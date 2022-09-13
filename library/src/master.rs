@@ -35,6 +35,20 @@ pub struct Master{
 }
 
 impl Master{
+    pub fn set_progress(&mut self, progress: Progress){
+        match (self.progress, progress){
+            (Progress::ForwardFast { steps: current}, Progress::ForwardFast { steps: update }) => {
+                if update < current{
+                    panic!("Cannot set progress from `ForwardFast` with lower steps count.");
+                }
+            },
+            (Progress::ForwardFast { steps: _ }, _) => {
+                panic!("Cannot set progress from `ForwardFast`.");
+            }
+            _ => {}
+        }
+        self.progress = progress;
+    }
     fn run_pre_update(check: bool, mut master: ResMut<Self>, mut time: ResMut<Time>) -> ShouldRun{
         if check{
             master.elapsed -= time.delta_seconds_f64();
