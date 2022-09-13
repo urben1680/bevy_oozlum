@@ -10,11 +10,11 @@ pub enum Progress{
     ForwardFast{
         steps: u16
     },
-    ForwardLog,
-    BackwardLog,
-    LogEnd{
-        forward: bool,
+    ForwardLog{
+        forward_at_end: bool,
     },
+    BackwardLog,
+    LogEnd,
     Pause,
 }
 
@@ -28,27 +28,37 @@ pub struct Master{
     pub(super) log: VecDeque<Vec<Box<dyn MasterEntryTrait>>>,
     time_stamp: Wrapping<u16>,
     log_index: usize,
+    pub progress_query: Progress,
     progress: Progress,
-    time_step: f64,
+    pub time_step: f64,
     elapsed: f64,
     pre_update_ran: bool,
 }
 
 impl Master{
-    pub fn set_progress(&mut self, progress: Progress){
-        match (self.progress, progress){
-            (Progress::ForwardFast { steps: current}, Progress::ForwardFast { steps: update }) => {
-                if update < current{
-                    panic!("Cannot set progress from `ForwardFast` with lower steps count.");
-                }
-            },
-            (Progress::ForwardFast { steps: _ }, _) => {
-                panic!("Cannot set progress from `ForwardFast`.");
-            }
-            _ => {}
-        }
-        self.progress = progress;
-    }
+    pub (super) const RUN_CRITERIA_PAUSE: for<'r> fn(Res<'r, Master>) -> ShouldRun = Self::run_pause;
+
+    pub (super) const RUN_CRITERIA_PRE_UPDATE_FORWARD: for<'r, 's> fn(ResMut<'r, Master>, ResMut<'s, Time>) -> bevy::ecs::schedule::ShouldRun = Self::run_forward_pre_update;
+    pub (super) const RUN_CRITERIA_PRE_UPDATE_FORWARD_FAST: for<'r, 's> fn(ResMut<'r, Master>, ResMut<'s, Time>) -> bevy::ecs::schedule::ShouldRun = Self::run_forward_fast_pre_update;
+    pub (super) const RUN_CRITERIA_PRE_UPDATE_FORWARD_LOG: for<'r, 's> fn(ResMut<'r, Master>, ResMut<'s, Time>) -> bevy::ecs::schedule::ShouldRun = Self::run_forward_log_pre_update;
+    pub (super) const RUN_CRITERIA_PRE_UPDATE_BACKWARD_LOG: for<'r, 's> fn(ResMut<'r, Master>, ResMut<'s, Time>) -> bevy::ecs::schedule::ShouldRun = Self::run_backward_log_pre_update;
+    pub (super) const RUN_CRITERIA_PRE_UPDATE_LOG_END: for<'r> fn(ResMut<'r, Master>) -> ShouldRun = Self::run_log_end_pre_update;
+
+    pub (super) const RUN_CRITERIA_UPDATE_FORWARD: for<'r> fn(Res<'r, Master>) -> ShouldRun = Self::run_forward_update;
+    pub (super) const RUN_CRITERIA_UPDATE_FORWARD_FAST: for<'r> fn(Res<'r, Master>) -> ShouldRun = Self::run_forward_fast_update;
+    pub (super) const RUN_CRITERIA_UPDATE_FORWARD_LOG: for<'r> fn(Res<'r, Master>) -> ShouldRun = Self::run_forward_log_update;
+    pub (super) const RUN_CRITERIA_UPDATE_BACKWARD_LOG: for<'r> fn(Res<'r, Master>) -> ShouldRun = Self::run_backward_log_update;
+    pub (super) const RUN_CRITERIA_UPDATE_LOG_END: for<'r> fn(Res<'r, Master>) -> ShouldRun = Self::run_log_end_update;
+
+    pub (super) const RUN_CRITERIA_POST_UPDATE_FORWARD: for<'r> fn(ResMut<'r, Master>) -> ShouldRun = Self::run_forward_post_update;
+    pub (super) const RUN_CRITERIA_POST_UPDATE_FORWARD_FAST: for<'r> fn(ResMut<'r, Master>) -> ShouldRun = Self::run_forward_fast_post_update;
+    pub (super) const RUN_CRITERIA_POST_UPDATE_FORWARD_LOG: for<'r> fn(ResMut<'r, Master>) -> ShouldRun = Self::run_forward_log_post_update;
+    pub (super) const RUN_CRITERIA_POST_UPDATE_BACKWARD_LOG: for<'r> fn(ResMut<'r, Master>) -> ShouldRun = Self::run_backward_log_post_update;
+    pub (super) const RUN_CRITERIA_POST_UPDATE_LOG_END: for<'r> fn(ResMut<'r, Master>) -> ShouldRun = Self::run_log_end_post_update;
+
+    pub (super) const SYSTEM_PRE_UPDATE: for<'r, 's, 't0> fn(ResMut<'r, Master>, Commands<'s, 't0>) = Self::system_pre_update;
+    pub (super) const SYSTEM_POST_UPDATE: for<'r, 's, 't0, 't1> fn(ResMut<'r, Master>, Commands<'s, 't0>, ResMut<'t1, Events<ForgetEvent>>) = Self::system_post_update;
+
     fn run_pre_update(check: bool, mut master: ResMut<Self>, mut time: ResMut<Time>) -> ShouldRun{
         if check{
             master.elapsed -= time.delta_seconds_f64();
@@ -61,81 +71,81 @@ impl Master{
         }
         ShouldRun::No
     }
-    fn run_update(check: bool, mut master: ResMut<Self>) -> ShouldRun{
-        if master.pre_update_ran{
+    fn run_update(check: bool, master: Res<Self>) -> ShouldRun{
+        if check && master.pre_update_ran{
             ShouldRun::Yes
         } else {
             ShouldRun::No
         }
     }
     fn run_post_update(check: bool, mut master: ResMut<Self>) -> ShouldRun{
-        if master.pre_update_ran{
+        if check && master.pre_update_ran{
             master.pre_update_ran = false;
             ShouldRun::Yes
         } else {
             ShouldRun::No
         }
     }
-    pub fn run_forward_pre_update(master: ResMut<Self>, time: ResMut<Time>) -> ShouldRun{
+    fn run_forward_pre_update(master: ResMut<Self>, time: ResMut<Time>) -> ShouldRun{
         Self::run_pre_update(matches!(master.progress, Progress::Forward), master, time)
     }
-    pub fn run_forward_fast_pre_update(master: ResMut<Self>, time: ResMut<Time>) -> ShouldRun{
+    fn run_forward_fast_pre_update(master: ResMut<Self>, time: ResMut<Time>) -> ShouldRun{
         Self::run_pre_update(matches!(master.progress, Progress::ForwardFast{steps: _}), master, time)
     }
-    pub fn run_forward_log_pre_update(master: ResMut<Self>, time: ResMut<Time>) -> ShouldRun{
-        Self::run_pre_update(matches!(master.progress, Progress::ForwardLog), master, time)
+    fn run_forward_log_pre_update(master: ResMut<Self>, time: ResMut<Time>) -> ShouldRun{
+        Self::run_pre_update(matches!(master.progress, Progress::ForwardLog{forward_at_end: _}), master, time)
     }
-    pub fn run_backward_log_pre_update(master: ResMut<Self>, time: ResMut<Time>) -> ShouldRun{
+    fn run_backward_log_pre_update(master: ResMut<Self>, time: ResMut<Time>) -> ShouldRun{
         Self::run_pre_update(matches!(master.progress, Progress::BackwardLog), master, time)
     }
-    pub fn run_log_end_pre_update(mut master: ResMut<Self>) -> ShouldRun{
-        if matches!(master.progress, Progress::LogEnd{forward: _}){
+    fn run_log_end_pre_update(mut master: ResMut<Self>) -> ShouldRun{
+        if matches!(master.progress, Progress::LogEnd){
             master.pre_update_ran = true;
             ShouldRun::Yes
         } else {
             ShouldRun::No
         }
     }
-    pub fn run_forward_update(master: ResMut<Self>) -> ShouldRun{
+    fn run_forward_update(master: Res<Self>) -> ShouldRun{
         Self::run_update(matches!(master.progress, Progress::Forward), master)
     }
-    pub fn run_forward_fast_update(master: ResMut<Self>) -> ShouldRun{
+    fn run_forward_fast_update(master: Res<Self>) -> ShouldRun{
         Self::run_update(matches!(master.progress, Progress::ForwardFast{steps: _}), master)
     }
-    pub fn run_forward_log_update(master: ResMut<Self>) -> ShouldRun{
-        Self::run_update(matches!(master.progress, Progress::ForwardLog), master)
+    fn run_forward_log_update(master: Res<Self>) -> ShouldRun{
+        Self::run_update(matches!(master.progress, Progress::ForwardLog{forward_at_end: _}), master)
     }
-    pub fn run_backward_log_update(master: ResMut<Self>) -> ShouldRun{
+    fn run_backward_log_update(master: Res<Self>) -> ShouldRun{
         Self::run_update(matches!(master.progress, Progress::BackwardLog), master)
     }
-    pub fn run_log_end_update(mut master: ResMut<Self>) -> ShouldRun{
-        if matches!(master.progress, Progress::LogEnd{forward: _}) && master.pre_update_ran{
+    fn run_log_end_update(master: Res<Self>) -> ShouldRun{
+        if matches!(master.progress, Progress::LogEnd) && master.pre_update_ran{
             ShouldRun::Yes
         } else {
             ShouldRun::No
         }
     }
-    pub fn run_forward_post_update(master: ResMut<Self>) -> ShouldRun{
+    fn run_forward_post_update(master: ResMut<Self>) -> ShouldRun{
         Self::run_post_update(matches!(master.progress, Progress::Forward), master)
     }
-    pub fn run_forward_fast_post_update(master: ResMut<Self>) -> ShouldRun{
+    fn run_forward_fast_post_update(master: ResMut<Self>) -> ShouldRun{
         Self::run_post_update(matches!(master.progress, Progress::ForwardFast{steps: _}), master)
     }
-    pub fn run_forward_log_post_update(master: ResMut<Self>) -> ShouldRun{
-        Self::run_post_update(matches!(master.progress, Progress::ForwardLog), master)
+    fn run_forward_log_post_update(master: ResMut<Self>) -> ShouldRun{
+        Self::run_post_update(matches!(master.progress, Progress::ForwardLog{forward_at_end: _}), master)
     }
-    pub fn run_backward_log_post_update(master: ResMut<Self>) -> ShouldRun{
+    fn run_backward_log_post_update(master: ResMut<Self>) -> ShouldRun{
         Self::run_post_update(matches!(master.progress, Progress::BackwardLog), master)
     }
-    pub fn run_log_end_post_update(mut master: ResMut<Self>) -> ShouldRun{
-        if matches!(master.progress, Progress::LogEnd{forward: _}) && master.pre_update_ran{
+    fn run_log_end_post_update(mut master: ResMut<Self>) -> ShouldRun{
+        if matches!(master.progress, Progress::LogEnd) && master.pre_update_ran{
             master.pre_update_ran = false;
             ShouldRun::Yes
         } else {
             ShouldRun::No
         }
     }
-    pub fn run_pause(master: Res<Self>) -> ShouldRun{
+    fn run_pause(master: Res<Self>) -> ShouldRun{
         if let Progress::Pause = master.progress{
             ShouldRun::Yes
         } else {
@@ -163,7 +173,7 @@ impl Master{
                 master.log.push_back(Vec::new());
                 master.time_stamp += 1;
             },
-            Progress::ForwardLog => {
+            Progress::ForwardLog{forward_at_end: _} => {
                 master.log_index += 1;
                 master.time_stamp += 1;
             },
@@ -172,10 +182,10 @@ impl Master{
                     entry.backward(&mut commands);
                 }
             },
-            Progress::LogEnd{forward: _} | Progress::Pause => {}
+            Progress::LogEnd | Progress::Pause => {}
         }
     }
-    fn post_update_forward(mut master: ResMut<Self>, mut commands: Commands, mut events: ResMut<Events<ForgetEvent>>, slow_down: bool){
+    fn post_update_forward(mut master: ResMut<Self>, mut commands: Commands, mut events: ResMut<Events<ForgetEvent>>, change_progress: bool){
         let count = events
             .drain()
             .map(|time_stamp| {
@@ -189,39 +199,51 @@ impl Master{
             }
             master.log_index = master.log.len() - 1;
         }
-        if slow_down{
-            master.progress = Progress::Forward;
+        if change_progress{
+            master.progress = master.progress_query;
         }
     }
     pub fn system_post_update(mut master: ResMut<Self>, mut commands: Commands, events: ResMut<Events<ForgetEvent>>)
     {
         match master.progress{
             Progress::Forward => {
-                Self::post_update_forward(master, commands, events, false);
+                Self::post_update_forward(master, commands, events, true);
             },
             Progress::ForwardFast{mut steps} => {
                 steps -= 1;
                 Self::post_update_forward(master, commands, events, steps == 0);
             }
-            Progress::ForwardLog => {
+            Progress::ForwardLog{forward_at_end: _} => {
                 for entry in master.log.get(master.log_index).unwrap(){
                     entry.forward(&mut commands);
                 }
+                if let Progress::ForwardLog { forward_at_end } = master.progress_query{
+                    if master.log_index + 1 == master.log.len(){
+                        if forward_at_end{
+                            master.progress_query = Progress::Forward;
+                        } else {
+                            master.progress_query = Progress::Pause;
+                        }
+                    }
+                }
+                master.progress = master.progress_query;
             },
             Progress::BackwardLog => {
                 master.time_stamp -= 1;
                 master.log_index -= 1;
+                if let Progress::BackwardLog = master.progress_query{
+                    if master.log_index == 0{
+                        master.progress_query = Progress::Pause;
+                    }
+                }
+                master.progress = master.progress_query;
             },
-            Progress::LogEnd{forward} => {
+            Progress::LogEnd => {
                 let target = master.log_index + 1;
                 while master.log.len() > target{
                     Self::forget(master.log.pop_back(), &mut commands);
                 }
-                if forward{
-                    master.progress = Progress::Forward;
-                } else {
-                    master.progress = Progress::Pause;
-                }
+                master.progress = master.progress_query;
             },
             Progress::Pause => {}
         }
