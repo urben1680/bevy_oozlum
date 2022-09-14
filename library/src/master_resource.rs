@@ -1,9 +1,11 @@
 use std::{collections::VecDeque, num::Wrapping};
 
-use bevy::{ecs::{system::Resource, schedule::ShouldRun}, prelude::{Commands, ResMut, Res, Events}, time::Time};
+use bevy::{ecs::{system::Resource, schedule::ShouldRun}, prelude::{Commands, ResMut, Res, Events, World, Entity}, time::Time};
 
 /// Event to forget all logs inclusively to `Some(time_stamp)`. `None` signals forgetting all logs.
-pub struct ForgetEvent(pub Option<Wrapping<u16>>);
+pub(super) struct ForgetEvent(pub Option<Wrapping<u16>>);
+
+pub struct MasterTimeStep(pub f64);
 
 /// Used to control the behavior of reversible systems.
 /// 
@@ -45,10 +47,11 @@ impl Progress{
     }
 }
 
-pub(super) trait MasterEntryTrait: Resource{
-    fn forward(&self, commands: &mut Commands);
-    fn backward(&self, commands: &mut Commands);
-    fn forget(&self, commands: &mut Commands);
+pub trait MasterEntryTrait: Resource{ //todo: decouple from LogCommands wrapper to enable custom implementations
+    fn init(&mut self, world: &mut World);
+    fn forward(&mut self, commands: &mut Commands);
+    fn backward(&mut self, commands: &mut Commands);
+    fn forget(&mut self, commands: &mut Commands);
 }
 
 pub struct Master{
@@ -127,7 +130,7 @@ impl Master{
         self.progress
     }
     fn forget(vec: Option<Vec<Box<dyn MasterEntryTrait>>>, commands: &mut Commands){
-        vec.into_iter().flatten().for_each(|entry| entry.forget(commands));
+        vec.into_iter().flatten().for_each(|mut entry| entry.forget(commands));
     }
     pub (super) fn system_pre_update(mut master: ResMut<Self>, mut time: ResMut<Time>, mut commands: Commands){
         if master.log_end{
@@ -170,21 +173,27 @@ impl Master{
                 master.time_stamp += 1;
             },
             Progress::BackwardLog | Progress::BackwardLogEnd => {
-                for entry in master.log.get(master.log_index).unwrap(){
+                let log_index = master.log_index;
+                for entry in master.log.get_mut(log_index).unwrap(){
                     entry.backward(&mut commands);
                 }
             },
             Progress::Pause | Progress::PauseLog => {}
         }
     }
-    pub (super) fn system_post_update(mut master: ResMut<Self>, mut commands: Commands, events: ResMut<Events<ForgetEvent>>, mut progress_query: ResMut<Events<Progress>>)
+    pub (super) fn system_post_update(mut master: ResMut<Self>, mut commands: Commands, events: ResMut<Events<ForgetEvent>>, mut progress_query: ResMut<Events<Progress>>, mut time_step: ResMut<Events<MasterTimeStep>>)
     {
         if !master.pre_update_ran{
             return; //do not run system
         }
         
         master.pre_update_ran = false;
-        master.progress_query = progress_query.drain().last().unwrap_or(master.progress_query);
+        if let Some(progress_query) = progress_query.drain().last(){
+            master.progress_query = progress_query;
+        }
+        if let Some(time_step) = time_step.drain().last(){
+            master.time_step = time_step.0;
+        }
 
         if master.log_end{
             let target = master.log_index + 1;
@@ -225,13 +234,15 @@ impl Master{
                 }
             },
             (Progress::ForwardLog, query) => {
-                for entry in master.log.get(master.log_index).unwrap(){
+                let log_index = master.log_index;
+                for entry in master.log.get_mut(log_index).unwrap(){
                     entry.forward(&mut commands);
                 }
                 master.log_end = !query.log();
             },
             (Progress::ForwardLogEnd, _) => {
-                for entry in master.log.get(master.log_index).unwrap(){
+                let log_index = master.log_index;
+                for entry in master.log.get_mut(log_index).unwrap(){
                     entry.forward(&mut commands);
                 }
                 if master.log_index + 1 != master.log.len(){
