@@ -1,4 +1,4 @@
-mod master;
+mod master_resource;
 mod log_commands;
 
 pub fn add(left: usize, right: usize) -> usize {
