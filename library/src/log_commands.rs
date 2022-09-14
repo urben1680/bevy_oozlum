@@ -1,55 +1,123 @@
-use std::marker::PhantomData;
+use std::{marker::PhantomData, fmt::Debug, any::type_name};
 
-use bevy::{ecs::system::Resource, prelude::{Commands, Entity, World, Component, Bundle}};
+use bevy::{ecs::{system::Resource, query::WorldQuery}, prelude::{Commands, Entity, World, Component, Bundle, Without}, log::{error, warn, info}};
 
-use super::master::{Master, MasterEntryTrait};
+use super::master_resource::{Master, MasterEntryTrait};
+
+#[derive(WorldQuery)]
+pub struct PresentEntity{
+    pub entity: Entity,
+    filter: Without<DespawnedEntity>
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum SpawnComponentError{
+    EntityNotFound,
+    ComponentAlreadyExists,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum DespawnComponentError{
+    EntityNotFound,
+    ComponentNotFound,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum SpawnResourceError{
+    ResourceAlreadyExists,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum DespawnResourceError{
+    ResourceNotFound,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum DespawnEntityError{
+    EntityNotFound,
+}
+
+pub enum ErrorOption<E: Debug>{
+    LogError,
+    LogWarning,
+    LogInfo,
+    Custom(fn(E))
+}
+
+impl<E: Debug> ErrorOption<E>{
+    fn error<T>(self, error: E){
+        match self{
+            Self::LogError => error!("LogCommand failed: {error:?}, relevant type: {}", type_name::<T>()),
+            Self::LogWarning => warn!("LogCommand failed: {error:?}, relevant type: {}", type_name::<T>()),
+            Self::LogInfo => info!("LogCommand failed: {error:?}, relevant type: {}", type_name::<T>()),
+            Self::Custom(f) => f(error)
+        }
+    }
+}
 
 /// `Commands` wrapper to offer commands compatible to reversible systems.
 pub struct LogCommands<'w, 's>(pub (super) Commands<'w, 's>);
 
 impl<'w, 's> LogCommands<'w, 's>{
-    pub fn spawn_component<T: Component>(&mut self, entity: Entity, value: T){
+    pub fn spawn_component<T: Component>(&mut self, entity: Entity, value: T, error: ErrorOption<SpawnComponentError>){
         self.0.add(move |world: &mut World|{
-            world.entity_mut(entity).insert(value);
-            let mut master = world.resource_mut::<Master>();
-            master.log.back_mut().unwrap().push(Box::new(ComponentEntry::<true, T>{
-                entity,
-                p: PhantomData
-            }));
-        })
-    }
-    pub fn despawn_component<T: Component>(&mut self, entity: Entity){
-        self.0.add(move |world: &mut World|{
-            let mut entity_mut = world.entity_mut(entity);
-            let value = entity_mut.remove::<T>();
-            if let Some(value) = value{
-                entity_mut.insert(Despawned(value));
-                let mut master = world.resource_mut::<Master>();
-                master.log.back_mut().unwrap().push(Box::new(ComponentEntry::<false, T>{
-                    entity,
-                    p: PhantomData
-                }));
+            if let Some(mut entity_mut) = world.get_entity_mut(entity){
+                if !entity_mut.contains::<T>(){
+                    entity_mut.insert(value);
+                    let mut master = world.resource_mut::<Master>();
+                    master.log.back_mut().unwrap().push(Box::new(ComponentEntry::<true, T>{
+                        entity,
+                        p: PhantomData
+                    }));
+                } else {
+                    error.error::<T>(SpawnComponentError::ComponentAlreadyExists);
+                }
+            } else {
+                error.error::<T>(SpawnComponentError::EntityNotFound);
             }
         })
     }
-    pub fn spawn_resource<T: Resource>(&mut self, value: T){
+    pub fn despawn_component<T: Component>(&mut self, entity: Entity, error: ErrorOption<DespawnComponentError>){
         self.0.add(move |world: &mut World|{
-            world.insert_resource(value);
-            let mut master = world.resource_mut::<Master>();
-            master.log.back_mut().unwrap().push(Box::new(ResourceEntry::<true, T>{
-                p: PhantomData
-            }));
+            if let Some(mut entity_mut) = world.get_entity_mut(entity){
+                if let Some(value) = entity_mut.remove::<T>(){
+                    entity_mut.insert(Despawned(value));
+                    let mut master = world.resource_mut::<Master>();
+                    master.log.back_mut().unwrap().push(Box::new(ComponentEntry::<false, T>{
+                        entity,
+                        p: PhantomData
+                    }));
+                } else {
+                    error.error::<T>(DespawnComponentError::ComponentNotFound);
+                }
+            } else {
+                error.error::<T>(DespawnComponentError::EntityNotFound);
+            }
         })
     }
-    pub fn despawn_resource<T: Resource>(&mut self){
+    pub fn spawn_resource<T: Resource>(&mut self, value: T, error: ErrorOption<SpawnResourceError>){
         self.0.add(move |world: &mut World|{
-            let value = world.remove_resource::<T>();
-            if let Some(value) = value{
+            if !world.contains_resource::<T>(){
+                world.insert_resource(value);
+                let mut master = world.resource_mut::<Master>();
+                master.log.back_mut().unwrap().push(Box::new(ResourceEntry::<true, T>{
+                    p: PhantomData
+                }));
+            } else {
+                error.error::<T>(SpawnResourceError::ResourceAlreadyExists);
+            }
+        })
+    }
+    pub fn despawn_resource<T: Resource>(&mut self, error: ErrorOption<DespawnResourceError>){
+        self.0.add(move |world: &mut World|{
+            if let Some(value) = world.remove_resource::<T>(){
                 world.insert_resource(Despawned(value));
                 let mut master = world.resource_mut::<Master>();
                 master.log.back_mut().unwrap().push(Box::new(ResourceEntry::<false, T>{
                     p: PhantomData
                 }));
+            } else {
+                error.error::<T>(DespawnResourceError::ResourceNotFound);
             }
         })
     }
@@ -62,13 +130,17 @@ impl<'w, 's> LogCommands<'w, 's>{
             }));
         })
     }
-    pub fn despawn_entity(&mut self, entity: Entity){
+    pub fn despawn_entity(&mut self, entity: Entity, error: ErrorOption<DespawnEntityError>){
         self.0.add(move |world: &mut World|{
-            world.entity_mut(entity).insert(DespawnedEntity);
-            let mut master = world.resource_mut::<Master>();
-            master.log.back_mut().unwrap().push(Box::new(EntityEntry::<false>{
-                entity
-            }));
+            if let Some(mut entity_mut) = world.get_entity_mut(entity){
+                entity_mut.insert(DespawnedEntity);
+                let mut master = world.resource_mut::<Master>();
+                master.log.back_mut().unwrap().push(Box::new(EntityEntry::<false>{
+                    entity
+                }));
+            } else {
+                error.error::<()>(DespawnEntityError::EntityNotFound);
+            }
         })
     }
 }

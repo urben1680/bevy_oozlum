@@ -10,11 +10,15 @@ pub struct ForgetEvent(pub Option<Wrapping<u16>>);
 /// - `Forward` progresses all systems step-by-step in sync.
 /// - `ForwardFast { to_time_stamp }` progresses some systems eagerly until `to_time_stamp` is reached. 
 /// This cannot be aborted because affected systems are not in sync until the end. 
-/// However, it can be extended at any point by setting this variant again with a later `to_time_stamp` relatively to `time_stamp()`.
+/// However, it can be extended at any point by setting this variant again with a larger `to_time_stamp` relatively to `time_stamp()`.
 /// If `to_time_stamp` was reached and still `FastForward` is queried, the progression is changed to `Forward`.
 /// - `ForwardLog` progresses all systems using each system's log(s) step-by-step. 
 /// If this is attempted while the log reached it's most recent end, the progression is changed to `PauseLog`. 
+/// - `ForwardLogEnd` progresses to the most recent log end, potentially cheaper than with `ForwardLog`.
+/// This cannot be aborted because affected systems are not in sync until the end.
 /// - `BackwardLog` reverts all systems using each system's log(s) step-by-step.
+/// - `BackwardLogEnd` reverts all systems to the most past log end, potentially cheaper than with `BackwardLog`.
+/// This cannot be aborted because affected systems are not in sync until the end.
 /// - `Pause` halts everything until another non-pause variant is picked.
 /// - `PauseLog` behaves like `Pause` but does not cause logs in the future to be forgotten.
 #[derive(Clone, Copy)]
@@ -24,19 +28,20 @@ pub enum Progress{
         to_time_stamp: Wrapping<u16>
     },
     ForwardLog,
+    ForwardLogEnd,
     BackwardLog,
+    BackwardLogEnd,
     Pause,
     PauseLog,
 }
 
 impl Progress{
-    fn log(&self) -> bool{
-        match self{
-            Progress::ForwardLog |
+    pub fn log(&self) -> bool{
+        matches!(self, Progress::ForwardLog |
+            Progress::ForwardLogEnd |
             Progress::BackwardLog |
-            Progress::PauseLog => true,
-            _ => false
-        }
+            Progress::BackwardLogEnd |
+            Progress::PauseLog)
     }
 }
 
@@ -60,7 +65,7 @@ pub struct Master{
     pub(super) log: VecDeque<Vec<Box<dyn MasterEntryTrait>>>,
     time_stamp: Wrapping<u16>,
     log_index: usize,
-    progress: Progress, //gets ignored if log_end is true
+    progress: Progress,
     elapsed: f64,
     pre_update_ran: bool,
     log_end: bool,
@@ -76,8 +81,14 @@ impl Master{
     pub (super) fn run_criteria_forward_log(master: Res<Self>) -> ShouldRun{
         Self::run_criteria_not_log_end(matches!(master.progress, Progress::ForwardLog), master)
     }
+    pub (super) fn run_criteria_forward_log_fast(master: Res<Self>) -> ShouldRun{
+        Self::run_criteria_not_log_end(matches!(master.progress, Progress::ForwardLogEnd), master)
+    }
     pub (super) fn run_criteria_backward_log(master: Res<Self>) -> ShouldRun{
         Self::run_criteria_not_log_end(matches!(master.progress, Progress::BackwardLog), master)
+    }
+    pub (super) fn run_criteria_backward_log_fast(master: Res<Self>) -> ShouldRun{
+        Self::run_criteria_not_log_end(matches!(master.progress, Progress::BackwardLogEnd), master)
     }
     pub (super) fn run_criteria_log_end(master: Res<Self>) -> ShouldRun{
         if master.log_end && master.pre_update_ran{
@@ -120,20 +131,30 @@ impl Master{
         vec.into_iter().flatten().for_each(|entry| entry.forget(commands));
     }
     pub (super) fn system_pre_update(mut master: ResMut<Self>, mut time: ResMut<Time>, mut commands: Commands){
-        master.elapsed -= time.delta_seconds_f64();
-        time.update();
-
-        if master.elapsed > 0.0{
-            return; //do not run system
-        }
-
-        master.elapsed += master.time_step;
-        master.pre_update_ran = true;
-
         if master.log_end{
+            master.pre_update_ran = true;
             return; //nothing to do for this state
+        } 
+        match master.progress{
+            Progress::ForwardFast { to_time_stamp: _ } |
+            Progress::ForwardLogEnd |
+            Progress::BackwardLogEnd |
+            Progress::Pause |
+            Progress::PauseLog => {
+                time.update();
+            }
+            Progress::Forward |
+            Progress::ForwardLog |
+            Progress::BackwardLog => {
+                master.elapsed -= time.delta_seconds_f64();
+                time.update();
+                if master.elapsed > 0.0{
+                    return; //do not run system
+                }
+                master.elapsed += master.time_step;
+                master.pre_update_ran = true;
+            }
         }
-
         match master.progress{
             Progress::Forward | Progress::ForwardFast{to_time_stamp: _} => {
                 if master.log.len() == master.log.capacity(){
@@ -145,11 +166,11 @@ impl Master{
                 master.log.push_back(Vec::new());
                 master.time_stamp += 1;
             },
-            Progress::ForwardLog => {
+            Progress::ForwardLog | Progress::ForwardLogEnd => {
                 master.log_index += 1;
                 master.time_stamp += 1;
             },
-            Progress::BackwardLog => {
+            Progress::BackwardLog | Progress::BackwardLogEnd => {
                 for entry in master.log.get(master.log_index).unwrap(){
                     entry.backward(&mut commands);
                 }
@@ -172,6 +193,7 @@ impl Master{
             master.log_end = false;
             return;
         }
+
         match &mut (master.progress, master.progress_query){
             (Progress::Forward, _) => {
                 Self::post_update_forward(&mut master, commands, events);
@@ -204,25 +226,47 @@ impl Master{
                 }
                 master.log_end = !query.log();
             },
+            (Progress::ForwardLogEnd, _) => {
+                for entry in master.log.get(master.log_index).unwrap(){
+                    entry.forward(&mut commands);
+                }
+                if master.log_index + 1 != master.log.len(){
+                    return;
+                }
+            },
             (Progress::BackwardLog, query) => {
                 master.time_stamp -= 1;
                 master.log_index -= 1;
                 master.log_end = !query.log();
             },
+            (Progress::BackwardLogEnd, _) => {
+                if master.log_index != 0{
+                    return;
+                }
+            }
             (Progress::PauseLog, query) => {
                 master.log_end = !query.log();
-            }
+            },
             (Progress::Pause, _) => {}
         }
+
         match master.progress_query{
-            Progress::ForwardLog if master.log_index + 1 == master.log.len() => {
-                master.progress_query = Progress::PauseLog;
-            }
-            Progress::BackwardLog if master.log_index == 0 => {
-                master.progress_query = Progress::PauseLog;
-            }
-            _ => {}
+            Progress::ForwardLog | Progress::ForwardLogEnd => {
+                if master.log_index + 1 == master.log.len(){
+                    master.progress_query = Progress::PauseLog;
+                }
+            },
+            Progress::BackwardLog | Progress::BackwardLogEnd => {
+                if master.log_index == 0{
+                    master.progress_query = Progress::PauseLog;
+                }
+            },
+            Progress::Forward | 
+            Progress::ForwardFast { to_time_stamp: _ } | 
+            Progress::Pause | 
+            Progress::PauseLog => {}
         }
+
         master.progress = master.progress_query;
     }
     fn post_update_forward(master: &mut ResMut<Self>, mut commands: Commands, mut events: ResMut<Events<ForgetEvent>>){
@@ -241,4 +285,3 @@ impl Master{
         }
     }
 }
-
