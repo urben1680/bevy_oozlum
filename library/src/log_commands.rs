@@ -4,7 +4,7 @@ use bevy::{ecs::system::Resource, prelude::{Commands, Entity, World, Component, 
 
 use super::master::{Master, MasterEntryTrait};
 
-/// `Commands` wrapper to offer commands compatible to the crate goal.
+/// `Commands` wrapper to offer commands compatible to reversible systems.
 pub struct LogCommands<'w, 's>(pub (super) Commands<'w, 's>);
 
 impl<'w, 's> LogCommands<'w, 's>{
@@ -20,11 +20,16 @@ impl<'w, 's> LogCommands<'w, 's>{
     }
     pub fn despawn_component<T: Component>(&mut self, entity: Entity){
         self.0.add(move |world: &mut World|{
-            let mut master = world.resource_mut::<Master>();
-            master.log.back_mut().unwrap().push(Box::new(ComponentEntry::<false, T>{
-                entity,
-                p: PhantomData
-            }));
+            let mut entity_mut = world.entity_mut(entity);
+            let value = entity_mut.remove::<T>();
+            if let Some(value) = value{
+                entity_mut.insert(Despawned(value));
+                let mut master = world.resource_mut::<Master>();
+                master.log.back_mut().unwrap().push(Box::new(ComponentEntry::<false, T>{
+                    entity,
+                    p: PhantomData
+                }));
+            }
         })
     }
     pub fn spawn_resource<T: Resource>(&mut self, value: T){
@@ -38,10 +43,14 @@ impl<'w, 's> LogCommands<'w, 's>{
     }
     pub fn despawn_resource<T: Resource>(&mut self){
         self.0.add(move |world: &mut World|{
-            let mut master = world.resource_mut::<Master>();
-            master.log.back_mut().unwrap().push(Box::new(ResourceEntry::<false, T>{
-                p: PhantomData
-            }));
+            let value = world.remove_resource::<T>();
+            if let Some(value) = value{
+                world.insert_resource(Despawned(value));
+                let mut master = world.resource_mut::<Master>();
+                master.log.back_mut().unwrap().push(Box::new(ResourceEntry::<false, T>{
+                    p: PhantomData
+                }));
+            }
         })
     }
     pub fn spawn_entity<T: Bundle>(&mut self, bundle: T){
@@ -55,6 +64,7 @@ impl<'w, 's> LogCommands<'w, 's>{
     }
     pub fn despawn_entity(&mut self, entity: Entity){
         self.0.add(move |world: &mut World|{
+            world.entity_mut(entity).insert(DespawnedEntity);
             let mut master = world.resource_mut::<Master>();
             master.log.back_mut().unwrap().push(Box::new(EntityEntry::<false>{
                 entity
