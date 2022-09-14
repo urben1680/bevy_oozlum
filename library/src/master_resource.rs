@@ -52,8 +52,6 @@ pub(super) trait MasterEntryTrait: Resource{
 }
 
 pub struct Master{
-    /// Change this property to control the next progression of all reversible systems
-    pub progress_query: Progress,
     /// Change this property to control the length of the time steps.
     /// Raising this value speeds the progression up while being more expensive.
     /// Lowering this value slows the progression down while being less expensive.
@@ -66,6 +64,7 @@ pub struct Master{
     time_stamp: Wrapping<u16>,
     log_index: usize,
     progress: Progress,
+    progress_query: Progress,
     elapsed: f64,
     pre_update_ran: bool,
     log_end: bool,
@@ -178,12 +177,14 @@ impl Master{
             Progress::Pause | Progress::PauseLog => {}
         }
     }
-    pub (super) fn system_post_update(mut master: ResMut<Self>, mut commands: Commands, events: ResMut<Events<ForgetEvent>>)
+    pub (super) fn system_post_update(mut master: ResMut<Self>, mut commands: Commands, events: ResMut<Events<ForgetEvent>>, mut progress_query: ResMut<Events<Progress>>)
     {
         if !master.pre_update_ran{
             return; //do not run system
         }
+        
         master.pre_update_ran = false;
+        master.progress_query = progress_query.drain().last().unwrap_or(master.progress_query);
 
         if master.log_end{
             let target = master.log_index + 1;
