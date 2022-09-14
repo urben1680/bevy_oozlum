@@ -2,8 +2,21 @@ use std::{collections::VecDeque, num::Wrapping};
 
 use bevy::{ecs::{system::Resource, schedule::ShouldRun}, prelude::{Commands, ResMut, Res, Events}, time::Time};
 
+/// Event to forget all logs inclusively to `Some(time_stamp)`. `None` signals forgetting all logs.
 pub struct ForgetEvent(pub Option<Wrapping<u16>>);
 
+/// Used to control the behavior of reversible systems.
+/// 
+/// - `Forward` progresses all systems step-by-step in sync.
+/// - `ForwardFast { to_time_stamp }` progresses some systems eagerly until `to_time_stamp` is reached. 
+/// This cannot be aborted because affected systems are not in sync until the end. 
+/// However, it can be extended at any point by setting this variant again with a later `to_time_stamp` relatively to `time_stamp()`.
+/// If `to_time_stamp` was reached and still `FastForward` is queried, the progression is changed to `Forward`.
+/// - `ForwardLog` progresses all systems using each system's log(s) step-by-step. 
+/// If this is attempted while the log reached it's most recent end, the progression is changed to `PauseLog`. 
+/// - `BackwardLog` reverts all systems using each system's log(s) step-by-step.
+/// - `Pause` halts everything until another non-pause variant is picked.
+/// - `PauseLog` behaves like `Pause` but does not cause logs in the future to be forgotten.
 #[derive(Clone, Copy)]
 pub enum Progress{
     Forward,
@@ -27,43 +40,44 @@ impl Progress{
     }
 }
 
-pub trait MasterEntryTrait: Resource{
+pub(super) trait MasterEntryTrait: Resource{
     fn forward(&self, commands: &mut Commands);
     fn backward(&self, commands: &mut Commands);
     fn forget(&self, commands: &mut Commands);
 }
 
 pub struct Master{
+    /// Change this property to control the next progression of all reversible systems
+    pub progress_query: Progress,
+    /// Change this property to control the length of the time steps.
+    /// Raising this value speeds the progression up while being more expensive.
+    /// Lowering this value slows the progression down while being less expensive.
+    /// 
+    /// If fast-forward is desired, prefer setting `progress_query = Progress::ForwardFast{ to_time_stamp }`.
+    /// This approach should not be significantly more expensive.
+    /// See `Progress` for more information.
+    pub time_step: f64,
     pub(super) log: VecDeque<Vec<Box<dyn MasterEntryTrait>>>,
     time_stamp: Wrapping<u16>,
     log_index: usize,
-    pub progress_query: Progress,
     progress: Progress, //gets ignored if log_end is true
-    pub time_step: f64,
     elapsed: f64,
     pre_update_ran: bool,
     log_end: bool,
 }
 
 impl Master{
-    fn run_update_not_log_end(check: bool, master: Res<Self>) -> ShouldRun{
-        if !master.log_end && master.pre_update_ran && check{
-            ShouldRun::Yes
-        } else {
-            ShouldRun::No
-        }
-    }
     pub (super) fn run_criteria_forward(master: Res<Self>) -> ShouldRun{
-        Self::run_update_not_log_end(matches!(master.progress, Progress::Forward), master)
+        Self::run_criteria_not_log_end(matches!(master.progress, Progress::Forward), master)
     }
     pub (super) fn run_criteria_forward_fast(master: Res<Self>) -> ShouldRun{
-        Self::run_update_not_log_end(matches!(master.progress, Progress::ForwardFast{to_time_stamp: _}), master)
+        Self::run_criteria_not_log_end(matches!(master.progress, Progress::ForwardFast{to_time_stamp: _}), master)
     }
     pub (super) fn run_criteria_forward_log(master: Res<Self>) -> ShouldRun{
-        Self::run_update_not_log_end(matches!(master.progress, Progress::ForwardLog), master)
+        Self::run_criteria_not_log_end(matches!(master.progress, Progress::ForwardLog), master)
     }
     pub (super) fn run_criteria_backward_log(master: Res<Self>) -> ShouldRun{
-        Self::run_update_not_log_end(matches!(master.progress, Progress::BackwardLog), master)
+        Self::run_criteria_not_log_end(matches!(master.progress, Progress::BackwardLog), master)
     }
     pub (super) fn run_criteria_log_end(master: Res<Self>) -> ShouldRun{
         if master.log_end && master.pre_update_ran{
@@ -86,8 +100,18 @@ impl Master{
             ShouldRun::No
         }
     }
+    fn run_criteria_not_log_end(check: bool, master: Res<Self>) -> ShouldRun{
+        if !master.log_end && master.pre_update_ran && check{
+            ShouldRun::Yes
+        } else {
+            ShouldRun::No
+        }
+    }
     pub fn time_stamp(&self) -> Wrapping<u16>{
         self.time_stamp
+    }
+    pub fn remembers_back_to(&self) -> Wrapping<u16>{
+        self.time_stamp - Wrapping(self.log.len() as u16) + Wrapping(1) //correct?
     }
     pub fn progress(&self) -> Progress{
         self.progress
@@ -98,15 +122,18 @@ impl Master{
     pub (super) fn system_pre_update(mut master: ResMut<Self>, mut time: ResMut<Time>, mut commands: Commands){
         master.elapsed -= time.delta_seconds_f64();
         time.update();
+
         if master.elapsed > 0.0{
             return; //do not run system
         }
+
         master.elapsed += master.time_step;
         master.pre_update_ran = true;
 
         if master.log_end{
-            return;
+            return; //nothing to do for this state
         }
+
         match master.progress{
             Progress::Forward | Progress::ForwardFast{to_time_stamp: _} => {
                 if master.log.len() == master.log.capacity(){
@@ -163,6 +190,7 @@ impl Master{
                 if *a != master.time_stamp{
                     return;
                 }
+                master.progress_query = Progress::Forward;
             },
             (Progress::ForwardFast{to_time_stamp}, _) => {
                 Self::post_update_forward(&mut master, commands, events);
