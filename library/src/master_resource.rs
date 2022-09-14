@@ -198,7 +198,10 @@ impl Master{
             (Progress::Forward, _) => {
                 Self::post_update_forward(&mut master, commands, events);
             },
-            (Progress::ForwardFast{to_time_stamp: a}, Progress::ForwardFast{to_time_stamp: b}) => {
+            (
+                Progress::ForwardFast{to_time_stamp: a}, 
+                Progress::ForwardFast{to_time_stamp: b}
+            ) => {
                 if a != b{
                     let a_delta = *a - master.time_stamp;
                     let b_delta = *b - master.time_stamp;
