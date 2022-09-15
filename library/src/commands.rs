@@ -1,18 +1,20 @@
-use std::{marker::PhantomData, fmt::Debug, any::type_name, mem::{replace, size_of}};
+use std::{marker::PhantomData, fmt::Debug, any::type_name, mem::{size_of, ManuallyDrop, MaybeUninit}};
 
-use bevy::{ecs::{system::Resource, query::WorldQuery}, prelude::{Commands, Entity, World, Component, Bundle, Without}, log::{error, warn, info}};
+use bevy::{ecs::system::Resource, prelude::{Commands, Entity, World, Component, Bundle}, log::{error, warn, info}};
+
+use crate::{DespawnedEntity, Despawned};
 
 use super::controller::Controller;
 
 pub trait ReversibleCommand: Resource{
-    /// Initialize by mutating the world, has to include actions that occur in the `forward` method
+    /// Initialize by mutating the world, has to include actions that occur in the `redo` method
     fn init(&mut self, world: &mut World);
     /// Deploy commands to redo the related actions
-    fn forward(&mut self, commands: &mut Commands);
+    fn redo(&mut self, commands: &mut Commands);
     /// Deploy commands to undo the related actions
-    fn backward(&mut self, commands: &mut Commands);
+    fn undo(&mut self, commands: &mut Commands);
     /// Cleanup commands like despawning buffers before Self is dropped
-    fn forget(&mut self, commands: &mut Commands);
+    fn cleanup(&mut self, commands: &mut Commands);
 }
 
 /// Some LogCommands contain data that is moved on initializing.
@@ -47,7 +49,7 @@ impl<T: Send + Sync + 'static> BoxOrTiny for Box<T>{
 pub struct SpawnComponent;
 
 struct SpawnComponentVariant<T: Component, Wrapped: BoxOrTiny<Inner = T>>{
-    data: Option<Wrapped>,
+    data: ManuallyDrop<Wrapped>,
     entity: Entity,
     error: ErrorOption<SpawnComponentError>
 }
@@ -56,13 +58,13 @@ impl SpawnComponent{
     pub fn new_box<T: Component>(entity: Entity, data: T, error: ErrorOption<SpawnComponentError>) -> Box<dyn ReversibleCommand>{
         if T::BOX_IS_SMALLER{
             Box::new(SpawnComponentVariant{
-                data: Some(Box::new(data)),
+                data: ManuallyDrop::new(Box::new(data)),
                 entity,
                 error
             })
         } else {
             Box::new(SpawnComponentVariant{
-                data: Some(Tiny(data)),
+                data: ManuallyDrop::new(Tiny(data)),
                 entity,
                 error
             })
@@ -72,7 +74,10 @@ impl SpawnComponent{
 
 impl<T: Component, Wrapped: BoxOrTiny<Inner = T>> ReversibleCommand for SpawnComponentVariant<T, Wrapped>{
     fn init(&mut self, world: &mut World){
-        let value = replace(&mut self.data, None).unwrap().into_inner();
+        let value = unsafe{
+            //SAFETY: `init` is only called once in the `LogCommands::add` method
+            ManuallyDrop::take(&mut self.data)
+        }.into_inner();
         if let Some(mut entity_mut) = world.get_entity_mut(self.entity){
             if !entity_mut.contains::<T>(){
                 entity_mut.insert(value);
@@ -83,7 +88,7 @@ impl<T: Component, Wrapped: BoxOrTiny<Inner = T>> ReversibleCommand for SpawnCom
             self.error.error::<T>(SpawnComponentError::EntityNotFound);
         }
     }
-    fn forward(&mut self, commands: &mut Commands){
+    fn redo(&mut self, commands: &mut Commands){
         let entity = self.entity;
         commands.add(move |world: &mut World|{
             let mut entity = world.entity_mut(entity);
@@ -93,7 +98,7 @@ impl<T: Component, Wrapped: BoxOrTiny<Inner = T>> ReversibleCommand for SpawnCom
             }
         });
     }
-    fn backward(&mut self, commands: &mut Commands){
+    fn undo(&mut self, commands: &mut Commands){
         let entity = self.entity;
         commands.add(move |world: &mut World|{
             let mut entity = world.entity_mut(entity);
@@ -103,7 +108,7 @@ impl<T: Component, Wrapped: BoxOrTiny<Inner = T>> ReversibleCommand for SpawnCom
             }
         });
     }
-    fn forget(&mut self, _commands: &mut Commands){}
+    fn cleanup(&mut self, _commands: &mut Commands){}
 }
 
 pub struct DespawnComponent<T: Component>{
@@ -134,7 +139,7 @@ impl<T: Component> ReversibleCommand for DespawnComponent<T>{
             self.error.error::<T>(DespawnComponentError::EntityNotFound);
         }
     }
-    fn forward(&mut self, commands: &mut Commands){
+    fn redo(&mut self, commands: &mut Commands){
         let entity = self.entity;
         commands.add(move |world: &mut World|{
             let mut entity = world.entity_mut(entity);
@@ -144,7 +149,7 @@ impl<T: Component> ReversibleCommand for DespawnComponent<T>{
             }
         });
     }
-    fn backward(&mut self, commands: &mut Commands){
+    fn undo(&mut self, commands: &mut Commands){
         let entity = self.entity;
         commands.add(move |world: &mut World|{
             let mut entity = world.entity_mut(entity);
@@ -154,7 +159,7 @@ impl<T: Component> ReversibleCommand for DespawnComponent<T>{
             }
         });
     }
-    fn forget(&mut self, commands: &mut Commands){
+    fn cleanup(&mut self, commands: &mut Commands){
         let entity = self.entity;
         commands.add(move |world: &mut World|{
             let mut entity = world.entity_mut(entity);
@@ -166,7 +171,7 @@ impl<T: Component> ReversibleCommand for DespawnComponent<T>{
 pub struct SpawnResource;
 
 struct SpawnResourceVariant<T: Resource, Wrapped: BoxOrTiny<Inner = T>>{
-    data: Option<Wrapped>,
+    data: ManuallyDrop<Wrapped>,
     error: ErrorOption<SpawnResourceError>
 }
 
@@ -174,12 +179,12 @@ impl SpawnResource{
     pub fn new_box<T: Resource>(data: T, error: ErrorOption<SpawnResourceError>) -> Box<dyn ReversibleCommand>{
         if T::BOX_IS_SMALLER{
             Box::new(SpawnResourceVariant{
-                data: Some(Box::new(data)),
+                data: ManuallyDrop::new(Box::new(data)),
                 error
             })
         } else {
             Box::new(SpawnResourceVariant{
-                data: Some(Tiny(data)),
+                data: ManuallyDrop::new(Tiny(data)),
                 error
             })
         }
@@ -188,14 +193,17 @@ impl SpawnResource{
 
 impl<Inner: Resource, T: BoxOrTiny<Inner = Inner>> ReversibleCommand for SpawnResourceVariant<Inner, T>{
     fn init(&mut self, world: &mut World){
-        let value = replace(&mut self.data, None).unwrap().into_inner();
+        let value = unsafe{
+            //SAFETY: `init` is only called once in the `LogCommands::add` method
+            ManuallyDrop::take(&mut self.data)
+        }.into_inner();
         if !world.contains_resource::<Inner>(){
             world.insert_resource(value);
         } else {
             self.error.error::<Inner>(SpawnResourceError::ResourceAlreadyExists);
         }
     }
-    fn forward(&mut self, commands: &mut Commands){
+    fn redo(&mut self, commands: &mut Commands){
         commands.add(|world: &mut World|{
             let value = world.remove_resource::<Despawned<Inner>>();
             if let Some(value) = value{
@@ -203,7 +211,7 @@ impl<Inner: Resource, T: BoxOrTiny<Inner = Inner>> ReversibleCommand for SpawnRe
             }
         });
     }
-    fn backward(&mut self, commands: &mut Commands){
+    fn undo(&mut self, commands: &mut Commands){
         commands.add(|world: &mut World|{
             let value = world.remove_resource::<Inner>();
             if let Some(value) = value{
@@ -211,7 +219,7 @@ impl<Inner: Resource, T: BoxOrTiny<Inner = Inner>> ReversibleCommand for SpawnRe
             }
         });
     }
-    fn forget(&mut self, _commands: &mut Commands){}
+    fn cleanup(&mut self, _commands: &mut Commands){}
 }
 
 pub struct DespawnResource<T: Resource>{
@@ -236,7 +244,7 @@ impl<T: Resource> ReversibleCommand for DespawnResource<T>{
             self.error.error::<T>(DespawnResourceError::ResourceNotFound);
         }
     }
-    fn forward(&mut self, commands: &mut Commands){
+    fn redo(&mut self, commands: &mut Commands){
         commands.add(|world: &mut World|{
             let value = world.remove_resource::<T>();
             if let Some(value) = value{
@@ -244,7 +252,7 @@ impl<T: Resource> ReversibleCommand for DespawnResource<T>{
             }
         });
     }
-    fn backward(&mut self, commands: &mut Commands){
+    fn undo(&mut self, commands: &mut Commands){
         commands.add(|world: &mut World|{
             let value = world.remove_resource::<Despawned<T>>();
             if let Some(value) = value{
@@ -252,7 +260,7 @@ impl<T: Resource> ReversibleCommand for DespawnResource<T>{
             }
         });
     }
-    fn forget(&mut self, commands: &mut Commands){
+    fn cleanup(&mut self, commands: &mut Commands){
         commands.add(|world: &mut World|{
             world.remove_resource::<Despawned<T>>();
         });
@@ -262,21 +270,21 @@ impl<T: Resource> ReversibleCommand for DespawnResource<T>{
 pub struct SpawnEntity;
 
 struct SpawnEntityVariant<T: Bundle, Wrapped: BoxOrTiny<Inner = T>>{
-    data: Option<Wrapped>,
-    entity: Option<Entity>
+    data: ManuallyDrop<Wrapped>,
+    entity: MaybeUninit<Entity>
 }
 
 impl SpawnEntity{
     pub fn new_box<T: Bundle>(data: T) -> Box<dyn ReversibleCommand>{
         if T::BOX_IS_SMALLER{
             Box::new(SpawnEntityVariant{
-                data: Some(Box::new(data)),
-                entity: None
+                data: ManuallyDrop::new(Box::new(data)),
+                entity: MaybeUninit::uninit()
             })
         } else {
             Box::new(SpawnEntityVariant{
-                data: Some(Tiny(data)),
-                entity: None
+                data: ManuallyDrop::new(Tiny(data)),
+                entity: MaybeUninit::uninit()
             })
         }
     }
@@ -284,24 +292,38 @@ impl SpawnEntity{
 
 impl<T: Bundle, Wrapped: BoxOrTiny<Inner = T>> ReversibleCommand for SpawnEntityVariant<T, Wrapped>{
     fn init(&mut self, world: &mut World){
-        let value = replace(&mut self.data, None).unwrap().into_inner();
-        self.entity = Some(world.spawn().insert_bundle(value).id());
+        let value = unsafe{
+            //SAFETY: method `Self::init` is only called once in the `LogCommands::add` method
+            ManuallyDrop::take(&mut self.data)
+        }.into_inner();
+        self.entity.write(world.spawn().insert_bundle(value).id());
     }
-    fn forward(&mut self, commands: &mut Commands){
-        let entity = self.entity.unwrap();
+    fn redo(&mut self, commands: &mut Commands){
+        let entity = *unsafe { 
+            //SAFETY: entity was written at method `Self::init` before
+            self.entity.assume_init_ref() 
+        };
         commands.add(move |world: &mut World|{
             let mut entity = world.entity_mut(entity);
             entity.remove::<DespawnedEntity>();
         });
     }
-    fn backward(&mut self, commands: &mut Commands){
-        let entity = self.entity.unwrap();
+    fn undo(&mut self, commands: &mut Commands){
+        let entity = *unsafe { 
+            //SAFETY: entity was written at method `Self::init` before
+            self.entity.assume_init_ref() 
+        };
         commands.add(move |world: &mut World|{
             let mut entity = world.entity_mut(entity);
             entity.insert(DespawnedEntity);
         });
     }
-    fn forget(&mut self, _commands: &mut Commands){}
+    fn cleanup(&mut self, _commands: &mut Commands){
+        unsafe{
+            // SAFETY: entity was written at method `Self::init` before
+            self.entity.assume_init_drop()
+        }
+    }
 }
 
 pub struct DespawnEntity{
@@ -326,32 +348,26 @@ impl ReversibleCommand for DespawnEntity{
             self.error.error::<()>(DespawnEntityError::EntityNotFound);
         }
     }
-    fn forward(&mut self, commands: &mut Commands){
+    fn redo(&mut self, commands: &mut Commands){
         let entity = self.entity;
         commands.add(move |world: &mut World|{
             let mut entity = world.entity_mut(entity);
             entity.insert(DespawnedEntity);
         });
     }
-    fn backward(&mut self, commands: &mut Commands){
+    fn undo(&mut self, commands: &mut Commands){
         let entity = self.entity;
         commands.add(move |world: &mut World|{
             let mut entity = world.entity_mut(entity);
             entity.remove::<DespawnedEntity>();
         });
     }
-    fn forget(&mut self, commands: &mut Commands){
+    fn cleanup(&mut self, commands: &mut Commands){
         let entity = self.entity;
         commands.add(move |world: &mut World|{
             world.entity_mut(entity).despawn();
         });
     }
-}
-
-#[derive(WorldQuery)]
-pub struct PresentEntity{
-    pub entity: Entity,
-    filter: Without<DespawnedEntity>
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -399,23 +415,18 @@ impl<E: Debug> ErrorOption<E>{
     }
 }
 
-pub struct LogCommands<'w, 's>(pub (super) Commands<'w, 's>);
+pub struct ReversibleCommands<'w, 's>(pub (super) Commands<'w, 's>);
 
-impl<'w, 's> LogCommands<'w, 's>{
+impl<'w, 's> ReversibleCommands<'w, 's>{
     pub fn add(&mut self, mut command: Box<dyn ReversibleCommand>){
         self.0.add(move |world: &mut World|{
             command.init(world);
-            let mut master = world.resource_mut::<Controller>();
-            master.log.back_mut().unwrap().push(command);
+            world
+                .resource_mut::<Controller>()
+                .log
+                .back_mut()
+                .unwrap()
+                .push(command);
         })
     }
 }
-
-struct Despawned<T>(T);
-
-impl<T: Component> Component for Despawned<T>{
-    type Storage = <T as Component>::Storage;
-}
-
-#[derive(Component)]
-struct DespawnedEntity;

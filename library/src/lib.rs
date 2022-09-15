@@ -1,9 +1,26 @@
+use bevy::{ecs::query::WorldQuery, prelude::{Entity, Without, Component}};
+
 mod controller;
 mod commands;
+mod system;
 
-pub fn add(left: usize, right: usize) -> usize {
-    left + right
+/// Component that should be always queried in `Query`s (instead of `Entity`).
+#[derive(WorldQuery)]
+pub struct PresentEntity{
+    pub entity: Entity,
+    filter: Without<DespawnedEntity>
 }
+
+/// Buffer component/resource that contains despawned data so it can be recovered.
+pub struct Despawned<T>(pub T);
+
+impl<T: Component> Component for Despawned<T>{
+    type Storage = <T as Component>::Storage;
+}
+
+/// Flag Component to mark an `Entity` as despawned.
+#[derive(Component)]
+pub struct DespawnedEntity;
 
 #[cfg(test)]
 mod tests {
@@ -11,7 +28,6 @@ mod tests {
 
     #[test]
     fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
+        assert!(true);
     }
 }
