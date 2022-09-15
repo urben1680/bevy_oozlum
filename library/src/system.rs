@@ -9,6 +9,19 @@ pub trait Derived: SystemParam{
     -- straight-forward as user params
     -- enforce rules: PresentEntity, no commands, no events (both only for state changes)
     --- Braucht zusätzlichen type für StateChange, Filter
+
+
+    types:
+    - State (S)
+    - Transition (T)
+
+    - User Params System (US) -> UP
+    - User Params (UP)
+
+    - User Params + State Change Params (CP) -> UP + SP
+    - State Change Params (SP)
+
+    - Log Only
     */
 }
 
