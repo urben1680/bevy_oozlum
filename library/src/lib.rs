@@ -1,5 +1,5 @@
-mod master_resource;
-mod log_commands;
+mod controller;
+mod commands;
 
 pub fn add(left: usize, right: usize) -> usize {
     left + right
