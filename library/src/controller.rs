@@ -125,7 +125,7 @@ impl Controller{
         self.progress
     }
     fn forget(vec: Option<Vec<Box<dyn ReversibleCommand>>>, commands: &mut Commands){
-        vec.into_iter().flatten().for_each(|mut entry| entry.forget(commands));
+        vec.into_iter().flatten().for_each(|mut entry| entry.cleanup(commands));
     }
     pub (super) fn system_pre_update(mut controller: ResMut<Self>, mut time: ResMut<Time>, mut commands: Commands){
         if controller.log_end{
@@ -170,7 +170,7 @@ impl Controller{
             Progress::BackwardLog | Progress::BackwardLogEnd => {
                 let log_index = controller.log_index;
                 for entry in controller.log.get_mut(log_index).unwrap(){
-                    entry.backward(&mut commands);
+                    entry.undo(&mut commands);
                 }
             },
             Progress::Pause | Progress::PauseLog => {}
@@ -231,14 +231,14 @@ impl Controller{
             (Progress::ForwardLog, query) => {
                 let log_index = controller.log_index;
                 for entry in controller.log.get_mut(log_index).unwrap(){
-                    entry.forward(&mut commands);
+                    entry.redo(&mut commands);
                 }
                 controller.log_end = !query.log();
             },
             (Progress::ForwardLogEnd, _) => {
                 let log_index = controller.log_index;
                 for entry in controller.log.get_mut(log_index).unwrap(){
-                    entry.forward(&mut commands);
+                    entry.redo(&mut commands);
                 }
                 if controller.log_index + 1 != controller.log.len(){
                     return;
