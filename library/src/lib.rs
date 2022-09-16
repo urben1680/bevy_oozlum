@@ -3,6 +3,7 @@ use bevy::{ecs::query::WorldQuery, prelude::{Entity, Without, Component}};
 mod controller;
 mod commands;
 mod system;
+mod event;
 
 /// Component that should be always queried in `Query`s (instead of `Entity`).
 #[derive(WorldQuery)]
