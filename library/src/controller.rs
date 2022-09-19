@@ -1,11 +1,11 @@
-use std::{collections::VecDeque, num::Wrapping};
+use std::{collections::VecDeque, num::Wrapping, mem::take};
 
 use bevy::{ecs::schedule::ShouldRun, prelude::{Commands, ResMut, Res, Events}, time::Time};
 
-use crate::commands::ReversibleCommand;
+use crate::{commands::ReversibleCommand, Timestamp};
 
 /// Event to forget all logs inclusively to `Some(time_stamp)`. `None` signals forgetting all logs.
-pub(super) struct Forget(pub Option<Wrapping<u16>>);
+pub(super) struct Forget(Option<Timestamp>);
 
 /// Send this event to control the length of the time steps.
 /// Raising this value speeds the progression up while being more expensive.
@@ -36,7 +36,7 @@ pub struct ControllerTimeStep(pub f64);
 pub enum Progress{
     Forward,
     ForwardFast{
-        to_time_stamp: Wrapping<u16>
+        to_time_stamp: Timestamp
     },
     ForwardLog,
     ForwardLogEnd,
@@ -58,8 +58,9 @@ impl Progress{
 
 pub struct Controller{
     time_step: f64,
-    pub(super) log: VecDeque<Vec<Box<dyn ReversibleCommand>>>,
-    time_stamp: Wrapping<u16>,
+    log: VecDeque<Vec<Box<dyn ReversibleCommand>>>,
+    pub(super) next_entry: Vec<Box<dyn ReversibleCommand>>,
+    time_stamp: Timestamp,
     log_index: usize,
     progress: Progress,
     progress_query: Progress,
@@ -115,10 +116,10 @@ impl Controller{
             ShouldRun::No
         }
     }
-    pub fn time_stamp(&self) -> Wrapping<u16>{
+    pub fn time_stamp(&self) -> Timestamp{
         self.time_stamp
     }
-    pub fn remembers_back_to(&self) -> Wrapping<u16>{
+    pub fn remembers_back_to(&self) -> Timestamp{
         self.time_stamp - Wrapping(self.log.len() as u16) + Wrapping(1) //correct?
     }
     pub fn progress(&self) -> Progress{
@@ -160,7 +161,8 @@ impl Controller{
                 else{
                     controller.log_index += 1;
                 }
-                controller.log.push_back(Vec::new());
+                let next = take(&mut controller.next_entry);
+                controller.log.push_back(next);
                 controller.time_stamp += 1;
             },
             Progress::ForwardLog | Progress::ForwardLogEnd => {
@@ -287,7 +289,7 @@ impl Controller{
             })
             .max();
         if let Some(mut count) = count{
-            count = count.min(controller.log_index); //should controller.log_index be replaced with controller.log.len()?
+            count = count.min(controller.log.len());
             for _ in 0..count{
                 Self::forget(controller.log.pop_front(), &mut commands);
             }

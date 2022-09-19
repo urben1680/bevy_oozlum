@@ -1,9 +1,16 @@
+use std::num::Wrapping;
+
 use bevy::{ecs::query::WorldQuery, prelude::{Entity, Without, Component}};
 
-mod controller;
-mod commands;
-mod system;
-mod event;
+pub mod controller;
+pub mod commands;
+pub mod system;
+pub mod event;
+
+pub const MAX_LOG_LEN: u16 = u16::MAX;
+pub const MAX_LOG_LEN_USIZE: usize = MAX_LOG_LEN as usize;
+
+pub type Timestamp = Wrapping<u16>;
 
 /// Component that should be always queried in `Query`s (instead of `Entity`).
 #[derive(WorldQuery)]
@@ -23,6 +30,7 @@ impl<T: Component> Component for Despawned<T>{
 #[derive(Component)]
 pub struct DespawnedEntity;
 
+/*
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -32,3 +40,4 @@ mod tests {
         assert!(true);
     }
 }
+*/
