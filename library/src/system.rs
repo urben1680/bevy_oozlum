@@ -1,4 +1,4 @@
-use std::marker::PhantomData;
+use std::{marker::PhantomData, num::Wrapping};
 
 use bevy::{ecs::{system::SystemParam, query::{WorldQuery, QueryItem}, event::Event}, prelude::{Query, Component, Without, Commands}};
 
@@ -41,10 +41,7 @@ trait DraftQuery: WorldQuery + Sized{
         let commands = &mut ReversibleCommands(commands);
         query.for_each_mut(|(user_items, log)| 
             if let Some(change) = Self::user_system_change(user_items, &other){
-                change
-                    .commands
-                    .into_iter()
-                    .for_each(|command| commands.add(command));
+                (change.commands)(commands);
             }
         )
     }
@@ -58,7 +55,16 @@ struct Log;
 
 struct Change<T>{
     transition: T,
-    commands: Vec<Box<dyn ReversibleCommand>>,
+    commands: fn(&mut ReversibleCommands),
     //event vectors?
 }
 
+
+
+
+
+struct Entry<Transition: Send + Sync + 'static> {
+    state_index: usize, //() for State = () when specialization lands
+    transition: Transition,
+    time_stamp: Wrapping<u16>,
+}
