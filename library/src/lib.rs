@@ -4,13 +4,14 @@ use bevy::{ecs::query::WorldQuery, prelude::{Entity, Without, Component}};
 
 pub mod controller;
 pub mod commands;
-pub mod system;
+pub mod system_mutation;
 pub mod event;
 
-pub const MAX_LOG_LEN: u16 = u16::MAX;
+pub const MAX_LOG_LEN: Ticks = Ticks::MAX;
 pub const MAX_LOG_LEN_USIZE: usize = MAX_LOG_LEN as usize;
 
-pub type Timestamp = Wrapping<u16>;
+pub type Ticks = u16;
+pub type Timestamp = Wrapping<Ticks>;
 
 /// Component that should be always queried in `Query`s (instead of `Entity`).
 #[derive(WorldQuery)]

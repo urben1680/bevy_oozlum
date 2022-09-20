@@ -2,7 +2,7 @@ use std::{collections::VecDeque, num::Wrapping, mem::take};
 
 use bevy::{ecs::schedule::ShouldRun, prelude::{Commands, ResMut, Res, Events}, time::Time};
 
-use crate::{commands::ReversibleCommand, Timestamp};
+use crate::{commands::ReversibleCommandInitialized, Timestamp};
 
 /// Event to forget all logs inclusively to `Some(time_stamp)`. `None` signals forgetting all logs.
 pub(super) struct Forget(Option<Timestamp>);
@@ -58,8 +58,8 @@ impl Progress{
 
 pub struct Controller{
     time_step: f64,
-    log: VecDeque<Vec<Box<dyn ReversibleCommand>>>,
-    pub(super) next_entry: Vec<Box<dyn ReversibleCommand>>,
+    log: VecDeque<Vec<Box<dyn ReversibleCommandInitialized>>>,
+    pub(super) next_entry: Vec<Box<dyn ReversibleCommandInitialized>>,
     time_stamp: Timestamp,
     log_index: usize,
     progress: Progress,
@@ -125,7 +125,7 @@ impl Controller{
     pub fn progress(&self) -> Progress{
         self.progress
     }
-    fn forget(vec: Option<Vec<Box<dyn ReversibleCommand>>>, commands: &mut Commands){
+    fn forget(vec: Option<Vec<Box<dyn ReversibleCommandInitialized>>>, commands: &mut Commands){
         vec.into_iter().flatten().for_each(|mut entry| entry.cleanup(commands));
     }
     pub (super) fn system_pre_update(mut controller: ResMut<Self>, mut time: ResMut<Time>, mut commands: Commands){
