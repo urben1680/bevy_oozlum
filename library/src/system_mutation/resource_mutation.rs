@@ -1,12 +1,12 @@
 use bevy::{ecs::system::{SystemParam, Resource}, prelude::{Res, ResMut}};
 
-use super::{Log, LogStateless, NextTransition, NextTransitionStateless};
+use super::{LogWithStates, Log, NextTransitionWithState, NextTransition};
 
 pub trait ReversibleResource: Send + Sync + Sized + 'static{
     type Resources: SystemParam;
     type Transition: Resource;
     type State: Resource;
-    fn next_transition(resources: &Self::Resources, state: &Self::State) -> Option<NextTransition<Self::Transition>>;
+    fn next_transition(resources: &Self::Resources, state: &Self::State) -> Option<NextTransitionWithState<Self::Transition, Self>>;
     fn advance(resources: Self::Resources, state: &Self::State);
     fn revert(resources: Self::Resources, state: &Self::State);
     fn advance_by_transition(resources: Self::Resources, transition: &Self::Transition){
@@ -22,15 +22,15 @@ pub trait ReversibleResource: Send + Sync + Sized + 'static{
 trait ReversibleResourceMutation: ReversibleResource{
     fn mutate<F: for<'a> Fn(
         Self::Resources,
-        &Vec<Self::State>,
-        &mut Log<Self::Transition, Self>
+        &Res<Vec<Self::State>>,
+        &mut LogWithStates<Self::Transition, Self>
     )>(
         resources: Self::Resources, 
         states: Res<Vec<Self::State>>,
-        mut log: ResMut<Log<Self::Transition, Self>>,
+        mut log: ResMut<LogWithStates<Self::Transition, Self>>,
         f: F
     ){
-        f(resources, &*states, &mut *log)
+        f(resources, &states, &mut *log)
     }
 }
 
@@ -39,7 +39,7 @@ impl<T: ReversibleResource> ReversibleResourceMutation for T {}
 pub trait ReversibleResourceStateless: Send + Sync + Sized + 'static{
     type Resources: SystemParam;
     type Transition: Resource;
-    fn next_transition(resources: &Self::Resources) -> Option<NextTransitionStateless<Self::Transition>>;
+    fn next_transition(resources: &Self::Resources) -> Option<NextTransition<Self::Transition, Self>>;
     fn advance(resources: Self::Resources);
     fn revert(resources: Self::Resources);
     fn advance_by_transition(resources: Self::Resources, transition: &Self::Transition){
@@ -55,13 +55,13 @@ pub trait ReversibleResourceStateless: Send + Sync + Sized + 'static{
 trait ReversibleResourceMutationStateless: ReversibleResourceStateless{
     fn mutate<F: for<'a> Fn(
         Self::Resources,
-        ResMut<LogStateless<Self::Transition, Self>>
+        &mut Log<Self::Transition, Self>
     )>(
         resources: Self::Resources, 
-        log: ResMut<LogStateless<Self::Transition, Self>>,
+        mut log: ResMut<Log<Self::Transition, Self>>,
         f: F
     ){
-        f(resources, log)
+        f(resources, &mut *log)
     }
 }
 

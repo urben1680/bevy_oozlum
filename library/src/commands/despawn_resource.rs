@@ -22,11 +22,11 @@ impl<T: Resource> DespawnResource<T>{
 
 impl<T: Resource> ReversibleCommand for DespawnResource<T>{
     type Initialized = DespawnResourceInitialized<T>;
-    fn init(self, world: &mut World) -> Self::Initialized{
+    fn init<M>(self, world: &mut World) -> Self::Initialized{
         if let Some(value) = world.remove_resource::<T>(){
             world.insert_resource(Despawned(value));
         } else {
-            self.error.error::<T>(&DespawnResourceError::ResourceNotFound);
+            self.error.error::<T, M>(&DespawnResourceError::ResourceNotFound);
         }
         DespawnResourceInitialized{
             p: PhantomData

@@ -23,11 +23,11 @@ impl DespawnEntity{
 
 impl ReversibleCommand for DespawnEntity{
     type Initialized = DespawnEntityInitialized;
-    fn init(self, world: &mut World) -> Self::Initialized {
+    fn init<M>(self, world: &mut World) -> Self::Initialized {
         if let Some(mut entity_mut) = world.get_entity_mut(self.entity){
             entity_mut.insert(DespawnedEntity);
         } else {
-            self.error.error::<()>(&DespawnEntityError::EntityNotFound);
+            self.error.error::<Entity, M>(&DespawnEntityError::EntityNotFound);
         }
         DespawnEntityInitialized{
             entity: self.entity
