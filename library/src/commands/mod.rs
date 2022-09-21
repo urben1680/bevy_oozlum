@@ -1,4 +1,4 @@
-use std::{fmt::Debug, any::type_name};
+use std::{fmt::Debug, any::type_name, marker::PhantomData};
 use bevy::{prelude::{Commands, World}, log::{error, warn, info}};
 use super::controller::Controller;
 
@@ -17,13 +17,19 @@ pub use spawn_entity::*;
 pub use despawn_entity::*;
 
 /// `Commands` wrapper to work with reversible commands.
-pub struct ReversibleCommands<'w, 's>(pub (super) Commands<'w, 's>);
+pub struct ReversibleCommands<'w, 's, M>{
+    commands: Commands<'w, 's>,
+    marker: PhantomData<M>
+}
 
-impl<'w, 's> ReversibleCommands<'w, 's>{
+impl<'w, 's, M> ReversibleCommands<'w, 's, M>{
+    pub(super) fn new(commands: Commands<'w, 's>) -> Self{
+        Self { commands, marker: PhantomData }
+    }
     /// Add a reversible command
     pub fn add<T: ReversibleCommand>(&mut self, command: T){
-        self.0.add(|world: &mut World|{
-            let command = command.init(world);
+        self.commands.add(|world: &mut World|{
+            let command = command.init::<M>(world);
             world
                 .resource_mut::<Controller>()
                 .next_entry
@@ -34,10 +40,12 @@ impl<'w, 's> ReversibleCommands<'w, 's>{
 
 /// Trait for reversible commands that are not yet initialized.
 pub trait ReversibleCommand: Send + Sync + 'static{
-    /// Type after initialization, typically unequal to `Self` if fields in Self are no longer needed or moved or additional fields are set in the `init` method
+    /// Type after initialization, typically unequal to `Self` if fields in Self are no longer needed or moved or additional fields are set in the `init` method.
     type Initialized: ReversibleCommandInitialized;
-    /// Initialize by mutating the world, has to include actions that occur in the `Self::WithoutInitData::redo` method
-    fn init(self, world: &mut World) -> Self::Initialized;
+    /// Initialize by mutating the world, has to include actions that occur in the `Self::WithoutInitData::redo` method.
+    /// 
+    /// Generic parameter `M` is the type of the calling reversible system
+    fn init<M>(self, world: &mut World) -> Self::Initialized;
 }
 
 /// Trait for reversible commands that are initialized.
@@ -58,7 +66,7 @@ pub trait ReversibleCommandInitialized: Send + Sync + 'static{
 /// 
 /// The above variants call their respective macro with these parameters:
 /// 
-/// `"LogCommand failed: {error:?}, relevant type: {}", type_name::<T>()`
+/// `"LogCommand failed: {error:?} for type {}, issued by reversible system {}", std::any::type_name::<T>(), std::any::type_name::<M>()`
 /// 
 /// ...where `error` is `&E` and `T` is an additional type that is relevant for this command, like the type of a resource that is tried to be spawned.
 /// 
@@ -67,16 +75,16 @@ pub enum ReversibleCommandErrorHandling<E: Debug>{
     LogError,
     LogWarning,
     LogInfo,
-    Custom(fn(&E))
+    Custom(Box<dyn Fn(&E) + Send + Sync>)
 }
 
 impl<E: Debug> ReversibleCommandErrorHandling<E>{
-    fn error<T>(&self, error: &E){
-        todo!("add another generic which identifies the relevant system, maybe also wrapped in an enum (resource, component, stateless, etc) or enum as a method field");
+    fn error<T, M>(&self, error: &E){
+        //todo!("add another generic which identifies the relevant system, maybe also wrapped in an enum (resource, component, stateless, etc) or enum as a method field");
         match self{
-            Self::LogError => error!("LogCommand failed: {error:?}, relevant type: {}", type_name::<T>()),
-            Self::LogWarning => warn!("LogCommand failed: {error:?}, relevant type: {}", type_name::<T>()),
-            Self::LogInfo => info!("LogCommand failed: {error:?}, relevant type: {}", type_name::<T>()),
+            Self::LogError => error!("LogCommand failed: {error:?} for type {}, issued by reversible system {}", type_name::<T>(), type_name::<M>()),
+            Self::LogWarning => warn!("LogCommand failed: {error:?} for type {}, issued by reversible system {}", type_name::<T>(), type_name::<M>()),
+            Self::LogInfo => info!("LogCommand failed: {error:?} for type {}, issued by reversible system {}", type_name::<T>(), type_name::<M>()),
             Self::Custom(f) => f(error)
         }
     }

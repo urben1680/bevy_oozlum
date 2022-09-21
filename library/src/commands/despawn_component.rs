@@ -26,15 +26,15 @@ impl<T: Component> DespawnComponent<T>{
 
 impl<T: Component> ReversibleCommand for DespawnComponent<T>{
     type Initialized = DespawnComponentInitialized<T>;
-    fn init(self, world: &mut World) -> Self::Initialized {
+    fn init<M>(self, world: &mut World) -> Self::Initialized {
         if let Some(mut entity_mut) = world.get_entity_mut(self.entity){
             if let Some(value) = entity_mut.remove::<T>(){
                 entity_mut.insert(Despawned(value));
             } else {
-                self.error.error::<T>(&DespawnComponentError::ComponentNotFound);
+                self.error.error::<T, M>(&DespawnComponentError::ComponentNotFound);
             }
         } else {
-            self.error.error::<T>(&DespawnComponentError::EntityNotFound);
+            self.error.error::<T, M>(&DespawnComponentError::EntityNotFound);
         }
         DespawnComponentInitialized{
             entity: self.entity,

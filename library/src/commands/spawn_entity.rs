@@ -15,7 +15,7 @@ impl<T: Bundle> SpawnEntity<T>{
 
 impl<T: Bundle> ReversibleCommand for SpawnEntity<T>{
     type Initialized = SpawnEntityInitialized;
-    fn init(self, world: &mut World) -> Self::Initialized {
+    fn init<M>(self, world: &mut World) -> Self::Initialized {
         SpawnEntityInitialized{
             entity: world.spawn().insert_bundle(self.data).id()
         }

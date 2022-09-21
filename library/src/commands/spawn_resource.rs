@@ -24,11 +24,11 @@ impl<T: Resource> SpawnResource<T>{
 
 impl<T: Resource> ReversibleCommand for SpawnResource<T>{
     type Initialized = SpawnResourceInitialized<T>;
-    fn init(self, world: &mut World) -> Self::Initialized{
+    fn init<M>(self, world: &mut World) -> Self::Initialized{
         if !world.contains_resource::<T>(){
             world.insert_resource(self.data);
         } else {
-            self.error.error::<T>(&SpawnResourceError::ResourceAlreadyExists);
+            self.error.error::<T, M>(&SpawnResourceError::ResourceAlreadyExists);
         }
         SpawnResourceInitialized{
             p: PhantomData
