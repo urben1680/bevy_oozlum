@@ -1,8 +1,8 @@
-use std::marker::PhantomData;
+use std::num::Wrapping;
 
 use bevy::{ecs::{system::{SystemParam, Resource}, query::{WorldQuery, QueryItem}}, prelude::{Res, Query, Without}};
-use crate::DespawnedEntity;
-use super::{LogWithStates, Log, NextTransitionWithState, NextTransition, IntoApp};
+use crate::{DespawnedEntity, Ticks};
+use super::{LogWithStates, Log, NextTransitionWithState, NextTransition, IntoApp, transition_default_assert};
 
 pub trait ReversibleComponents: Send + Sync + Sized + 'static{
     type Resources: SystemParam + Send + Sync;
@@ -13,11 +13,25 @@ pub trait ReversibleComponents: Send + Sync + Sized + 'static{
     fn next_transition(resources: &Self::Resources, state: &Self::State, query_item: QueryItem<Self::Query>) -> Option<NextTransitionWithState<Self::Transition, Self>>;
     fn advance(resources: &Self::Resources, state: &Self::State, query_item: QueryItem<Self::Query>);
     fn revert(resources: &Self::Resources, state: &Self::State, query_item: QueryItem<Self::Query>);
-    fn advance_by_transition(resources: &Self::Resources, transition: &Self::Transition, query_item: QueryItem<Self::Query>){
+    fn advance_timestamp(resources: &Self::Resources, state: &Self::State, query_item: QueryItem<Self::Query>, current_timestamp: Wrapping<Ticks>, target: Wrapping<Ticks>) -> Wrapping<Ticks>{
+        #[allow(clippy::no_effect)]
+        {target};
+        Self::advance(resources, state, query_item);
+        current_timestamp + Wrapping(1)
+    }
+    fn revert_timestamp(resources: &Self::Resources, state: &Self::State, query_item: QueryItem<Self::Query>, current_timestamp: Wrapping<Ticks>, target: Wrapping<Ticks>) -> Wrapping<Ticks>{
+        #[allow(clippy::no_effect)]
+        {target};
+        Self::revert(resources, state, query_item);
+        current_timestamp - Wrapping(1)
+    }
+    fn advance_by_transition(resources: &Self::Resources, query_item: QueryItem<Self::Query>, past_state: &Self::State, future_state: &Self::State, transition: &Self::Transition){
+        transition_default_assert::<true, Self::Transition, Self>();
         #[allow(clippy::no_effect)]
         (resources, transition, query_item);
     }
-    fn revert_by_transition(resources: &Self::Resources, transition: &Self::Transition, query_item: QueryItem<Self::Query>){
+    fn revert_by_transition(resources: &Self::Resources, query_item: QueryItem<Self::Query>, past_state: &Self::State, future_state: &Self::State, transition: &Self::Transition){
+        transition_default_assert::<false, Self::Transition, Self>();
         #[allow(clippy::no_effect)]
         (resources, transition, query_item);
     }
@@ -63,11 +77,25 @@ pub trait ReversibleComponentsSingleState: Send + Sync + Sized + 'static{
     fn next_transition(resources: &Self::Resources, query_item: QueryItem<Self::Query>) -> Option<NextTransition<Self::Transition, Self>>;
     fn advance(resources: &Self::Resources, query_item: QueryItem<Self::Query>);
     fn revert(resources: &Self::Resources, query_item: QueryItem<Self::Query>);
-    fn advance_by_transition(resources: &Self::Resources, transition: &Self::Transition, query_item: QueryItem<Self::Query>){
+    fn advance_timestamp(resources: &Self::Resources, query_item: QueryItem<Self::Query>, current_timestamp: Wrapping<Ticks>, target: Wrapping<Ticks>) -> Wrapping<Ticks>{
+        #[allow(clippy::no_effect)]
+        {target};
+        Self::advance(resources, query_item);
+        current_timestamp + Wrapping(1)
+    }
+    fn revert_timestamp(resources: &Self::Resources, query_item: QueryItem<Self::Query>, current_timestamp: Wrapping<Ticks>, target: Wrapping<Ticks>) -> Wrapping<Ticks>{
+        #[allow(clippy::no_effect)]
+        {target};
+        Self::revert(resources, query_item);
+        current_timestamp - Wrapping(1)
+    }
+    fn advance_by_transition(resources: &Self::Resources, query_item: QueryItem<Self::Query>, transition: &Self::Transition){
+        transition_default_assert::<true, Self::Transition, Self>();
         #[allow(clippy::no_effect)]
         (resources, transition, query_item);
     }
-    fn revert_by_transition(resources: &Self::Resources, transition: &Self::Transition, query_item: QueryItem<Self::Query>){
+    fn revert_by_transition(resources: &Self::Resources, query_item: QueryItem<Self::Query>, transition: &Self::Transition){
+        transition_default_assert::<false, Self::Transition, Self>();
         #[allow(clippy::no_effect)]
         (resources, transition, query_item);
     }
