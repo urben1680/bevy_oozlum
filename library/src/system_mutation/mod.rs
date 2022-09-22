@@ -1,8 +1,8 @@
-use std::{marker::PhantomData, collections::VecDeque, ops::Index};
+use std::{marker::PhantomData, collections::VecDeque, ops::Index, any::{TypeId, type_name}, num::Wrapping};
 
 use bevy::{ecs::{system::{SystemParam, Resource, StaticSystemParam, SystemParamFetch, SystemParamItem}, query::{WorldQuery, QueryItem, Fetch}, schedule::IntoSystemDescriptor}, prelude::{Query, Component, Without, Res, ResMut, System, App}};
 
-use crate::{DespawnedEntity, Timestamp, commands::ReversibleCommands};
+use crate::{DespawnedEntity, Ticks, commands::ReversibleCommands};
 
 
 mod resource_mutation;
@@ -57,12 +57,12 @@ pub struct Log<T: Resource, M: Resource>{
 struct LogEntryWithState<T: Resource>{
     state_index: usize,
     transition: T,
-    time_stamp: Timestamp
+    time_stamp: Wrapping<Ticks>
 }
 
 struct LogEntry<T: Resource>{
     transition: T,
-    time_stamp: Timestamp
+    time_stamp: Wrapping<Ticks>
 }
 
 trait LogMutation{
@@ -71,6 +71,14 @@ trait LogMutation{
     /*
     mutations:
 
+    - resources (as reference or as value/&mut(?))
+    - state collection
+    - state
+    - log / next transition
+    -- transition
+    -- marker
+    - query
+    - queryitems
 
     ////// COMPONENTS
 
@@ -169,16 +177,96 @@ die felder des containers sind alle funktion pointer
 benötigt GAT für die jeweiligen typen
 */
 
+pub struct SystemContainer<ParamsFull: SystemParam, ParamsLog: SystemParam>{
+    pub advance: fn(ParamsFull),
+    pub advance_timestamp: fn(ParamsFull), //both log and not-log
+    pub advance_log: fn(ParamsFull),
+    pub revert_log: fn(ParamsFull),
+    pub revert_timestamp: fn(ParamsFull),
+    pub log_end: fn(ParamsLog)
+
+    /*
+    advance_system:
+    - advance
+    - next
+    - (advance_transition)
+
+    advance_timestamp_system:
+    - advance_timestamp
+    - next
+    - (advance_transition)
+
+    advance_log_system:
+    - advance
+    - (advance_translation)
+
+    revert_log_system:
+    - (revert_transition)
+    - revert
+
+    revert_log_timestamp_system:
+    - (revert_transition)
+    - revert_timestamp
+
+    log_end:
+    - log_end
+
+    Idee:
+
+    Mutate traits erzeugen die funktionen als fn und greifen dabei auf die allgemeinen funktionen zu und auf die user definierten funktionen
+    diese werden gebündelt als struct zurückgegeben in fn(SystemParams) format
+
+
+    Unterschied advance_timestamp und advance_log_timestamp?
+    - keiner, controller.target_time_stamp() nutzen
+    */
+}
+
+
+
+
 pub struct IntoApp<I: SystemParam + 'static, O: 'static>{
     pub(super) translation: fn(SystemParamItem<I>, fn(O)),
     pub(super) system: fn(O),
+    pub(super) system_1: fn(StaticSystemParam<I>)
 }
 impl<I: SystemParam + 'static, O: 'static> IntoApp<I, O>{
     fn add_system(&self, app: &mut App){
+        app.add_system(self.system_1);
+    }
+    fn system(&self) -> impl Fn(StaticSystemParam<I>){
         let translation = self.translation;
         let system = self.system;
-        app.add_system(move |params: StaticSystemParam<I>|{
+        move |params: StaticSystemParam<I>|{
             (translation)(params.into_inner(), system);
-        });
+        }
     }
+    fn proxy(app: &mut App, f: fn(StaticSystemParam<I>)){}
+}
+
+fn transition_default_assert<const FORWARD: bool, Transition: 'static, S>(){
+    let fn_name = if FORWARD{
+        "advance_by_transition"
+    } else {
+        "revert_by_transition"
+    };
+    debug_assert!(
+        TypeId::of::<Transition>() == TypeId::of::<()>(), 
+        "Default impl for `{}` should be replaced if `Transition` is not `()` for trait implementator {}", 
+        fn_name, type_name::<S>()
+    );
+    /* desirable solution if Rust allowed usage of "generic parameters from outer function"
+    const ASSERT: () = {
+        let fn_name = if FORWARD{
+            "advance_by_transition"
+        } else {
+            "revert_by_transition"
+        };
+        debug_assert!(
+            TypeId::of::<Transition>() == TypeId::of::<()>(), 
+            "Default impl for `{}` should be replaced if `Transition` is not `()` for trait implementator {}", 
+            fn_name, type_name::<S>()
+        )
+    };
+    */
 }

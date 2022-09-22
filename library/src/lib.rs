@@ -1,5 +1,3 @@
-use std::num::Wrapping;
-
 use bevy::{ecs::query::WorldQuery, prelude::{Entity, Without, Component}};
 
 pub mod controller;
@@ -10,8 +8,10 @@ pub mod event;
 pub const MAX_LOG_LEN: Ticks = Ticks::MAX;
 pub const MAX_LOG_LEN_USIZE: usize = MAX_LOG_LEN as usize;
 
+/// Type that stores the ticks systems work by.
+/// MAX value is also the limit how many ticks can be logged.
+/// Timestamps are stored as `std::num::Wrapping<Ticks>`.
 pub type Ticks = u16;
-pub type Timestamp = Wrapping<Ticks>;
 
 /// Component that should be always queried in `Query`s (instead of `Entity`).
 #[derive(WorldQuery)]

@@ -2,10 +2,10 @@ use std::{collections::VecDeque, num::Wrapping, mem::take};
 
 use bevy::{ecs::schedule::ShouldRun, prelude::{Commands, ResMut, Res, Events}, time::Time};
 
-use crate::{commands::ReversibleCommandInitialized, Timestamp};
+use crate::{commands::ReversibleCommandInitialized, Ticks};
 
 /// Event to forget all logs inclusively to `Some(time_stamp)`. `None` signals forgetting all logs.
-pub(super) struct Forget(Option<Timestamp>);
+pub(super) struct Forget(Option<Wrapping<Ticks>>);
 
 /// Send this event to control the length of the time steps.
 /// Raising this value speeds the progression up while being more expensive.
@@ -36,10 +36,10 @@ pub struct ControllerTimeStep(pub f64);
 pub enum Progress{
     Forward,
     ForwardFast{
-        to_time_stamp: Timestamp
+        to_time_stamp: Wrapping<Ticks>
     },
     ForwardLog,
-    ForwardLogEnd,
+    ForwardLogEnd, //calls same systems as ForwardFast
     BackwardLog,
     BackwardLogEnd,
     Pause,
@@ -60,7 +60,7 @@ pub struct Controller{
     time_step: f64,
     log: VecDeque<Vec<Box<dyn ReversibleCommandInitialized>>>,
     pub(super) next_entry: Vec<Box<dyn ReversibleCommandInitialized>>,
-    time_stamp: Timestamp,
+    time_stamp: Wrapping<Ticks>,
     log_index: usize,
     progress: Progress,
     progress_query: Progress,
@@ -70,6 +70,16 @@ pub struct Controller{
 }
 
 impl Controller{
+    pub (super) fn target_time_stamp(&self) -> Wrapping<Ticks>{
+        match self.progress{
+            Progress::Forward | Progress::ForwardLog => todo!("aktueller plus 1"),
+            Progress::ForwardFast { to_time_stamp } => to_time_stamp,
+            Progress::ForwardLogEnd => todo!("aktueller plus differenz log len und index"),
+            Progress::BackwardLog => todo!("aktueller minus 1"),
+            Progress::BackwardLogEnd => todo!("aktueller minus index"),
+            Progress::Pause | Progress::PauseLog => todo!("aktueller")
+        }
+    }
     pub (super) fn run_criteria_forward(controller: Res<Self>) -> ShouldRun{
         Self::run_criteria_not_log_end(matches!(controller.progress, Progress::Forward), controller)
     }
@@ -116,10 +126,10 @@ impl Controller{
             ShouldRun::No
         }
     }
-    pub fn time_stamp(&self) -> Timestamp{
+    pub fn time_stamp(&self) -> Wrapping<Ticks>{
         self.time_stamp
     }
-    pub fn remembers_back_to(&self) -> Timestamp{
+    pub fn remembers_back_to(&self) -> Wrapping<Ticks>{
         self.time_stamp - Wrapping(self.log.len() as u16) + Wrapping(1) //correct?
     }
     pub fn progress(&self) -> Progress{
