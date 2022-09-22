@@ -1,8 +1,7 @@
 use std::num::Wrapping;
-
 use bevy::{ecs::{system::{SystemParam, Resource}, query::{WorldQuery, QueryItem}}, prelude::{Res, Query, Without}};
 use crate::{DespawnedEntity, Ticks};
-use super::{LogWithStates, Log, NextTransitionWithState, NextTransition, IntoApp, transition_default_assert};
+use super::{LogWithStates, Log, NextTransitionWithState, NextTransition, transition_default_assert};
 
 pub trait ReversibleComponents: Send + Sync + Sized + 'static{
     type Resources: SystemParam + Send + Sync;
@@ -28,12 +27,12 @@ pub trait ReversibleComponents: Send + Sync + Sized + 'static{
     fn advance_by_transition(resources: &Self::Resources, query_item: QueryItem<Self::Query>, past_state: &Self::State, future_state: &Self::State, transition: &Self::Transition){
         transition_default_assert::<true, Self::Transition, Self>();
         #[allow(clippy::no_effect)]
-        (resources, transition, query_item);
+        (resources, query_item, past_state, future_state, transition);
     }
     fn revert_by_transition(resources: &Self::Resources, query_item: QueryItem<Self::Query>, past_state: &Self::State, future_state: &Self::State, transition: &Self::Transition){
         transition_default_assert::<false, Self::Transition, Self>();
         #[allow(clippy::no_effect)]
-        (resources, transition, query_item);
+        (resources, query_item, past_state, future_state, transition);
     }
 }
 

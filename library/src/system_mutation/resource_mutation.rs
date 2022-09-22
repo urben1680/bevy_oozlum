@@ -1,9 +1,6 @@
 use std::num::Wrapping;
-
 use bevy::{ecs::system::{SystemParam, Resource}, prelude::{Res, ResMut}};
-
 use crate::Ticks;
-
 use super::{LogWithStates, Log, NextTransitionWithState, NextTransition, transition_default_assert};
 
 pub trait ReversibleResource: Send + Sync + Sized + 'static{
@@ -28,12 +25,12 @@ pub trait ReversibleResource: Send + Sync + Sized + 'static{
     fn advance_by_transition(resources: Self::Resources, past_state: &Self::State, future_state: &Self::State, transition: &Self::Transition){
         transition_default_assert::<true, Self::Transition, Self>();
         #[allow(clippy::no_effect)]
-        (resources, transition);
+        (resources, past_state, future_state, transition);
     }
     fn revert_by_transition(resources: Self::Resources, past_state: &Self::State, future_state: &Self::State, transition: &Self::Transition){
         transition_default_assert::<false, Self::Transition, Self>();
         #[allow(clippy::no_effect)]
-        (resources, transition);
+        (resources, past_state, future_state, transition);
     }
 }
 
