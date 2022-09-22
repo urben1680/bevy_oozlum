@@ -262,7 +262,7 @@ fn transition_default_assert<const FORWARD: bool, Transition: 'static, S>(){
         } else {
             "revert_by_transition"
         };
-        debug_assert!(
+        assert!(
             TypeId::of::<Transition>() == TypeId::of::<()>(), 
             "Default impl for `{}` should be replaced if `Transition` is not `()` for trait implementator {}", 
             fn_name, type_name::<S>()
