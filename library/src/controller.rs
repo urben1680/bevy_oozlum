@@ -5,7 +5,7 @@ use bevy::{ecs::schedule::ShouldRun, prelude::{Commands, ResMut, Res, Events}, t
 use crate::{commands::ReversibleCommandInitialized, Ticks};
 
 /// Event to forget all logs inclusively to `Some(time_stamp)`. `None` signals forgetting all logs.
-pub(super) struct Forget(Option<Wrapping<Ticks>>);
+pub(super) struct Forget(pub(super) Option<Wrapping<Ticks>>);
 
 /// Send this event to control the length of the time steps.
 /// Raising this value speeds the progression up while being more expensive.
@@ -60,7 +60,7 @@ pub struct Controller{
     time_step: f64,
     log: VecDeque<Vec<Box<dyn ReversibleCommandInitialized>>>,
     pub(super) next_entry: Vec<Box<dyn ReversibleCommandInitialized>>,
-    time_stamp: Wrapping<Ticks>,
+    pub(super) time_stamp: Wrapping<Ticks>,
     log_index: usize,
     progress: Progress,
     progress_query: Progress,
@@ -70,14 +70,14 @@ pub struct Controller{
 }
 
 impl Controller{
-    pub (super) fn target_time_stamp(&self) -> Wrapping<Ticks>{
+    pub fn target_time_stamp(&self) -> Wrapping<Ticks>{
         match self.progress{
-            Progress::Forward | Progress::ForwardLog => todo!("aktueller plus 1"),
+            Progress::Forward | Progress::ForwardLog => self.time_stamp + Wrapping(1),
             Progress::ForwardFast { to_time_stamp } => to_time_stamp,
-            Progress::ForwardLogEnd => todo!("aktueller plus differenz log len und index"),
-            Progress::BackwardLog => todo!("aktueller minus 1"),
-            Progress::BackwardLogEnd => todo!("aktueller minus index"),
-            Progress::Pause | Progress::PauseLog => todo!("aktueller")
+            Progress::ForwardLogEnd => self.time_stamp + Wrapping((self.log.len() - self.log_index - 1) as u16),
+            Progress::BackwardLog => self.time_stamp - Wrapping(1),
+            Progress::BackwardLogEnd => self.time_stamp - Wrapping(self.log_index as Ticks),
+            Progress::Pause | Progress::PauseLog => self.time_stamp
         }
     }
     pub (super) fn run_criteria_forward(controller: Res<Self>) -> ShouldRun{
@@ -138,7 +138,7 @@ impl Controller{
     fn forget(vec: Option<Vec<Box<dyn ReversibleCommandInitialized>>>, commands: &mut Commands){
         vec.into_iter().flatten().for_each(|mut entry| entry.cleanup(commands));
     }
-    pub (super) fn system_pre_update(mut controller: ResMut<Self>, mut time: ResMut<Time>, mut commands: Commands){
+    pub (super) fn system_pre_reversible_systems(mut controller: ResMut<Self>, mut time: ResMut<Time>, mut commands: Commands){
         if controller.log_end{
             controller.pre_update_ran = true;
             return; //nothing to do for this state
@@ -188,13 +188,14 @@ impl Controller{
             Progress::Pause | Progress::PauseLog => {}
         }
     }
-    pub (super) fn system_post_update(mut controller: ResMut<Self>, mut commands: Commands, events: ResMut<Events<Forget>>, mut progress_query: ResMut<Events<Progress>>, mut time_step: ResMut<Events<ControllerTimeStep>>)
+    pub (super) fn system_post_reversible_systems(mut controller: ResMut<Self>, mut commands: Commands, events: ResMut<Events<Forget>>, mut progress_query: ResMut<Events<Progress>>, mut time_step: ResMut<Events<ControllerTimeStep>>)
     {
         if !controller.pre_update_ran{
-            return; //do not run system
+            return;
         }
         
         controller.pre_update_ran = false;
+
         if let Some(progress_query) = progress_query.drain().last(){
             controller.progress_query = progress_query;
         }
@@ -240,12 +241,12 @@ impl Controller{
                     return;
                 }
             },
-            (Progress::ForwardLog, query) => {
+            (Progress::ForwardLog, _) => {
                 let log_index = controller.log_index;
                 for entry in controller.log.get_mut(log_index).unwrap(){
                     entry.redo(&mut commands);
                 }
-                controller.log_end = !query.log();
+                controller.log_end = !controller.progress_query.log();
             },
             (Progress::ForwardLogEnd, _) => {
                 let log_index = controller.log_index;
@@ -256,18 +257,18 @@ impl Controller{
                     return;
                 }
             },
-            (Progress::BackwardLog, query) => {
+            (Progress::BackwardLog, _) => {
                 controller.time_stamp -= 1;
                 controller.log_index -= 1;
-                controller.log_end = !query.log();
+                controller.log_end = !controller.progress_query.log();
             },
             (Progress::BackwardLogEnd, _) => {
                 if controller.log_index != 0{
                     return;
                 }
             }
-            (Progress::PauseLog, query) => {
-                controller.log_end = !query.log();
+            (Progress::PauseLog, _) => {
+                controller.log_end = !controller.progress_query.log();
             },
             (Progress::Pause, _) => {}
         }
