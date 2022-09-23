@@ -5,8 +5,9 @@ pub mod commands;
 pub mod system_mutation;
 pub mod event;
 
-pub const MAX_LOG_LEN: Ticks = Ticks::MAX;
-pub const MAX_LOG_LEN_USIZE: usize = MAX_LOG_LEN as usize;
+pub const MAX_LOG_INDEX: Ticks = Ticks::MAX;
+pub const MAX_LOG_INDEX_USIZE: usize = MAX_LOG_INDEX as usize;
+pub const MAX_LOG_LEN: usize = MAX_LOG_INDEX_USIZE + 1;
 
 /// Type that stores the ticks systems work by.
 /// MAX value is also the limit how many ticks can be logged.

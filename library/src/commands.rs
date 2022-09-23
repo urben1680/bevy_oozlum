@@ -1,5 +1,5 @@
 use std::{fmt::Debug, any::type_name, marker::PhantomData};
-use bevy::{prelude::{Commands, World}, log::{error, warn, info}};
+use bevy::{prelude::{Commands, World, ParallelCommands}, log::{error, warn, info}};
 use super::controller::Controller;
 
 mod spawn_component;
@@ -16,25 +16,29 @@ pub use despawn_resource::*;
 pub use spawn_entity::*;
 pub use despawn_entity::*;
 
+pub(super) type NextCommands<Marker> = Option<Box<dyn FnOnce(&mut ReversibleCommands<Marker>)>>;
+
 /// `Commands` wrapper to work with reversible commands.
-pub struct ReversibleCommands<'w, 's, M>{
-    commands: Commands<'w, 's>,
-    marker: PhantomData<M>
+pub struct ReversibleCommands<'a, 'w, 's, Marker>{
+    commands: &'a mut ParallelCommands<'w, 's>,
+    marker: PhantomData<Marker>
 }
 
-impl<'w, 's, M> ReversibleCommands<'w, 's, M>{
-    pub(super) fn new(commands: Commands<'w, 's>) -> Self{
+impl<'a, 'w, 's, Marker> ReversibleCommands<'a, 'w, 's, Marker>{
+    pub(super) fn new(commands: &'a mut ParallelCommands<'w, 's>) -> Self{
         Self { commands, marker: PhantomData }
     }
     /// Add a reversible command
     pub fn add<T: ReversibleCommand>(&mut self, command: T){
-        self.commands.add(|world: &mut World|{
-            let command = command.init::<M>(world);
-            world
-                .resource_mut::<Controller>()
-                .next_entry
-                .push(Box::new(command));
-        })
+        self.commands.command_scope(|mut commands|{
+            commands.add(|world: &mut World|{
+                let command = command.init::<Marker>(world);
+                world
+                    .resource_mut::<Controller>()
+                    .next_entry
+                    .push(Box::new(command));
+            });
+        });
     }
 }
 
