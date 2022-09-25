@@ -22,12 +22,12 @@ pub trait ReversibleResource: Send + Sync + Sized + 'static{
         Self::revert(params, now, state);
         now - Wrapping(1)
     }
-    fn advance_by_transition(params: Self::Params, now: Wrapping<Ticks>, past_state: &Self::State, future_state: &Self::State, transition: &Self::Transition){
+    fn advance_transition(params: Self::Params, now: Wrapping<Ticks>, past_state: &Self::State, future_state: &Self::State, transition: &Self::Transition){
         transition_default_assert::<true, Self::Transition, Self>();
         #[allow(clippy::no_effect)]
         (params, now, past_state, future_state, transition);
     }
-    fn revert_by_transition(params: Self::Params, now: Wrapping<Ticks>, past_state: &Self::State, future_state: &Self::State, transition: &Self::Transition){
+    fn revert_transition(params: Self::Params, now: Wrapping<Ticks>, past_state: &Self::State, future_state: &Self::State, transition: &Self::Transition){
         transition_default_assert::<false, Self::Transition, Self>();
         #[allow(clippy::no_effect)]
         (params, now, past_state, future_state, transition);
@@ -58,12 +58,12 @@ pub trait ReversibleResourceStateless: Send + Sync + Sized + 'static{
         Self::revert(params, now);
         now - Wrapping(1)
     }
-    fn advance_by_transition(params: Self::Params, now: Wrapping<Ticks>, transition: &Self::Transition){
+    fn advance_transition(params: Self::Params, now: Wrapping<Ticks>, transition: &Self::Transition){
         transition_default_assert::<true, Self::Transition, Self>();
         #[allow(clippy::no_effect)]
         (params, now, transition);
     }
-    fn revert_by_transition(params: Self::Params, now: Wrapping<Ticks>, transition: &Self::Transition){
+    fn revert_transition(params: Self::Params, now: Wrapping<Ticks>, transition: &Self::Transition){
         transition_default_assert::<false, Self::Transition, Self>();
         #[allow(clippy::no_effect)]
         (params, now, transition);

@@ -16,20 +16,20 @@ pub use despawn_resource::*;
 pub use spawn_entity::*;
 pub use despawn_entity::*;
 
-pub(super) type NextCommands<Marker> = Option<Box<dyn FnOnce(&mut ReversibleCommands<Marker>)>>;
+pub(super) type NextCommands<Marker> = Option<Box<dyn FnOnce(ReversibleCommands<Marker>)>>;
 
 /// `Commands` wrapper to work with reversible commands.
 pub struct ReversibleCommands<'a, 'w, 's, Marker>{
-    commands: &'a mut ParallelCommands<'w, 's>,
+    commands: &'a ParallelCommands<'w, 's>,
     marker: PhantomData<Marker>
 }
 
 impl<'a, 'w, 's, Marker> ReversibleCommands<'a, 'w, 's, Marker>{
-    pub(super) fn new(commands: &'a mut ParallelCommands<'w, 's>) -> Self{
+    pub(super) fn new(commands: &'a ParallelCommands<'w, 's>) -> Self{
         Self { commands, marker: PhantomData }
     }
     /// Add a reversible command
-    pub fn add<T: ReversibleCommand>(&mut self, command: T){
+    pub fn add<T: ReversibleCommand>(&self, command: T){
         self.commands.command_scope(|mut commands|{
             commands.add(|world: &mut World|{
                 let command = command.init::<Marker>(world);

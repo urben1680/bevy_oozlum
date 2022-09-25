@@ -12,6 +12,36 @@ pub use resource_mutation::*;
 pub use component_mutation::*;
 
 
+#[repr(u8)]
+enum SystemId{
+    Advance,
+    AdvanceTimestamp,
+    AdvanceLog,
+    AdvanceLogTimestamp,
+    RevertLog,
+    RevertLogTimestamp,
+    LogEnd,
+    LogAgeCheck
+}
+
+impl TryFrom<u8> for SystemId{
+    type Error = ();
+    fn try_from(value: u8) -> Result<Self, Self::Error>{
+        match value{
+            x if x == SystemId::Advance as u8 => Ok(SystemId::Advance),
+            x if x == SystemId::AdvanceTimestamp as u8 => Ok(SystemId::AdvanceTimestamp),
+            x if x == SystemId::AdvanceLog as u8 => Ok(SystemId::AdvanceLog),
+            x if x == SystemId::AdvanceLogTimestamp as u8 => Ok(SystemId::AdvanceLogTimestamp),
+            x if x == SystemId::RevertLog as u8 => Ok(SystemId::RevertLog),
+            x if x == SystemId::RevertLogTimestamp as u8 => Ok(SystemId::RevertLogTimestamp),
+            x if x == SystemId::LogEnd as u8 => Ok(SystemId::LogEnd),
+            x if x == SystemId::LogAgeCheck as u8 => Ok(SystemId::LogAgeCheck),
+            _ => Err(())
+        }
+    }
+}
+
+
 pub struct NextTransitionWithState<Transition, Marker>{
     next_state_index: usize,
     transition: Transition,
@@ -22,7 +52,7 @@ impl<Transition, Marker> NextTransitionWithState<Transition, Marker>{
     pub fn new(next_state_index: usize, transition: Transition) -> Self{
         Self { next_state_index, transition, commands: None }
     }
-    pub fn new_with_commands<F: 'static + FnOnce(&mut ReversibleCommands<Marker>)>(next_state_index: usize, transition: Transition, commands: F) -> Self{
+    pub fn new_with_commands<F: 'static + FnOnce(ReversibleCommands<Marker>)>(next_state_index: usize, transition: Transition, commands: F) -> Self{
         Self { next_state_index, transition, commands: Some(Box::new(commands)) }
     }
 }
@@ -36,7 +66,7 @@ impl<Transition, Marker> NextTransition<Transition, Marker>{
     pub fn new(transition: Transition) -> Self{
         Self { transition, commands: None }
     }
-    pub fn new_with_commands<F: 'static + FnOnce(&mut ReversibleCommands<Marker>)>(transition: Transition, commands: F) -> Self{
+    pub fn new_with_commands<F: 'static + FnOnce(ReversibleCommands<Marker>)>(transition: Transition, commands: F) -> Self{
         Self { transition, commands: Some(Box::new(commands)) }
     }
 }
@@ -342,9 +372,9 @@ fn advance_system<
 >(
     params: &mut Params, 
     states: &States,
-    forget: EventWriter<Forget>, 
+    forget: &mut EventWriter<Forget>, 
     controller: &Controller,
-    commands: ParallelCommands,
+    commands: &ParallelCommands,
     log: &mut Log<Entry, Transition, Marker>,
     next_transition: fn(
         &mut Params,
@@ -384,9 +414,9 @@ fn advance_result<
     next: NextTransition,
     params: &mut Params,
     states: &States,
-    mut forget: EventWriter<Forget>,
+    forget: &mut EventWriter<Forget>,
     controller: &Controller,
-    mut commands: ParallelCommands,
+    mut commands: &ParallelCommands,
     log: &mut Log<Entry, Transition, Marker>,
     current_state: &<States as GetState>::Output,
     advance_transition: fn(
@@ -399,8 +429,7 @@ fn advance_result<
 ){
     let (next_state_index, transition, command) = next.to_inner();
     if let Some(command) = command{
-        let mut commands = ReversibleCommands::new(&mut commands);
-        command(&mut commands);
+        command(ReversibleCommands::new(&mut commands));
     }
     let next_state = states.get_state(next_state_index);
     advance_transition(params, controller.time_stamp, current_state, next_state, &transition);
