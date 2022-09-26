@@ -1,11 +1,35 @@
-use std::{collections::VecDeque, num::Wrapping, mem::take};
+use std::{collections::VecDeque, num::Wrapping, mem::take, sync::mpsc::Sender};
 
-use bevy::{ecs::schedule::ShouldRun, prelude::{Commands, ResMut, Res, Events}, time::Time};
+use bevy::{ecs::schedule::ShouldRun, prelude::{Commands, ResMut, Res, Events, EventWriter, ParallelCommands, World}, time::Time};
 
 use crate::{commands::ReversibleCommandInitialized, Ticks};
 
 /// Event to forget all logs inclusively to `Some(time_stamp)`. `None` signals forgetting all logs.
-pub(super) struct Forget(pub(super) Option<Wrapping<Ticks>>);
+pub(super) struct Forget(pub(super) Option<Wrapping<Ticks>>); //is it always Some?
+
+impl Forget{
+    pub(super) fn send(self, commands: &ParallelCommands){
+        commands.command_scope(|mut commands|{
+            commands.add(|world: &mut World|{
+                let mut controller = world.resource_mut::<Controller>();
+                controller.forget_buffer = match &controller.forget_buffer{
+                    None => Some(self),
+                    Some(old) => {
+                        match (old.0, self.0){
+                            (Some(mut a), Some(mut b)) => {
+                                a -= controller.time_stamp;
+                                b -= controller.time_stamp;
+                                let c = a.max(b) + controller.time_stamp;
+                                Some(Forget(Some(c)))
+                            },
+                            _ => Some(Forget(None))
+                        }
+                    }
+                }
+            })
+        })
+    }
+}
 
 /// Send this event to control the length of the time steps.
 /// Raising this value speeds the progression up while being more expensive.
@@ -67,6 +91,7 @@ pub struct Controller{
     elapsed: f64,
     pre_update_ran: bool,
     log_end: bool,
+    forget_buffer: Option<Forget>
 }
 
 impl Controller{
@@ -129,7 +154,7 @@ impl Controller{
     pub fn time_stamp(&self) -> Wrapping<Ticks>{
         self.time_stamp
     }
-    pub fn remembers_back_to(&self) -> Wrapping<Ticks>{
+    pub fn age(&self) -> Wrapping<Ticks>{
         self.time_stamp - Wrapping(self.log.len() as u16) + Wrapping(1) //correct?
     }
     pub fn progress(&self) -> Progress{
@@ -188,7 +213,7 @@ impl Controller{
             Progress::Pause | Progress::PauseLog => {}
         }
     }
-    pub (super) fn system_post_reversible_systems(mut controller: ResMut<Self>, mut commands: Commands, events: ResMut<Events<Forget>>, mut progress_query: ResMut<Events<Progress>>, mut time_step: ResMut<Events<ControllerTimeStep>>)
+    pub (super) fn system_post_reversible_systems(mut controller: ResMut<Self>, mut commands: Commands, mut progress_query: ResMut<Events<Progress>>, mut time_step: ResMut<Events<ControllerTimeStep>>)
     {
         if !controller.pre_update_ran{
             return;
@@ -214,7 +239,7 @@ impl Controller{
 
         match &mut (controller.progress, controller.progress_query){
             (Progress::Forward, _) => {
-                Self::post_update_forward(&mut controller, commands, events);
+                Self::post_update_forward(&mut controller, commands);
             },
             (
                 Progress::ForwardFast{to_time_stamp: a}, 
@@ -229,14 +254,14 @@ impl Controller{
                         *b = *a;
                     }
                 }
-                Self::post_update_forward(&mut controller, commands, events);
+                Self::post_update_forward(&mut controller, commands);
                 if *a != controller.time_stamp{
                     return;
                 }
                 controller.progress_query = Progress::Forward;
             },
             (Progress::ForwardFast{to_time_stamp}, _) => {
-                Self::post_update_forward(&mut controller, commands, events);
+                Self::post_update_forward(&mut controller, commands);
                 if *to_time_stamp != controller.time_stamp{
                     return;
                 }
@@ -292,15 +317,13 @@ impl Controller{
 
         controller.progress = controller.progress_query;
     }
-    fn post_update_forward(controller: &mut ResMut<Self>, mut commands: Commands, mut events: ResMut<Events<Forget>>){
-        let count = events
-            .drain()
-            .map(|time_stamp| {
-                time_stamp.0.map_or(usize::MAX, |value| (value - controller.time_stamp).0 as usize)
-            })
-            .max();
-        if let Some(mut count) = count{
-            count = count.min(controller.log.len());
+    fn post_update_forward(controller: &mut ResMut<Self>, mut commands: Commands){
+        if let Some(forget) = controller.forget_buffer.take(){
+            let mut count = controller.log.len();
+            if let Some(forget) = forget.0{
+                let delta = controller.time_stamp - forget;
+                count = count.min(delta.0 as usize);
+            }
             for _ in 0..count{
                 Self::forget(controller.log.pop_front(), &mut commands);
             }
