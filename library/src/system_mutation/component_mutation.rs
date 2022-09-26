@@ -1,4 +1,4 @@
-use std::{num::Wrapping, alloc::System};
+use std::{num::Wrapping, alloc::System, sync::mpsc::channel};
 use bevy::{ecs::{system::{SystemParam, Resource}, query::{WorldQuery, QueryItem}}, prelude::{Res, Query, Without, ParallelCommands, EventWriter, Mut}};
 use crate::{DespawnedEntity, Ticks, controller::{Controller, Forget}};
 use super::{Log, NextTransitionWithState, NextTransition, transition_default_assert, LogEntryWithState, mutate, advance_system, translation_components, LogEntry, SystemId};
@@ -67,35 +67,25 @@ trait ReversibleComponentsMutation<'w, 's>: ReversibleComponents{
             >
         ),
         states: Res<Vec<Self::State>>,
-        controller: Controller,
-        mut forget: EventWriter<Forget>, 
+        controller: Res<Controller>,
         commands: ParallelCommands
     ){
-        let mut inner = |(mut item, log)|{
-            let params = &mut (&params.0, &mut item);
-            let mut log: Mut<Log<LogEntry<Self::Transition>, Self::Transition, Self>> = log;
-            match SYSTEM_ID.try_into(){
-                Ok(SystemId::Advance) => advance_system(
-                    params, &states, &mut forget, &controller, &commands, &mut *log, 
-                    Self::next_transition_tupled, 
-                    Self::advance_tupled, 
-                    Self::advance_transition_tupled
-                ),
-                Ok(SystemId::AdvanceTimestamp) => todo!(),
-                _ => unreachable!()
-            }
-        };
         if Self::PAR_ITER_BATCH_SIZE == 0{
-            params.1.for_each_mut(|tupled|{
-                inner(tupled);
+            params.1.for_each_mut(|(mut item, mut log)|{
+                let tupled = &mut (&params.0, &mut item);
+                match SYSTEM_ID.try_into(){
+                    Ok(SystemId::Advance) => advance_system(
+                        tupled, &states, &controller, &commands, &mut *log, 
+                        Self::next_transition_tupled, 
+                        Self::advance_tupled, 
+                        Self::advance_transition_tupled
+                    ),
+                    Ok(SystemId::AdvanceTimestamp) => todo!(),
+                    _ => unreachable!()
+                }
             })
         } else {
-            todo!("how to write parallel EventWriter? also: inner should be Copy by not using context");
-            /* 
-            params.1.par_for_each_mut(Self::PAR_ITER_BATCH_SIZE, |tupled|{
-                inner(tupled);
-            })
-            */
+            unimplemented!("lacking ParallelEventWriter");
         }
     }
     fn system_in_log<const ID: u8>(

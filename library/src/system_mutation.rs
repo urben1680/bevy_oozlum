@@ -372,7 +372,6 @@ fn advance_system<
 >(
     params: &mut Params, 
     states: &States,
-    forget: &mut EventWriter<Forget>, 
     controller: &Controller,
     commands: &ParallelCommands,
     log: &mut Log<Entry, Transition, Marker>,
@@ -398,7 +397,7 @@ fn advance_system<
     let current_state = states.get_state(entry.state_index());
     advance(params, controller.time_stamp, current_state);
     if let Some(next) = next_transition(params, controller.time_stamp, current_state){
-        advance_result(next, params, states, forget, controller, commands, log, current_state, advance_transition);
+        advance_result(next, params, states, controller, commands, log, current_state, advance_transition);
     }
 }
 
@@ -414,7 +413,6 @@ fn advance_result<
     next: NextTransition,
     params: &mut Params,
     states: &States,
-    forget: &mut EventWriter<Forget>,
     controller: &Controller,
     mut commands: &ParallelCommands,
     log: &mut Log<Entry, Transition, Marker>,
@@ -429,7 +427,7 @@ fn advance_result<
 ){
     let (next_state_index, transition, command) = next.to_inner();
     if let Some(command) = command{
-        command(ReversibleCommands::new(&mut commands));
+        command(ReversibleCommands::new(commands));
     }
     let next_state = states.get_state(next_state_index);
     advance_transition(params, controller.time_stamp, current_state, next_state, &transition);
@@ -437,7 +435,8 @@ fn advance_result<
     if log.entries.len() == MAX_LOG_LEN {
         log.entries.pop_front();
         let age = log.entries.front().unwrap().time_stamp();
-        forget.send(Forget(Some(age - Wrapping(1))));
+        let forget = Forget(Some(age - Wrapping(1)));
+        forget.send(commands);
     } else {
         log.entry_index += 1;
     }
