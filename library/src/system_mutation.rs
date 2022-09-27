@@ -2,7 +2,7 @@ use std::{marker::PhantomData, collections::VecDeque, ops::Index, any::{TypeId, 
 
 use bevy::{ecs::{system::{SystemParam, Resource, StaticSystemParam, SystemParamFetch, SystemParamItem}, query::{WorldQuery, QueryItem, Fetch}, schedule::IntoSystemDescriptor}, prelude::{Query, Component, Without, Res, ResMut, System, App, Commands, EventWriter, ParallelCommands}};
 
-use crate::{DespawnedEntity, Ticks, commands::{ReversibleCommands, NextCommands}, MAX_LOG_LEN, controller::{Controller, Forget}};
+use crate::{DespawnedEntity, Ticks, commands::{ReversibleCommands, NextCommands, CommandsScope, DelayedCommandWrapper}, MAX_LOG_LEN, controller::{Controller, Forget}};
 
 
 mod resource_mutation;
@@ -24,6 +24,17 @@ enum SystemId{
     LogAgeCheck
 }
 
+impl SystemId{
+    const ADVANCE: u8 = Self::Advance as u8;
+    const ADVANCE_TIMESTAMP: u8 = Self::AdvanceTimestamp as u8;
+    const ADVANCE_LOG: u8 = Self::AdvanceLog as u8;
+    const ADVANCE_LOG_TIMESTAMP: u8 = Self::AdvanceLogTimestamp as u8;
+    const REVERT_LOG: u8 = Self::RevertLog as u8;
+    const REVERT_LOG_TIMESTAMP: u8 = Self::RevertLogTimestamp as u8;
+    const LOG_END: u8 = Self::LogEnd as u8;
+    const LOG_AGE_CHECK: u8 = Self::LogAgeCheck as u8;
+}
+
 impl TryFrom<u8> for SystemId{
     type Error = ();
     fn try_from(value: u8) -> Result<Self, Self::Error>{
@@ -42,47 +53,47 @@ impl TryFrom<u8> for SystemId{
 }
 
 
-pub struct NextTransitionWithState<Transition, Marker>{
+pub struct NextTransitionWithState<Transition, Marker: Send + Sync + 'static>{
     next_state_index: usize,
     transition: Transition,
-    commands: NextCommands<Marker>
+    commands: Option<NextCommands<Marker>>
 }
 
-impl<Transition, Marker> NextTransitionWithState<Transition, Marker>{
+impl<Transition, Marker: Send + Sync + 'static> NextTransitionWithState<Transition, Marker>{
     pub fn new(next_state_index: usize, transition: Transition) -> Self{
         Self { next_state_index, transition, commands: None }
     }
-    pub fn new_with_commands<F: 'static + FnOnce(ReversibleCommands<Marker>)>(next_state_index: usize, transition: Transition, commands: F) -> Self{
+    pub fn new_with_commands<F: FnOnce(ReversibleCommands<Marker>) + Send + Sync + 'static>(next_state_index: usize, transition: Transition, commands: F) -> Self{
         Self { next_state_index, transition, commands: Some(Box::new(commands)) }
     }
 }
 
-pub struct NextTransition<Transition, Marker>{
+pub struct NextTransition<Transition, Marker: Send + Sync + 'static>{
     transition: Transition,
-    commands: NextCommands<Marker>
+    commands: Option<NextCommands<Marker>>
 }
 
-impl<Transition, Marker> NextTransition<Transition, Marker>{
+impl<Transition, Marker: Send + Sync + 'static> NextTransition<Transition, Marker>{
     pub fn new(transition: Transition) -> Self{
         Self { transition, commands: None }
     }
-    pub fn new_with_commands<F: 'static + FnOnce(ReversibleCommands<Marker>)>(transition: Transition, commands: F) -> Self{
+    pub fn new_with_commands<F: FnOnce(ReversibleCommands<Marker>) + Send + Sync + 'static>(transition: Transition, commands: F) -> Self{
         Self { transition, commands: Some(Box::new(commands)) }
     }
 }
 
-trait NextTransitionTrait<Transition, Marker>{
-    fn to_inner(self) -> (usize, Transition, NextCommands<Marker>);
+trait NextTransitionTrait<Transition, Marker: Send + Sync + 'static>{
+    fn explode(self) -> (usize, Transition, Option<NextCommands<Marker>>);
 }
 
-impl<Transition, Marker> NextTransitionTrait<Transition, Marker> for NextTransition<Transition, Marker>{
-    fn to_inner(self) -> (usize, Transition, NextCommands<Marker>){
+impl<Transition, Marker: Send + Sync + 'static> NextTransitionTrait<Transition, Marker> for NextTransition<Transition, Marker>{
+    fn explode(self) -> (usize, Transition, Option<NextCommands<Marker>>){
         (Default::default(), self.transition, self.commands)
     }
 }
 
-impl<Transition, Marker> NextTransitionTrait<Transition, Marker> for NextTransitionWithState<Transition, Marker>{
-    fn to_inner(self) -> (usize, Transition, NextCommands<Marker>){
+impl<Transition, Marker: Send + Sync + 'static> NextTransitionTrait<Transition, Marker> for NextTransitionWithState<Transition, Marker>{
+    fn explode(self) -> (usize, Transition, Option<NextCommands<Marker>>){
         (self.next_state_index, self.transition, self.commands)
     }
 }
@@ -174,197 +185,34 @@ trait Mutation{
     type Out;
 }
 
-pub struct SystemContainer<ParamsFull: SystemParam, ParamsLog: SystemParam>{
-    pub advance: fn(ParamsFull, ParallelCommands),
-    pub advance_timestamp: fn(ParamsFull, ParallelCommands),
-    pub advance_log: fn(ParamsFull),
-    pub advance_log_timestamp: fn(ParamsFull),
-    pub revert_log: fn(ParamsFull),
-    pub revert_log_timestamp: fn(ParamsFull),
-    pub log_end: fn(ParamsLog),
-    pub log_age_check: fn(ParamsLog) //check if timestamp of oldest entry is equal to current time stamp to drop just when time stamp was raised in controller
-
+pub struct SystemContainer<
+    'w, 's,
+    Params: SystemParam,
+    ParamsOnlyLog: SystemParam,
+    Commands: CommandsScope<'w, 's>
+>{
+    pub advance: fn(Params, Res<'w, Controller>, Commands),
+    pub advance_timestamp: fn(Params, Res<'w, Controller>, Commands), //commands must be applied later when returning timestamp is reached
+    pub advance_log: fn(Params, Res<'w, Controller>),
+    pub advance_log_timestamp: fn(Params, Res<'w, Controller>),
+    pub revert_log: fn(Params, Res<'w, Controller>),
+    pub revert_log_timestamp: fn(Params, Res<'w, Controller>),
+    pub log_end: fn(ParamsOnlyLog, Res<'w, Controller>),
+    pub log_age_check: fn(ParamsOnlyLog, Res<'w, Controller>), //check if timestamp of oldest entry is equal to current time stamp to drop just when time stamp was raised in controller
+    p: PhantomData<&'s()>
     /*
-    ////// COMPONENTS
-
-    fn mutate<F: Send + Sync + Clone + Fn(
-        &Self::Resources,
-        &Res<Vec<Self::State>>,
-        QueryItem<Self::Query>,
-        &mut LogWithStates<Self::Transition, Self>
-    )>(
-        resources: Self::Resources, 
-        states: Res<Vec<Self::State>>,
-        mut query: Query<(
-            Self::Query, 
-            &mut LogWithStates<Self::Transition, Self>
-        ), Without<DespawnedEntity>>,
-        f: F
-    )
-
-    fn mutate<F: Send + Sync + Clone + Fn(
-        &Self::Resources,
-        QueryItem<Self::Query>,
-        &mut Log<Self::Transition, Self>
-    )>(
-        resources: Self::Resources, 
-        mut query: Query<(
-            Self::Query, 
-            &mut Log<Self::Transition, Self>
-        ), Without<DespawnedEntity>>,
-        f: F
-    )
-
-    ////// RESOURCES
-
-    fn mutate<F: for<'a> Fn(
-        Self::Resources,
-        &Res<Vec<Self::State>>,
-        &mut LogWithStates<Self::Transition, Self>
-    )>(
-        resources: Self::Resources, 
-        states: Res<Vec<Self::State>>,
-        mut log: ResMut<LogWithStates<Self::Transition, Self>>,
-        f: F
-    )
-
-    fn mutate<F: for<'a> Fn(
-        Self::Resources,
-        &mut Log<Self::Transition, Self>
-    )>(
-        resources: Self::Resources, 
-        mut log: ResMut<Log<Self::Transition, Self>>,
-        f: F
-    )
-
-    advance_system:
-    - advance
-    - next
-    - (advance_transition)
-
-    advance_timestamp_system:
-    - advance_timestamp
-    - next
-    - (advance_transition)
-
-    advance_log_system:
-    - advance
-    - (advance_translation)
-
-    revert_log_system:
-    - (revert_transition)
-    - revert
-
-    revert_log_timestamp_system:
-    - (revert_transition)
-    - revert_timestamp
-
-    log_end:
-    - log_end
-
-    Idee:
-
-    Mutate traits erzeugen die funktionen als fn und greifen dabei auf die allgemeinen funktionen zu und auf die user definierten funktionen
-    diese werden gebündelt als struct zurückgegeben in fn(SystemParams) format
-
-
     Unterschied advance_timestamp und advance_log_timestamp?
     - keiner, controller.target_time_stamp() nutzen
     - doch, einer ruft next auf und schreibt commands, der andere nicht
     */
 }
 
-#[allow(clippy::type_complexity)]
-fn mutate<
-    UserParamsIn: SystemParam + Send + Sync,
-    UserParamsOut,
-    States: SystemParam + Send + Sync,
-    Log: Component
->(
-    params: UserParamsIn,
-    states: States,
-    controller: Res<Controller>,
-    batch_size: usize,
-    translation: fn(
-        UserParamsIn,
-        States,
-        Res<Controller>,
-        usize,
-        fn(
-            UserParamsOut,
-            &States,
-            &Controller,
-            &mut Log
-        )
-    ),
-    inner: fn(
-        UserParamsOut,
-        &States,
-        &Controller,
-        &mut Log
-    )
-){
-    translation(params, states, controller, batch_size, inner);
-    todo!("make this more general to serve all mutations (like now) and only log");
-}
-
-fn translation_components<
-    Resources: SystemParam + Send + Sync,
-    UserQuery: WorldQuery,
-    States: SystemParam + Send + Sync,
-    Log: Component
->(
-    mut params: (
-        Resources, 
-        Query<(UserQuery, &mut Log), Without<DespawnedEntity>>
-    ),
-    states: States,
-    controller: Res<Controller>,
-    batch_size: usize,
-    inner: fn(
-        (&Resources, QueryItem<UserQuery>),
-        &States,
-        &Controller,
-        &mut Log
-    )
-){
-    if batch_size == 0{
-        params.1.for_each_mut(|(items, mut log)|{
-            inner((&params.0, items), &states, &controller, &mut log);
-        })
-    } else {
-        params.1.par_for_each_mut( batch_size, |(items, mut log)|{
-            inner((&params.0, items), &states, &controller, &mut log);
-        })
-    }
-}
-
-fn translation_resources<
-    Resources: SystemParam + Send + Sync,
-    States: SystemParam + Send + Sync,
-    Log: Component
->(
-    mut params: (
-        Resources,
-        ResMut<Log>
-    ),
-    states: States,
-    controller: Res<Controller>,
-    _: usize,
-    inner: fn(
-        Resources,
-        &States,
-        &Controller,
-        &mut Log
-    )
-){
-    inner(params.0, &states, &controller, &mut params.1)
-}
-
 #[allow(clippy::too_many_arguments)]
 fn advance_system<
+    'w, 's,
     Params,
     States: GetState,
+    CommandsType: CommandsScope<'w, 's>,
     Entry: LogEntryTrait<Transition>,
     NextTransition: NextTransitionTrait<Transition, Marker>,
     Transition: Resource,
@@ -373,7 +221,7 @@ fn advance_system<
     params: &mut Params, 
     states: &States,
     controller: &Controller,
-    commands: &ParallelCommands,
+    commands: CommandsType,
     log: &mut Log<Entry, Transition, Marker>,
     next_transition: fn(
         &mut Params,
@@ -397,24 +245,27 @@ fn advance_system<
     let current_state = states.get_state(entry.state_index());
     advance(params, controller.time_stamp, current_state);
     if let Some(next) = next_transition(params, controller.time_stamp, current_state){
-        advance_result(next, params, states, controller, commands, log, current_state, advance_transition);
+        advance_result(None, next, params, states, controller, commands, log, current_state, advance_transition);
     }
 }
 
 #[allow(clippy::too_many_arguments)]
 fn advance_result<
+    'w, 's,
     Params,
     States: GetState,
+    CommandsType: CommandsScope<'w, 's>,
     Entry: LogEntryTrait<Transition>,
     NextTransition: NextTransitionTrait<Transition, Marker>,
     Transition: Resource,
     Marker: Resource
 >(
+    delay_commands_to: Option<Wrapping<Ticks>>,
     next: NextTransition,
     params: &mut Params,
     states: &States,
     controller: &Controller,
-    mut commands: &ParallelCommands,
+    commands: CommandsType,
     log: &mut Log<Entry, Transition, Marker>,
     current_state: &<States as GetState>::Output,
     advance_transition: fn(
@@ -425,29 +276,46 @@ fn advance_result<
         &Transition
     )
 ){
-    let (next_state_index, transition, command) = next.to_inner();
-    if let Some(command) = command{
-        command(ReversibleCommands::new(commands));
-    }
+    let forget = if log.entries.len() < MAX_LOG_LEN.min(log.entries.capacity()){
+        log.entry_index += 1;
+        None
+    } else {
+        log.entries.pop_front();
+        let age = log.entries.front().unwrap().time_stamp();
+        Some(Forget(Some(age - Wrapping(1))))
+    };
+    let (next_state_index, transition, command) = next.explode();
     let next_state = states.get_state(next_state_index);
     advance_transition(params, controller.time_stamp, current_state, next_state, &transition);
     log.entries.back_mut().unwrap().set_transition(transition);
-    if log.entries.len() == MAX_LOG_LEN {
-        log.entries.pop_front();
-        let age = log.entries.front().unwrap().time_stamp();
-        let forget = Forget(Some(age - Wrapping(1)));
-        forget.send(commands);
-    } else {
-        log.entry_index += 1;
-    }
     log.entries.push_back(Entry::new(controller.time_stamp, next_state_index));
+    match (forget, command){
+        (None, None) => {},
+        (Some(forget), None) => {
+            commands.get_command_scope(|mut commands|{
+                forget.send(&mut commands);
+            });
+        },
+        (forget, Some(command)) => {
+            commands.get_command_scope(|mut commands|{
+                if let Some(forget) = forget{
+                    forget.send(&mut commands);
+                }
+                if let Some(target) = delay_commands_to{
+                    ReversibleCommands::delayed(commands, command, target);
+                } else {
+                    command(ReversibleCommands::new(&mut commands));
+                }
+            })
+        }
+    }
 }
 
 fn transition_default_assert<const FORWARD: bool, Transition: 'static, S>(){
     let fn_name = if FORWARD{
-        "advance_by_transition"
+        "advance_transition"
     } else {
-        "revert_by_transition"
+        "revert_transition"
     };
     debug_assert!(
         TypeId::of::<Transition>() == TypeId::of::<()>(), 
@@ -456,16 +324,7 @@ fn transition_default_assert<const FORWARD: bool, Transition: 'static, S>(){
     );
     /* desirable solution if Rust allowed usage of "generic parameters from outer function"
     const ASSERT: () = {
-        let fn_name = if FORWARD{
-            "advance_by_transition"
-        } else {
-            "revert_by_transition"
-        };
-        assert!(
-            TypeId::of::<Transition>() == TypeId::of::<()>(), 
-            "Default impl for `{}` should be replaced if `Transition` is not `()` for trait implementator {}", 
-            fn_name, type_name::<S>()
-        )
+        //above code
     };
     */
 }
