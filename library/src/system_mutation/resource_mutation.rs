@@ -10,13 +10,13 @@ pub trait ReversibleResource: Send + Sync + Sized + 'static{
     fn next_transition(params: Self::Params, now: Wrapping<Ticks>, state: &Self::State) -> Option<NextTransitionWithState<Self::Transition, Self>>;
     fn advance(params: Self::Params, now: Wrapping<Ticks>, state: &Self::State);
     fn revert(params: Self::Params, now: Wrapping<Ticks>, state: &Self::State);
-    fn advance_timestamp(params: Self::Params, now: Wrapping<Ticks>, target: Wrapping<Ticks>, state: &Self::State) -> Wrapping<Ticks>{
+    fn advance_up_to(params: Self::Params, now: Wrapping<Ticks>, target: Wrapping<Ticks>, state: &Self::State) -> Wrapping<Ticks>{
         #[allow(clippy::no_effect)]
         {target};
         Self::advance(params, now, state);
         now + Wrapping(1)
     }
-    fn revert_timestamp(params: Self::Params, now: Wrapping<Ticks>, target: Wrapping<Ticks>, state: &Self::State) -> Wrapping<Ticks>{
+    fn revert_down_to(params: Self::Params, now: Wrapping<Ticks>, target: Wrapping<Ticks>, state: &Self::State) -> Wrapping<Ticks>{
         #[allow(clippy::no_effect)]
         {target};
         Self::revert(params, now, state);
@@ -46,13 +46,13 @@ pub trait ReversibleResourceStateless: Send + Sync + Sized + 'static{
     fn next_transition(params: Self::Params, now: Wrapping<Ticks>) -> Option<NextTransitionWithState<Self::Transition, Self>>;
     fn advance(params: Self::Params, now: Wrapping<Ticks>);
     fn revert(params: Self::Params, now: Wrapping<Ticks>);
-    fn advance_timestamp(params: Self::Params, now: Wrapping<Ticks>, target: Wrapping<Ticks>) -> Wrapping<Ticks>{
+    fn advance_up_to(params: Self::Params, now: Wrapping<Ticks>, target: Wrapping<Ticks>) -> Wrapping<Ticks>{
         #[allow(clippy::no_effect)]
         {target};
         Self::advance(params, now);
         now + Wrapping(1)
     }
-    fn revert_timestamp(params: Self::Params, now: Wrapping<Ticks>, target: Wrapping<Ticks>) -> Wrapping<Ticks>{
+    fn revert_down_to(params: Self::Params, now: Wrapping<Ticks>, target: Wrapping<Ticks>) -> Wrapping<Ticks>{
         #[allow(clippy::no_effect)]
         {target};
         Self::revert(params, now);

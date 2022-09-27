@@ -1,32 +1,30 @@
-use std::{collections::VecDeque, num::Wrapping, mem::take, sync::mpsc::Sender};
+use std::{collections::{VecDeque, BTreeMap}, num::Wrapping, mem::take, iter::FromIterator};
 
-use bevy::{ecs::schedule::ShouldRun, prelude::{Commands, ResMut, Res, Events, EventWriter, ParallelCommands, World}, time::Time};
+use bevy::{ecs::schedule::ShouldRun, prelude::{Commands, ResMut, Res, Events, World}, time::Time};
 
-use crate::{commands::ReversibleCommandInitialized, Ticks};
+use crate::{commands::{ReversibleCommandInitialized, DelayedCommand}, Ticks};
 
 /// Event to forget all logs inclusively to `Some(time_stamp)`. `None` signals forgetting all logs.
 pub(super) struct Forget(pub(super) Option<Wrapping<Ticks>>); //is it always Some?
 
 impl Forget{
-    pub(super) fn send(self, commands: &ParallelCommands){
-        commands.command_scope(|mut commands|{
-            commands.add(|world: &mut World|{
-                let mut controller = world.resource_mut::<Controller>();
-                controller.forget_buffer = match &controller.forget_buffer{
-                    None => Some(self),
-                    Some(old) => {
-                        match (old.0, self.0){
-                            (Some(mut a), Some(mut b)) => {
-                                a -= controller.time_stamp;
-                                b -= controller.time_stamp;
-                                let c = a.max(b) + controller.time_stamp;
-                                Some(Forget(Some(c)))
-                            },
-                            _ => Some(Forget(None))
-                        }
+    pub(super) fn send(self, commands: &mut Commands){
+        commands.add(|world: &mut World|{
+            let mut controller = world.resource_mut::<Controller>();
+            controller.forget_buffer = match &controller.forget_buffer{
+                None => Some(self),
+                Some(old) => {
+                    match (old.0, self.0){
+                        (Some(mut a), Some(mut b)) => {
+                            a -= controller.time_stamp;
+                            b -= controller.time_stamp;
+                            let c = a.min(b) + controller.time_stamp;
+                            Some(Forget(Some(c)))
+                        },
+                        _ => Some(Forget(None))
                     }
                 }
-            })
+            }
         })
     }
 }
@@ -91,7 +89,8 @@ pub struct Controller{
     elapsed: f64,
     pre_update_ran: bool,
     log_end: bool,
-    forget_buffer: Option<Forget>
+    forget_buffer: Option<Forget>,
+    pub(super) delayed_commands: VecDeque<Vec<Box<dyn DelayedCommand>>>
 }
 
 impl Controller{
@@ -239,7 +238,7 @@ impl Controller{
 
         match &mut (controller.progress, controller.progress_query){
             (Progress::Forward, _) => {
-                Self::post_update_forward(&mut controller, commands);
+                Self::post_update_forward(&mut controller, commands, false);
             },
             (
                 Progress::ForwardFast{to_time_stamp: a}, 
@@ -254,17 +253,19 @@ impl Controller{
                         *b = *a;
                     }
                 }
-                Self::post_update_forward(&mut controller, commands);
+                Self::post_update_forward(&mut controller, commands, true);
                 if *a != controller.time_stamp{
                     return;
                 }
                 controller.progress_query = Progress::Forward;
+                debug_assert!(controller.delayed_commands.is_empty());
             },
             (Progress::ForwardFast{to_time_stamp}, _) => {
-                Self::post_update_forward(&mut controller, commands);
+                Self::post_update_forward(&mut controller, commands, true);
                 if *to_time_stamp != controller.time_stamp{
                     return;
                 }
+                debug_assert!(controller.delayed_commands.is_empty());
             },
             (Progress::ForwardLog, _) => {
                 let log_index = controller.log_index;
@@ -308,16 +309,25 @@ impl Controller{
                 if controller.log_index == 0{
                     controller.progress_query = Progress::PauseLog;
                 }
+            }, 
+            Progress::ForwardFast { to_time_stamp } => {
+                let mut delta = (to_time_stamp - controller.time_stamp).0 as usize;
+                delta = delta
+                    .checked_sub(controller.delayed_commands.len())
+                    .expect("`delayed_commands.len()` should be less than target ticks");
+                if delta != 0{
+                    let mut vd = VecDeque::from_iter((0..delta).map(|_|Vec::new()));
+                    controller.delayed_commands.append(&mut vd);
+                }
             },
-            Progress::Forward | 
-            Progress::ForwardFast { to_time_stamp: _ } | 
+            Progress::Forward |
             Progress::Pause | 
             Progress::PauseLog => {}
         }
 
         controller.progress = controller.progress_query;
     }
-    fn post_update_forward(controller: &mut ResMut<Self>, mut commands: Commands){
+    fn post_update_forward(controller: &mut ResMut<Self>, mut commands: Commands, to_time_stamp: bool){
         if let Some(forget) = controller.forget_buffer.take(){
             let mut count = controller.log.len();
             if let Some(forget) = forget.0{
@@ -328,6 +338,19 @@ impl Controller{
                 Self::forget(controller.log.pop_front(), &mut commands);
             }
             controller.log_index = controller.log.len() - 1;
+        }
+        if to_time_stamp{
+            controller
+                .delayed_commands
+                .pop_front()
+                .unwrap()
+                .into_iter()
+                .for_each(|mut command|{
+                unsafe{
+                    //SAFETY: calls `ManuallyDrop::take` which is only allowed to be done once, which is the case here before `command` is dropped
+                    command.init(&mut commands);
+                }
+            });
         }
     }
 }

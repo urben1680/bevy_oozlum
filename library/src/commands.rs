@@ -1,5 +1,7 @@
-use std::{fmt::Debug, any::type_name, marker::PhantomData};
-use bevy::{prelude::{Commands, World, ParallelCommands}, log::{error, warn, info}};
+use std::{fmt::Debug, any::type_name, marker::PhantomData, num::Wrapping, mem::ManuallyDrop};
+use bevy::{prelude::{Commands, World, ParallelCommands}, log::{error, warn, info}, ecs::system::Command};
+use crate::Ticks;
+
 use super::controller::Controller;
 
 mod spawn_component;
@@ -16,30 +18,78 @@ pub use despawn_resource::*;
 pub use spawn_entity::*;
 pub use despawn_entity::*;
 
-pub(super) type NextCommands<Marker> = Option<Box<dyn FnOnce(ReversibleCommands<Marker>)>>;
+pub(super) type NextCommands<Marker> = Box<dyn FnOnce(ReversibleCommands<Marker>) + Send + Sync + 'static>;
 
 /// `Commands` wrapper to work with reversible commands.
-pub struct ReversibleCommands<'a, 'w, 's, Marker>{
-    commands: &'a ParallelCommands<'w, 's>,
+pub struct ReversibleCommands<'a, 'w, 's, Marker: Send + Sync + 'static>{
+    commands: &'a mut Commands<'w, 's>, //todo change back to commands and build from parallel commands where needed
     marker: PhantomData<Marker>
 }
 
-impl<'a, 'w, 's, Marker> ReversibleCommands<'a, 'w, 's, Marker>{
-    pub(super) fn new(commands: &'a ParallelCommands<'w, 's>) -> Self{
+impl<'a, 'w, 's, Marker: Send + Sync + 'static> ReversibleCommands<'a, 'w, 's, Marker>{
+    pub(super) fn new(commands: &'a mut Commands<'w, 's>) -> Self{
         Self { commands, marker: PhantomData }
     }
+    pub(super) fn delayed(mut commands: Commands<'w, 's>, command: NextCommands<Marker>, target: Wrapping<Ticks>){
+        let delayed = DelayedCommandWrapper::new(command);
+        commands.add(move |world: &mut World|{
+            let controller = &mut world
+                .resource_mut::<Controller>();
+            let index = (target - controller.time_stamp()).0 as usize;
+            controller.delayed_commands.get_mut(index).unwrap().push(Box::new(delayed));               
+        })
+    }
     /// Add a reversible command
-    pub fn add<T: ReversibleCommand>(&self, command: T){
-        self.commands.command_scope(|mut commands|{
-            commands.add(|world: &mut World|{
-                let command = command.init::<Marker>(world);
-                world
-                    .resource_mut::<Controller>()
-                    .next_entry
-                    .push(Box::new(command));
-            });
+    pub fn add<T: ReversibleCommand>(&mut self, command: T){
+        self.commands.add(|world: &mut World|{
+            let command = command.init::<Marker>(world);
+            world
+                .resource_mut::<Controller>()
+                .next_entry
+                .push(Box::new(command));
         });
     }
+}
+
+pub trait CommandsScope<'w, 's>{
+    fn get_command_scope<R>(self, f: impl FnOnce(Commands) -> R) -> R;
+}
+
+impl<'w, 's> CommandsScope<'w, 's> for Commands<'w, 's>{
+    fn get_command_scope<R>(self, f: impl FnOnce(Commands) -> R) -> R{
+        f(self)
+    }
+}
+
+impl<'w, 's> CommandsScope<'w, 's> for &ParallelCommands<'w, 's>{
+    fn get_command_scope<R>(self, f: impl FnOnce(Commands) -> R) -> R{
+        self.command_scope(f)
+    }
+}
+
+pub(super) struct DelayedCommandWrapper<Marker: Send + Sync + 'static>{
+    command: ManuallyDrop<NextCommands<Marker>>
+}
+
+impl<Marker: Send + Sync + 'static> DelayedCommandWrapper<Marker>{
+    pub(super) fn new(command: NextCommands<Marker>) -> Self{
+        Self { command: ManuallyDrop::new(command) }
+    }
+}
+
+pub(super) trait DelayedCommand: Send + Sync + 'static{
+    /// SAFETY: call only once, see https://doc.rust-lang.org/std/mem/struct.ManuallyDrop.html#method.take
+    unsafe fn init(&mut self, commands: &mut Commands);
+}
+
+impl<Marker: Send + Sync +'static> DelayedCommand for DelayedCommandWrapper<Marker>{
+    unsafe fn init(&mut self, commands: &mut Commands) {
+        ManuallyDrop::take(&mut self.command)(ReversibleCommands::<Marker>::new(commands));
+    }
+}
+
+trait DelayedCommands: ReversibleCommand{
+    fn init(self, world: &mut World) -> Self::Initialized;
 }
 
 /// Trait for reversible commands that are not yet initialized.
