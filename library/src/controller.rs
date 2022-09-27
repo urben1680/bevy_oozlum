@@ -343,7 +343,7 @@ impl Controller{
             controller
                 .delayed_commands
                 .pop_front()
-                .unwrap()
+                .expect("`delayed_commands` should not be empty before FastForward is finished")
                 .into_iter()
                 .for_each(|mut command|{
                 unsafe{
