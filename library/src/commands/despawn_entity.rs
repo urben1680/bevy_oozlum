@@ -1,4 +1,4 @@
-use bevy::prelude::{Entity, World, Commands};
+use bevy::prelude::{Entity, World};
 use crate::DespawnedEntity;
 use super::{ReversibleCommandErrorHandling, ReversibleCommand, ReversibleCommandInitialized};
 
@@ -23,11 +23,11 @@ impl DespawnEntity{
 
 impl ReversibleCommand for DespawnEntity{
     type Initialized = DespawnEntityInitialized;
-    fn init<M>(self, world: &mut World) -> Self::Initialized {
+    fn init<Marker>(self, world: &mut World) -> Self::Initialized {
         if let Some(mut entity_mut) = world.get_entity_mut(self.entity){
             entity_mut.insert(DespawnedEntity);
         } else {
-            self.error.error::<Entity, M>(&DespawnEntityError::EntityNotFound);
+            self.error.error::<Entity, Marker>(&DespawnEntityError::EntityNotFound);
         }
         DespawnEntityInitialized{
             entity: self.entity
@@ -40,24 +40,16 @@ pub struct DespawnEntityInitialized{
 }
 
 impl ReversibleCommandInitialized for DespawnEntityInitialized{
-    fn redo(&mut self, commands: &mut Commands){
-        let entity = self.entity;
-        commands.add(move |world: &mut World|{
-            let mut entity = world.entity_mut(entity);
-            entity.insert(DespawnedEntity);
-        });
+    fn redo(&mut self, world: &mut World){
+        let mut entity = world.entity_mut(self.entity);
+        entity.insert(DespawnedEntity);
     }
-    fn undo(&mut self, commands: &mut Commands){
-        let entity = self.entity;
-        commands.add(move |world: &mut World|{
-            let mut entity = world.entity_mut(entity);
-            entity.remove::<DespawnedEntity>();
-        });
+    fn undo(&mut self, world: &mut World){
+        let mut entity = world.entity_mut(self.entity);
+        entity.remove::<DespawnedEntity>();
     }
-    fn cleanup(&mut self, commands: &mut Commands){
-        let entity = self.entity;
-        commands.add(move |world: &mut World|{
-            world.entity_mut(entity).despawn();
-        });
+    fn redo_finalize(&mut self, world: &mut World){
+        world.entity_mut(self.entity).despawn();
     }
+    fn undo_finalize(&mut self, world: &mut World){}
 }

@@ -1,5 +1,5 @@
 use std::marker::PhantomData;
-use bevy::prelude::{Component, Entity, World, Commands};
+use bevy::prelude::{Component, Entity, World};
 use crate::Despawned;
 use super::{ReversibleCommandErrorHandling, ReversibleCommand, ReversibleCommandInitialized};
 
@@ -26,15 +26,15 @@ impl<T: Component> SpawnComponent<T>{
 
 impl<T: Component> ReversibleCommand for SpawnComponent<T>{
     type Initialized = SpawnComponentInitialized<T>;
-    fn init<M>(self, world: &mut World) -> Self::Initialized {
+    fn init<Marker>(self, world: &mut World) -> Self::Initialized {
         if let Some(mut entity_mut) = world.get_entity_mut(self.entity){
             if !entity_mut.contains::<T>(){
                 entity_mut.insert(self.data);
             } else {
-                self.error.error::<T, M>(&SpawnComponentError::ComponentAlreadyExists);
+                self.error.error::<T, Marker>(&SpawnComponentError::ComponentAlreadyExists);
             }
         } else {
-            self.error.error::<T, M>(&SpawnComponentError::EntityNotFound);
+            self.error.error::<T, Marker>(&SpawnComponentError::EntityNotFound);
         }
         SpawnComponentInitialized{
             p: PhantomData,
@@ -49,25 +49,23 @@ pub struct SpawnComponentInitialized<T: Component>{
 }
 
 impl<T: Component> ReversibleCommandInitialized for SpawnComponentInitialized<T>{
-    fn redo(&mut self, commands: &mut Commands){
-        let entity = self.entity;
-        commands.add(move |world: &mut World|{
-            let mut entity = world.entity_mut(entity);
-            let value = entity.remove::<Despawned<T>>();
-            if let Some(value) = value{
-                entity.insert(value.0);
-            }
-        });
+    fn redo(&mut self, world: &mut World){
+        let mut entity = world.entity_mut(self.entity);
+        let value = entity.remove::<Despawned<T>>();
+        if let Some(value) = value{
+            entity.insert(value.0);
+        }
     }
-    fn undo(&mut self, commands: &mut Commands){
-        let entity = self.entity;
-        commands.add(move |world: &mut World|{
-            let mut entity = world.entity_mut(entity);
-            let value = entity.remove::<T>();
-            if let Some(value) = value{
-                entity.insert(Despawned(value));
-            }
-        });
+    fn undo(&mut self, world: &mut World){
+        let mut entity = world.entity_mut(self.entity);
+        let value = entity.remove::<T>();
+        if let Some(value) = value{
+            entity.insert(Despawned(value));
+        }
     }
-    fn cleanup(&mut self, _commands: &mut Commands){}
+    fn redo_finalize(&mut self, _world: &mut World){}
+    fn undo_finalize(&mut self, world: &mut World) {
+        let mut entity = world.entity_mut(self.entity);
+        entity.remove::<Despawned<T>>();
+    }
 }

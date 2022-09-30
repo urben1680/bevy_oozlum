@@ -2,7 +2,7 @@ use std::{marker::PhantomData, collections::VecDeque, ops::Index, any::{TypeId, 
 
 use bevy::{ecs::{system::{SystemParam, Resource, StaticSystemParam, SystemParamFetch, SystemParamItem}, query::{WorldQuery, QueryItem, Fetch}, schedule::IntoSystemDescriptor}, prelude::{Query, Component, Without, Res, ResMut, System, App, Commands, EventWriter, ParallelCommands}};
 
-use crate::{DespawnedEntity, Ticks, commands::{ReversibleCommands, NextCommands, CommandsScope, DelayedCommandWrapper}, MAX_LOG_LEN, controller::{Controller, Forget}};
+use crate::{DespawnedEntity, Ticks, commands::{ReversibleCommands, NextCommands, CommandsScope}, MAX_LOG_LEN, controller::{Controller, Forget}};
 
 
 mod resource_mutation;
@@ -302,9 +302,10 @@ fn advance_result<
                     forget.send(&mut commands);
                 }
                 if let Some(target) = delay_commands_to{
-                    ReversibleCommands::delayed(commands, command, target);
+                    //ReversibleCommands::delayed(commands, command, target);
                 } else {
-                    command(ReversibleCommands::new(&mut commands));
+                    todo!();
+                    //command(ReversibleCommands::new(&mut commands));
                 }
             })
         }

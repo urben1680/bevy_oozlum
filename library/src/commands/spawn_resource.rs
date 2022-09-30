@@ -1,5 +1,5 @@
 use std::marker::PhantomData;
-use bevy::{prelude::{World, Commands}, ecs::system::Resource};
+use bevy::{prelude::World, ecs::system::Resource};
 use crate::Despawned;
 use super::{ReversibleCommandErrorHandling, ReversibleCommand, ReversibleCommandInitialized};
 
@@ -24,11 +24,11 @@ impl<T: Resource> SpawnResource<T>{
 
 impl<T: Resource> ReversibleCommand for SpawnResource<T>{
     type Initialized = SpawnResourceInitialized<T>;
-    fn init<M>(self, world: &mut World) -> Self::Initialized{
+    fn init<Marker>(self, world: &mut World) -> Self::Initialized{
         if !world.contains_resource::<T>(){
             world.insert_resource(self.data);
         } else {
-            self.error.error::<T, M>(&SpawnResourceError::ResourceAlreadyExists);
+            self.error.error::<T, Marker>(&SpawnResourceError::ResourceAlreadyExists);
         }
         SpawnResourceInitialized{
             p: PhantomData
@@ -41,21 +41,20 @@ pub struct SpawnResourceInitialized<T: Resource>{
 }
 
 impl<T: Resource> ReversibleCommandInitialized for SpawnResourceInitialized<T>{
-    fn redo(&mut self, commands: &mut Commands){
-        commands.add(|world: &mut World|{
-            let value = world.remove_resource::<Despawned<T>>();
-            if let Some(value) = value{
-                world.insert_resource(value.0);
-            }
-        });
+    fn redo(&mut self, world: &mut World){
+        let value = world.remove_resource::<Despawned<T>>();
+        if let Some(value) = value{
+            world.insert_resource(value.0);
+        }
     }
-    fn undo(&mut self, commands: &mut Commands){
-        commands.add(|world: &mut World|{
-            let value = world.remove_resource::<T>();
-            if let Some(value) = value{
-                world.insert_resource(Despawned(value));
-            }
-        });
+    fn undo(&mut self, world: &mut World){
+        let value = world.remove_resource::<T>();
+        if let Some(value) = value{
+            world.insert_resource(Despawned(value));
+        }
     }
-    fn cleanup(&mut self, _commands: &mut Commands){}
+    fn redo_finalize(&mut self, _world: &mut World){}
+    fn undo_finalize(&mut self, world: &mut World) {
+        world.remove_resource::<T>();
+    }
 }

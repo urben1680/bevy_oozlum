@@ -1,6 +1,6 @@
-use std::{collections::VecDeque, sync::mpsc::Sender};
+use std::{collections::VecDeque};
 
-use bevy::{ecs::event::Event, prelude::EventWriter};
+use bevy::{ecs::event::Event};
 
 struct ReversibleEvents<T: Event>{
     log: VecDeque<Vec<T>>,
