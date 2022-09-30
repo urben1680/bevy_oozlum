@@ -8,6 +8,10 @@ pub mod event;
 pub const MAX_LOG_INDEX: Ticks = Ticks::MAX;
 pub const MAX_LOG_INDEX_USIZE: usize = MAX_LOG_INDEX as usize;
 pub const MAX_LOG_LEN: usize = MAX_LOG_INDEX_USIZE + 1;
+pub const DEFAULT_TIME_STEP: f64 = 0.02;
+pub const FORGET_SYNC_SENDER_CAPACITY: usize = 1024;
+pub const DELAYED_COMMANDS_TICKS_CAPACITY: usize = Ticks::MAX as usize >> 1; //jumping from morning to evening
+pub const DELAYED_COMMANDS_SYNC_SENDER_CAPACITY: usize = 1024;
 
 /// Type that stores the ticks systems work by.
 /// MAX value is also the limit how many ticks can be logged.

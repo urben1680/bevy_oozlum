@@ -1,6 +1,5 @@
-use std::{fmt::Debug, any::type_name, marker::PhantomData, num::Wrapping, mem::ManuallyDrop};
-use bevy::{prelude::{Commands, World, ParallelCommands}, log::{error, warn, info}, ecs::system::Command};
-use crate::Ticks;
+use std::{fmt::Debug, any::type_name, marker::PhantomData, mem::ManuallyDrop};
+use bevy::{prelude::{Commands, World, ParallelCommands}, log::{error, warn, info}, ecs::world::Mut};
 
 use super::controller::Controller;
 
@@ -21,15 +20,16 @@ pub use despawn_entity::*;
 pub(super) type NextCommands<Marker> = Box<dyn FnOnce(ReversibleCommands<Marker>) + Send + Sync + 'static>;
 
 /// `Commands` wrapper to work with reversible commands.
-pub struct ReversibleCommands<'a, 'w, 's, Marker: Send + Sync + 'static>{
-    commands: &'a mut Commands<'w, 's>, //todo change back to commands and build from parallel commands where needed
+pub struct ReversibleCommands<'a, Marker: Send + Sync + 'static>{
+    world: &'a mut World,
     marker: PhantomData<Marker>
 }
 
-impl<'a, 'w, 's, Marker: Send + Sync + 'static> ReversibleCommands<'a, 'w, 's, Marker>{
-    pub(super) fn new(commands: &'a mut Commands<'w, 's>) -> Self{
-        Self { commands, marker: PhantomData }
+impl<'a, Marker: Send + Sync + 'static> ReversibleCommands<'a, Marker>{
+    pub(super) fn new(world: &'a mut World) -> Self{
+        Self { world, marker: PhantomData }
     }
+    /*/
     pub(super) fn delayed(mut commands: Commands<'w, 's>, command: NextCommands<Marker>, target: Wrapping<Ticks>){
         let delayed = DelayedCommandWrapper::new(command);
         commands.add(move |world: &mut World|{
@@ -39,14 +39,12 @@ impl<'a, 'w, 's, Marker: Send + Sync + 'static> ReversibleCommands<'a, 'w, 's, M
             controller.delayed_commands.get_mut(index).unwrap().push(Box::new(delayed));               
         })
     }
+    */
     /// Add a reversible command
     pub fn add<T: ReversibleCommand>(&mut self, command: T){
-        self.commands.add(|world: &mut World|{
+        self.world.resource_scope(|world, mut controller: Mut<Controller>|{
             let command = command.init::<Marker>(world);
-            world
-                .resource_mut::<Controller>()
-                .next_entry
-                .push(Box::new(command));
+            controller.send_command::<T::Initialized, Marker>(command);
         });
     }
 }
@@ -77,14 +75,15 @@ impl<Marker: Send + Sync + 'static> DelayedCommandWrapper<Marker>{
     }
 }
 
+
 pub(super) trait DelayedCommand: Send + Sync + 'static{
     /// SAFETY: call only once, see https://doc.rust-lang.org/std/mem/struct.ManuallyDrop.html#method.take
-    unsafe fn init(&mut self, commands: &mut Commands);
+    unsafe fn init(&mut self, world: &mut World);
 }
 
 impl<Marker: Send + Sync +'static> DelayedCommand for DelayedCommandWrapper<Marker>{
-    unsafe fn init(&mut self, commands: &mut Commands) {
-        ManuallyDrop::take(&mut self.command)(ReversibleCommands::<Marker>::new(commands));
+    unsafe fn init(&mut self, world: &mut World) {
+        ManuallyDrop::take(&mut self.command)(ReversibleCommands::<Marker>::new(world));
     }
 }
 
@@ -99,17 +98,19 @@ pub trait ReversibleCommand: Send + Sync + 'static{
     /// Initialize by mutating the world, has to include actions that occur in the `Self::WithoutInitData::redo` method.
     /// 
     /// Generic parameter `M` is the type of the calling reversible system
-    fn init<M>(self, world: &mut World) -> Self::Initialized;
+    fn init<Marker>(self, world: &mut World) -> Self::Initialized;
 }
 
 /// Trait for reversible commands that are initialized.
 pub trait ReversibleCommandInitialized: Send + Sync + 'static{
-    /// Deploy commands to redo the related actions
-    fn redo(&mut self, commands: &mut Commands);
-    /// Deploy commands to undo the related actions
-    fn undo(&mut self, commands: &mut Commands);
-    /// Cleanup commands like despawning buffers before Self is dropped
-    fn cleanup(&mut self, commands: &mut Commands);
+    /// Redo the command
+    fn redo(&mut self, world: &mut World);
+    /// Undo the command
+    fn undo(&mut self, world: &mut World);
+    /// Remove data that is needed to undo the command
+    fn redo_finalize(&mut self, world: &mut World);
+    /// Remove data that is needed to redo the command
+    fn undo_finalize(&mut self, world: &mut World);
 }
 
 /// Options for errorhandling of the error type `E` in reversible commands.
@@ -134,7 +135,6 @@ pub enum ReversibleCommandErrorHandling<E: Debug>{
 
 impl<E: Debug> ReversibleCommandErrorHandling<E>{
     fn error<T, M>(&self, error: &E){
-        //todo!("add another generic which identifies the relevant system, maybe also wrapped in an enum (resource, component, stateless, etc) or enum as a method field");
         match self{
             Self::LogError => error!("LogCommand failed: {error:?} for type {}, issued by reversible system {}", type_name::<T>(), type_name::<M>()),
             Self::LogWarning => warn!("LogCommand failed: {error:?} for type {}, issued by reversible system {}", type_name::<T>(), type_name::<M>()),

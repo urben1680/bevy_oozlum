@@ -1,4 +1,4 @@
-use bevy::prelude::{Entity, World, Commands, Bundle};
+use bevy::prelude::{Entity, World, Bundle};
 use crate::DespawnedEntity;
 
 use super::{ReversibleCommand, ReversibleCommandInitialized};
@@ -15,7 +15,7 @@ impl<T: Bundle> SpawnEntity<T>{
 
 impl<T: Bundle> ReversibleCommand for SpawnEntity<T>{
     type Initialized = SpawnEntityInitialized;
-    fn init<M>(self, world: &mut World) -> Self::Initialized {
+    fn init<Marker>(self, world: &mut World) -> Self::Initialized {
         SpawnEntityInitialized{
             entity: world.spawn().insert_bundle(self.data).id()
         }
@@ -27,19 +27,16 @@ pub struct SpawnEntityInitialized{
 }
 
 impl ReversibleCommandInitialized for SpawnEntityInitialized{
-    fn redo(&mut self, commands: &mut Commands){
-        let entity = self.entity;
-        commands.add(move |world: &mut World|{
-            let mut entity = world.entity_mut(entity);
-            entity.remove::<DespawnedEntity>();
-        });
+    fn redo(&mut self, world: &mut World){
+        let mut entity = world.entity_mut(self.entity);
+        entity.remove::<DespawnedEntity>();
     }
-    fn undo(&mut self, commands: &mut Commands){
-        let entity = self.entity;
-        commands.add(move |world: &mut World|{
-            let mut entity = world.entity_mut(entity);
-            entity.insert(DespawnedEntity);
-        });
+    fn undo(&mut self, world: &mut World){
+        let mut entity = world.entity_mut(self.entity);
+        entity.insert(DespawnedEntity);
     }
-    fn cleanup(&mut self, _commands: &mut Commands){}
+    fn redo_finalize(&mut self, _world: &mut World){}
+    fn undo_finalize(&mut self, world: &mut World) {
+        world.despawn(self.entity);
+    }
 }
