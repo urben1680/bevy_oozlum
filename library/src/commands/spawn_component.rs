@@ -1,69 +1,79 @@
-use std::marker::PhantomData;
-use bevy::prelude::{Component, Entity, World};
+use super::{ReversibleCommand, ReversibleCommandErrorHandling, ReversibleCommandInitialized};
 use crate::Despawned;
-use super::{ReversibleCommandErrorHandling, ReversibleCommand, ReversibleCommandInitialized};
+use bevy::prelude::{Component, Entity, World};
+use std::marker::PhantomData;
 
 #[derive(Debug, Clone, Copy)]
-pub enum SpawnComponentError{
+pub enum SpawnComponentError {
     EntityNotFound,
     ComponentAlreadyExists,
 }
 
-pub struct SpawnComponent<T: Component>{
+pub struct SpawnComponent<T: Component> {
     data: T,
     entity: Entity,
-    error: ReversibleCommandErrorHandling<SpawnComponentError>
+    error: ReversibleCommandErrorHandling<SpawnComponentError>,
 }
 
-impl<T: Component> SpawnComponent<T>{
-    pub fn new_with_error_handling(data: T, entity: Entity, error: ReversibleCommandErrorHandling<SpawnComponentError>) -> Self{
-        Self { data, entity, error }
+impl<T: Component> SpawnComponent<T> {
+    pub fn new_with_error_handling(
+        data: T,
+        entity: Entity,
+        error: ReversibleCommandErrorHandling<SpawnComponentError>,
+    ) -> Self {
+        Self {
+            data,
+            entity,
+            error,
+        }
     }
-    pub fn new(data: T, entity: Entity) -> Self{
+    pub fn new(data: T, entity: Entity) -> Self {
         Self::new_with_error_handling(data, entity, Default::default())
     }
 }
 
-impl<T: Component> ReversibleCommand for SpawnComponent<T>{
+impl<T: Component> ReversibleCommand for SpawnComponent<T> {
     type Initialized = SpawnComponentInitialized<T>;
     fn init<Marker>(self, world: &mut World) -> Self::Initialized {
-        if let Some(mut entity_mut) = world.get_entity_mut(self.entity){
-            if !entity_mut.contains::<T>(){
+        if let Some(mut entity_mut) = world.get_entity_mut(self.entity) {
+            if !entity_mut.contains::<T>() {
                 entity_mut.insert(self.data);
             } else {
-                self.error.error::<T, Marker>(&SpawnComponentError::ComponentAlreadyExists);
+                self.error
+                    .error::<T, Marker>(&SpawnComponentError::ComponentAlreadyExists);
             }
         } else {
-            self.error.error::<T, Marker>(&SpawnComponentError::EntityNotFound);
+            self.error
+                .error::<T, Marker>(&SpawnComponentError::EntityNotFound);
         }
-        SpawnComponentInitialized{
+        SpawnComponentInitialized {
             p: PhantomData,
-            entity: self.entity
+            entity: self.entity,
         }
     }
 }
 
-pub struct SpawnComponentInitialized<T: Component>{
+pub struct SpawnComponentInitialized<T: Component> {
     p: PhantomData<T>,
-    entity: Entity
+    entity: Entity,
 }
 
-impl<T: Component> ReversibleCommandInitialized for SpawnComponentInitialized<T>{
-    fn redo(&mut self, world: &mut World){
+impl<T: Component> ReversibleCommandInitialized for SpawnComponentInitialized<T> {
+    fn redo(&mut self, world: &mut World) {
         let mut entity = world.entity_mut(self.entity);
         let value = entity.remove::<Despawned<T>>();
-        if let Some(value) = value{
+        if let Some(value) = value {
             entity.insert(value.0);
         }
     }
-    fn undo(&mut self, world: &mut World){
+    fn undo(&mut self, world: &mut World) {
         let mut entity = world.entity_mut(self.entity);
         let value = entity.remove::<T>();
-        if let Some(value) = value{
+        if let Some(value) = value {
             entity.insert(Despawned(value));
         }
     }
-    fn redo_finalize(&mut self, _world: &mut World){}
+    fn redo_finalize(&mut self, _world: &mut World) {}
     fn undo_finalize(&mut self, world: &mut World) {
         let mut entity = world.entity_mut(self.entity);
         entity.remove::<Despawned<T>>();
