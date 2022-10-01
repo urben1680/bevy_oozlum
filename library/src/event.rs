@@ -1,10 +1,10 @@
-use std::{collections::VecDeque};
+use std::collections::VecDeque;
 
-use bevy::{ecs::event::Event};
+use bevy::ecs::event::Event;
 
-struct ReversibleEvents<T: Event>{
+struct ReversibleEvents<T: Event> {
     log: VecDeque<Vec<T>>,
-    log_index: usize
+    log_index: usize,
 }
 
 /*
