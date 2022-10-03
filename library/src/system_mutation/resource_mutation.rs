@@ -1,7 +1,8 @@
 use std::num::Wrapping;
 use bevy::{ecs::system::{SystemParam, Resource}, prelude::{Res, ResMut}};
 use crate::Ticks;
-use super::{Log, NextTransitionWithState, NextTransition, transition_default_assert};
+
+use super::{next_transition::{NextTransitionWithState, NextTransition}, transition_default_assert};
 
 pub trait ReversibleResource: Send + Sync + Sized + 'static{
     type Params: SystemParam;
@@ -43,7 +44,7 @@ impl<T: ReversibleResource> ReversibleResourceMutation for T {}
 pub trait ReversibleResourceStateless: Send + Sync + Sized + 'static{
     type Params: SystemParam;
     type Transition: Resource;
-    fn next_transition(params: Self::Params, now: Wrapping<Ticks>) -> Option<NextTransitionWithState<Self::Transition, Self>>;
+    fn next_transition(params: Self::Params, now: Wrapping<Ticks>) -> Option<NextTransition<Self::Transition, Self>>;
     fn advance(params: Self::Params, now: Wrapping<Ticks>);
     fn revert(params: Self::Params, now: Wrapping<Ticks>);
     fn advance_up_to(params: Self::Params, now: Wrapping<Ticks>, target: Wrapping<Ticks>) -> Wrapping<Ticks>{

@@ -1,3 +1,5 @@
+use std::num::Wrapping;
+
 use bevy::{
     ecs::query::WorldQuery,
     prelude::{Component, Entity, Without},
@@ -5,8 +7,8 @@ use bevy::{
 
 pub mod commands;
 pub mod controller;
-//pub mod system_mutation;
 pub mod event;
+pub mod system_mutation;
 
 pub const MAX_LOG_INDEX: Ticks = Ticks::MAX;
 pub const MAX_LOG_INDEX_USIZE: usize = MAX_LOG_INDEX as usize;
@@ -20,6 +22,32 @@ pub const DELAYED_COMMANDS_SYNC_SENDER_CAPACITY: usize = 1024;
 /// MAX value is also the limit how many ticks can be logged.
 /// Timestamps are stored as `std::num::Wrapping<Ticks>`.
 pub type Ticks = u16;
+
+pub trait TicksRelative {
+    fn ticks_ago(&self, reference: Wrapping<Ticks>) -> Ticks;
+    fn ticks_from_now(&self, reference: Wrapping<Ticks>) -> Ticks;
+    fn further_in_the_future(&self, other: Wrapping<Ticks>, reference: Wrapping<Ticks>) -> bool;
+    fn further_in_the_past(&self, other: Wrapping<Ticks>, reference: Wrapping<Ticks>) -> bool;
+    fn in_between(&self, earlier: Wrapping<Ticks>, later: Wrapping<Ticks>) -> bool;
+}
+
+impl TicksRelative for Wrapping<Ticks> {
+    fn ticks_ago(&self, time_stamp: Self) -> Ticks {
+        (time_stamp - self).0
+    }
+    fn ticks_from_now(&self, time_stamp: Self) -> Ticks {
+        (self - time_stamp).0
+    }
+    fn further_in_the_future(&self, other: Self, reference: Self) -> bool {
+        self.ticks_from_now(reference) > other.ticks_from_now(reference)
+    }
+    fn further_in_the_past(&self, other: Self, reference: Self) -> bool {
+        self.ticks_ago(reference) > other.ticks_ago(reference)
+    }
+    fn in_between(&self, earlier: Wrapping<Ticks>, later: Wrapping<Ticks>) -> bool {
+        later.further_in_the_future(*self, earlier)
+    }
+}
 
 /// Component that should be always queried in `Query`s (instead of `Entity`).
 #[derive(WorldQuery)]

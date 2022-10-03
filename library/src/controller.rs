@@ -15,7 +15,7 @@ use bevy::{
 
 use crate::{
     commands::{DelayedCommand, ReversibleCommandInitialized},
-    Ticks, DEFAULT_TIME_STEP, DELAYED_COMMANDS_SYNC_SENDER_CAPACITY,
+    Ticks, TicksRelative, DEFAULT_TIME_STEP, DELAYED_COMMANDS_SYNC_SENDER_CAPACITY,
     DELAYED_COMMANDS_TICKS_CAPACITY, FORGET_SYNC_SENDER_CAPACITY, MAX_LOG_LEN,
 };
 
@@ -33,10 +33,10 @@ pub enum Progress {
     /// `Forward` progresses all systems step-by-step in sync.
     Forward,
     /// `ForwardFast { to_time_stamp }` progresses some systems eagerly until `to_time_stamp` is reached.
-    /// 
+    ///
     /// This cannot be aborted because affected systems are not in sync until the end.
     /// However, it can be extended at any point by setting this variant again with a larger `to_time_stamp` relatively to `time_stamp()`.
-    /// 
+    ///
     /// If `to_time_stamp` was reached and still `FastForward` is queried, the progression is changed to `Forward`.
     ForwardFast { to_time_stamp: Wrapping<Ticks> },
     /// `ForwardLog` progresses all systems using each system's log(s) step-by-step.
@@ -59,7 +59,7 @@ pub enum Progress {
 impl Progress {
     /// Returns `true` if `self` is `ForwardLog`, `ForwardLogEnd`, `BackwardLog` or `BackwardLogEnd`.
     ///
-    /// If parameter `including_pause` is set to true, the above check includes `PauseLog`.
+    /// If parameter `including_pause` is set to true, the above list includes `PauseLog`.
     ///
     /// Otherwise returns `false`.
     pub fn is_log(&self, including_pause: bool) -> bool {
@@ -71,18 +71,17 @@ impl Progress {
                 | Progress::BackwardLogEnd
         ) || (including_pause && self == &Progress::PauseLog)
     }
-    /// Returns `true` if `self` is `Pause`.
-    ///
-    /// If parameter `including_log` is set to true, the above check includes `PauseLog`.
+    /// Returns `true` if `self` is `Pause` or `PauseLog`.
     ///
     /// Otherwise returns `false`.
     pub fn is_pause(&self) -> bool {
         matches!(self, Progress::Pause | Progress::PauseLog)
     }
 
-    /// Returns `true` if `self` in `Controller` causes progress in fixed time steps.
+    /// Returns `true` if `self` is `Forward`, `ForwardLog` or `BackwardLog`.
+    /// In `Controller` this causes progression in fixed time steps.
     ///
-    /// Returns `false` if `self` in `Controller` causes progress as fast as possible.
+    /// Otherwise returns `false`. In `Controller` this causes progression as fast as possible.
     pub fn is_fixed_time_step(&self) -> bool {
         matches!(
             self,
@@ -146,7 +145,7 @@ impl Controller {
     }
     /// Get the time stamp to which everything can be reverted to.
     pub fn age(&self) -> Ticks {
-        (self.time_stamp - Wrapping(self.log.len() as u16)).0 + 1 //correct?
+        self.ticks_ago(Wrapping(self.log.len() as u16))
     }
     pub fn log_front(&self) -> bool {
         self.log_index == 0
@@ -154,7 +153,7 @@ impl Controller {
     pub fn log_back(&self) -> bool {
         self.log_index + 1 == self.log.len()
     }
-    pub fn set_time_step(&mut self, time_step: f64) {
+    pub fn query_time_step(&mut self, time_step: f64) {
         self.time_step_query = Some(time_step);
     }
     pub fn time_step(&self) -> Option<f64> {
@@ -164,11 +163,19 @@ impl Controller {
             None
         }
     }
-    pub fn set_progress(&mut self, progress: Progress) {
+    pub fn query_progress(&mut self, progress: Progress) {
         self.progress_query = Some(progress);
     }
     pub fn progress(&self) -> Progress {
         self.progress
+    }
+    /// Returns numbers of ticks `time_stamp` is in the future.
+    pub fn ticks_from_now(&self, time_stamp: Wrapping<Ticks>) -> Ticks {
+        time_stamp.ticks_from_now(self.time_stamp)
+    }
+    /// Returns number of ticks `time_stamp` is in the past.
+    pub fn ticks_ago(&self, time_stamp: Wrapping<Ticks>) -> Ticks {
+        time_stamp.ticks_ago(self.time_stamp)
     }
     /// Add new command.
     pub(super) fn push_command<T: ReversibleCommandInitialized, Marker>(&mut self, command: T) {
@@ -183,24 +190,21 @@ impl Controller {
     }
     pub(super) fn send_forget(&self, time_stamp: Wrapping<Ticks>, commands: &mut Commands) {
         debug_assert_eq!(self.progress, Progress::Forward);
-        let ticks = (time_stamp - self.time_stamp).0;
+        let ticks = self.ticks_ago(time_stamp);
         if ticks > self.age() {
             return;
         }
-        match self
-            .forget_sender
-            .try_send((time_stamp - self.time_stamp).0)
-        {
-            Ok(()) => return,
-            Err(TrySendError::Full(a)) => commands.add(move |world: &mut World| {
+        match self.forget_sender.try_send(ticks) {
+            Ok(_) => return,
+            Err(TrySendError::Full(ticks)) => commands.add(move |world: &mut World| {
                 let mut controller = world.resource_mut::<Self>();
                 controller.forget_overflows += 1;
-                if !matches!(controller.forget_overflow, Some(b) if b < a) {
-                    controller.forget_overflow = Some(a);
+                if !matches!(controller.forget_overflow, Some(other) if other < ticks) {
+                    controller.forget_overflow = Some(ticks);
                 }
             }),
             Err(TrySendError::Disconnected(_)) => {
-                panic!("Could not send forget timestamp, receiver disconnected.");
+                panic!("Could not send forget timestamp, receiver disconnected.")
             }
         }
     }
@@ -211,7 +215,7 @@ impl Controller {
         commands: &mut Commands,
     ) {
         debug_assert!(matches!(self.progress, Progress::ForwardFast { .. }));
-        let index = (time_stamp - self.time_stamp).0 as usize;
+        let index = self.ticks_ago(time_stamp) as usize;
         match self
             .delayed_commands_sender
             .try_send((index, Box::new(command)))
@@ -223,7 +227,7 @@ impl Controller {
                 controller.add_delayed_command(index, command);
             }),
             Err(TrySendError::Disconnected(_)) => {
-                panic!("Could not send delayed command, receiver disconnected.");
+                panic!("Could not send delayed command, receiver disconnected.")
             }
         }
     }
@@ -233,7 +237,7 @@ impl Controller {
             None => {
                 panic!(
                 "`delayed_commands` with `len` {} is too short for `index` {}, `len` should be {}.",
-                self.log.len(), index, (self.target_time_stamp() - self.time_stamp).0
+                self.log.len(), index, self.ticks_from_now(self.target_time_stamp())
             )
             }
         }
@@ -247,17 +251,28 @@ impl Controller {
 
 /// Run criterias for other systems
 impl Controller {
-    pub fn run_criteria<const LOG: bool, const PAUSE: bool, const LOG_PAUSE: bool>(controller: Res<Self>) -> ShouldRun {
-        Self::should_run(match (LOG, PAUSE, LOG_PAUSE) {
-            (false, false, false) => controller.progress.is_not_log_nor_pause(),
-            (false, false, true) => controller.progress == Progress::PauseLog,
-            (false, true, false) => controller.progress == Progress::Pause,
-            (false, true, true) => controller.progress.is_pause(),
-            (true, false, false) => controller.progress.is_log(false),
-            (true, false, true) => controller.progress.is_log(true),
-            (true, true, false) => controller.progress.is_log(false) || controller.progress == Progress::Pause,
-            (true, true, true) => !controller.progress.is_not_log_nor_pause(),
-        })
+    pub fn run_criteria<
+        const LOG: bool,
+        const PAUSE: bool,
+        const LOG_PAUSE: bool,
+        const LOG_END: bool,
+    >(
+        controller: Res<Self>,
+    ) -> ShouldRun {
+        Self::should_run(
+            match (LOG, PAUSE, LOG_PAUSE) {
+                (false, false, false) => controller.progress.is_not_log_nor_pause(),
+                (false, false, true) => controller.progress == Progress::PauseLog,
+                (false, true, false) => controller.progress == Progress::Pause,
+                (false, true, true) => controller.progress.is_pause(),
+                (true, false, false) => controller.progress.is_log(false),
+                (true, false, true) => controller.progress.is_log(true),
+                (true, true, false) => {
+                    controller.progress.is_log(false) || controller.progress == Progress::Pause
+                }
+                (true, true, true) => !controller.progress.is_not_log_nor_pause(),
+            } || (LOG_END && controller.log_end),
+        )
     }
     pub fn run_criteria_forward(controller: Res<Self>) -> ShouldRun {
         controller.after_pre_update_not_log_end(controller.progress == Progress::Forward)
@@ -434,8 +449,8 @@ impl Controller {
             self.log_end(commands);
             return;
         }
-        self.last_progress_query_check();
-        self.last_progress_check(receivers, commands);
+        self.validate_progress_query();
+        self.progress_check(receivers, commands);
     }
     fn forward_commands(
         &mut self,
@@ -489,12 +504,10 @@ impl Controller {
         }
 
         commands.add(|world: &mut World| {
-            delayed
-                .into_iter()
-                .for_each(|mut command| unsafe {
-                    //SAFETY: calls `ManuallyDrop::take` which is only allowed to be done once, which is the case here before `command` is dropped
-                    command.init(world);
-                });
+            delayed.into_iter().for_each(|mut command| unsafe {
+                //SAFETY: calls `ManuallyDrop::take` which is only allowed to be done once, which is the case here before `command` is dropped
+                command.init(world);
+            });
             forget
                 .into_iter()
                 .flatten()
@@ -527,6 +540,9 @@ impl Controller {
     }
     fn log_end(&mut self, mut commands: Commands) {
         self.log_end = false;
+        if matches!(self.progress_query, Some(progress) if progress.is_log(true)) {
+            self.progress_query = None;
+        }
         if self.log_front() {
             return;
         }
@@ -544,18 +560,27 @@ impl Controller {
                 .for_each(|mut command| command.undo_finalize(world))
         });
     }
-    fn last_progress_query_check(&mut self) {
-        if let Some(progress_query) = self.progress_query {
-            match progress_query {
+    fn validate_progress_query(&mut self) {
+        if let Some(query) = self.progress_query {
+            match query {
                 Progress::ForwardFast { to_time_stamp } => {
-                    if progress_query != self.progress {
-                        let mut delta = (to_time_stamp - self.time_stamp).0 as usize;
-                        delta = delta.checked_sub(self.delayed_commands.len()).expect(
-                            "`delayed_commands.len()` should be less than or equal target ticks",
-                        );
-                        let mut vd = VecDeque::from_iter((0..delta).map(|_| Vec::new()));
-                        self.delayed_commands.append(&mut vd);
+                    if let Progress::ForwardFast {
+                        to_time_stamp: previous,
+                    } = &mut self.progress
+                    {
+                        if to_time_stamp.further_in_the_future(*previous, self.time_stamp) {
+                            *previous = to_time_stamp;
+                        } else {
+                            self.progress_query = None;
+                            return;
+                        }
                     }
+                    let mut delta = self.ticks_from_now(to_time_stamp) as usize;
+                    delta = delta.checked_sub(self.delayed_commands.len()).expect(
+                        "`delayed_commands.len()` should be less than or equal target ticks",
+                    );
+                    let mut vd = VecDeque::from_iter((0..delta).map(|_| Vec::new()));
+                    self.delayed_commands.append(&mut vd);
                 }
                 Progress::ForwardLog | Progress::ForwardLogEnd => {
                     if self.log_front() {
@@ -571,25 +596,13 @@ impl Controller {
             }
         }
     }
-    fn last_progress_check(
-        &mut self,
-        receivers: NonSendMut<ControllerReceivers>,
-        commands: Commands,
-    ) {
+    fn progress_check(&mut self, receivers: NonSendMut<ControllerReceivers>, commands: Commands) {
         match &mut self.progress {
             Progress::Forward => {
                 self.apply_progress_query(self.progress);
                 self.forward_commands(receivers, commands, false);
             }
             Progress::ForwardFast { to_time_stamp } => {
-                if let Some(Progress::ForwardFast {
-                    to_time_stamp: update,
-                }) = self.progress_query
-                {
-                    if update - self.time_stamp > *to_time_stamp - self.time_stamp {
-                        *to_time_stamp = update;
-                    }
-                }
                 if *to_time_stamp == self.time_stamp {
                     self.apply_progress_query(Progress::Forward);
                 }
