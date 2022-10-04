@@ -58,5 +58,5 @@ impl<T: Resource> ReversibleCommandInitialized for DespawnResourceInitialized<T>
     fn redo_finalize(&mut self, world: &mut World) {
         world.remove_resource::<Despawned<T>>();
     }
-    fn undo_finalize(&mut self, world: &mut World) {}
+    fn undo_finalize(&mut self, _world: &mut World) {}
 }
