@@ -7,7 +7,7 @@ use bevy::{
 
 pub trait UserStateTrait: Resource {
     type Index: Send + Sync + 'static;
-    type Param<'w>: SystemParam;
+    type Param<'w>: SystemParam + Send + Sync;
     type Output;
     fn get_state<'w: 'a, 'a>(param: &'a Self::Param<'w>, index: Self::Index) -> &'a Self::Output;
 }

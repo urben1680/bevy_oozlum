@@ -5,51 +5,54 @@ use bevy::{
         query::{QueryItem, WorldQuery},
         system::SystemParam,
     },
-    prelude::{Mut, Query, Res, ResMut, Without, ParallelCommands},
+    prelude::{Mut, ParallelCommands, Query, Res, ResMut, Without},
 };
 
 use crate::{controller::Controller, DespawnedEntity};
 
-use super::{Log, ReversibleSystem, params::{Params, ParamsTransition}};
-
-pub(super) type OutLogOnly<'w, 'a, T> = (&'w Controller, &'a mut Log<T>);
+use super::{state::UserStateTrait, Log, ReversibleSystem};
 
 pub trait LogPositionTrait: 'static {
-    type QueryItem<'w>;
-    type In<'w: 's, 's, Other: SystemParam + Send + Sync + 'w, T: ReversibleSystem>: SystemParam;
-    type Out<'w: 's, 's, 'a, Other: SystemParam + Send + Sync + 'w, T: ReversibleSystem>;
+    type In<'w: 's, 's, T: ReversibleSystem>: SystemParam;
     type InLogOnly<'w: 's, 's, T: ReversibleSystem>: SystemParam;
-    type UserParams: UserParamContainer;
-    /*
-    fn mutate<'w: 's, 's, Other: SystemParam + Send + Sync, T: ReversibleSystem>(
-        params: &'w mut Self::In<'w, 's, Other, T>,
-        f: fn(Self::Out<'w, 's, '_, Other, T>, ),
-    );
-    */
+    type Out<'w: 's, 's, T: ReversibleSystem>;
+    type QueryItem<'w>;
     fn mutate<'w: 's, 's, T: ReversibleSystem>(
-        params: Self::In::<'w, 's, (T::Params, ParallelCommands)>,
-        f: fn(Self::UserParams, Self::Out<'w, 's, '_, (T::Params, ParallelCommands), T>)
+        controller: Res<'w, Controller>,
+        commands: ParallelCommands,
+        states: <T::State as UserStateTrait>::Param<'w>,
+        params: &'w mut Self::In<'w, 's, T>,
+        f: fn(
+            &Controller,
+            &ParallelCommands,
+            &<T::State as UserStateTrait>::Param<'w>,
+            &mut Log<T>,
+            &mut Self::Out<'w, 's, T>,
+        ),
     );
-    fn mutate_log<'w: 's, 's, T: ReversibleSystem>(
-        params: Self::In::<'w, 's, T::Params>,
-        f: fn(Self::UserParams, Self::Out<'w, 's, '_, T::Params, T>)
+    fn mutate_log<'w: 's, 's, 'a, T: ReversibleSystem>(
+        controller: Res<'w, Controller>,
+        states: <T::State as UserStateTrait>::Param<'w>,
+        params: &'w mut Self::In<'w, 's, T>,
+        f: fn(
+            &Controller,
+            &<T::State as UserStateTrait>::Param<'w>,
+            &mut Log<T>,
+            &mut Self::Out<'w, 's, T>,
+        ),
     );
     fn mutate_log_only<'w: 's, 's, T: ReversibleSystem>(
+        controller: Res<'w, Controller>,
         params: &'w mut Self::InLogOnly<'w, 's, T>,
-        f: fn(OutLogOnly<'w, '_, T>),
+        f: fn(&Controller, &mut Log<T>),
     );
-}
-
-pub trait UserParamContainer{
-    fn params<'w: 'a, 'a, T: ReversibleSystem>(&mut self) -> Params<'w, 'a, T>;
-    fn params_transition<'w: 'a, 'a, T: ReversibleSystem>(&mut self) -> ParamsTransition<'w, 'a, T>;
 }
 
 pub struct PerSystem;
 pub struct PerEntity<Q: WorldQuery + 'static, const PAR_ITER_BATCH_SIZE: usize = 0>(PhantomData<Q>);
 
 impl<Q: WorldQuery + 'static, const PAR_ITER_BATCH_SIZE: usize> PerEntity<Q, PAR_ITER_BATCH_SIZE> {
-    fn apply_mutate<
+    fn for_each_mut<
         'w: 's,
         's,
         T: WorldQuery,
@@ -68,60 +71,114 @@ impl<Q: WorldQuery + 'static, const PAR_ITER_BATCH_SIZE: usize> PerEntity<Q, PAR
 }
 
 impl LogPositionTrait for PerSystem {
+    type In<'w: 's, 's, T: ReversibleSystem> = (T::Params, ResMut<'w, Log<T>>);
+    type InLogOnly<'w: 's, 's, T: ReversibleSystem> = ResMut<'w, Log<T>>;
+    type Out<'w: 's, 's, T: ReversibleSystem> = T::Params;
     type QueryItem<'w> = ();
-    type In<'w: 's, 's, Other: SystemParam + Send + Sync + 'w, T: ReversibleSystem> =
-        (Other, Res<'w, Controller>, ResMut<'w, Log<T>>);
-    type Out<'w: 's, 's, 'a, Other: SystemParam + Send + Sync + 'w, T: ReversibleSystem> =
-        (&'w mut Other, &'w Controller, &'a mut Log<T>);
-    type InLogOnly<'w: 's, 's, T: ReversibleSystem> = (Res<'w, Controller>, ResMut<'w, Log<T>>);
-    fn mutate<'w: 's, 's, Other: SystemParam + Send + Sync + 'w, T: ReversibleSystem>(
-        params: &'w mut Self::In<'w, 's, Other, T>,
-        f: fn(Self::Out<'w, 's, '_, Other, T>),
+    fn mutate<'w: 's, 's, T: ReversibleSystem>(
+        controller: Res<'w, Controller>,
+        commands: ParallelCommands,
+        states: <T::State as UserStateTrait>::Param<'w>,
+        params: &'w mut Self::In<'w, 's, T>,
+        f: fn(
+            &Controller,
+            &ParallelCommands,
+            &<T::State as UserStateTrait>::Param<'w>,
+            &mut Log<T>,
+            &mut Self::Out<'w, 's, T>,
+        ),
     ) {
-        f((&mut params.0, &params.1, &mut params.2));
+        f(
+            &controller,
+            &commands,
+            &states,
+            &mut *params.1,
+            &mut params.0,
+        );
+    }
+    fn mutate_log<'w: 's, 's, T: ReversibleSystem>(
+        controller: Res<'w, Controller>,
+        states: <T::State as UserStateTrait>::Param<'w>,
+        params: &'w mut Self::In<'w, 's, T>,
+        f: fn(
+            &Controller,
+            &<T::State as UserStateTrait>::Param<'w>,
+            &mut Log<T>,
+            &mut Self::Out<'w, 's, T>,
+        ),
+    ) {
+        f(&controller, &states, &mut *params.1, &mut params.0);
     }
     fn mutate_log_only<'w: 's, 's, T: ReversibleSystem>(
+        controller: Res<'w, Controller>,
         params: &'w mut Self::InLogOnly<'w, 's, T>,
-        f: fn(OutLogOnly<'w, '_, T>),
+        f: fn(&Controller, &mut Log<T>),
     ) {
-        f((&params.0, &mut *params.1));
+        f(&controller, &mut *params);
     }
 }
 
 impl<Q: WorldQuery + 'static, const PAR_ITER_BATCH_SIZE: usize> LogPositionTrait
     for PerEntity<Q, PAR_ITER_BATCH_SIZE>
 {
-    type QueryItem<'w> = QueryItem<'w, Q>;
-    type In<'w: 's, 's, Other: SystemParam + Send + Sync + 'w, T: ReversibleSystem> = (
-        Other,
-        Res<'w, Controller>,
+    type In<'w: 's, 's, T: ReversibleSystem> = (
+        T::Params,
         Query<'w, 's, (Q, &'static mut Log<T>), Without<DespawnedEntity>>,
     );
-    type Out<'w: 's, 's, 'a, Other: SystemParam + Send + Sync + 'w, T: ReversibleSystem> = (
-        &'w Other,
-        &'w Controller,
-        &'a mut Log<T>,
-        Self::QueryItem<'w>,
-    );
-    type InLogOnly<'w: 's, 's, T: ReversibleSystem> =
-        (Res<'w, Controller>, Query<'w, 's, &'static mut Log<T>>);
-    fn mutate<'w: 's, 's, Other: SystemParam + Send + Sync + 'w, T: ReversibleSystem>(
-        params: &'w mut Self::In<'w, 's, Other, T>,
-        f: fn(Self::Out<'w, 's, '_, Other, T>),
+    type InLogOnly<'w: 's, 's, T: ReversibleSystem> = Query<'w, 's, &'static mut Log<T>>;
+    type Out<'w: 's, 's, T: ReversibleSystem> = (&'w T::Params, Self::QueryItem<'w>);
+    type QueryItem<'w> = QueryItem<'w, Q>;
+    fn mutate<'w: 's, 's, T: ReversibleSystem>(
+        controller: Res<'w, Controller>,
+        commands: ParallelCommands,
+        states: <T::State as UserStateTrait>::Param<'w>,
+        params: &'w mut Self::In<'w, 's, T>,
+        f: fn(
+            &Controller,
+            &ParallelCommands,
+            &<T::State as UserStateTrait>::Param<'w>,
+            &mut Log<T>,
+            &mut Self::Out<'w, 's, T>,
+        ),
     ) {
-        Self::apply_mutate(
-            &mut params.2,
+        Self::for_each_mut::<'w, 's>(
+            &mut params.1,
             |(item, mut log): (Self::QueryItem<'w>, Mut<'w, Log<T>>)| {
-                f((&params.0, &params.1, &mut *log, item))
+                f(
+                    &controller,
+                    &commands,
+                    &states,
+                    &mut log,
+                    &mut (&params.0, item),
+                );
+            },
+        );
+    }
+    fn mutate_log<'w: 's, 's, T: ReversibleSystem>(
+        controller: Res<'w, Controller>,
+        states: <T::State as UserStateTrait>::Param<'w>,
+        params: &'w mut Self::In<'w, 's, T>,
+        f: fn(
+            &Controller,
+            &<T::State as UserStateTrait>::Param<'w>,
+            &mut Log<T>,
+            &mut Self::Out<'w, 's, T>,
+        ),
+    ) {
+        Self::for_each_mut::<'w, 's>(
+            &mut params.1,
+            |(item, mut log): (Self::QueryItem<'w>, Mut<'w, Log<T>>)| {
+                f(&controller, &states, &mut log, &mut (&params.0, item));
             },
         );
     }
     fn mutate_log_only<'w: 's, 's, T: ReversibleSystem>(
+        controller: Res<'w, Controller>,
         params: &'w mut Self::InLogOnly<'w, 's, T>,
-        f: fn(OutLogOnly<'w, '_, T>),
+        f: fn(&Controller, &mut Log<T>),
     ) {
-        Self::apply_mutate(&mut params.1, |mut log: Mut<'w, Log<T>>| {
-            f((&params.0, &mut *log))
+        Self::for_each_mut::<'w, 's>(params, |mut log: Mut<'w, Log<T>>| {
+            f(&controller, &mut log);
         });
     }
 }
