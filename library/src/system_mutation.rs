@@ -2,10 +2,14 @@ use std::{collections::VecDeque, mem::MaybeUninit, num::Wrapping};
 
 use bevy::{
     ecs::system::SystemParam,
-    prelude::{Component, ParallelCommands},
+    prelude::{Component, ParallelCommands, Res},
 };
 
-use crate::{commands::NextCommands, Ticks, MAX_LOG_LEN};
+use crate::{
+    commands::{NextCommands, ReversibleCommands},
+    controller::Controller,
+    Ticks, LOG_LEN,
+};
 
 use self::{log_position::LogPositionTrait, state::UserStateTrait};
 
@@ -17,13 +21,12 @@ pub trait ReversibleSystem: Send + Sync + Sized + 'static {
     type Params: SystemParam + Send + Sync;
     type LogPosition: LogPositionTrait; //`PerSystem` or `PerEntity<Q, 0>`
     type Transition: Send + Sync + 'static;
-    const INITIAL_LOG_CAPACITY: usize = MAX_LOG_LEN;
-    const LOG_CAPACITY_GROWTH: usize = 1;
+    const DEFAULT_LOG_CAPACITY: usize = LOG_LEN;
     fn next_transition(
         params: &mut <Self::LogPosition as LogPositionTrait>::In<'_, '_, Self>,
         state: &<Self::State as UserStateTrait>::Output,
         now: Wrapping<u16>,
-    ) -> Option<NextTransition<<Self::State as UserStateTrait>::Index, Self::Transition, Self>>;
+    ) -> Option<NextTransition<Self>>;
     fn advance(
         params: &mut <Self::LogPosition as LogPositionTrait>::In<'_, '_, Self>,
         state: &<Self::State as UserStateTrait>::Output,
@@ -54,11 +57,11 @@ pub trait ReversibleSystem: Send + Sync + Sized + 'static {
         state: &<Self::State as UserStateTrait>::Output,
         now: Wrapping<u16>,
         limit: Wrapping<u16>,
-    ) -> Option<Wrapping<u16>> {
+    ) -> bool {
         #[allow(clippy::no_effect)]
         (limit,); //calm clippy without adding `_` prefixes to trait function signature
         Self::revert(params, state, now);
-        None
+        false
     }
     fn advance_transition(
         params: &mut <Self::LogPosition as LogPositionTrait>::In<'_, '_, Self>,
@@ -82,10 +85,34 @@ pub trait ReversibleSystem: Send + Sync + Sized + 'static {
     }
 }
 
-pub struct NextTransition<Index: Send + Sync + 'static, Transition, Marker: Send + Sync + 'static> {
-    pub(super) next_state_index: Index,
-    pub(super) transition: Transition,
-    pub(super) commands: Option<NextCommands<Marker>>,
+pub struct NextTransition<T: ReversibleSystem> {
+    pub(super) next_state_index: <T::State as UserStateTrait>::Index,
+    pub(super) transition: T::Transition,
+    pub(super) commands: Option<NextCommands<T>>,
+}
+
+impl<T: ReversibleSystem> NextTransition<T> {
+    fn new(
+        next_state_index: <T::State as UserStateTrait>::Index,
+        transition: T::Transition,
+    ) -> Self {
+        Self {
+            next_state_index,
+            transition,
+            commands: None,
+        }
+    }
+    fn with_commands<FN: FnOnce(ReversibleCommands<T>) + Send + Sync + 'static>(
+        next_state_index: <T::State as UserStateTrait>::Index,
+        transition: T::Transition,
+        commands: FN,
+    ) -> Self {
+        Self {
+            next_state_index,
+            transition,
+            commands: Some(Box::new(commands)),
+        }
+    }
 }
 
 #[derive(Component)]
@@ -100,6 +127,140 @@ pub(super) struct LogEntry<T: ReversibleSystem> {
     pub(super) state_index: <T::State as UserStateTrait>::Index,
 }
 
-trait ReversibleComponentsImplemented: ReversibleSystem {}
+pub(super) trait ReversibleComponentsImplemented: ReversibleSystem {
+    /*
+    fn advance_system<'w, 's>(
+        controller: Res<'w, Controller>,
+        commands: ParallelCommands,
+        states: <Self::State as UserStateTrait>::Param<'w>,
+        params: <Self::LogPosition as LogPositionTrait>::In<'w, 's, Self>,
+    ) {
+        <Self::LogPosition as LogPositionTrait>::mutate(
+            controller,
+            commands,
+            states,
+            params,
+            Self::advance_inner,
+        )
+    }
+    fn advance_fast_system<'w, 's>(
+        controller: Res<'w, Controller>,
+        commands: ParallelCommands,
+        states: <Self::State as UserStateTrait>::Param<'w>,
+        params: <Self::LogPosition as LogPositionTrait>::In<'w, 's, Self>,
+    ) {
+        <Self::LogPosition as LogPositionTrait>::mutate(
+            controller,
+            commands,
+            states,
+            params,
+            Self::advance_fast_inner,
+        )
+    }
+    fn advance_log_system<'w, 's>(
+        controller: Res<'w, Controller>,
+        states: <Self::State as UserStateTrait>::Param<'w>,
+        params: <Self::LogPosition as LogPositionTrait>::In<'w, 's, Self>,
+    ) {
+        <Self::LogPosition as LogPositionTrait>::mutate_log(
+            controller,
+            states,
+            params,
+            Self::advance_log_inner,
+        )
+    }
+    fn advance_log_fast_system<'w, 's>(
+        controller: Res<'w, Controller>,
+        states: <Self::State as UserStateTrait>::Param<'w>,
+        params: <Self::LogPosition as LogPositionTrait>::In<'w, 's, Self>,
+    ) {
+        <Self::LogPosition as LogPositionTrait>::mutate_log(
+            controller,
+            states,
+            params,
+            Self::advance_log_inner,
+        )
+    }
+    fn revert_log_system<'w, 's>(
+        controller: Res<'w, Controller>,
+        states: <Self::State as UserStateTrait>::Param<'w>,
+        params: <Self::LogPosition as LogPositionTrait>::In<'w, 's, Self>,
+    ) {
+        <Self::LogPosition as LogPositionTrait>::mutate_log(
+            controller,
+            states,
+            params,
+            Self::revert_log_inner,
+        )
+    }
+    fn revert_log_fast_system<'w, 's>(
+        controller: Res<'w, Controller>,
+        states: <Self::State as UserStateTrait>::Param<'w>,
+        params: <Self::LogPosition as LogPositionTrait>::In<'w, 's, Self>,
+    ) {
+        <Self::LogPosition as LogPositionTrait>::mutate_log(
+            controller,
+            states,
+            params,
+            Self::revert_log_fast_inner,
+        )
+    }
+    fn log_age_check_system<'w, 's>(
+        controller: Res<'w, Controller>,
+        log: <Self::LogPosition as LogPositionTrait>::InLogOnly<'w, 's, Self>,
+    ) {
+        <Self::LogPosition as LogPositionTrait>::mutate_log_only(
+            controller,
+            log,
+            Self::log_age_check_inner,
+        )
+    }
+    fn advance_inner<'w, 's>(
+        controller: &Controller,
+        commands: &ParallelCommands,
+        states: &<Self::State as UserStateTrait>::Param<'w>,
+        log: &mut Log<Self>,
+        params: <Self::LogPosition as LogPositionTrait>::In<'w, 's, Self>,
+    ) {
+    }
+    fn advance_fast_inner<'w, 's>(
+        controller: &Controller,
+        commands: &ParallelCommands,
+        states: &<Self::State as UserStateTrait>::Param<'w>,
+        log: &mut Log<Self>,
+        params: <Self::LogPosition as LogPositionTrait>::In<'w, 's, Self>,
+    ) {
+    }
+    fn advance_log_inner<'w, 's>(
+        controller: &Controller,
+        states: &<Self::State as UserStateTrait>::Param<'w>,
+        log: &mut Log<Self>,
+        params: <Self::LogPosition as LogPositionTrait>::In<'w, 's, Self>,
+    ) {
+    }
+    fn advance_log_fast_inner<'w, 's>(
+        controller: &Controller,
+        states: &<Self::State as UserStateTrait>::Param<'w>,
+        log: &mut Log<Self>,
+        params: <Self::LogPosition as LogPositionTrait>::In<'w, 's, Self>,
+    ) {
+    }
+    fn revert_log_inner<'w, 's>(
+        controller: &Controller,
+        states: &<Self::State as UserStateTrait>::Param<'w>,
+        log: &mut Log<Self>,
+        params: <Self::LogPosition as LogPositionTrait>::In<'w, 's, Self>,
+    ) {
+    }
+    fn revert_log_fast_inner<'w, 's>(
+        controller: &Controller,
+        states: &<Self::State as UserStateTrait>::Param<'w>,
+        log: &mut Log<Self>,
+        params: <Self::LogPosition as LogPositionTrait>::In<'w, 's, Self>,
+    ) {
+    }
+    fn log_age_check_inner(controller: &Controller, log: &mut Log<Self>) {}
+    */
+}
 
 impl<T: ReversibleSystem> ReversibleComponentsImplemented for T {}

@@ -16,12 +16,13 @@ use bevy::{
 use crate::{
     commands::{DelayedCommand, ReversibleCommandInitialized},
     Ticks, TicksRelative, DEFAULT_TIME_STEP, DELAYED_COMMANDS_SYNC_SENDER_CAPACITY,
-    DELAYED_COMMANDS_TICKS_CAPACITY, FORGET_SYNC_SENDER_CAPACITY, MAX_LOG_LEN,
+    DELAYED_COMMANDS_TICKS_CAPACITY, FORGET_SYNC_SENDER_CAPACITY, LOG_LEN,
 };
 
 /// `NonSend` resource containing sync channel `Receiver`s for forgets and delayed commands.
 pub(super) struct ControllerReceivers {
     /// Messages about forgetting `n` ticks in the past, is only sent to if progress is `Forward`or `ForwardFast`.
+    /// TODO: Nicht mehr nötig wenn logs weiter wachsen um gewünschte log länge zu erreichen
     forget: Receiver<Ticks>,
     /// Messages about commands that are not happening in the next tick, is only sent to if progress is `ForwardFast`.
     delayed_commands: Receiver<(usize, Box<dyn DelayedCommand>)>,
@@ -396,7 +397,7 @@ impl Controller {
         match self.progress {
             Progress::Forward | Progress::ForwardFast { .. } => {
                 self.time_stamp += 1;
-                if self.log.len() == MAX_LOG_LEN {
+                if self.log.len() == LOG_LEN {
                     let forget = self.log.pop_back().expect("`MAX_LOG_LEN` should not be 0.");
                     if !forget.is_empty() {
                         commands.add(|world: &mut World| {

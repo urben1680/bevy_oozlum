@@ -1,18 +1,21 @@
-use std::num::Wrapping;
+use std::{marker::PhantomData, num::Wrapping};
 
 use bevy::{
-    ecs::query::WorldQuery,
-    prelude::{Component, Entity, Without},
+    ecs::{
+        query::{QueryItem, WorldQuery},
+        system::SystemParam,
+    },
+    prelude::{Component, Entity, Query, ResMut, Without},
 };
 
 pub mod commands;
 pub mod controller;
 pub mod event;
-pub mod system_mutation;
+//pub mod system_mutation;
 
 pub const MAX_LOG_INDEX: Ticks = Ticks::MAX;
 pub const MAX_LOG_INDEX_USIZE: usize = MAX_LOG_INDEX as usize;
-pub const MAX_LOG_LEN: usize = MAX_LOG_INDEX_USIZE + 1;
+pub const LOG_LEN: usize = MAX_LOG_INDEX_USIZE + 1;
 pub const DEFAULT_TIME_STEP: f64 = 0.02;
 pub const FORGET_SYNC_SENDER_CAPACITY: usize = 1024;
 pub const DELAYED_COMMANDS_TICKS_CAPACITY: usize = Ticks::MAX as usize >> 1; //jumping from morning to evening
@@ -78,3 +81,54 @@ mod tests {
     }
 }
 */
+mod bevy_discord {
+
+    use bevy::{ecs::{query::{QueryItem, WorldQuery},system::SystemParam},prelude::{Component, Query, ResMut}};
+
+#[derive(Component)]
+struct Log;
+struct PerSystem;
+struct PerEntity<Q: WorldQuery + 'static, const BATCH_SIZE: usize = 0>(std::marker::PhantomData<Q>);
+
+trait LogPosition {
+    type Params<'w, 's>: SystemParam;
+    type UserParams<'w, 'a, S: SystemParam + Send + Sync + 'a>;
+    fn mutate<
+        'w, 's, 'a,
+        S: SystemParam + Send + Sync + 'a,
+        FN: Fn(&mut Log, &mut Self::UserParams<'w, 'a, S>) + Send + Sync + Copy,
+    >(params: Self::Params<'w, 's>, s: S, f: FN);
+}
+
+impl LogPosition for PerSystem {
+    type Params<'w, 's> = ResMut<'w, Log>;
+    type UserParams<'w, 'a, S: SystemParam + Send + Sync + 'a> = S;
+    fn mutate<
+        'w, 's, 'a,
+        S: SystemParam + Send + Sync + 'a,
+        FN: Fn(&mut Log, &mut Self::UserParams<'w, 'a, S>) + Send + Sync + Copy,
+    >(mut params: Self::Params<'w, 's>, mut s: S, f: FN) {
+        f(&mut params, &mut s);
+    }
+}
+
+impl<Q: WorldQuery, const BATCH_SIZE: usize> LogPosition for PerEntity<Q, BATCH_SIZE> {
+    type Params<'w, 's> = Query<'w, 's, (Q, &'static mut Log)>;
+    type UserParams<'w, 'a, S: SystemParam + Send + Sync + 'a> = (&'a S, QueryItem<'w, Q>);
+    fn mutate<
+        'w, 's, 'a,
+        S: SystemParam + Send + Sync + 'a,
+        FN: Fn(&mut Log, &mut Self::UserParams<'w, 'a, S>) + Send + Sync + Copy,
+    >(mut params: Self::Params<'w, 's>, s: S, f: FN) {
+        if BATCH_SIZE == 0 {
+            params.for_each_mut(|(item, mut log)| {
+                f(&mut log, &mut (&s, item));
+            });
+        } else {
+            params.par_for_each_mut(BATCH_SIZE, |(item, mut log)| {
+                f(&mut log, &mut (&s, item));
+            });
+        }
+    }
+}
+}
