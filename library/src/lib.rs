@@ -96,7 +96,7 @@ trait LogPosition {
     fn mutate<
         'w, 's, 'a,
         S: SystemParam + Send + Sync + 'a,
-        FN: Fn(&mut Log, &mut Self::UserParams<'w, 'a, S>) + Send + Sync + Copy,
+        FN: Fn(&mut Log, Self::UserParams<'w, 'a, S>) + Send + Sync + Copy,
     >(params: Self::Params<'w, 's>, s: S, f: FN);
 }
 
@@ -106,9 +106,9 @@ impl LogPosition for PerSystem {
     fn mutate<
         'w, 's, 'a,
         S: SystemParam + Send + Sync + 'a,
-        FN: Fn(&mut Log, &mut Self::UserParams<'w, 'a, S>) + Send + Sync + Copy,
+        FN: Fn(&mut Log, Self::UserParams<'w, 'a, S>) + Send + Sync + Copy,
     >(mut params: Self::Params<'w, 's>, mut s: S, f: FN) {
-        f(&mut params, &mut s);
+        f(&mut params, s);
     }
 }
 
@@ -118,15 +118,15 @@ impl<Q: WorldQuery, const BATCH_SIZE: usize> LogPosition for PerEntity<Q, BATCH_
     fn mutate<
         'w, 's, 'a,
         S: SystemParam + Send + Sync + 'a,
-        FN: Fn(&mut Log, &mut Self::UserParams<'w, 'a, S>) + Send + Sync + Copy,
+        FN: Fn(&mut Log, Self::UserParams<'w, 'a, S>) + Send + Sync + Copy,
     >(mut params: Self::Params<'w, 's>, s: S, f: FN) {
         if BATCH_SIZE == 0 {
             params.for_each_mut(|(item, mut log)| {
-                f(&mut log, &mut (&s, item));
+                f(&mut log, (&s, item));
             });
         } else {
             params.par_for_each_mut(BATCH_SIZE, |(item, mut log)| {
-                f(&mut log, &mut (&s, item));
+                f(&mut log, (&s, item));
             });
         }
     }
