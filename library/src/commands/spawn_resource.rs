@@ -26,7 +26,7 @@ impl<T: Resource> SpawnResource<T> {
 }
 
 impl<T: Resource> ReversibleCommand for SpawnResource<T> {
-    fn init(self, world: &mut World) -> Box<dyn ReversibleCommandInitialized> {
+    fn init(self: Box<Self>, world: &mut World) -> Box<dyn ReversibleCommandInitialized> {
         if !world.contains_resource::<T>() {
             world.insert_resource(self.data);
         } else {

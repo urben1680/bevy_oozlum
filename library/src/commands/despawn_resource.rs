@@ -26,7 +26,7 @@ impl<T: Resource> DespawnResource<T> {
 }
 
 impl<T: Resource> ReversibleCommand for DespawnResource<T> {
-    fn init(self, world: &mut World) -> Box<dyn ReversibleCommandInitialized> {
+    fn init(self: Box<Self>, world: &mut World) -> Box<dyn ReversibleCommandInitialized> {
         if let Some(value) = world.remove_resource::<T>() {
             world.insert_resource(Despawned(value));
         } else {

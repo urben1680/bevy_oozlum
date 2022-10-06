@@ -32,7 +32,7 @@ impl<T: Component> DespawnComponent<T> {
 }
 
 impl<T: Component> ReversibleCommand for DespawnComponent<T> {
-    fn init(self, world: &mut World) -> Box<dyn ReversibleCommandInitialized> {
+    fn init(self: Box<Self>, world: &mut World) -> Box<dyn ReversibleCommandInitialized> {
         if let Some(mut entity_mut) = world.get_entity_mut(self.entity) {
             if let Some(value) = entity_mut.remove::<T>() {
                 entity_mut.insert(Despawned(value));

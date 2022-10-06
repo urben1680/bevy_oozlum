@@ -25,7 +25,7 @@ impl DespawnEntity {
 }
 
 impl ReversibleCommand for DespawnEntity {
-    fn init(self, world: &mut World) -> Box<dyn ReversibleCommandInitialized> {
+    fn init(self: Box<Self>, world: &mut World) -> Box<dyn ReversibleCommandInitialized> {
         if let Some(mut entity_mut) = world.get_entity_mut(self.entity) {
             entity_mut.insert(DespawnedEntity);
         } else {

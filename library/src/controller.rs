@@ -21,11 +21,9 @@ use crate::{
 
 /// `NonSend` resource containing sync channel `Receiver`s for forgets and delayed commands.
 pub(super) struct ControllerReceivers {
-    /// Messages about forgetting `n` ticks in the past, is only sent to if progress is `Forward`or `ForwardFast`.
-    /// TODO: Nicht mehr nötig wenn logs weiter wachsen um gewünschte log länge zu erreichen
-    //forget: Receiver<Ticks>,
     /// Messages about commands that are not happening in the next tick, is only sent to if progress is `ForwardFast`.
     delayed_commands: Receiver<(usize, Box<dyn ReversibleCommand>)>,
+    //TODO: commands:  Receiver<Box<dyn ReversibleCommand>>
 }
 
 /// `Progress` is used to control the progression of all reversible systems.
