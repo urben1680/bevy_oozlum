@@ -14,7 +14,7 @@ impl<T: Bundle> SpawnEntity<T> {
 }
 
 impl<T: Bundle> ReversibleCommand for SpawnEntity<T> {
-    fn init(self, world: &mut World) -> Box<dyn ReversibleCommandInitialized> {
+    fn init(self: Box<Self>, world: &mut World) -> Box<dyn ReversibleCommandInitialized> {
         Box::new(SpawnEntityInitialized {
             entity: world.spawn().insert_bundle(self.data).id(),
         })

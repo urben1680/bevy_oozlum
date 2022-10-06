@@ -21,26 +21,9 @@ pub use spawn_component::*;
 pub use spawn_entity::*;
 pub use spawn_resource::*;
 
-pub(super) type NextCommands =
-    Box<dyn for<'a> FnOnce(ReversibleWorld<'a>) + Send + Sync>;
-
-/// `Commands` wrapper to work with reversible commands.
-pub struct ReversibleWorld<'a> (pub(super) &'a mut World);
-
-impl<'a> ReversibleWorld<'a> {
-    /// Add a reversible command
-    pub fn add<T: ReversibleCommand>(&mut self, command: T) {
-        self.0
-            .resource_scope(|world, mut controller: Mut<'_, Controller>| {
-                let command = command.init(world);
-                controller.push_command(command);
-            });
-    }
-}
-
 /// Trait for reversible commands that are not yet initialized.
 pub trait ReversibleCommand: Send + Sync + 'static {
-    fn init(self, world: &mut World) -> Box<dyn ReversibleCommandInitialized>;
+    fn init(self: Box<Self>, world: &mut World) -> Box<dyn ReversibleCommandInitialized>;
 }
 
 /// Trait for reversible commands that are initialized.

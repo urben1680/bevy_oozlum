@@ -93,15 +93,17 @@ struct PerSystem;
 struct PerEntity<Q: WorldQuery + 'static, const BATCH_SIZE: usize = 0>(std::marker::PhantomData<Q>);
 
 trait LogPosition {
-    type Params<'w, 's>: SystemParam;
-    type UserParams<'w, 'a, S: SystemParam + Send + Sync + 'a>;
+    type Params<'w, 's, 'b>: SystemParam + 'b;
+    type UserParams<'a, S: SystemParam + Send + Sync + 'a>;
     fn mutate<
-        'w, 's, 'a,
-        S: SystemParam + Send + Sync + 'a,
-        FN: Fn(&mut Log, Self::UserParams<'w, 'a, S>) + Send + Sync + Copy,
-    >(params: Self::Params<'w, 's>, s: S, f: FN);
+        'b,
+        S: SystemParam + Send + Sync + 'static,
+        FN: for<'a> Fn(&'a mut Log, Self::UserParams<'a, S>) + Send + Sync + Copy,
+    >(params: Self::Params<'_, '_, 'b>, s: S, f: FN);
+    //anders betrachten: alles geht rein per value, also sollte die funktion selbst die lifetime darstellen und keine von außen zulassen
+    //https://doc.rust-lang.org/nightly/reference/trait-bounds.html#higher-ranked-trait-bounds
 }
-
+/*
 impl LogPosition for PerSystem {
     type Params<'w, 's> = ResMut<'w, Log>;
     type UserParams<'w, 'a, S: SystemParam + Send + Sync + 'a> = S;
@@ -113,21 +115,21 @@ impl LogPosition for PerSystem {
         f(&mut params, s);
     }
 }
-
+*/
 impl<Q: WorldQuery, const BATCH_SIZE: usize> LogPosition for PerEntity<Q, BATCH_SIZE> {
-    type Params<'w, 's> = Query<'w, 's, (Q, &'static mut Log)>;
-    type UserParams<'w, 'a, S: SystemParam + Send + Sync + 'a> = (&'a S, QueryItem<'w, Q>);
+    type Params<'w, 's, 'b> = Query<'w, 's, (Q, &'static mut Log)>;
+    type UserParams<'a, S: SystemParam + Send + Sync + 'a> = (&'a S, QueryItem<'a, Q>);
     fn mutate<
-        'w, 's, 'a,
-        S: SystemParam + Send + Sync + 'a,
-        FN: Fn(&mut Log, Self::UserParams<'w, 'a, S>) + Send + Sync + Copy,
-    >(mut params: Self::Params<'w, 's>, s: S, f: FN) {
+        'b,
+        S: SystemParam + Send + Sync + 'static,
+        FN: for<'a> Fn(&'a mut Log, Self::UserParams<'a, S>) + Send + Sync + Copy,
+    >(mut params: Self::Params<'_, '_, 'b>, s: S, f: FN) {
         if BATCH_SIZE == 0 {
-            params.for_each_mut(|(item, mut log)| {
+            params.for_each_mut::<'b, _>(|(item, mut log)| {
                 f(&mut log, (&s, item));
             });
         } else {
-            params.par_for_each_mut(BATCH_SIZE, |(item, mut log)| {
+            params.par_for_each_mut::<'b, _>(BATCH_SIZE, |(item, mut log)| {
                 f(&mut log, (&s, item));
             });
         }

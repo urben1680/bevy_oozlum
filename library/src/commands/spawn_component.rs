@@ -33,7 +33,7 @@ impl<T: Component> SpawnComponent<T> {
 }
 
 impl<T: Component> ReversibleCommand for SpawnComponent<T> {
-    fn init(self, world: &mut World) -> Box<dyn ReversibleCommandInitialized> {
+    fn init(self: Box<Self>, world: &mut World) -> Box<dyn ReversibleCommandInitialized> {
         if let Some(mut entity_mut) = world.get_entity_mut(self.entity) {
             if !entity_mut.contains::<T>() {
                 entity_mut.insert(self.data);
