@@ -32,23 +32,22 @@ impl<T: Component> DespawnComponent<T> {
 }
 
 impl<T: Component> ReversibleCommand for DespawnComponent<T> {
-    type Initialized = DespawnComponentInitialized<T>;
-    fn init<Marker>(self, world: &mut World) -> Self::Initialized {
+    fn init(self, world: &mut World) -> Box<dyn ReversibleCommandInitialized> {
         if let Some(mut entity_mut) = world.get_entity_mut(self.entity) {
             if let Some(value) = entity_mut.remove::<T>() {
                 entity_mut.insert(Despawned(value));
             } else {
                 self.error
-                    .error::<T, Marker>(&DespawnComponentError::ComponentNotFound);
+                    .error::<T>(&DespawnComponentError::ComponentNotFound);
             }
         } else {
             self.error
-                .error::<T, Marker>(&DespawnComponentError::EntityNotFound);
+                .error::<T>(&DespawnComponentError::EntityNotFound);
         }
-        DespawnComponentInitialized {
+        Box::new(DespawnComponentInitialized {
             entity: self.entity,
-            p: PhantomData,
-        }
+            p: PhantomData::<T>,
+        })
     }
 }
 
