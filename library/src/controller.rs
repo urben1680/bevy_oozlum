@@ -14,7 +14,7 @@ use bevy::{
 };
 
 use crate::{
-    commands::{DelayedCommand, ReversibleCommandInitialized},
+    commands::{ReversibleCommand, ReversibleCommandInitialized},
     Ticks, TicksRelative, DEFAULT_TIME_STEP, DELAYED_COMMANDS_SYNC_SENDER_CAPACITY,
     DELAYED_COMMANDS_TICKS_CAPACITY, FORGET_SYNC_SENDER_CAPACITY, LOG_LEN,
 };
@@ -23,9 +23,9 @@ use crate::{
 pub(super) struct ControllerReceivers {
     /// Messages about forgetting `n` ticks in the past, is only sent to if progress is `Forward`or `ForwardFast`.
     /// TODO: Nicht mehr nötig wenn logs weiter wachsen um gewünschte log länge zu erreichen
-    forget: Receiver<Ticks>,
+    //forget: Receiver<Ticks>,
     /// Messages about commands that are not happening in the next tick, is only sent to if progress is `ForwardFast`.
-    delayed_commands: Receiver<(usize, Box<dyn DelayedCommand>)>,
+    delayed_commands: Receiver<(usize, Box<dyn ReversibleCommand>)>,
 }
 
 /// `Progress` is used to control the progression of all reversible systems.
@@ -118,12 +118,12 @@ pub struct Controller {
     //progress_query: Progress,
     pre_update_ran: bool,
     log_end: bool,
-    delayed_commands_sender: SyncSender<(usize, Box<dyn DelayedCommand>)>,
-    delayed_commands: VecDeque<Vec<Box<dyn DelayedCommand>>>,
+    delayed_commands_sender: SyncSender<(usize, Box<dyn ReversibleCommand>)>,
+    delayed_commands: VecDeque<Vec<Box<dyn ReversibleCommand>>>,
     delayed_commands_overflows: u64,
-    forget_sender: SyncSender<Ticks>,
-    forget_overflow: Option<Ticks>,
-    forget_overflows: u64,
+    //forget_sender: SyncSender<Ticks>,
+    //forget_overflow: Option<Ticks>,
+    //forget_overflows: u64,
 }
 
 impl Controller {
@@ -178,18 +178,8 @@ impl Controller {
     pub fn ticks_ago(&self, time_stamp: Wrapping<Ticks>) -> Ticks {
         time_stamp.ticks_ago(self.time_stamp)
     }
-    /// Add new command.
-    pub(super) fn push_command<T: ReversibleCommandInitialized, Marker>(&mut self, command: T) {
-        debug_assert!(matches!(
-            self.progress,
-            Progress::Forward | Progress::ForwardFast { .. }
-        ));
-        self.log
-            .front_mut()
-            .expect("`log` should not be empty")
-            .push(Box::new(command));
-    }
-    pub(super) fn send_forget(&self, time_stamp: Wrapping<Ticks>, commands: &mut Commands) {
+    /* 
+    pub(super) fn send_forget(&self, time_stamp: Wrapping<Ticks>, commands: &mut Commands<'_, '_>) {
         debug_assert_eq!(self.progress, Progress::Forward);
         let ticks = self.ticks_ago(time_stamp);
         if ticks > self.age() {
@@ -209,11 +199,23 @@ impl Controller {
             }
         }
     }
-    pub(super) fn send_delayed_command<T: DelayedCommand>(
+    */
+    /// Add new command.
+    pub(super) fn push_command(&mut self, command: Box<dyn ReversibleCommandInitialized>) {
+        debug_assert!(matches!(
+            self.progress,
+            Progress::Forward | Progress::ForwardFast { .. }
+        ));
+        self.log
+            .front_mut()
+            .expect("`log` should not be empty")
+            .push(command);
+    }
+    pub(super) fn send_delayed_command<T: ReversibleCommand>(
         &self,
         time_stamp: Wrapping<Ticks>,
         command: T,
-        commands: &mut Commands,
+        commands: &mut Commands<'_, '_>,
     ) {
         debug_assert!(matches!(self.progress, Progress::ForwardFast { .. }));
         let index = self.ticks_ago(time_stamp) as usize;
@@ -232,7 +234,7 @@ impl Controller {
             }
         }
     }
-    fn add_delayed_command(&mut self, index: usize, command: Box<dyn DelayedCommand>) {
+    fn add_delayed_command(&mut self, index: usize, command: Box<dyn ReversibleCommand>) {
         match self.delayed_commands.get_mut(index) {
             Some(v) => v.push(command),
             None => {
@@ -258,7 +260,7 @@ impl Controller {
         const LOG_PAUSE: bool,
         const LOG_END: bool,
     >(
-        controller: Res<Self>,
+        controller: Res<'_, Self>,
     ) -> ShouldRun {
         Self::should_run(
             match (LOG, PAUSE, LOG_PAUSE) {
@@ -275,28 +277,28 @@ impl Controller {
             } || (LOG_END && controller.log_end),
         )
     }
-    pub fn run_criteria_forward(controller: Res<Self>) -> ShouldRun {
+    pub fn run_criteria_forward(controller: Res<'_, Self>) -> ShouldRun {
         controller.after_pre_update_not_log_end(controller.progress == Progress::Forward)
     }
-    pub fn run_criteria_forward_fast(controller: Res<Self>) -> ShouldRun {
+    pub fn run_criteria_forward_fast(controller: Res<'_, Self>) -> ShouldRun {
         controller.after_pre_update_not_log_end(matches!(
             controller.progress,
             Progress::ForwardFast { .. }
         ))
     }
-    pub fn run_criteria_forward_log(controller: Res<Self>) -> ShouldRun {
+    pub fn run_criteria_forward_log(controller: Res<'_, Self>) -> ShouldRun {
         controller.after_pre_update_not_log_end(controller.progress == Progress::ForwardLog)
     }
-    pub fn run_criteria_forward_log_fast(controller: Res<Self>) -> ShouldRun {
+    pub fn run_criteria_forward_log_fast(controller: Res<'_, Self>) -> ShouldRun {
         controller.after_pre_update_not_log_end(controller.progress == Progress::ForwardLogEnd)
     }
-    pub fn run_criteria_backward_log(controller: Res<Self>) -> ShouldRun {
+    pub fn run_criteria_backward_log(controller: Res<'_, Self>) -> ShouldRun {
         controller.after_pre_update_not_log_end(controller.progress == Progress::BackwardLog)
     }
-    pub fn run_criteria_backward_log_fast(controller: Res<Self>) -> ShouldRun {
+    pub fn run_criteria_backward_log_fast(controller: Res<'_, Self>) -> ShouldRun {
         controller.after_pre_update_not_log_end(controller.progress == Progress::BackwardLogEnd)
     }
-    pub fn run_criteria_log_end(controller: Res<Self>) -> ShouldRun {
+    pub fn run_criteria_log_end(controller: Res<'_, Self>) -> ShouldRun {
         controller.after_pre_update(controller.log_end)
     }
     fn after_pre_update_not_log_end(&self, b: bool) -> ShouldRun {
@@ -322,10 +324,10 @@ impl Controller {
         time_stamp: Wrapping<Ticks>,
     ) -> impl FnOnce(&mut World) {
         move |world: &mut World| {
-            let (forget_s, forget_r) = sync_channel(FORGET_SYNC_SENDER_CAPACITY);
+            //let (forget_s, forget_r) = sync_channel(FORGET_SYNC_SENDER_CAPACITY);
             let (commands_s, commands_r) = sync_channel(DELAYED_COMMANDS_SYNC_SENDER_CAPACITY);
             world.insert_non_send_resource(ControllerReceivers {
-                forget: forget_r,
+                //forget: forget_r,
                 delayed_commands: commands_r,
             });
             world.insert_resource(Self {
@@ -341,18 +343,18 @@ impl Controller {
                 delayed_commands_sender: commands_s,
                 delayed_commands: VecDeque::with_capacity(DELAYED_COMMANDS_TICKS_CAPACITY),
                 delayed_commands_overflows: 0,
-                forget_sender: forget_s,
-                forget_overflow: None,
-                forget_overflows: 0,
+                //forget_sender: forget_s,
+                //forget_overflow: None,
+                //forget_overflows: 0,
             })
         }
     }
     /// System that should be run before all reversible systems.
     pub(super) fn first_system(
-        mut controller: ResMut<Self>,
-        time: Local<Time>,
-        elapsed: Local<f64>,
-        commands: Commands,
+        mut controller: ResMut<'_, Self>,
+        time: Local<'_, Time>,
+        elapsed: Local<'_, f64>,
+        commands: Commands<'_, '_>,
     ) {
         if !controller.first_early_return(time, elapsed) {
             controller.first_update(commands);
@@ -360,15 +362,15 @@ impl Controller {
     }
     /// System that should be run after all reversible systems.
     pub(super) fn last_system(
-        mut controller: ResMut<Self>,
-        receivers: NonSendMut<ControllerReceivers>,
-        commands: Commands,
+        mut controller: ResMut<'_, Self>,
+        receivers: NonSendMut<'_, ControllerReceivers>,
+        commands: Commands<'_, '_>,
     ) {
         if controller.pre_update_ran {
             controller.last(receivers, commands);
         }
     }
-    fn first_early_return(&mut self, mut time: Local<Time>, mut elapsed: Local<f64>) -> bool {
+    fn first_early_return(&mut self, mut time: Local<'_, Time>, mut elapsed: Local<'_, f64>) -> bool {
         if self.log_end {
             self.pre_update_ran = true;
             return true;
@@ -393,7 +395,7 @@ impl Controller {
         }
         false
     }
-    fn first_update(&mut self, mut commands: Commands) {
+    fn first_update(&mut self, mut commands: Commands<'_, '_>) {
         match self.progress {
             Progress::Forward | Progress::ForwardFast { .. } => {
                 self.time_stamp += 1;
@@ -419,7 +421,7 @@ impl Controller {
                     Some(v) => {
                         if !v.is_empty() {
                             commands.add(|world: &mut World|{
-                                world.resource_scope(|world, mut controller: Mut<Self>|{
+                                world.resource_scope(|world, mut controller: Mut<'_, Self>|{
                                     let log_index = controller.log_index;
                                     match controller.log.get_mut(log_index){
                                         Some(entry) => {
@@ -441,7 +443,7 @@ impl Controller {
             Progress::Pause | Progress::PauseLog => {}
         }
     }
-    fn last(&mut self, receivers: NonSendMut<ControllerReceivers>, commands: Commands) {
+    fn last(&mut self, receivers: NonSendMut<'_, ControllerReceivers>, commands: Commands<'_, '_>) {
         self.pre_update_ran = false;
         if let Some(time_step) = self.time_step_query.take() {
             self.time_step = time_step;
@@ -455,8 +457,8 @@ impl Controller {
     }
     fn forward_commands(
         &mut self,
-        receivers: NonSendMut<ControllerReceivers>,
-        mut commands: Commands,
+        receivers: NonSendMut<'_, ControllerReceivers>,
+        mut commands: Commands<'_, '_>,
         fast_forward: bool,
     ) {
         let delayed = if fast_forward {
@@ -482,7 +484,7 @@ impl Controller {
             debug_assert_eq!(self.delayed_commands_overflows, 0);
             Default::default()
         };
-
+/*
         let forget = receivers
             .forget
             .try_iter()
@@ -490,12 +492,12 @@ impl Controller {
             .min()
             .map(|ticks| self.log.split_off(self.log.len() - ticks as usize))
             .filter(|vd| vd.iter().any(|v| !v.is_empty()));
-
-        if delayed.is_empty() && forget.is_none() {
-            debug_assert_eq!(self.forget_overflows, 0);
+*/
+        if delayed.is_empty() /*&& forget.is_none()*/ {
+            //debug_assert_eq!(self.forget_overflows, 0);
             return;
         }
-
+/*
         if self.forget_overflows != 0 {
             info!(
                 "`forget_overflows` {} with FORGET_SYNC_SENDER_CAPACITY {}",
@@ -503,20 +505,23 @@ impl Controller {
             );
             self.forget_overflows = 0;
         }
+    */
 
         commands.add(|world: &mut World| {
             delayed.into_iter().for_each(|mut command| unsafe {
                 //SAFETY: calls `ManuallyDrop::take` which is only allowed to be done once, which is the case here before `command` is dropped
                 command.init(world);
             });
+            /*
             forget
                 .into_iter()
                 .flatten()
                 .flatten()
                 .for_each(|mut command| command.redo_finalize(world));
+                */
         })
     }
-    fn forward_log_commands(&self, mut commands: Commands) {
+    fn forward_log_commands(&self, mut commands: Commands<'_, '_>) {
         let commands_exist = match self.log.get(self.log_index) {
             Some(v) => !v.is_empty(),
             None => panic!(
@@ -529,7 +534,7 @@ impl Controller {
             let log_len = self.log.len();
             let log_index = self.log_index;
             commands.add(move |world: &mut World|{
-                world.resource_scope(|world, mut controller: Mut<Self>|{
+                world.resource_scope(|world, mut controller: Mut<'_, Self>|{
                     let commands = match controller.log.get_mut(log_index){
                         Some(v) => v,
                         None => panic!("`log` with `len` {} is too short for `log_index` {} during `ForwardLog` command.", log_len, log_index)
@@ -539,7 +544,7 @@ impl Controller {
             })
         }
     }
-    fn log_end(&mut self, mut commands: Commands) {
+    fn log_end(&mut self, mut commands: Commands<'_, '_>) {
         self.log_end = false;
         if matches!(self.progress_query, Some(progress) if progress.is_log(true)) {
             self.progress_query = None;
@@ -597,7 +602,7 @@ impl Controller {
             }
         }
     }
-    fn progress_check(&mut self, receivers: NonSendMut<ControllerReceivers>, commands: Commands) {
+    fn progress_check(&mut self, receivers: NonSendMut<'_, ControllerReceivers>, commands: Commands<'_, '_>) {
         match &mut self.progress {
             Progress::Forward => {
                 self.apply_progress_query(self.progress);

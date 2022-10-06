@@ -33,23 +33,22 @@ impl<T: Component> SpawnComponent<T> {
 }
 
 impl<T: Component> ReversibleCommand for SpawnComponent<T> {
-    type Initialized = SpawnComponentInitialized<T>;
-    fn init<Marker>(self, world: &mut World) -> Self::Initialized {
+    fn init(self, world: &mut World) -> Box<dyn ReversibleCommandInitialized> {
         if let Some(mut entity_mut) = world.get_entity_mut(self.entity) {
             if !entity_mut.contains::<T>() {
                 entity_mut.insert(self.data);
             } else {
                 self.error
-                    .error::<T, Marker>(&SpawnComponentError::ComponentAlreadyExists);
+                    .error::<T>(&SpawnComponentError::ComponentAlreadyExists);
             }
         } else {
             self.error
-                .error::<T, Marker>(&SpawnComponentError::EntityNotFound);
+                .error::<T>(&SpawnComponentError::EntityNotFound);
         }
-        SpawnComponentInitialized {
-            p: PhantomData,
+        Box::new(SpawnComponentInitialized {
+            p: PhantomData::<T>,
             entity: self.entity,
-        }
+        })
     }
 }
 

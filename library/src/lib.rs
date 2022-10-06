@@ -1,3 +1,5 @@
+#![deny(rust_2018_idioms)]
+
 use std::{marker::PhantomData, num::Wrapping};
 
 use bevy::{
@@ -107,7 +109,7 @@ impl LogPosition for PerSystem {
         'w, 's, 'a,
         S: SystemParam + Send + Sync + 'a,
         FN: Fn(&mut Log, Self::UserParams<'w, 'a, S>) + Send + Sync + Copy,
-    >(mut params: Self::Params<'w, 's>, mut s: S, f: FN) {
+    >(mut params: Self::Params<'w, 's>, s: S, f: FN) {
         f(&mut params, s);
     }
 }
