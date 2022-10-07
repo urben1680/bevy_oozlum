@@ -1,4 +1,5 @@
 #![deny(rust_2018_idioms)]
+#![feature(generic_associated_types)]
 
 use std::{marker::PhantomData, num::Wrapping};
 
@@ -93,13 +94,12 @@ struct PerSystem;
 struct PerEntity<Q: WorldQuery + 'static, const BATCH_SIZE: usize = 0>(std::marker::PhantomData<Q>);
 
 trait LogPosition {
-    type Params<'w, 's, 'b>: SystemParam + 'b;
+    type Params<'w, 's>: SystemParam;
     type UserParams<'a, S: SystemParam + Send + Sync + 'a>;
     fn mutate<
-        'b,
-        S: SystemParam + Send + Sync + 'static,
+        S: SystemParam + Send + Sync,
         FN: for<'a> Fn(&'a mut Log, Self::UserParams<'a, S>) + Send + Sync + Copy,
-    >(params: Self::Params<'_, '_, 'b>, s: S, f: FN);
+    >(params: Self::Params<'_, '_>, s: S, f: FN);
     //anders betrachten: alles geht rein per value, also sollte die funktion selbst die lifetime darstellen und keine von außen zulassen
     //https://doc.rust-lang.org/nightly/reference/trait-bounds.html#higher-ranked-trait-bounds
 }
@@ -117,19 +117,18 @@ impl LogPosition for PerSystem {
 }
 */
 impl<Q: WorldQuery, const BATCH_SIZE: usize> LogPosition for PerEntity<Q, BATCH_SIZE> {
-    type Params<'w, 's, 'b> = Query<'w, 's, (Q, &'static mut Log)>;
+    type Params<'w, 's> = Query<'w, 's, (Q, &'static mut Log)>;
     type UserParams<'a, S: SystemParam + Send + Sync + 'a> = (&'a S, QueryItem<'a, Q>);
     fn mutate<
-        'b,
-        S: SystemParam + Send + Sync + 'static,
+        S: SystemParam + Send + Sync,
         FN: for<'a> Fn(&'a mut Log, Self::UserParams<'a, S>) + Send + Sync + Copy,
-    >(mut params: Self::Params<'_, '_, 'b>, s: S, f: FN) {
+    >(mut params: Self::Params<'_, '_>, s: S, f: FN) {
         if BATCH_SIZE == 0 {
-            params.for_each_mut::<'b, _>(|(item, mut log)| {
+            params.for_each_mut(|(item, mut log)| {
                 f(&mut log, (&s, item));
             });
         } else {
-            params.par_for_each_mut::<'b, _>(BATCH_SIZE, |(item, mut log)| {
+            params.par_for_each_mut(BATCH_SIZE, |(item, mut log)| {
                 f(&mut log, (&s, item));
             });
         }
