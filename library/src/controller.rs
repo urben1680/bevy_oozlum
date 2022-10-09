@@ -22,8 +22,7 @@ use crate::{
 /// `NonSend` resource containing sync channel `Receiver`s for forgets and delayed commands.
 pub(super) struct ControllerReceivers {
     /// Messages about commands that are not happening in the next tick, is only sent to if progress is `ForwardFast`.
-    delayed_commands: Receiver<(usize, Box<dyn ReversibleCommand>)>,
-    //TODO: commands:  Receiver<Box<dyn ReversibleCommand>>
+    commands: Receiver<(usize, Vec<Box<dyn ReversibleCommand>>)>,
 }
 
 /// `Progress` is used to control the progression of all reversible systems.
@@ -95,6 +94,14 @@ impl Progress {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum OneTimeProgress {
+    None,
+    ForwardLogEndInit,
+    BackwardLogInit,
+    LogEnd,
+}
+
 pub struct Controller {
     progress_query: Option<Progress>,
     time_step_query: Option<f64>,
@@ -115,10 +122,10 @@ pub struct Controller {
     progress: Progress,
     //progress_query: Progress,
     pre_update_ran: bool,
-    log_end: bool,
-    delayed_commands_sender: SyncSender<(usize, Box<dyn ReversibleCommand>)>,
+    log_end: bool, //OneTimeProgress, //todo replace with enum: None, LogEnd, AdvanceFastInit, RevertFastInit when issue about fast forward option return is solved
+    commands_sender: SyncSender<(usize, Vec<Box<dyn ReversibleCommand>>)>,
     delayed_commands: VecDeque<Vec<Box<dyn ReversibleCommand>>>,
-    delayed_commands_overflows: u64,
+    commands_overflows: u64,
     //forget_sender: SyncSender<Ticks>,
     //forget_overflow: Option<Ticks>,
     //forget_overflows: u64,
@@ -176,7 +183,7 @@ impl Controller {
     pub fn ticks_ago(&self, time_stamp: Wrapping<Ticks>) -> Ticks {
         time_stamp.ticks_ago(self.time_stamp)
     }
-    /* 
+    /*
     pub(super) fn send_forget(&self, time_stamp: Wrapping<Ticks>, commands: &mut Commands<'_, '_>) {
         debug_assert_eq!(self.progress, Progress::Forward);
         let ticks = self.ticks_ago(time_stamp);
@@ -198,8 +205,57 @@ impl Controller {
         }
     }
     */
+    pub(super) fn send_commands(
+        &self,
+        v: Vec<Box<dyn ReversibleCommand>>,
+        mut commands: Commands<'_, '_>,
+    ) {
+        debug_assert_eq!(
+            self.progress,
+            Progress::Forward,
+            "`send_commands` should not be called during `progress`: `{:?}`",
+            self.progress
+        );
+        self.send_commands_raw(v, 0, commands);
+    }
+    pub(super) fn send_delayed_commands(
+        &self,
+        v: Vec<Box<dyn ReversibleCommand>>,
+        time_stamp: Wrapping<Ticks>,
+        mut commands: Commands<'_, '_>,
+    ) {
+        debug_assert!(
+            matches!(self.progress, Progress::ForwardFast { .. }),
+            "`send_commands` should not be called during `progress`: `{:?}`",
+            self.progress
+        );
+        let index = self.ticks_from_now(time_stamp) as usize;
+        self.send_commands_raw(v, index, commands);
+    }
+    fn send_commands_raw(
+        &self,
+        v: Vec<Box<dyn ReversibleCommand>>,
+        index: usize,
+        mut commands: Commands<'_, '_>,
+    ) {
+        match self.commands_sender.try_send((index, v)) {
+            Ok(_) => {}
+            Err(TrySendError::Full((index, command))) => commands.add(move |world: &mut World| {
+                let mut controller = world.resource_mut::<Self>();
+                controller.commands_overflows += 1;
+                controller.add_delayed_commands(index, command);
+            }),
+            Err(TrySendError::Disconnected(_)) => {
+                panic!("Could not send delayed command, receiver disconnected.")
+            }
+        }
+    }
+
     /// Add new command.
-    pub(super) fn push_command(&mut self, command: Box<dyn ReversibleCommandInitialized>) {
+    pub(super) fn push_command<I: Iterator<Item = Box<dyn ReversibleCommandInitialized>>>(
+        &mut self,
+        mut commands: I,
+    ) {
         debug_assert!(matches!(
             self.progress,
             Progress::Forward | Progress::ForwardFast { .. }
@@ -207,34 +263,16 @@ impl Controller {
         self.log
             .front_mut()
             .expect("`log` should not be empty")
-            .push(command);
+            .extend(commands);
     }
-    pub(super) fn send_delayed_command<T: ReversibleCommand>(
-        &self,
-        time_stamp: Wrapping<Ticks>,
-        command: T,
-        commands: &mut Commands<'_, '_>,
+
+    fn add_delayed_commands(
+        &mut self,
+        index: usize,
+        mut commands: Vec<Box<dyn ReversibleCommand>>,
     ) {
-        debug_assert!(matches!(self.progress, Progress::ForwardFast { .. }));
-        let index = self.ticks_ago(time_stamp) as usize;
-        match self
-            .delayed_commands_sender
-            .try_send((index, Box::new(command)))
-        {
-            Ok(_) => {}
-            Err(TrySendError::Full((index, command))) => commands.add(move |world: &mut World| {
-                let mut controller = world.resource_mut::<Self>();
-                controller.delayed_commands_overflows += 1;
-                controller.add_delayed_command(index, command);
-            }),
-            Err(TrySendError::Disconnected(_)) => {
-                panic!("Could not send delayed command, receiver disconnected.")
-            }
-        }
-    }
-    fn add_delayed_command(&mut self, index: usize, command: Box<dyn ReversibleCommand>) {
         match self.delayed_commands.get_mut(index) {
-            Some(v) => v.push(command),
+            Some(v) => v.append(&mut commands),
             None => {
                 panic!(
                 "`delayed_commands` with `len` {} is too short for `index` {}, `len` should be {}.",
@@ -326,7 +364,7 @@ impl Controller {
             let (commands_s, commands_r) = sync_channel(DELAYED_COMMANDS_SYNC_SENDER_CAPACITY);
             world.insert_non_send_resource(ControllerReceivers {
                 //forget: forget_r,
-                delayed_commands: commands_r,
+                commands: commands_r,
             });
             world.insert_resource(Self {
                 time_step_query: None,
@@ -338,9 +376,9 @@ impl Controller {
                 progress: Progress::Forward,
                 pre_update_ran: false,
                 log_end: false,
-                delayed_commands_sender: commands_s,
+                commands_sender: commands_s,
                 delayed_commands: VecDeque::with_capacity(DELAYED_COMMANDS_TICKS_CAPACITY),
-                delayed_commands_overflows: 0,
+                commands_overflows: 0,
                 //forget_sender: forget_s,
                 //forget_overflow: None,
                 //forget_overflows: 0,
@@ -368,7 +406,11 @@ impl Controller {
             controller.last(receivers, commands);
         }
     }
-    fn first_early_return(&mut self, mut time: Local<'_, Time>, mut elapsed: Local<'_, f64>) -> bool {
+    fn first_early_return(
+        &mut self,
+        mut time: Local<'_, Time>,
+        mut elapsed: Local<'_, f64>,
+    ) -> bool {
         if self.log_end {
             self.pre_update_ran = true;
             return true;
@@ -461,49 +503,53 @@ impl Controller {
     ) {
         let delayed = if fast_forward {
             receivers
-                .delayed_commands
+                .commands
                 .try_iter()
-                .for_each(|(index, command)| self.add_delayed_command(index, command));
-            if self.delayed_commands_overflows != 0 {
+                .for_each(|(index, command)| self.add_delayed_commands(index, command));
+            if self.commands_overflows != 0 {
                 info!(
                     "`delayed_commands_overflows` {} with DELAYED_COMMANDS_SYNC_SENDER_CAPACITY {}",
-                    self.delayed_commands_overflows, DELAYED_COMMANDS_SYNC_SENDER_CAPACITY
+                    self.commands_overflows, DELAYED_COMMANDS_SYNC_SENDER_CAPACITY
                 );
-                self.delayed_commands_overflows = 0;
+                self.commands_overflows = 0;
             }
             self.delayed_commands
                 .pop_front()
-                .expect("`delayed_commands` should not be empty before `FastForward` is finished")
+                .expect("`delayed_commands` should not be empty during `FastForward`.")
         } else {
             debug_assert!(matches!(
-                receivers.delayed_commands.try_recv(),
+                receivers.commands.try_recv(),
                 Err(TryRecvError::Empty)
             ));
-            debug_assert_eq!(self.delayed_commands_overflows, 0);
-            Default::default()
+            debug_assert_eq!(self.commands_overflows, 0);
+            self.delayed_commands
+                .pop_front()
+                .unwrap_or_else(|| Default::default())
         };
-/*
-        let forget = receivers
-            .forget
-            .try_iter()
-            .chain(self.forget_overflow.take())
-            .min()
-            .map(|ticks| self.log.split_off(self.log.len() - ticks as usize))
-            .filter(|vd| vd.iter().any(|v| !v.is_empty()));
-*/
-        if delayed.is_empty() /*&& forget.is_none()*/ {
+        /*
+                let forget = receivers
+                    .forget
+                    .try_iter()
+                    .chain(self.forget_overflow.take())
+                    .min()
+                    .map(|ticks| self.log.split_off(self.log.len() - ticks as usize))
+                    .filter(|vd| vd.iter().any(|v| !v.is_empty()));
+        */
+        if delayed.is_empty()
+        /*&& forget.is_none()*/
+        {
             //debug_assert_eq!(self.forget_overflows, 0);
             return;
         }
-/*
-        if self.forget_overflows != 0 {
-            info!(
-                "`forget_overflows` {} with FORGET_SYNC_SENDER_CAPACITY {}",
-                self.forget_overflows, FORGET_SYNC_SENDER_CAPACITY
-            );
-            self.forget_overflows = 0;
-        }
-    */
+        /*
+            if self.forget_overflows != 0 {
+                info!(
+                    "`forget_overflows` {} with FORGET_SYNC_SENDER_CAPACITY {}",
+                    self.forget_overflows, FORGET_SYNC_SENDER_CAPACITY
+                );
+                self.forget_overflows = 0;
+            }
+        */
 
         commands.add(|world: &mut World| {
             delayed.into_iter().for_each(|mut command| unsafe {
@@ -600,7 +646,11 @@ impl Controller {
             }
         }
     }
-    fn progress_check(&mut self, receivers: NonSendMut<'_, ControllerReceivers>, commands: Commands<'_, '_>) {
+    fn progress_check(
+        &mut self,
+        receivers: NonSendMut<'_, ControllerReceivers>,
+        commands: Commands<'_, '_>,
+    ) {
         match &mut self.progress {
             Progress::Forward => {
                 self.apply_progress_query(self.progress);

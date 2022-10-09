@@ -33,7 +33,9 @@ impl<T: Resource> ReversibleCommand for SpawnResource<T> {
             self.error
                 .error::<T>(&SpawnResourceError::ResourceAlreadyExists);
         }
-        Box::new(SpawnResourceInitialized { p: PhantomData::<T> })
+        Box::new(SpawnResourceInitialized {
+            p: PhantomData::<T>,
+        })
     }
 }
 
@@ -54,8 +56,8 @@ impl<T: Resource> ReversibleCommandInitialized for SpawnResourceInitialized<T> {
             world.insert_resource(Despawned(value));
         }
     }
-    fn redo_finalize(&mut self, _world: &mut World) {}
-    fn undo_finalize(&mut self, world: &mut World) {
+    fn redo_finalize(self: Box<Self>, _world: &mut World) {}
+    fn undo_finalize(self: Box<Self>, world: &mut World) {
         world.remove_resource::<T>();
     }
 }

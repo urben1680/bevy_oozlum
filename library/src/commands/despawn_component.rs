@@ -71,9 +71,9 @@ impl<T: Component> ReversibleCommandInitialized for DespawnComponentInitialized<
             entity.insert(value.0);
         }
     }
-    fn redo_finalize(&mut self, world: &mut World) {
+    fn redo_finalize(self: Box<Self>, world: &mut World) {
         let mut entity = world.entity_mut(self.entity);
         entity.remove::<Despawned<T>>();
     }
-    fn undo_finalize(&mut self, _world: &mut World) {}
+    fn undo_finalize(self: Box<Self>, _world: &mut World) {}
 }
