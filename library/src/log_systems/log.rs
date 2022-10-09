@@ -208,6 +208,8 @@ impl<Marker, Transition, Index: Copy + Debug> Log<Marker, Transition, Index> {
         - darf nicht von der aktualität anderer systeme abhängig sein, außer sie sind zum zeitpunkt von transitionen aktuell
         - anderer systeme dürfen nicht von der aktualität abhängig sein, wenn dann nur indirekt über commands
 
+        Idee: controller enthält timestamp an dem fast functionen ausgelöst wurden, aber das heißt nicht ab dem punkt liefen alle systeme weiter
+
         sonst:
         | second | back |
         |||||||||||||||||  // ticks (right end is target)
