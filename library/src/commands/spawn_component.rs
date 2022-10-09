@@ -42,8 +42,7 @@ impl<T: Component> ReversibleCommand for SpawnComponent<T> {
                     .error::<T>(&SpawnComponentError::ComponentAlreadyExists);
             }
         } else {
-            self.error
-                .error::<T>(&SpawnComponentError::EntityNotFound);
+            self.error.error::<T>(&SpawnComponentError::EntityNotFound);
         }
         Box::new(SpawnComponentInitialized {
             p: PhantomData::<T>,
@@ -72,8 +71,8 @@ impl<T: Component> ReversibleCommandInitialized for SpawnComponentInitialized<T>
             entity.insert(Despawned(value));
         }
     }
-    fn redo_finalize(&mut self, _world: &mut World) {}
-    fn undo_finalize(&mut self, world: &mut World) {
+    fn redo_finalize(self: Box<Self>, _world: &mut World) {}
+    fn undo_finalize(self: Box<Self>, world: &mut World) {
         let mut entity = world.entity_mut(self.entity);
         entity.remove::<Despawned<T>>();
     }

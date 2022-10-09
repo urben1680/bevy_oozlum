@@ -33,7 +33,9 @@ impl<T: Resource> ReversibleCommand for DespawnResource<T> {
             self.error
                 .error::<T>(&DespawnResourceError::ResourceNotFound);
         }
-        Box::new(DespawnResourceInitialized { p: PhantomData::<T> })
+        Box::new(DespawnResourceInitialized {
+            p: PhantomData::<T>,
+        })
     }
 }
 
@@ -54,8 +56,8 @@ impl<T: Resource> ReversibleCommandInitialized for DespawnResourceInitialized<T>
             world.insert_resource(value.0);
         }
     }
-    fn redo_finalize(&mut self, world: &mut World) {
+    fn redo_finalize(self: Box<Self>, world: &mut World) {
         world.remove_resource::<Despawned<T>>();
     }
-    fn undo_finalize(&mut self, _world: &mut World) {}
+    fn undo_finalize(self: Box<Self>, _world: &mut World) {}
 }

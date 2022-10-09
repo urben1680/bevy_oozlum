@@ -32,10 +32,10 @@ pub trait ReversibleCommandInitialized: Send + Sync + 'static {
     fn redo(&mut self, world: &mut World);
     /// Undo the command
     fn undo(&mut self, world: &mut World);
-    /// Remove data that is needed to undo the command
-    fn redo_finalize(&mut self, world: &mut World);
-    /// Remove data that is needed to redo the command
-    fn undo_finalize(&mut self, world: &mut World);
+    /// Clean up data that is needed to undo the command
+    fn redo_finalize(self: Box<Self>, world: &mut World);
+    /// Clean up data that is needed to redo the command
+    fn undo_finalize(self: Box<Self>, world: &mut World);
 }
 
 /// Options for errorhandling of the error type `E` in reversible commands.
@@ -61,18 +61,9 @@ pub enum ReversibleCommandErrorHandling<E: Debug> {
 impl<E: Debug> ReversibleCommandErrorHandling<E> {
     fn error<T>(&self, error: &E) {
         match self {
-            Self::LogError => error!(
-                "LogCommand failed: {error:?} for type {}",
-                type_name::<T>()
-            ),
-            Self::LogWarning => warn!(
-                "LogCommand failed: {error:?} for type {}",
-                type_name::<T>()
-            ),
-            Self::LogInfo => info!(
-                "LogCommand failed: {error:?} for type {}",
-                type_name::<T>()
-            ),
+            Self::LogError => error!("LogCommand failed: {error:?} for type {}", type_name::<T>()),
+            Self::LogWarning => warn!("LogCommand failed: {error:?} for type {}", type_name::<T>()),
+            Self::LogInfo => info!("LogCommand failed: {error:?} for type {}", type_name::<T>()),
             Self::Custom(f) => f(error),
         }
     }
