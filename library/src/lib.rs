@@ -20,9 +20,9 @@ pub const MAX_LOG_INDEX: Ticks = Ticks::MAX;
 pub const MAX_LOG_INDEX_USIZE: usize = MAX_LOG_INDEX as usize;
 pub const LOG_LEN: usize = MAX_LOG_INDEX_USIZE + 1;
 pub const DEFAULT_TIME_STEP: f64 = 0.02;
-pub const FORGET_SYNC_SENDER_CAPACITY: usize = 1024;
 pub const DELAYED_COMMANDS_TICKS_CAPACITY: usize = Ticks::MAX as usize >> 1; //jumping from morning to evening
 pub const DELAYED_COMMANDS_SYNC_SENDER_CAPACITY: usize = 1024;
+pub const LOG_ONLY_PAR_ITER_BATCH_SIZE: usize = 0;
 
 /// Type that stores the ticks systems work by.
 /// MAX value is also the limit how many ticks can be logged.
@@ -84,30 +84,3 @@ mod tests {
     }
 }
 */
-
-mod test {
-    use bevy::prelude::{Component, Query, Res};
-
-    #[derive(Component)]
-    struct Com;
-    #[derive(Component)]
-    struct Log;
-    fn test(mut query: Query<'_, '_, (&mut Com, &mut Log)>, res: Res<'_, Log>) {
-        query.par_for_each_mut(10, |(mut com, mut log)| {
-            let f = || {
-                com.stuff();
-                let r = &res;
-            };
-            log.stuff(f);
-        });
-    }
-
-    impl Log {
-        fn stuff<F: FnMut()>(&mut self, mut f: F) {
-            f();
-        }
-    }
-    impl Com {
-        fn stuff(&mut self) {}
-    }
-}

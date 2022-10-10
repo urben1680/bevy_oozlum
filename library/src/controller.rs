@@ -16,7 +16,7 @@ use bevy::{
 use crate::{
     commands::{ReversibleCommand, ReversibleCommandInitialized},
     Ticks, TicksRelative, DEFAULT_TIME_STEP, DELAYED_COMMANDS_SYNC_SENDER_CAPACITY,
-    DELAYED_COMMANDS_TICKS_CAPACITY, FORGET_SYNC_SENDER_CAPACITY, LOG_LEN,
+    DELAYED_COMMANDS_TICKS_CAPACITY, LOG_LEN,
 };
 
 /// `NonSend` resource containing sync channel `Receiver`s for forgets and delayed commands.
@@ -92,14 +92,15 @@ impl Progress {
     pub fn is_not_log_nor_pause(&self) -> bool {
         matches!(self, Progress::Forward | Progress::ForwardFast { .. })
     }
-}
-
-#[derive(Clone, Copy, PartialEq, Debug)]
-enum OneTimeProgress {
-    None,
-    ForwardLogEndInit,
-    BackwardLogInit,
-    LogEnd,
+    /// Returns `true` if `self` is `ForwardFast`, `ForwardLogEnd` of `BackwardLogEnd`.
+    ///
+    /// Otherwise returns `false`.
+    pub fn is_fast(&self) -> bool {
+        matches!(
+            self,
+            Progress::ForwardFast { .. } | Progress::ForwardLogEnd | Progress::BackwardLogEnd
+        )
+    }
 }
 
 pub struct Controller {
@@ -122,7 +123,8 @@ pub struct Controller {
     progress: Progress,
     //progress_query: Progress,
     pre_update_ran: bool,
-    log_end: bool, //OneTimeProgress, //todo replace with enum: None, LogEnd, AdvanceFastInit, RevertFastInit when issue about fast forward option return is solved
+    fast_init: bool, //todo make systems
+    log_end: bool,
     commands_sender: SyncSender<(usize, Vec<Box<dyn ReversibleCommand>>)>,
     delayed_commands: VecDeque<Vec<Box<dyn ReversibleCommand>>>,
     commands_overflows: u64,
@@ -151,7 +153,10 @@ impl Controller {
     }
     /// Get the time stamp to which everything can be reverted to.
     pub fn age(&self) -> Ticks {
-        self.ticks_ago(Wrapping(self.log.len() as u16))
+        self.ticks_ago(Wrapping(self.log.len() as Ticks))
+    }
+    pub fn log_start(&self) -> Wrapping<Ticks> {
+        self.time_stamp - Wrapping(self.log.len() as Ticks)
     }
     pub fn log_front(&self) -> bool {
         self.log_index == 0
@@ -183,6 +188,9 @@ impl Controller {
     pub fn ticks_ago(&self, time_stamp: Wrapping<Ticks>) -> Ticks {
         time_stamp.ticks_ago(self.time_stamp)
     }
+    pub fn fast_init(&self) -> bool {
+        self.fast_init
+    }
     /*
     pub(super) fn send_forget(&self, time_stamp: Wrapping<Ticks>, commands: &mut Commands<'_, '_>) {
         debug_assert_eq!(self.progress, Progress::Forward);
@@ -208,7 +216,7 @@ impl Controller {
     pub(super) fn send_commands(
         &self,
         v: Vec<Box<dyn ReversibleCommand>>,
-        mut commands: Commands<'_, '_>,
+        commands: &mut Commands<'_, '_>,
     ) {
         debug_assert_eq!(
             self.progress,
@@ -222,7 +230,7 @@ impl Controller {
         &self,
         v: Vec<Box<dyn ReversibleCommand>>,
         time_stamp: Wrapping<Ticks>,
-        mut commands: Commands<'_, '_>,
+        commands: &mut Commands<'_, '_>,
     ) {
         debug_assert!(
             matches!(self.progress, Progress::ForwardFast { .. }),
@@ -236,7 +244,7 @@ impl Controller {
         &self,
         v: Vec<Box<dyn ReversibleCommand>>,
         index: usize,
-        mut commands: Commands<'_, '_>,
+        commands: &mut Commands<'_, '_>,
     ) {
         match self.commands_sender.try_send((index, v)) {
             Ok(_) => {}
@@ -284,6 +292,7 @@ impl Controller {
     fn apply_progress_query(&mut self, or: Progress) {
         let query = self.progress_query.take().unwrap_or(or);
         self.log_end = self.progress.is_log(true) && !query.is_log(true);
+        self.fast_init = !self.progress.is_fast() && query.is_fast();
         self.progress = query;
     }
 }
@@ -375,7 +384,8 @@ impl Controller {
                 log_index: 0,
                 progress: Progress::Forward,
                 pre_update_ran: false,
-                log_end: false,
+                log_end: false,   //log_end systems must have been run before save
+                fast_init: false, //cannot occure just before `Forward`
                 commands_sender: commands_s,
                 delayed_commands: VecDeque::with_capacity(DELAYED_COMMANDS_TICKS_CAPACITY),
                 commands_overflows: 0,
@@ -678,6 +688,8 @@ impl Controller {
                 self.apply_progress_query(Progress::PauseLog);
             }
             Progress::BackwardLogEnd => {
+                self.time_stamp -= 1;
+                self.log_index += 1;
                 if self.log_back() {
                     self.apply_progress_query(Progress::PauseLog);
                 }
