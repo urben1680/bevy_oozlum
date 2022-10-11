@@ -64,27 +64,25 @@ impl Default for ControllerCmp{
     }
 }
 
-struct ControllerProgressTest{
+struct Test{
     progress_query: Option<Progress>,
     at_update: ControllerCmp,
     at_end: Option<ControllerCmp>
 }
 
-struct ControllerCopy(Option<Controller>);
-
-impl ControllerProgressTest{
-    fn tests<const N: usize>(log: VecDeque<Vec<Box<dyn ReversibleCommandInitialized>>>, time_stamp: Wrapping<Ticks>, tests: [Self; N]){
+impl Test{
+    fn tests<const N: usize>(log: VecDeque<Vec<Box<dyn ReversibleCommandInitialized>>>, time_stamp: Wrapping<Ticks>, tests: &'static [Self; N]){
         let mut app = App::new();
         Controller::insert_command(log, time_stamp, &mut app.world);
         app.world.resource_mut::<Controller>().time_step = 0.0;
         app.add_system_to_stage(CoreStage::PreUpdate, Controller::first_system);
-        app.add_system_to_stage(CoreStage::Update, |controller: Res<'_, Controller>, index: Local<'_, usize>| {
+        app.add_system_to_stage(CoreStage::Update, |controller: Res<'_, Controller>, mut index: Local<'_, usize>| {
             tests[*index].at_update.assert_eq(&controller, *index, true);
             *index += 1;
         });
         app.add_system_to_stage(CoreStage::PostUpdate, Controller::last_system);
-        app.add_system_to_stage(CoreStage::Last, |controller: Res<'_, Controller>, index: Local<'_, usize>| {
-            if let Some(at_end) = tests[*index].at_end{
+        app.add_system_to_stage(CoreStage::Last, |controller: Res<'_, Controller>, mut index: Local<'_, usize>| {
+            if let Some(at_end) = &tests[*index].at_end{
                 at_end.assert_eq(&controller, *index, false)
             }
             *index += 1;
@@ -95,15 +93,19 @@ impl ControllerProgressTest{
 
 #[test]
 fn forward(){
+    Test::tests(Default::default(), Default::default(), &[]);
+    /*
     let progress = Progress::Forward;
     let mut app = app(progress);
 
     app.update_controller(1, progress, false, false);
     app.update_controller(2, progress, false, false);
+    */
 }
 
 #[test]
 fn forward_fast(){
+    /*
     let to_time_stamp = Wrapping(3);
     let progress = Progress::ForwardFast{ to_time_stamp };
     let mut app = app(progress);
@@ -124,4 +126,5 @@ fn forward_fast(){
     assert_eq!(c.time_stamp().0, 3);
     assert_eq!(c.forget() + Wrapping(MAX_LOG_INDEX), c.time_stamp());
     assert_eq!(c.fast_init(), false);
+    */
 }

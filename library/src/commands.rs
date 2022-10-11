@@ -1,9 +1,11 @@
 use bevy::{
-    ecs::world::Mut,
+    ecs::{world::{Mut, EntityMut}, system::Resource},
     log::{error, info, warn},
-    prelude::{Commands, ParallelCommands, World},
+    prelude::{Commands, ParallelCommands, World, Component},
 };
 use std::{any::type_name, fmt::{Debug, self}, marker::PhantomData, mem::ManuallyDrop};
+
+use crate::{Despawned, DespawnedEntity};
 
 use super::controller::Controller;
 
@@ -25,10 +27,11 @@ pub use spawn_resource::*;
 pub trait ReversibleCommand: Send + Sync + 'static {
     //returns `Some` if init was successful.
     fn init(self: Box<Self>, world: &mut World) -> Option<Box<dyn ReversibleCommandInitialized>>;
-    #[cfg(debug)]
-    /// Get debug information
-    fn debug(&self) -> String{
-        
+}
+
+impl Debug for dyn ReversibleCommand{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.fmt(f)   
     }
 }
 
@@ -45,9 +48,13 @@ pub trait ReversibleCommandInitialized: Send + Sync + 'static {
     }
 }
 
-fn panic_msg<T>(s: &'static str) -> String{
-    format!("Reversible command `{s}` panicked: {}", type_name::<T>())
+trait CommandPanic{
+    fn panic(&self, s: &'static str){
+        panic!("Reversible command `{s}` panicked: \"{}\"", type_name::<Self>())
+    }
 }
+
+impl<T> CommandPanic for T{}
 
 /// Options for errorhandling of the error type `E` in reversible commands.
 ///

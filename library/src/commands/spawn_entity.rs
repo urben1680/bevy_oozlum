@@ -1,7 +1,7 @@
 use crate::DespawnedEntity;
 use bevy::prelude::{Bundle, Entity, World};
 
-use super::{ReversibleCommand, ReversibleCommandInitialized, panic_msg};
+use super::{ReversibleCommand, ReversibleCommandInitialized};
 
 pub struct SpawnEntity<T: Bundle> {
     data: T,
@@ -29,20 +29,7 @@ pub struct SpawnEntityInitialized {
 
 impl ReversibleCommandInitialized for SpawnEntityInitialized {
     fn undo_redo(&mut self, world: &mut World) {
-        let mut entity = world.entity_mut(self.entity);
-        if self.spawned{
-            if entity.remove::<DespawnedEntity>().is_none(){
-                panic!("{}", panic_msg::<Self>("undo"));
-            }
-        } else if entity.contains::<DespawnedEntity>(){
-            panic!("{}", panic_msg::<Self>("redo"));
-        } else {
-            entity.insert(DespawnedEntity);
-        }
     }
     fn finalize(self: Box<Self>, world: &mut World) {
-        if !self.spawned{
-            world.despawn(self.entity);
-        }
     }
 }
