@@ -27,7 +27,7 @@ struct LogEntry<Transition, Index> {
 }
 
 impl<Marker, Transition, Index: Copy + Debug> Log<Marker, Transition, Index> {
-    /// Log mutation to be called during `Progres::Advance`.
+    /// Log mutation to be called during `Progress::Advance`.
     ///
     /// Function arguments:
     /// - `advance`: current state, transitioned time stamp, current time stamp
@@ -57,13 +57,13 @@ impl<Marker, Transition, Index: Copy + Debug> Log<Marker, Transition, Index> {
         const FN: &'static str = "advance";
         let latest = self.entries.back().unwrap_or_else(|| {
             panic!(
-                "`Log<{}>` at `{FN}`: `entries` should not be empty.",
+                "`Log<{}>::{FN}`: `entries` should not be empty.",
                 type_name::<Marker>()
             )
         });
         let state = State::get_state(states, latest.state_index).unwrap_or_else(|len| {
             panic!(
-                "`Log<{}>` at `{FN}`: `states` should contain an element at index {:?}, length is {len}.",
+                "`Log<{}>::{FN}`: `states` should contain an element at index {:?}, length is {len}.",
                 type_name::<Marker>(), latest.state_index
             )
         });
@@ -83,7 +83,7 @@ impl<Marker, Transition, Index: Copy + Debug> Log<Marker, Transition, Index> {
             );
         }
     }
-    /// Log mutation to be called during `Progres::AdvanceFast`.
+    /// Log mutation to be called during `Progress::AdvanceFast`.
     ///
     /// Function arguments:
     /// - `advance_up_to_transition_or_limit`: current state, transitioned time stamp, current time stamp, limit time stamp,
@@ -121,11 +121,11 @@ impl<Marker, Transition, Index: Copy + Debug> Log<Marker, Transition, Index> {
         const FN: &'static str = "advance_fast";
         let latest = self.entries.back().unwrap_or_else(|| {
             panic!(
-                "`Log<{}>` at `{FN}`: `entries` should not be empty.",
+                "`Log<{}>::{FN}`: `entries` should not be empty.",
                 type_name::<Marker>()
             )
         });
-        let target = controller.target_time_stamp();
+        let limit = controller.forward_fast_limit();
         if self.entries.len() > 1 {
             let second = &self.entries[self.entries.len() - 2];
             if !controller
@@ -134,7 +134,7 @@ impl<Marker, Transition, Index: Copy + Debug> Log<Marker, Transition, Index> {
             {
                 //Fast forward already happened because `latest` is in the future
                 assert_ne!(
-                    controller.time_stamp(), target, "`Log<{}>` at `{FN}`: `advance_up_to_transition_or_limit` should not be skipped at the end of fast-forward.", 
+                    controller.time_stamp(), limit, "`Log<{}>::{FN}`: `advance_up_to_transition_or_limit` should not be skipped at the end of fast-forward.", 
                     type_name::<Marker>()
                 );
                 return;
@@ -142,7 +142,7 @@ impl<Marker, Transition, Index: Copy + Debug> Log<Marker, Transition, Index> {
         }
         let state = State::get_state(states, latest.state_index).unwrap_or_else(|len|{
             panic!(
-                "`Log<{}>` at `{FN}`: `states` should contain an element at index {:?}, length is {len}.", 
+                "`Log<{}>::{FN}`: `states` should contain an element at index {:?}, length is {len}.", 
                 type_name::<Marker>(), latest.state_index
             );
         });
@@ -151,9 +151,9 @@ impl<Marker, Transition, Index: Copy + Debug> Log<Marker, Transition, Index> {
             state,
             latest.time_stamp,
             controller.time_stamp(),
-            target,
+            limit,
         );
-        if let Some(next) = next_transition(params, state, latest.time_stamp, target) {
+        if let Some(next) = next_transition(params, state, latest.time_stamp, limit) {
             controller.send_delayed_commands(next.commands, time_stamp, commands);
             self.advance_next::<State, Params>(
                 params,
@@ -164,9 +164,9 @@ impl<Marker, Transition, Index: Copy + Debug> Log<Marker, Transition, Index> {
                 state,
                 advance_transition,
             );
-        } else if time_stamp != target {
+        } else if time_stamp != limit {
             panic!(
-                "`Log<{}>` at `{FN}`: `next_transition` should return `Some`. `advance_up_to_transition_or_limit` was called with state at index: {:?}, time stamp: `Wrapping({})` and limit: `Wrapping({target})` and did not return the limit, `next_transition` was called with the same state and `target` afterwards. Additional information:\n{}",
+                "`Log<{}>::{FN}`: `next_transition` should return `Some`. `advance_up_to_transition_or_limit` was called with state at index: {:?}, time stamp: `Wrapping({})` and limit: `Wrapping({limit})` and did not return the limit, `next_transition` was called with the same state and `limit` afterwards. Additional information:\n{}",
                 type_name::<Marker>(), latest.state_index, controller.time_stamp(), debug(params)
             );
         }
@@ -194,7 +194,7 @@ impl<Marker, Transition, Index: Copy + Debug> Log<Marker, Transition, Index> {
         if self.entry_index == MAX_LOG_INDEX{
             assert_eq!(
                 self.entries.len(), LOG_LEN,
-                "`Log<{}>` at `{FN}`: `entries.len()` should return {MAX_LOG_INDEX} instead of {}.",
+                "`Log<{}>::{FN}`: `entries.len()` should return {MAX_LOG_INDEX} instead of {}.",
                 type_name::<Marker>(), self.entries.len()
             );
             let oldest = self.entries.pop_front();
@@ -209,7 +209,7 @@ impl<Marker, Transition, Index: Copy + Debug> Log<Marker, Transition, Index> {
         }
         let next_state = State::get_state(states, next_state_index).unwrap_or_else(|len|{
             panic!(
-                "`Log<{}>` at `{FN}`: `states` should contain an element at index {next_state_index:?} for the transition's future state, length is {len}.", 
+                "`Log<{}>::{FN}`: `states` should contain an element at index {next_state_index:?} for the transition's future state, length is {len}.", 
                 type_name::<Marker>()
             )
         });
@@ -224,7 +224,7 @@ impl<Marker, Transition, Index: Copy + Debug> Log<Marker, Transition, Index> {
             .back_mut()
             .unwrap_or_else(|| {
                 panic!(
-                    "`Log<{}>` at `{FN}`: `entries` should not be empty.",
+                    "`Log<{}>::{FN}`: `entries` should not be empty.",
                     type_name::<Marker>()
                 )
             })
@@ -236,7 +236,7 @@ impl<Marker, Transition, Index: Copy + Debug> Log<Marker, Transition, Index> {
             state_index: next_state_index,
         });
     }
-    /// Log mutation to be called during `Progres::AdvanceLog`.
+    /// Log mutation to be called during `Progress::AdvanceLog`.
     ///
     /// Function arguments:
     /// - `advance`: current state, transitioned time stamp, current time stamp
@@ -259,13 +259,13 @@ impl<Marker, Transition, Index: Copy + Debug> Log<Marker, Transition, Index> {
         let entry_index = self.entry_index as usize;
         let entry = self.entries.get(entry_index).unwrap_or_else(||{
             panic!(
-                "`Log<{}>` at `{FN}`: `entries` should contain an element at index {}, length is {}.", 
+                "`Log<{}>::{FN}`: `entries` should contain an element at index {}, length is {}.", 
                 type_name::<Marker>(), entry_index, self. entries.len()
             )
         });
         let state = State::get_state(states, entry.state_index).unwrap_or_else(|len|{
             panic!(
-                "`Log<{}>` at `{FN}`: `states` should contain an element at index {:?}, length is {len}.", 
+                "`Log<{}>::{FN}`: `states` should contain an element at index {:?}, length is {len}.", 
                 type_name::<Marker>(), entry.state_index
             )
         });
@@ -274,7 +274,7 @@ impl<Marker, Transition, Index: Copy + Debug> Log<Marker, Transition, Index> {
             if controller.time_stamp() != next.time_stamp {
                 return;
             }
-            let next_state = State::get_state(states, next.state_index).unwrap_or_else(|len|panic!("`Log<{}>` at `{FN}`: `states` should contain an element at index {:?} for the transition's future state, length is {len}.", 
+            let next_state = State::get_state(states, next.state_index).unwrap_or_else(|len|panic!("`Log<{}>::{FN}`: `states` should contain an element at index {:?} for the transition's future state, length is {len}.", 
                 type_name::<Marker>(), entry.state_index));
             let transition = unsafe {
                 // SAFETY: transitions are always init if they are not stored in the back end of the log deque
@@ -290,7 +290,7 @@ impl<Marker, Transition, Index: Copy + Debug> Log<Marker, Transition, Index> {
             self.entry_index += 1;
         }
     }
-    /// Log mutation to be called during `Progres::AdvanceLogEnd`.
+    /// Log mutation to be called during `Progress::AdvanceLogEnd`.
     ///
     /// Function arguments:
     /// - `advance_up_to_transition_or_limit`: current state, transitioned time stamp, current time stamp, limit time stamp,
@@ -321,7 +321,7 @@ impl<Marker, Transition, Index: Copy + Debug> Log<Marker, Transition, Index> {
         let entry_index = self.entry_index as usize;
         let entry = self.entries.get(entry_index).unwrap_or_else(||{
             panic!(
-                "`Log<{}>` at `{FN}`: `entries` should contain an element at index {}, length is {}.", 
+                "`Log<{}>::{FN}`: `entries` should contain an element at index {}, length is {}.", 
                 type_name::<Marker>(), self.entry_index, self. entries.len()
             )
         });
@@ -330,28 +330,28 @@ impl<Marker, Transition, Index: Copy + Debug> Log<Marker, Transition, Index> {
         }
         let state = State::get_state(states, entry.state_index).unwrap_or_else(|len|{
             panic!(
-                "`Log<{}>` at `{FN}`: `states` should contain an element at index {:?}, length is {len}.", 
+                "`Log<{}>::{FN}`: `states` should contain an element at index {:?}, length is {len}.", 
                 type_name::<Marker>(), entry.state_index
             )
         });
-        let target = controller.target_time_stamp();
+        let limit = controller.forward_fast_limit();
         let time_stamp = advance_up_to_transition_or_limit(
             params,
             state,
             entry.time_stamp,
             controller.time_stamp(),
-            target,
+            limit,
         );
         if let Some(next) = self.entries.get(entry_index + 1) {
             assert_eq!(
                 time_stamp, next.time_stamp,
-                "`Log<{}>` at `{FN}` with init `{}`: `advance_up_to_transition_or_limit` should return the limit time stamp `Wrapping({})`, not `Wrapping({})`. `advance_up_to_transition_or_limit` was called with state index {:?} and time stamp `Wrapping({})`. Additional information:\n{}",
-                type_name::<Marker>(), controller.fast_init(), target, time_stamp, entry.state_index, controller.time_stamp(), debug(params)
+                "`Log<{}>::{FN}` with init `{}`: `advance_up_to_transition_or_limit` should return the limit time stamp `Wrapping({})`, not `Wrapping({})`. `advance_up_to_transition_or_limit` was called with state index {:?} and time stamp `Wrapping({})`. Additional information:\n{}",
+                type_name::<Marker>(), controller.fast_init(), limit, time_stamp, entry.state_index, controller.time_stamp(), debug(params)
             );
             self.entry_index += 1;
             let next_state = State::get_state(states, next.state_index).unwrap_or_else(|len|{
                 panic!(
-                    "`Log<{}>` at `{FN}`: `states` should contain an element at index {:?} for the transition's future state, length is {len}.", 
+                    "`Log<{}>::{FN}`: `states` should contain an element at index {:?} for the transition's future state, length is {len}.", 
                     type_name::<Marker>(), next.state_index
                 )
             });
@@ -360,14 +360,14 @@ impl<Marker, Transition, Index: Copy + Debug> Log<Marker, Transition, Index> {
                 entry.transition.assume_init_ref()
             };
             advance_transition(params, state, next_state, transition, time_stamp);
-        } else if time_stamp != target {
+        } else if time_stamp != limit {
             panic!(
-                "`Log<{}>` at `{FN}`: `next_transition` should return `Some`. `advance_up_to_transition_or_limit` was called with state at index: {:?}, time stamp: `Wrapping({})` and limit: `Wrapping({target})` and did not return the limit, `next_transition` was called with the same state and `target` afterwards. Additional information:\n{}",
+                "`Log<{}>::{FN}`: `next_transition` should return `Some`. `advance_up_to_transition_or_limit` was called with state at index: {:?}, time stamp: `Wrapping({})` and limit: `Wrapping({limit})` and did not return the limit, `next_transition` was called with the same state and `limit` afterwards. Additional information:\n{}",
                 type_name::<Marker>(), entry.state_index, controller.time_stamp(), debug(params)
             );
         }
     }
-    /// Log mutation to be called during `Progres::RevertLog`.
+    /// Log mutation to be called during `Progress::RevertLog`.
     ///
     /// Function arguments:
     /// - `revert_log`: current state, transitioned time stamp, current time stamp
@@ -389,13 +389,13 @@ impl<Marker, Transition, Index: Copy + Debug> Log<Marker, Transition, Index> {
         const FN: &'static str = "revert_log";
         let mut entry = self.entries.get(self.entry_index as usize).unwrap_or_else(||{
             panic!(
-                "`Log<{}>` at `{FN}`: `entries` should contain an element at index {}, length is {}.", 
+                "`Log<{}>::{FN}`: `entries` should contain an element at index {}, length is {}.", 
                 type_name::<Marker>(), self.entry_index, self. entries.len()
             )
         });
         let mut state = State::get_state(states, entry.state_index).unwrap_or_else(|len|{
             panic!(
-                "`Log<{}>` at `{FN}`: `states` should contain an element at index {:?}, length is {len}.", 
+                "`Log<{}>::{FN}`: `states` should contain an element at index {:?}, length is {len}.", 
                 type_name::<Marker>(), entry.state_index
             )
         });
@@ -404,7 +404,7 @@ impl<Marker, Transition, Index: Copy + Debug> Log<Marker, Transition, Index> {
             entry = &self.entries[self.entry_index as usize];
             let past_state = State::get_state(states, entry.state_index).unwrap_or_else(|len|{
                 panic!(
-                    "`Log<{}>` at `{FN}`: `states` should contain an element at index {:?} for the transition's past state, length is {len}.", 
+                    "`Log<{}>::{FN}`: `states` should contain an element at index {:?} for the transition's past state, length is {len}.", 
                     type_name::<Marker>(), entry.state_index
                 )
             });
@@ -423,7 +423,7 @@ impl<Marker, Transition, Index: Copy + Debug> Log<Marker, Transition, Index> {
         }
         revert(params, state, entry.time_stamp, controller.time_stamp());
     }
-    /// Log mutation to be called during `Progres::RevertLogEnd`.
+    /// Log mutation to be called during `Progress::RevertLogEnd`.
     ///
     /// Function arguments:
     /// - `revert_down_to_transition_or_limit`: current state, transitioned time stamp, current time stamp
@@ -453,7 +453,7 @@ impl<Marker, Transition, Index: Copy + Debug> Log<Marker, Transition, Index> {
         }
         let mut entry = self.entries.get(self.entry_index as usize).unwrap_or_else(||{
             panic!(
-                "`Log<{}>` at `{FN}`: `entries` should contain an element at index {}, length is {}.", 
+                "`Log<{}>::{FN}`: `entries` should contain an element at index {}, length is {}.", 
                 type_name::<Marker>(), self.entry_index, self. entries.len()
             )
         });
@@ -463,7 +463,7 @@ impl<Marker, Transition, Index: Copy + Debug> Log<Marker, Transition, Index> {
         let mut transitioned = entry.time_stamp;
         let mut state = State::get_state(states, entry.state_index).unwrap_or_else(|len|{
             panic!(
-                "`Log<{}>` at `{FN}`: `states` should contain an element at index {:?}, length is {len}.", 
+                "`Log<{}>::{FN}`: `states` should contain an element at index {:?}, length is {len}.", 
                 type_name::<Marker>(), entry.state_index
             )
         });
@@ -473,7 +473,7 @@ impl<Marker, Transition, Index: Copy + Debug> Log<Marker, Transition, Index> {
             transitioned = entry.time_stamp;
             let past_state = State::get_state(states, entry.state_index).unwrap_or_else(|len|{
                 panic!(
-                    "`Log<{}>` at `{FN}`: `states` should contain an element at index {:?} for the transition's past state, length is {len}.", 
+                    "`Log<{}>::{FN}`: `states` should contain an element at index {:?} for the transition's past state, length is {len}.", 
                     type_name::<Marker>(), entry.state_index
                 )
             });
@@ -504,7 +504,7 @@ impl<Marker, Transition, Index: Copy + Debug> Log<Marker, Transition, Index> {
             //it needs to be made sure that after the truncation the new back end is also not/no longer initialized to uphold this rule
             assert!(
                 entry_index < self.entries.len(),
-                "`Log<{}>` at `{FN}`: `entry_index` {} should be smaller than length {}.",
+                "`Log<{}>::{FN}`: `entry_index` {} should be smaller than length {}.",
                 type_name::<Marker>(),
                 self.entry_index,
                 self.entries.len()
@@ -520,16 +520,15 @@ impl<Marker, Transition, Index: Copy + Debug> Log<Marker, Transition, Index> {
     /// Log mutation to be called at every non-pause progress.
     pub(super) fn age_check(&mut self, controller: &Controller) {
         const FN: &'static str = "age_check";
-        let forget = controller.time_stamp() - Wrapping(MAX_LOG_INDEX);
         let second_time_stamp = self.entries.get(1).map(|second| second.time_stamp);
-        let oldest = self.entries.front_mut().unwrap_or_else(|| {
-            panic!(
-                "`Log<{}>` at `{FN}`: `entries` should not be empty.",
-                type_name::<Marker>()
-            )
-        });
-        if second_time_stamp == Some(forget) {
+        if second_time_stamp == Some(controller.forget()) {
             if needs_drop::<Transition>() {
+                let oldest = self.entries.front_mut().unwrap_or_else(|| {
+                    panic!(
+                        "`Log<{}>::{FN}`: `entries` should not be empty.",
+                        type_name::<Marker>()
+                    )
+                });
                 unsafe {
                     // SAFETY: entries[0].transition is always uninit, every other is init
                     oldest.transition.assume_init_drop();

@@ -2,6 +2,9 @@ mod log;
 mod per_entity;
 mod per_system;
 
+#[cfg(test)]
+pub(crate) mod test;
+
 use std::{fmt::Debug, marker::PhantomData};
 
 use bevy::{
@@ -10,6 +13,7 @@ use bevy::{
 };
 
 use crate::commands::ReversibleCommand;
+
 
 pub trait StateOption: Resource {
     type Index: Send + Sync + Copy + Debug + 'static;

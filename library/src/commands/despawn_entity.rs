@@ -25,34 +25,43 @@ impl DespawnEntity {
 }
 
 impl ReversibleCommand for DespawnEntity {
-    fn init(self: Box<Self>, world: &mut World) -> Box<dyn ReversibleCommandInitialized> {
+    fn init(self: Box<Self>, world: &mut World) -> Option<Box<dyn ReversibleCommandInitialized>> {
         if let Some(mut entity_mut) = world.get_entity_mut(self.entity) {
             entity_mut.insert(DespawnedEntity);
+            Some(Box::new(DespawnEntityInitialized {
+                despawned: true,
+                entity: self.entity,
+            }))
         } else {
             self.error
                 .error::<Entity>(&DespawnEntityError::EntityNotFound);
+            None
         }
-        Box::new(DespawnEntityInitialized {
-            entity: self.entity,
-        })
     }
 }
 
 pub struct DespawnEntityInitialized {
+    despawned: bool,
     entity: Entity,
 }
 
 impl ReversibleCommandInitialized for DespawnEntityInitialized {
-    fn redo(&mut self, world: &mut World) {
+    fn undo_redo(&mut self, world: &mut World) {
         let mut entity = world.entity_mut(self.entity);
-        entity.insert(DespawnedEntity);
+        if self.despawned{
+            if entity.remove::<DespawnedEntity>().is_none(){
+                
+            }
+        } else if entity.contains::<DespawnEntity>() {
+
+        } else {
+            entity.insert(DespawnedEntity);
+        }
+        self.despawned = !self.despawned;
     }
-    fn undo(&mut self, world: &mut World) {
-        let mut entity = world.entity_mut(self.entity);
-        entity.remove::<DespawnedEntity>();
+    fn finalize(self: Box<Self>, world: &mut World) {
+        if self.despawned{
+            world.entity_mut(self.entity).despawn();
+        }
     }
-    fn redo_finalize(self: Box<Self>, world: &mut World) {
-        world.entity_mut(self.entity).despawn();
-    }
-    fn undo_finalize(self: Box<Self>, _world: &mut World) {}
 }

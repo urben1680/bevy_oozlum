@@ -1,7 +1,7 @@
-use super::{ReversibleCommand, ReversibleCommandErrorHandling, ReversibleCommandInitialized};
+use super::{ReversibleCommand, ReversibleCommandErrorHandling, ReversibleCommandInitialized, panic_msg};
 use crate::Despawned;
 use bevy::{ecs::system::Resource, prelude::World};
-use std::marker::PhantomData;
+use std::{marker::PhantomData};
 
 #[derive(Debug, Clone, Copy)]
 pub enum DespawnResourceError {
@@ -26,38 +26,51 @@ impl<T: Resource> DespawnResource<T> {
 }
 
 impl<T: Resource> ReversibleCommand for DespawnResource<T> {
-    fn init(self: Box<Self>, world: &mut World) -> Box<dyn ReversibleCommandInitialized> {
+    fn init(self: Box<Self>, world: &mut World) -> Option<Box<dyn ReversibleCommandInitialized>> {
         if let Some(value) = world.remove_resource::<T>() {
             world.insert_resource(Despawned(value));
+            Some(Box::new(DespawnResourceInitialized {
+                despawned: true,
+                p: PhantomData::<T>,
+            }))
         } else {
             self.error
                 .error::<T>(&DespawnResourceError::ResourceNotFound);
+            None
         }
-        Box::new(DespawnResourceInitialized {
-            p: PhantomData::<T>,
-        })
     }
 }
 
 pub struct DespawnResourceInitialized<T: Resource> {
+    despawned: bool,
     p: PhantomData<T>,
 }
 
 impl<T: Resource> ReversibleCommandInitialized for DespawnResourceInitialized<T> {
-    fn redo(&mut self, world: &mut World) {
-        let value = world.remove_resource::<T>();
-        if let Some(value) = value {
+    fn undo_redo(&mut self, world: &mut World) {
+        match self.despawned{
+            false if world.contains_resource::<DespawnResource<T>>() =>
+            false => 
+        }
+
+
+        if self.despawned{
+            let value = world.remove_resource::<Despawned<T>>().unwrap_or_else(||panic!("{}", panic_msg::<Self>("undo")));
+            if world.contains_resource::<T>(){
+
+            }
+            world.insert_resource(value.0);
+        } else {
+            let value = world.remove_resource::<T>().unwrap_or_else(||panic!("{}", panic_msg::<Self>("redo")));
             world.insert_resource(Despawned(value));
         }
+        self.despawned = !self.despawned;
     }
-    fn undo(&mut self, world: &mut World) {
-        let value = world.remove_resource::<Despawned<T>>();
-        if let Some(value) = value {
-            world.insert_resource(value.0);
+    fn finalize(self: Box<Self>, world: &mut World) {
+        if self.despawned{
+            if world.remove_resource::<Despawned<T>>().is_none(){
+                panic!("{}", panic_msg::<Self>("finalize"));
+            }
         }
     }
-    fn redo_finalize(self: Box<Self>, world: &mut World) {
-        world.remove_resource::<Despawned<T>>();
-    }
-    fn undo_finalize(self: Box<Self>, _world: &mut World) {}
 }

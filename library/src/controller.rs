@@ -3,7 +3,7 @@ use std::{
     iter::FromIterator,
     mem::swap,
     num::Wrapping,
-    sync::mpsc::{sync_channel, Receiver, SyncSender, TryRecvError, TrySendError},
+    sync::mpsc::{sync_channel, Receiver, SyncSender, TryRecvError, TrySendError}, fmt::Debug,
 };
 
 use bevy::{
@@ -16,8 +16,12 @@ use bevy::{
 use crate::{
     commands::{ReversibleCommand, ReversibleCommandInitialized},
     Ticks, TicksRelative, DEFAULT_TIME_STEP, DELAYED_COMMANDS_SYNC_SENDER_CAPACITY,
-    DELAYED_COMMANDS_TICKS_CAPACITY, LOG_LEN,
+    DELAYED_COMMANDS_TICKS_CAPACITY, LOG_LEN, MAX_LOG_INDEX,
 };
+
+#[cfg(test)]
+mod test;
+
 
 /// `NonSend` resource containing sync channel `Receiver`s for forgets and delayed commands.
 pub(super) struct ControllerReceivers {
@@ -118,6 +122,8 @@ pub struct Controller {
     log: VecDeque<Vec<Box<dyn ReversibleCommandInitialized>>>,
     //pub(super) next_entry: Vec<Box<dyn ReversibleCommandInitialized>>,
     time_stamp: Wrapping<Ticks>,
+    forget: Wrapping<Ticks>,
+    forward_fast_limit: Wrapping<Ticks>,
     /// Current log index, todo: reverse now that deque ends are reversed!!
     log_index: usize,
     progress: Progress,
@@ -133,9 +139,28 @@ pub struct Controller {
     //forget_overflows: u64,
 }
 
+impl Debug for Controller{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Controller")
+        .field("progress_query", &self.progress_query)
+        .field("time_step_query", &self.time_step_query)
+        .field("log.len()", &self.log.len())
+        .field("time_stamp", &self.time_stamp)
+        .field("forget", &self.forget)
+        .field("forward_fast_limit", &self.forward_fast_limit)
+        .field("log_index", &self.log_index)
+        .field("progress", &self.progress)
+        .field("pre_update_ran", &self.pre_update_ran)
+        .field("fast_init", &self.fast_init)
+        .field("log_end", &self.log_end)
+        .field("delayed_commands.len()", &self.delayed_commands.len())
+        .field("commands_overflows", &self.commands_overflows)
+        .finish()
+    }
+}
+
 impl Controller {
-    /// Get the time stamp at which a change of the progress is possible again.
-    pub fn target_time_stamp(&self) -> Wrapping<Ticks> {
+    pub fn forward_fast_limit(&self) -> Wrapping<Ticks> {
         match self.progress {
             Progress::Forward | Progress::ForwardLog => self.time_stamp + Wrapping(1),
             Progress::ForwardFast { to_time_stamp } => to_time_stamp,
@@ -151,9 +176,9 @@ impl Controller {
     pub fn time_stamp(&self) -> Wrapping<Ticks> {
         self.time_stamp
     }
-    /// Get the time stamp to which everything can be reverted to.
-    pub fn age(&self) -> Ticks {
-        self.ticks_ago(Wrapping(self.log.len() as Ticks))
+    /// Get the time stamp that is outside the log at the next tick.
+    pub(super) fn forget(&self) -> Wrapping<Ticks>{
+        self.forget
     }
     pub fn log_start(&self) -> Wrapping<Ticks> {
         self.time_stamp - Wrapping(self.log.len() as Ticks)
@@ -191,28 +216,6 @@ impl Controller {
     pub fn fast_init(&self) -> bool {
         self.fast_init
     }
-    /*
-    pub(super) fn send_forget(&self, time_stamp: Wrapping<Ticks>, commands: &mut Commands<'_, '_>) {
-        debug_assert_eq!(self.progress, Progress::Forward);
-        let ticks = self.ticks_ago(time_stamp);
-        if ticks > self.age() {
-            return;
-        }
-        match self.forget_sender.try_send(ticks) {
-            Ok(_) => return,
-            Err(TrySendError::Full(ticks)) => commands.add(move |world: &mut World| {
-                let mut controller = world.resource_mut::<Self>();
-                controller.forget_overflows += 1;
-                if !matches!(controller.forget_overflow, Some(other) if other < ticks) {
-                    controller.forget_overflow = Some(ticks);
-                }
-            }),
-            Err(TrySendError::Disconnected(_)) => {
-                panic!("Could not send forget timestamp, receiver disconnected.")
-            }
-        }
-    }
-    */
     pub(super) fn send_commands(
         &self,
         v: Vec<Box<dyn ReversibleCommand>>,
@@ -262,7 +265,7 @@ impl Controller {
     /// Add new command.
     pub(super) fn push_command<I: Iterator<Item = Box<dyn ReversibleCommandInitialized>>>(
         &mut self,
-        mut commands: I,
+        commands: I,
     ) {
         debug_assert!(matches!(
             self.progress,
@@ -284,7 +287,7 @@ impl Controller {
             None => {
                 panic!(
                 "`delayed_commands` with `len` {} is too short for `index` {}, `len` should be {}.",
-                self.log.len(), index, self.ticks_from_now(self.target_time_stamp())
+                self.log.len(), index, self.ticks_from_now(self.forward_fast_limit())
             )
             }
         }
@@ -292,7 +295,32 @@ impl Controller {
     fn apply_progress_query(&mut self, or: Progress) {
         let query = self.progress_query.take().unwrap_or(or);
         self.log_end = self.progress.is_log(true) && !query.is_log(true);
-        self.fast_init = !self.progress.is_fast() && query.is_fast();
+        println!("step {}, progress: {:?}, query: {:?}", self.time_stamp, self.progress, query);
+        if query.is_fast(){
+            self.fast_init = !self.progress.is_fast();
+            if let Progress::ForwardFast { to_time_stamp } = query{
+                let mut delta = self.ticks_from_now(to_time_stamp) as usize;
+                if let Progress::ForwardFast { to_time_stamp: previous } = self.progress{
+                    if previous.further_in_the_future(to_time_stamp, self.time_stamp) {
+                        return; //can't shorten `to_time_stamp`
+                    }
+                    delta = delta.checked_sub(self.delayed_commands.len() - 1).expect(
+                        "`delayed_commands.len() - 1` should be less than or equal target ticks",
+                    );
+                }
+                let mut vd = VecDeque::from_iter((0..delta).map(|_| Vec::new()));
+                self.delayed_commands.append(&mut vd);
+                self.forward_fast_limit = to_time_stamp;
+            } else { //if query == Progress::ForwardFastLog
+                assert_eq!(self.delayed_commands.len(), 1);
+                self.forward_fast_limit = self.time_stamp + Wrapping(
+                    (self.log.len() - self.log_index) as Ticks
+                );
+            }
+        } else {
+            assert_eq!(self.delayed_commands.len(), 1);
+            self.fast_init = false;
+        }
         self.progress = query;
     }
 }
@@ -367,33 +395,31 @@ impl Controller {
     pub(super) fn insert_command(
         log: VecDeque<Vec<Box<dyn ReversibleCommandInitialized>>>,
         time_stamp: Wrapping<Ticks>,
-    ) -> impl FnOnce(&mut World) {
-        move |world: &mut World| {
-            //let (forget_s, forget_r) = sync_channel(FORGET_SYNC_SENDER_CAPACITY);
-            let (commands_s, commands_r) = sync_channel(DELAYED_COMMANDS_SYNC_SENDER_CAPACITY);
-            world.insert_non_send_resource(ControllerReceivers {
-                //forget: forget_r,
-                commands: commands_r,
-            });
-            world.insert_resource(Self {
-                time_step_query: None,
-                progress_query: None,
-                time_step: DEFAULT_TIME_STEP,
-                log,
-                time_stamp,
-                log_index: 0,
-                progress: Progress::Forward,
-                pre_update_ran: false,
-                log_end: false,   //log_end systems must have been run before save
-                fast_init: false, //cannot occure just before `Forward`
-                commands_sender: commands_s,
-                delayed_commands: VecDeque::with_capacity(DELAYED_COMMANDS_TICKS_CAPACITY),
-                commands_overflows: 0,
-                //forget_sender: forget_s,
-                //forget_overflow: None,
-                //forget_overflows: 0,
-            })
-        }
+        world: &mut World
+    ) {
+        let (commands_s, commands_r) = sync_channel(DELAYED_COMMANDS_SYNC_SENDER_CAPACITY);
+        world.insert_non_send_resource(ControllerReceivers {
+            commands: commands_r,
+        });
+        let mut delayed_commands = VecDeque::with_capacity(DELAYED_COMMANDS_TICKS_CAPACITY);
+        delayed_commands.push_front(Default::default());
+        world.insert_resource(Self {
+            time_step_query: None,
+            progress_query: None,
+            time_step: DEFAULT_TIME_STEP,
+            log,
+            time_stamp,
+            forget: time_stamp - Wrapping(MAX_LOG_INDEX),
+            forward_fast_limit: Default::default(), //only needs a valid value during fast forward progress
+            log_index: 0,
+            progress: Progress::Forward,
+            pre_update_ran: false,
+            log_end: false,   //log_end systems must have been run before save
+            fast_init: false, //cannot occure just before `Forward`
+            commands_sender: commands_s,
+            delayed_commands,
+            commands_overflows: 0,
+        })
     }
     /// System that should be run before all reversible systems.
     pub(super) fn first_system(
@@ -403,7 +429,10 @@ impl Controller {
         commands: Commands<'_, '_>,
     ) {
         if !controller.first_early_return(time, elapsed) {
+            println!("step {} first OK", controller.time_stamp);
             controller.first_update(commands);
+        } else {
+            println!("step {} first FAIL", controller.time_stamp);
         }
     }
     /// System that should be run after all reversible systems.
@@ -413,7 +442,10 @@ impl Controller {
         commands: Commands<'_, '_>,
     ) {
         if controller.pre_update_ran {
+            println!("step {} last OK", controller.time_stamp);
             controller.last(receivers, commands);
+        } else {
+            println!("step {} last FAIL", controller.time_stamp);
         }
     }
     fn first_early_return(
@@ -426,13 +458,11 @@ impl Controller {
             return true;
         }
         match self.progress {
-            Progress::ForwardFast { .. }
-            | Progress::ForwardLogEnd
-            | Progress::BackwardLogEnd
             | Progress::Pause
             | Progress::PauseLog => {
                 time.update();
-            }
+                return true;
+            },
             Progress::Forward | Progress::ForwardLog | Progress::BackwardLog => {
                 *elapsed -= time.delta_seconds_f64();
                 time.update();
@@ -441,22 +471,27 @@ impl Controller {
                 }
                 *elapsed += self.time_step;
                 self.pre_update_ran = true;
-            }
+            },
+            Progress::ForwardFast { .. }
+            | Progress::ForwardLogEnd
+            | Progress::BackwardLogEnd => {},
         }
+        self.pre_update_ran = true;
         false
     }
     fn first_update(&mut self, mut commands: Commands<'_, '_>) {
         match self.progress {
             Progress::Forward | Progress::ForwardFast { .. } => {
                 self.time_stamp += 1;
+                self.forget += 1;
                 if self.log.len() == LOG_LEN {
                     let forget = self.log.pop_back().expect("`MAX_LOG_LEN` should not be 0.");
                     if !forget.is_empty() {
                         commands.add(|world: &mut World| {
                             forget
                                 .into_iter()
-                                .for_each(|mut command| command.redo_finalize(world))
-                        })
+                                .for_each(|command| command.finalize(world))
+                        });
                     }
                 } else {
                     self.log.push_front(Default::default());
@@ -465,6 +500,7 @@ impl Controller {
             Progress::ForwardLog | Progress::ForwardLogEnd => {
                 self.log_index -= 1;
                 self.time_stamp += 1;
+                self.forget += 1;
             }
             Progress::BackwardLog | Progress::BackwardLogEnd => {
                 match self.log.get(self.log_index) {
@@ -475,7 +511,7 @@ impl Controller {
                                     let log_index = controller.log_index;
                                     match controller.log.get_mut(log_index){
                                         Some(entry) => {
-                                            entry.iter_mut().for_each(|command|command.undo(&mut *world));
+                                            entry.iter_mut().for_each(|command|command.undo_redo(&mut *world));
                                         },
                                         None => {
                                             panic!("`log` with `len` {} is too short for `log_index` {} in `first_update` method command", controller.log.len(), controller.log_index);
@@ -502,175 +538,21 @@ impl Controller {
             self.log_end(commands);
             return;
         }
-        self.validate_progress_query();
-        self.progress_check(receivers, commands);
-    }
-    fn forward_commands(
-        &mut self,
-        receivers: NonSendMut<'_, ControllerReceivers>,
-        mut commands: Commands<'_, '_>,
-        fast_forward: bool,
-    ) {
-        let delayed = if fast_forward {
-            receivers
-                .commands
-                .try_iter()
-                .for_each(|(index, command)| self.add_delayed_commands(index, command));
-            if self.commands_overflows != 0 {
-                info!(
-                    "`delayed_commands_overflows` {} with DELAYED_COMMANDS_SYNC_SENDER_CAPACITY {}",
-                    self.commands_overflows, DELAYED_COMMANDS_SYNC_SENDER_CAPACITY
-                );
-                self.commands_overflows = 0;
-            }
-            self.delayed_commands
-                .pop_front()
-                .expect("`delayed_commands` should not be empty during `FastForward`.")
-        } else {
-            debug_assert!(matches!(
-                receivers.commands.try_recv(),
-                Err(TryRecvError::Empty)
-            ));
-            debug_assert_eq!(self.commands_overflows, 0);
-            self.delayed_commands
-                .pop_front()
-                .unwrap_or_else(|| Default::default())
-        };
-        /*
-                let forget = receivers
-                    .forget
-                    .try_iter()
-                    .chain(self.forget_overflow.take())
-                    .min()
-                    .map(|ticks| self.log.split_off(self.log.len() - ticks as usize))
-                    .filter(|vd| vd.iter().any(|v| !v.is_empty()));
-        */
-        if delayed.is_empty()
-        /*&& forget.is_none()*/
+        if matches!(self.progress_query, Some(Progress::ForwardLog) | Some(Progress::ForwardLogEnd) if self.log_front()) 
+        || matches!(self.progress_query, Some(Progress::BackwardLog) | Some(Progress::BackwardLogEnd) if self.log_back())
         {
-            //debug_assert_eq!(self.forget_overflows, 0);
-            return;
-        }
-        /*
-            if self.forget_overflows != 0 {
-                info!(
-                    "`forget_overflows` {} with FORGET_SYNC_SENDER_CAPACITY {}",
-                    self.forget_overflows, FORGET_SYNC_SENDER_CAPACITY
-                );
-                self.forget_overflows = 0;
-            }
-        */
-
-        commands.add(|world: &mut World| {
-            delayed.into_iter().for_each(|mut command| unsafe {
-                //SAFETY: calls `ManuallyDrop::take` which is only allowed to be done once, which is the case here before `command` is dropped
-                command.init(world);
-            });
-            /*
-            forget
-                .into_iter()
-                .flatten()
-                .flatten()
-                .for_each(|mut command| command.redo_finalize(world));
-                */
-        })
-    }
-    fn forward_log_commands(&self, mut commands: Commands<'_, '_>) {
-        let commands_exist = match self.log.get(self.log_index) {
-            Some(v) => !v.is_empty(),
-            None => panic!(
-                "`log` with `len` {} is too short for `log_index` {} during `ForwardLog` system.",
-                self.log.len(),
-                self.log_index
-            ),
-        };
-        if commands_exist {
-            let log_len = self.log.len();
-            let log_index = self.log_index;
-            commands.add(move |world: &mut World|{
-                world.resource_scope(|world, mut controller: Mut<'_, Self>|{
-                    let commands = match controller.log.get_mut(log_index){
-                        Some(v) => v,
-                        None => panic!("`log` with `len` {} is too short for `log_index` {} during `ForwardLog` command.", log_len, log_index)
-                    };
-                    commands.iter_mut().for_each(|command| command.redo(world))
-                })
-            })
-        }
-    }
-    fn log_end(&mut self, mut commands: Commands<'_, '_>) {
-        self.log_end = false;
-        if matches!(self.progress_query, Some(progress) if progress.is_log(true)) {
             self.progress_query = None;
         }
-        if self.log_front() {
-            return;
-        }
-        //workaround for not having `VecDeque::split_off_front`, see https://github.com/rust-lang/rust/issues/92547
-        let additional = self.log.len() - self.log_index;
-        let mut split_off = self.log.split_off(self.log_index);
-        split_off.reserve_exact(additional);
-        swap(&mut split_off, &mut self.log);
-        //end of workaround
-        self.log_index = 0;
-        commands.add(move |world: &mut World| {
-            split_off
-                .into_iter()
-                .flatten()
-                .for_each(|mut command| command.undo_finalize(world))
-        });
-    }
-    fn validate_progress_query(&mut self) {
-        if let Some(query) = self.progress_query {
-            match query {
-                Progress::ForwardFast { to_time_stamp } => {
-                    if let Progress::ForwardFast {
-                        to_time_stamp: previous,
-                    } = &mut self.progress
-                    {
-                        if to_time_stamp.further_in_the_future(*previous, self.time_stamp) {
-                            *previous = to_time_stamp;
-                        } else {
-                            self.progress_query = None;
-                            return;
-                        }
-                    }
-                    let mut delta = self.ticks_from_now(to_time_stamp) as usize;
-                    delta = delta.checked_sub(self.delayed_commands.len()).expect(
-                        "`delayed_commands.len()` should be less than or equal target ticks",
-                    );
-                    let mut vd = VecDeque::from_iter((0..delta).map(|_| Vec::new()));
-                    self.delayed_commands.append(&mut vd);
-                }
-                Progress::ForwardLog | Progress::ForwardLogEnd => {
-                    if self.log_front() {
-                        self.progress_query = None;
-                    }
-                }
-                Progress::BackwardLog | Progress::BackwardLogEnd => {
-                    if self.log_back() {
-                        self.progress_query = None;
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-    fn progress_check(
-        &mut self,
-        receivers: NonSendMut<'_, ControllerReceivers>,
-        commands: Commands<'_, '_>,
-    ) {
-        match &mut self.progress {
+        match self.progress {
             Progress::Forward => {
                 self.apply_progress_query(self.progress);
                 self.forward_commands(receivers, commands, false);
             }
             Progress::ForwardFast { to_time_stamp } => {
-                if *to_time_stamp == self.time_stamp {
+                if to_time_stamp == self.time_stamp {
                     self.apply_progress_query(Progress::Forward);
                 }
-                self.forward_commands(receivers, commands, true);
+                self.forward_commands(receivers, commands, self.progress.is_fast());
             }
             Progress::ForwardLog => {
                 self.forward_log_commands(commands);
@@ -698,5 +580,105 @@ impl Controller {
                 self.apply_progress_query(self.progress);
             }
         }
+    }
+    fn forward_commands(
+        &mut self,
+        receivers: NonSendMut<'_, ControllerReceivers>,
+        mut commands: Commands<'_, '_>,
+        fast_forward: bool,
+    ) {
+        if fast_forward {
+            receivers
+                .commands
+                .try_iter()
+                .for_each(|(index, command)| self.add_delayed_commands(index, command));
+            if self.commands_overflows != 0 {
+                info!(
+                    "`delayed_commands_overflows` {} with DELAYED_COMMANDS_SYNC_SENDER_CAPACITY {}",
+                    self.commands_overflows, DELAYED_COMMANDS_SYNC_SENDER_CAPACITY
+                );
+                self.commands_overflows = 0;
+            }
+            if self.forward_fast_limit == self.time_stamp{
+                assert_eq!(self.delayed_commands.len(), 1);
+                self.delayed_commands.push_back(Default::default());
+            } else {
+                assert!(self.delayed_commands.len() > 1);
+            }
+        } else { 
+            debug_assert!(matches!(
+                receivers.commands.try_recv(),
+                Err(TryRecvError::Empty)
+            ));
+            if !self.fast_init{
+                assert_eq!(self.delayed_commands.len(), 1);
+            }
+            debug_assert_eq!(self.commands_overflows, 0);
+            self.delayed_commands.push_back(Default::default());
+        };
+
+        let delayed = self.delayed_commands
+            .pop_front()
+            .expect("`delayed_commands` should not be empty during `ForwardLogEnd`.");
+        if delayed.is_empty()
+        {
+            return;
+        }
+
+        commands.add(|world: &mut World| {
+            world.resource_scope(|world, mut controller: Mut<'_, Self>|{
+                let inits = delayed.into_iter().flat_map(|command| command.init(world));
+                controller.log.front_mut().unwrap_or_else(||{
+                    panic!(
+                        "`log` should not be empty to insert commands."
+                    );
+                }).extend(inits);
+            });
+        })
+    }
+    fn forward_log_commands(&self, mut commands: Commands<'_, '_>) {
+        let commands_exist = match self.log.get(self.log_index) {
+            Some(v) => !v.is_empty(),
+            None => panic!(
+                "`log` with `len` {} is too short for `log_index` {} during `ForwardLog` system.",
+                self.log.len(),
+                self.log_index
+            ),
+        };
+        if commands_exist {
+            let log_len = self.log.len();
+            let log_index = self.log_index;
+            commands.add(move |world: &mut World|{
+                world.resource_scope(|world, mut controller: Mut<'_, Self>|{
+                    let commands = match controller.log.get_mut(log_index){
+                        Some(v) => v,
+                        None => panic!("`log` with `len` {} is too short for `log_index` {} during `ForwardLog` command.", log_len, log_index)
+                    };
+                    commands.iter_mut().for_each(|command| command.undo_redo(world))
+                })
+            })
+        }
+    }
+    fn log_end(&mut self, mut commands: Commands<'_, '_>) {
+        self.log_end = false;
+        if matches!(self.progress_query, Some(progress) if progress.is_log(true)) {
+            self.progress_query = None;
+        }
+        if self.log_front() {
+            return;
+        }
+        //workaround for not having `VecDeque::split_off_front`, see https://github.com/rust-lang/rust/issues/92547
+        let additional = self.log.len() - self.log_index;
+        let mut split_off = self.log.split_off(self.log_index);
+        split_off.reserve_exact(additional);
+        swap(&mut split_off, &mut self.log);
+        //end of workaround
+        self.log_index = 0;
+        commands.add(move |world: &mut World| {
+            split_off
+                .into_iter()
+                .flatten()
+                .for_each(|command| command.finalize(world))
+        });
     }
 }

@@ -1,4 +1,4 @@
-use super::{ReversibleCommand, ReversibleCommandErrorHandling, ReversibleCommandInitialized};
+use super::{ReversibleCommand, ReversibleCommandErrorHandling, ReversibleCommandInitialized, panic_msg};
 use crate::Despawned;
 use bevy::prelude::{Component, Entity, World};
 use std::marker::PhantomData;
@@ -33,10 +33,15 @@ impl<T: Component> SpawnComponent<T> {
 }
 
 impl<T: Component> ReversibleCommand for SpawnComponent<T> {
-    fn init(self: Box<Self>, world: &mut World) -> Box<dyn ReversibleCommandInitialized> {
+    fn init(self: Box<Self>, world: &mut World) -> Option<Box<dyn ReversibleCommandInitialized>> {
         if let Some(mut entity_mut) = world.get_entity_mut(self.entity) {
             if !entity_mut.contains::<T>() {
                 entity_mut.insert(self.data);
+                return Some(Box::new(SpawnComponentInitialized {
+                    spawned: true,
+                    p: PhantomData::<T>,
+                    entity: self.entity,
+                }));
             } else {
                 self.error
                     .error::<T>(&SpawnComponentError::ComponentAlreadyExists);
@@ -44,36 +49,31 @@ impl<T: Component> ReversibleCommand for SpawnComponent<T> {
         } else {
             self.error.error::<T>(&SpawnComponentError::EntityNotFound);
         }
-        Box::new(SpawnComponentInitialized {
-            p: PhantomData::<T>,
-            entity: self.entity,
-        })
+        None
     }
 }
 
 pub struct SpawnComponentInitialized<T: Component> {
+    spawned: bool,
     p: PhantomData<T>,
     entity: Entity,
 }
 
 impl<T: Component> ReversibleCommandInitialized for SpawnComponentInitialized<T> {
-    fn redo(&mut self, world: &mut World) {
+    fn undo_redo(&mut self, world: &mut World) {
         let mut entity = world.entity_mut(self.entity);
-        let value = entity.remove::<Despawned<T>>();
-        if let Some(value) = value {
+        if self.spawned{
+            let value = entity.remove::<Despawned<T>>().unwrap_or_else(||panic!("{}", panic_msg::<Self>("undo")));
             entity.insert(value.0);
-        }
-    }
-    fn undo(&mut self, world: &mut World) {
-        let mut entity = world.entity_mut(self.entity);
-        let value = entity.remove::<T>();
-        if let Some(value) = value {
+        } else {
+            let value = entity.remove::<T>().unwrap_or_else(||panic!("{}", panic_msg::<Self>("redo")));
             entity.insert(Despawned(value));
         }
     }
-    fn redo_finalize(self: Box<Self>, _world: &mut World) {}
-    fn undo_finalize(self: Box<Self>, world: &mut World) {
-        let mut entity = world.entity_mut(self.entity);
-        entity.remove::<Despawned<T>>();
+    fn finalize(self: Box<Self>, world: &mut World) {
+        if !self.spawned{
+            let mut entity = world.entity_mut(self.entity);
+            entity.remove::<Despawned<T>>();
+        }
     }
 }
