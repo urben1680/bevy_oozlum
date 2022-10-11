@@ -16,7 +16,11 @@ pub mod controller;
 pub mod event;
 pub mod log_systems;
 
+#[cfg(not(test))]
 pub const MAX_LOG_INDEX: Ticks = Ticks::MAX;
+#[cfg(test)]
+pub const MAX_LOG_INDEX: Ticks = log_systems::test::MAX_LOG_INDEX_TEST;
+
 pub const MAX_LOG_INDEX_USIZE: usize = MAX_LOG_INDEX as usize;
 pub const LOG_LEN: usize = MAX_LOG_INDEX_USIZE + 1;
 pub const DEFAULT_TIME_STEP: f64 = 0.02;
@@ -44,8 +48,8 @@ impl TicksRelative for Wrapping<Ticks> {
     fn ticks_from_now(&self, time_stamp: Self) -> Ticks {
         (self - time_stamp).0
     }
-    fn further_in_the_future(&self, other: Self, reference: Self) -> bool {
-        self.ticks_from_now(reference) > other.ticks_from_now(reference)
+    fn further_in_the_future(&self, than: Self, reference: Self) -> bool {
+        self.ticks_from_now(reference) > than.ticks_from_now(reference)
     }
     fn further_in_the_past(&self, other: Self, reference: Self) -> bool {
         self.ticks_ago(reference) > other.ticks_ago(reference)

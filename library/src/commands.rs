@@ -3,7 +3,7 @@ use bevy::{
     log::{error, info, warn},
     prelude::{Commands, ParallelCommands, World},
 };
-use std::{any::type_name, fmt::Debug, marker::PhantomData, mem::ManuallyDrop};
+use std::{any::type_name, fmt::{Debug, self}, marker::PhantomData, mem::ManuallyDrop};
 
 use super::controller::Controller;
 
@@ -23,19 +23,30 @@ pub use spawn_resource::*;
 
 /// Trait for reversible commands that are not yet initialized.
 pub trait ReversibleCommand: Send + Sync + 'static {
-    fn init(self: Box<Self>, world: &mut World) -> Box<dyn ReversibleCommandInitialized>;
+    //returns `Some` if init was successful.
+    fn init(self: Box<Self>, world: &mut World) -> Option<Box<dyn ReversibleCommandInitialized>>;
+    #[cfg(debug)]
+    /// Get debug information
+    fn debug(&self) -> String{
+        
+    }
 }
 
 /// Trait for reversible commands that are initialized.
 pub trait ReversibleCommandInitialized: Send + Sync + 'static {
-    /// Redo the command
-    fn redo(&mut self, world: &mut World);
-    /// Undo the command
-    fn undo(&mut self, world: &mut World);
-    /// Clean up data that is needed to undo the command
-    fn redo_finalize(self: Box<Self>, world: &mut World);
-    /// Clean up data that is needed to redo the command
-    fn undo_finalize(self: Box<Self>, world: &mut World);
+    /// Redo or undo the command. `Self` needs to track itself if `redo` or `undo`is to be applied. The first call to this function is `undo`.
+    fn undo_redo(&mut self, world: &mut World);
+    /// Clean up data. `Self` needs to track itself if `redo` or `undo` was called last to keep the vtable size smaller.
+    fn finalize(self: Box<Self>, world: &mut World);
+    #[cfg(debug)]
+    /// Get debug information
+    fn debug(&self) -> String{
+
+    }
+}
+
+fn panic_msg<T>(s: &'static str) -> String{
+    format!("Reversible command `{s}` panicked: {}", type_name::<T>())
 }
 
 /// Options for errorhandling of the error type `E` in reversible commands.
