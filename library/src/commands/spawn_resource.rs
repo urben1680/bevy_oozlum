@@ -26,16 +26,8 @@ impl<T: Resource> SpawnResource<T> {
 }
 
 impl<T: Resource> ReversibleCommand for SpawnResource<T> {
-    fn init(self: Box<Self>, world: &mut World) -> Box<dyn ReversibleCommandInitialized> {
-        if !world.contains_resource::<T>() {
-            world.insert_resource(self.data);
-        } else {
-            self.error
-                .error::<T>(&SpawnResourceError::ResourceAlreadyExists);
-        }
-        Box::new(SpawnResourceInitialized {
-            p: PhantomData::<T>,
-        })
+    fn init(self: Box<Self>, world: &mut World) -> Option<Box<dyn ReversibleCommandInitialized>> {
+        None
     }
 }
 
@@ -44,20 +36,8 @@ pub struct SpawnResourceInitialized<T: Resource> {
 }
 
 impl<T: Resource> ReversibleCommandInitialized for SpawnResourceInitialized<T> {
-    fn redo(&mut self, world: &mut World) {
-        let value = world.remove_resource::<Despawned<T>>();
-        if let Some(value) = value {
-            world.insert_resource(value.0);
-        }
+    fn undo_redo(&mut self, world: &mut World) {
     }
-    fn undo(&mut self, world: &mut World) {
-        let value = world.remove_resource::<T>();
-        if let Some(value) = value {
-            world.insert_resource(Despawned(value));
-        }
-    }
-    fn redo_finalize(self: Box<Self>, _world: &mut World) {}
-    fn undo_finalize(self: Box<Self>, world: &mut World) {
-        world.remove_resource::<T>();
+    fn finalize(self: Box<Self>, world: &mut World) {
     }
 }

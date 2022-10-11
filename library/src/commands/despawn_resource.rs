@@ -1,4 +1,4 @@
-use super::{ReversibleCommand, ReversibleCommandErrorHandling, ReversibleCommandInitialized, panic_msg};
+use super::{ReversibleCommand, ReversibleCommandErrorHandling, ReversibleCommandInitialized};
 use crate::Despawned;
 use bevy::{ecs::system::Resource, prelude::World};
 use std::{marker::PhantomData};
@@ -27,17 +27,7 @@ impl<T: Resource> DespawnResource<T> {
 
 impl<T: Resource> ReversibleCommand for DespawnResource<T> {
     fn init(self: Box<Self>, world: &mut World) -> Option<Box<dyn ReversibleCommandInitialized>> {
-        if let Some(value) = world.remove_resource::<T>() {
-            world.insert_resource(Despawned(value));
-            Some(Box::new(DespawnResourceInitialized {
-                despawned: true,
-                p: PhantomData::<T>,
-            }))
-        } else {
-            self.error
-                .error::<T>(&DespawnResourceError::ResourceNotFound);
-            None
-        }
+        None
     }
 }
 
@@ -48,29 +38,7 @@ pub struct DespawnResourceInitialized<T: Resource> {
 
 impl<T: Resource> ReversibleCommandInitialized for DespawnResourceInitialized<T> {
     fn undo_redo(&mut self, world: &mut World) {
-        match self.despawned{
-            false if world.contains_resource::<DespawnResource<T>>() =>
-            false => 
-        }
-
-
-        if self.despawned{
-            let value = world.remove_resource::<Despawned<T>>().unwrap_or_else(||panic!("{}", panic_msg::<Self>("undo")));
-            if world.contains_resource::<T>(){
-
-            }
-            world.insert_resource(value.0);
-        } else {
-            let value = world.remove_resource::<T>().unwrap_or_else(||panic!("{}", panic_msg::<Self>("redo")));
-            world.insert_resource(Despawned(value));
-        }
-        self.despawned = !self.despawned;
     }
     fn finalize(self: Box<Self>, world: &mut World) {
-        if self.despawned{
-            if world.remove_resource::<Despawned<T>>().is_none(){
-                panic!("{}", panic_msg::<Self>("finalize"));
-            }
-        }
     }
 }

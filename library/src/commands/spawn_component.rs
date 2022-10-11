@@ -1,4 +1,4 @@
-use super::{ReversibleCommand, ReversibleCommandErrorHandling, ReversibleCommandInitialized, panic_msg};
+use super::{ReversibleCommand, ReversibleCommandErrorHandling, ReversibleCommandInitialized,};
 use crate::Despawned;
 use bevy::prelude::{Component, Entity, World};
 use std::marker::PhantomData;
@@ -61,19 +61,7 @@ pub struct SpawnComponentInitialized<T: Component> {
 
 impl<T: Component> ReversibleCommandInitialized for SpawnComponentInitialized<T> {
     fn undo_redo(&mut self, world: &mut World) {
-        let mut entity = world.entity_mut(self.entity);
-        if self.spawned{
-            let value = entity.remove::<Despawned<T>>().unwrap_or_else(||panic!("{}", panic_msg::<Self>("undo")));
-            entity.insert(value.0);
-        } else {
-            let value = entity.remove::<T>().unwrap_or_else(||panic!("{}", panic_msg::<Self>("redo")));
-            entity.insert(Despawned(value));
-        }
     }
     fn finalize(self: Box<Self>, world: &mut World) {
-        if !self.spawned{
-            let mut entity = world.entity_mut(self.entity);
-            entity.remove::<Despawned<T>>();
-        }
     }
 }

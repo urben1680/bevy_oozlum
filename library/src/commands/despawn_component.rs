@@ -1,12 +1,14 @@
-use super::{ReversibleCommand, ReversibleCommandErrorHandling, ReversibleCommandInitialized, panic_msg};
-use crate::Despawned;
+use super::{ReversibleCommand, ReversibleCommandErrorHandling, ReversibleCommandInitialized, CommandPanic};
+use crate::{Despawned, DespawnedEntity};
 use bevy::prelude::{Component, Entity, World};
 use std::marker::PhantomData;
 
 #[derive(Debug, Clone, Copy)]
 pub enum DespawnComponentError {
     EntityNotFound,
+    EntityDespawned,
     ComponentNotFound,
+    PreviouslyDespawed,
 }
 
 pub struct DespawnComponent<T: Component> {
@@ -33,23 +35,31 @@ impl<T: Component> DespawnComponent<T> {
 
 impl<T: Component> ReversibleCommand for DespawnComponent<T> {
     fn init(self: Box<Self>, world: &mut World) -> Option<Box<dyn ReversibleCommandInitialized>> {
-        if let Some(mut entity_mut) = world.get_entity_mut(self.entity) {
-            if let Some(value) = entity_mut.remove::<T>() {
-                entity_mut.insert(Despawned(value));
-                return Some(Box::new(DespawnComponentInitialized {
+        if let Some(mut entity) = world.get_entity_mut(self.entity) {
+            if entity.contains::<DespawnedEntity>(){
+                self.error.error::<Self>(&DespawnComponentError::EntityDespawned);
+                None
+            }
+            else if entity.contains::<Despawned<T>>(){
+                self.error.error::<Self>(&DespawnComponentError::PreviouslyDespawed);
+                None
+            }
+            else if let Some(value) = entity.remove::<T>() {
+                entity.insert(Despawned(value));
+                Some(Box::new(DespawnComponentInitialized {
                     despawned: true,
                     entity: self.entity,
                     p: PhantomData::<T>,
-                }));
-            } else {
-                self.error
-                    .error::<T>(&DespawnComponentError::ComponentNotFound);
+                }))
+            } 
+            else {
+                self.error.error::<Self>(&DespawnComponentError::ComponentNotFound);
+                None
             }
         } else {
-            self.error
-                .error::<T>(&DespawnComponentError::EntityNotFound);
+            self.error.error::<Self>(&DespawnComponentError::EntityNotFound);
+            None
         }
-        None
     }
 }
 
@@ -61,27 +71,70 @@ pub struct DespawnComponentInitialized<T: Component> {
 
 impl<T: Component> ReversibleCommandInitialized for DespawnComponentInitialized<T> {
     fn undo_redo(&mut self, world: &mut World) {
-        let mut entity = world.entity_mut(self.entity);
-        if self.despawned{
-            if entity.contains::<Despawned<T>>(){
-                panic!("{}", panic_msg::<Self>("undo check"));
+        if let Some(mut entity) = world.get_entity_mut(self.entity){
+            if self.despawned{
+                if entity.contains::<DespawnedEntity>(){
+                    self.panic("respawned failed, entity itself is marked as despawned");
+                }
+                else if entity.contains::<Despawned<T>>(){
+                    self.panic("respawned failed, entity already contains `T`");
+                }
+                else if let Some(value) = entity.remove::<Despawned<T>>(){
+                    entity.insert(value.0);
+                }
+                else{
+                    self.panic("respawned failed, entity does not contain `Despawned<T>`");
+                }
+            } else {
+                if entity.contains::<DespawnedEntity>(){
+                    self.panic("despawned failed, entity itself is marked as despawned");
+                }
+                else if entity.contains::<Despawned<T>>(){
+                    self.panic("despawned failed, entity already contains `Despawned<T>`");
+                }
+                else if let Some(value) = entity.remove::<T>(){
+                    entity.insert(Despawned(value));
+                }
+                else{
+                    self.panic("despawned failed, entity does not contain `T`");
+                }
             }
-            let value = entity.remove::<Despawned<T>>().unwrap_or_else(||panic!("{}", panic_msg::<Self>("undo remove")));
-            entity.insert(value.0);
-        } else {
-            if entity.contains::<T>(){
-                panic!("{}", panic_msg::<Self>("redo check"));
-            }
-            let value = entity.remove::<T>().unwrap_or_else(||panic!("{}", panic_msg::<Self>("redo remove")));
-            entity.insert(Despawned(value));
+        }
+        else if self.despawned{
+            self.panic("respawned failed, entity not found");
+        }
+        else {
+            self.panic("despawned failed, entity not found");
         }
         self.despawned = !self.despawned;
     }
     fn finalize(self: Box<Self>, world: &mut World) {
-        if self.despawned{
-            if world.entity_mut(self.entity).remove::<Despawned<T>>().is_none(){
-                panic!("{}", panic_msg::<Self>("finalize"));
+        if let Some(mut entity) = world.get_entity_mut(self.entity){
+            if self.despawned{
+                if entity.contains::<DespawnedEntity>(){
+                    self.panic("finalize despawn failed, entity itself is marked as despawned");
+                }
+                else if entity.contains::<T>(){
+                    self.panic("finalize despawn failed, entity contains `T`");
+                }
+                else if entity.remove::<Despawned<T>>().is_none(){
+                    self.panic("finalize despawn failed, entity does not contain `Despawned<T>`")
+                }
             }
+            else {
+                if entity.contains::<DespawnedEntity>(){
+                    self.panic("finalize respawn failed, entity itself is marked as despawned");
+                }
+                else if entity.contains::<Despawned<T>>(){
+                    self.panic("finalize respawn failed, entity contains `Despawned<T>`");
+                }
+            }
+        }
+        else if self.despawned{
+            self.panic("finalize despawn failed, entity not found");
+        }
+        else {
+            self.panic("finalize respawn failed, entity not found");
         }
     }
 }
