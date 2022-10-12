@@ -8,7 +8,10 @@ use bevy::{
     prelude::{ParallelCommands, Query, Res, Without},
 };
 
-use crate::{controller::Controller, DespawnedEntity, LOG_LEN, LOG_ONLY_PAR_ITER_BATCH_SIZE};
+use crate::{
+    controller::{Controller, CONTROLLER_CONSTS},
+    DespawnedEntity, LOG_ONLY_PAR_ITER_BATCH_SIZE,
+};
 
 use super::{log::Log, NextTransition, StateOption};
 
@@ -17,7 +20,7 @@ pub trait PerEntity: Send + Sync + Sized + 'static {
     type Items: WorldQuery;
     type State: StateOption;
     type Transition: Send + Sync;
-    const DEFAULT_LOG_CAPACITY: usize = LOG_LEN;
+    const DEFAULT_LOG_CAPACITY: usize = CONTROLLER_CONSTS.log_len;
     const FAST_ADVANCE_SYSTEM: bool = false;
     const FAST_REVERT_SYSTEM: bool = false;
     const PAR_ITER_BATCH_SIZE: usize = 0;
@@ -104,7 +107,7 @@ pub trait PerEntity: Send + Sync + Sized + 'static {
     }
 }
 
-pub(super) type Params<'a, 'b, T> = (
+type Params<'a, 'b, T> = (
     &'a <T as PerEntity>::Params,
     &'a mut QueryItem<'b, <T as PerEntity>::Items>,
 );

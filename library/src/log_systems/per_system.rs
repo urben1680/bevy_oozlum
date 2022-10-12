@@ -5,7 +5,7 @@ use bevy::{
     prelude::{Commands, Res, ResMut},
 };
 
-use crate::{controller::Controller, LOG_LEN};
+use crate::controller::{Controller, CONTROLLER_CONSTS};
 
 use super::{log::Log, NextTransition, StateOption};
 
@@ -13,7 +13,7 @@ pub trait PerSystem: Send + Sync + Sized + 'static {
     type Params: SystemParam;
     type State: StateOption;
     type Transition: Send + Sync;
-    const DEFAULT_LOG_CAPACITY: usize = LOG_LEN;
+    const DEFAULT_LOG_CAPACITY: usize = CONTROLLER_CONSTS.log_len;
     const FAST_ADVANCE_SYSTEM: bool = false;
     const FAST_REVERT_SYSTEM: bool = false;
     fn next_transition(
