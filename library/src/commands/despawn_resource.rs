@@ -1,11 +1,16 @@
-use super::{ReversibleCommand, ReversibleCommandErrorHandling, ReversibleCommandInitialized};
 use crate::Despawned;
+
+use super::{
+    CommandAction, CommandPanic, ReversibleCommand, ReversibleCommandErrorHandling,
+    ReversibleCommandInitialized,
+};
 use bevy::{ecs::system::Resource, prelude::World};
-use std::{marker::PhantomData};
+use std::marker::PhantomData;
 
 #[derive(Debug, Clone, Copy)]
 pub enum DespawnResourceError {
-    ResourceNotFound,
+    NotFound,
+    AlreadyDespawed,
 }
 
 #[derive(Default)]
@@ -27,18 +32,26 @@ impl<T: Resource> DespawnResource<T> {
 
 impl<T: Resource> ReversibleCommand for DespawnResource<T> {
     fn init(self: Box<Self>, world: &mut World) -> Option<Box<dyn ReversibleCommandInitialized>> {
-        None
+        if world.contains_resource::<Despawned<T>>() {
+            self.error
+                .error::<Self>(&DespawnResourceError::AlreadyDespawed);
+            None
+        } else if let Some(data) = world.remove_resource::<T>() {
+            world.insert_resource(Despawned(data));
+            Some(Box::new(DespawnResourceInitialized::<T> { p: PhantomData }))
+        } else {
+            self.error.error::<Self>(&DespawnResourceError::NotFound);
+            None
+        }
     }
 }
 
 pub struct DespawnResourceInitialized<T: Resource> {
-    despawned: bool,
     p: PhantomData<T>,
 }
 
 impl<T: Resource> ReversibleCommandInitialized for DespawnResourceInitialized<T> {
-    fn undo_redo(&mut self, world: &mut World) {
-    }
-    fn finalize(self: Box<Self>, world: &mut World) {
+    fn action(&mut self, world: &mut World, action: CommandAction) {
+        Self::resource::<T>(world, action, true);
     }
 }

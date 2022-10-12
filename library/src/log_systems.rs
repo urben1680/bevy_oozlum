@@ -14,7 +14,6 @@ use bevy::{
 
 use crate::commands::ReversibleCommand;
 
-
 pub trait StateOption: Resource {
     type Index: Send + Sync + Copy + Debug + 'static;
     type Param<'w>: SystemParam + Send + Sync;

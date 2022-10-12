@@ -9,7 +9,7 @@ use std::{
 
 use bevy::prelude::{Commands, Component};
 
-use crate::{controller::Controller, Ticks, TicksRelative, MAX_LOG_INDEX, LOG_LEN};
+use crate::{controller::Controller, Ticks, TicksRelative};
 
 use super::{NextTransition, StateOption};
 
@@ -191,15 +191,18 @@ impl<Marker, Transition, Index: Copy + Debug> Log<Marker, Transition, Index> {
         //capacity maximum is handled at systems calling `self.age_check_system`.
         //reserve as little as possible but remember the current capacity in saves to minimize future reservations.
         self.entries.reserve_exact(1);
-        if self.entry_index == MAX_LOG_INDEX{
+        if self.entry_index == controller.consts().max_log_index {
             assert_eq!(
-                self.entries.len(), LOG_LEN,
-                "`Log<{}>::{FN}`: `entries.len()` should return {MAX_LOG_INDEX} instead of {}.",
-                type_name::<Marker>(), self.entries.len()
+                self.entries.len(),
+                controller.consts().log_len,
+                "`Log<{}>::{FN}`: `entries.len()` should return {} instead of {}.",
+                type_name::<Marker>(),
+                controller.consts().max_log_index,
+                self.entries.len()
             );
             let oldest = self.entries.pop_front();
-            if needs_drop::<Transition>(){
-                unsafe{
+            if needs_drop::<Transition>() {
+                unsafe {
                     //SAFETY: Only the other end of the deque contains an uninit transition
                     oldest.unwrap().transition.assume_init();
                 }
@@ -257,12 +260,13 @@ impl<Marker, Transition, Index: Copy + Debug> Log<Marker, Transition, Index> {
     ) {
         const FN: &'static str = "advance_log";
         let entry_index = self.entry_index as usize;
-        let entry = self.entries.get(entry_index).unwrap_or_else(||{
-            panic!(
+        let entry =
+            self.entries.get(entry_index).unwrap_or_else(|| {
+                panic!(
                 "`Log<{}>::{FN}`: `entries` should contain an element at index {}, length is {}.", 
                 type_name::<Marker>(), entry_index, self. entries.len()
             )
-        });
+            });
         let state = State::get_state(states, entry.state_index).unwrap_or_else(|len|{
             panic!(
                 "`Log<{}>::{FN}`: `states` should contain an element at index {:?}, length is {len}.", 
@@ -319,12 +323,13 @@ impl<Marker, Transition, Index: Copy + Debug> Log<Marker, Transition, Index> {
     ) {
         const FN: &'static str = "advance_log_fast";
         let entry_index = self.entry_index as usize;
-        let entry = self.entries.get(entry_index).unwrap_or_else(||{
-            panic!(
+        let entry =
+            self.entries.get(entry_index).unwrap_or_else(|| {
+                panic!(
                 "`Log<{}>::{FN}`: `entries` should contain an element at index {}, length is {}.", 
                 type_name::<Marker>(), self.entry_index, self. entries.len()
             )
-        });
+            });
         if !controller.fast_init() && entry.time_stamp != controller.time_stamp() {
             return;
         }
@@ -387,12 +392,15 @@ impl<Marker, Transition, Index: Copy + Debug> Log<Marker, Transition, Index> {
         ),
     ) {
         const FN: &'static str = "revert_log";
-        let mut entry = self.entries.get(self.entry_index as usize).unwrap_or_else(||{
-            panic!(
+        let mut entry = self
+            .entries
+            .get(self.entry_index as usize)
+            .unwrap_or_else(|| {
+                panic!(
                 "`Log<{}>::{FN}`: `entries` should contain an element at index {}, length is {}.", 
                 type_name::<Marker>(), self.entry_index, self. entries.len()
             )
-        });
+            });
         let mut state = State::get_state(states, entry.state_index).unwrap_or_else(|len|{
             panic!(
                 "`Log<{}>::{FN}`: `states` should contain an element at index {:?}, length is {len}.", 
@@ -451,12 +459,15 @@ impl<Marker, Transition, Index: Copy + Debug> Log<Marker, Transition, Index> {
         if !controller.fast_init() && self.entry_index == 0 {
             return;
         }
-        let mut entry = self.entries.get(self.entry_index as usize).unwrap_or_else(||{
-            panic!(
+        let mut entry = self
+            .entries
+            .get(self.entry_index as usize)
+            .unwrap_or_else(|| {
+                panic!(
                 "`Log<{}>::{FN}`: `entries` should contain an element at index {}, length is {}.", 
                 type_name::<Marker>(), self.entry_index, self. entries.len()
             )
-        });
+            });
         if !controller.fast_init() && entry.time_stamp != controller.time_stamp() {
             return;
         }

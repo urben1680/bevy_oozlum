@@ -1,31 +1,16 @@
 #![deny(rust_2018_idioms)]
 #![feature(generic_associated_types)]
 
-use std::{marker::PhantomData, num::Wrapping};
+use std::num::Wrapping;
 
-use bevy::{
-    ecs::{
-        query::{QueryItem, WorldQuery},
-        system::SystemParam,
-    },
-    prelude::{Component, Entity, Query, ResMut, Without},
-};
+use bevy::prelude::Component;
 
 pub mod commands;
 pub mod controller;
 pub mod event;
 pub mod log_systems;
 
-#[cfg(not(test))]
-pub const MAX_LOG_INDEX: Ticks = Ticks::MAX;
-#[cfg(test)]
-pub const MAX_LOG_INDEX: Ticks = log_systems::test::MAX_LOG_INDEX_TEST;
-
-pub const MAX_LOG_INDEX_USIZE: usize = MAX_LOG_INDEX as usize;
-pub const LOG_LEN: usize = MAX_LOG_INDEX_USIZE + 1;
 pub const DEFAULT_TIME_STEP: f64 = 0.02;
-pub const DELAYED_COMMANDS_TICKS_CAPACITY: usize = Ticks::MAX as usize >> 1; //jumping from morning to evening
-pub const DELAYED_COMMANDS_SYNC_SENDER_CAPACITY: usize = 1024;
 pub const LOG_ONLY_PAR_ITER_BATCH_SIZE: usize = 0;
 
 /// Type that stores the ticks systems work by.
@@ -59,13 +44,6 @@ impl TicksRelative for Wrapping<Ticks> {
     }
 }
 
-/// Component that should be always queried in `Query`s (instead of `Entity`).
-#[derive(WorldQuery)]
-pub struct PresentEntity {
-    pub entity: Entity,
-    filter: Without<DespawnedEntity>,
-}
-
 /// Buffer component/resource that contains despawned data so it can be recovered.
 pub struct Despawned<T>(pub T);
 
@@ -76,15 +54,3 @@ impl<T: Component> Component for Despawned<T> {
 /// Flag Component to mark an `Entity` as despawned.
 #[derive(Component)]
 pub struct DespawnedEntity;
-
-/*
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn it_works() {
-        assert!(true);
-    }
-}
-*/
