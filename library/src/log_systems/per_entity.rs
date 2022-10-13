@@ -9,7 +9,7 @@ use bevy::{
 };
 
 use crate::{
-    controller::{Controller, CONTROLLER_CONSTS},
+    controller::{consts::CONTROLLER_CONSTS, Controller},
     DespawnedEntity, LOG_ONLY_PAR_ITER_BATCH_SIZE,
 };
 

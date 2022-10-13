@@ -1,7 +1,7 @@
 use crate::Despawned;
 
 use super::{
-    CommandAction, CommandPanic, ReversibleCommand, ReversibleCommandErrorHandling,
+    CommandAction, PresetFunctions, ReversibleCommand, ReversibleCommandErrorHandling,
     ReversibleCommandInitialized,
 };
 use bevy::{ecs::system::Resource, prelude::World};

@@ -1,6 +1,6 @@
 use bevy::prelude::{Bundle, Entity, World};
 
-use super::{CommandAction, CommandPanic, ReversibleCommand, ReversibleCommandInitialized};
+use super::{CommandAction, PresetFunctions, ReversibleCommand, ReversibleCommandInitialized};
 
 pub struct SpawnEntity<T: Bundle> {
     data: T,

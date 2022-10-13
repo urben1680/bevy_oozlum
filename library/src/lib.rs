@@ -16,6 +16,7 @@ pub const LOG_ONLY_PAR_ITER_BATCH_SIZE: usize = 0;
 /// Type that stores the ticks systems work by.
 /// MAX value is also the limit how many ticks can be logged.
 /// Timestamps are stored as `std::num::Wrapping<Ticks>`.
+/// Must be a smaller integer type than `usize`.
 pub type Ticks = u16;
 
 pub trait TicksRelative {
