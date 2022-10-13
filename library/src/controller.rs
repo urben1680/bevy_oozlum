@@ -19,43 +19,16 @@ use crate::{
     Ticks, TicksRelative, DEFAULT_TIME_STEP,
 };
 
+use self::{
+    consts::{ControllerConsts, CONTROLLER_CONSTS},
+    progress::Progress,
+};
+
+pub(crate) mod consts;
+pub(crate) mod progress;
+
 #[cfg(test)]
 mod test;
-
-#[derive(PartialEq, Debug)]
-pub(crate) struct ControllerConsts {
-    pub(crate) max_log_index: Ticks,
-    pub(crate) max_log_index_usize: usize,
-    pub(crate) log_len: usize,
-    pub(crate) delayed_commands_ticks_capacity: usize,
-    pub(crate) delayed_commands_sync_sender_capacity: usize,
-}
-
-impl ControllerConsts {
-    pub(crate) const fn new(
-        max_log_index: Ticks,
-        delayed_commands_ticks_capacity: usize,
-        delayed_commands_sync_sender_capacity: usize,
-    ) -> Self {
-        Self {
-            max_log_index,
-            max_log_index_usize: max_log_index as usize,
-            log_len: max_log_index as usize + 1,
-            delayed_commands_ticks_capacity,
-            delayed_commands_sync_sender_capacity,
-        }
-    }
-    pub(crate) const fn max_log_index_only(max_log_index: Ticks) -> Self {
-        Self::new(
-            max_log_index,
-            CONTROLLER_CONSTS.delayed_commands_ticks_capacity,
-            CONTROLLER_CONSTS.delayed_commands_sync_sender_capacity,
-        )
-    }
-}
-
-pub(crate) const CONTROLLER_CONSTS: ControllerConsts =
-    ControllerConsts::new(Ticks::MAX, Ticks::MAX as usize >> 1, 1024);
 
 /// `NonSend` resource containing sync channel `Receiver`s for forgets and delayed commands.
 pub(super) struct ControllerReceivers {
@@ -63,88 +36,9 @@ pub(super) struct ControllerReceivers {
     commands: Receiver<(usize, Vec<Box<dyn ReversibleCommand>>)>,
 }
 
-/// `Progress` is used to control the progression of all reversible systems.
-#[derive(Clone, Copy, PartialEq, Debug, Default)]
-pub enum Progress {
-    #[default]
-    /// `Forward` progresses all systems step-by-step in sync.
-    Forward,
-    /// `ForwardFast { to_time_stamp }` progresses some systems eagerly until `to_time_stamp` is reached.
-    ///
-    /// This cannot be aborted because affected systems are not in sync until the end.
-    /// However, it can be extended at any point by setting this variant again with a larger `to_time_stamp` relatively to `time_stamp()`.
-    ///
-    /// If `to_time_stamp` was reached and still `FastForward` is queried, the progression is changed to `Forward`.
-    ForwardFast { to_time_stamp: Wrapping<Ticks> },
-    /// `ForwardLog` progresses all systems using each system's log(s) step-by-step.
-    /// If this is attempted while the log reached it's most recent end, the progression is changed to `PauseLog`.
-    ForwardLog,
-    /// `ForwardLogEnd` progresses to the most recent log end, potentially cheaper than with `ForwardLog`.
-    /// This cannot be aborted because affected systems are not in sync until the end.
-    ForwardLogEnd,
-    /// `BackwardLog` reverts all systems using each system's log(s) step-by-step.
-    BackwardLog,
-    /// `BackwardLogEnd` reverts all systems to the most past log end, potentially cheaper than with `BackwardLog`.
-    /// This cannot be aborted because affected systems are not in sync until the end.
-    BackwardLogEnd,
-    /// `Pause` halts everything until another non-pause variant is picked.
-    Pause,
-    /// `PauseLog` behaves like `Pause` but does not cause logs in the future to be forgotten.
-    PauseLog,
-}
-
-impl Progress {
-    /// Returns `true` if `self` is `ForwardLog`, `ForwardLogEnd`, `BackwardLog` or `BackwardLogEnd`.
-    ///
-    /// If parameter `including_pause` is set to true, the above list includes `PauseLog`.
-    ///
-    /// Otherwise returns `false`.
-    pub fn is_log(&self, including_pause: bool) -> bool {
-        matches!(
-            self,
-            Progress::ForwardLog
-                | Progress::ForwardLogEnd
-                | Progress::BackwardLog
-                | Progress::BackwardLogEnd
-        ) || (including_pause && self == &Progress::PauseLog)
-    }
-    /// Returns `true` if `self` is `Pause` or `PauseLog`.
-    ///
-    /// Otherwise returns `false`.
-    pub fn is_pause(&self) -> bool {
-        matches!(self, Progress::Pause | Progress::PauseLog)
-    }
-
-    /// Returns `true` if `self` is `Forward`, `ForwardLog` or `BackwardLog`.
-    /// In `Controller` this causes progression in fixed time steps.
-    ///
-    /// Otherwise returns `false`. In `Controller` this causes progression as fast as possible.
-    pub fn is_fixed_time_step(&self) -> bool {
-        matches!(
-            self,
-            Progress::Forward | Progress::ForwardLog | Progress::BackwardLog
-        )
-    }
-    /// Returns `true` if `self` is `Forward` or `ForwardFast`.
-    ///
-    /// Otherwise returns `false`.
-    pub fn is_not_log_nor_pause(&self) -> bool {
-        matches!(self, Progress::Forward | Progress::ForwardFast { .. })
-    }
-    /// Returns `true` if `self` is `ForwardFast`, `ForwardLogEnd` of `BackwardLogEnd`.
-    ///
-    /// Otherwise returns `false`.
-    pub fn is_fast(&self) -> bool {
-        matches!(
-            self,
-            Progress::ForwardFast { .. } | Progress::ForwardLogEnd | Progress::BackwardLogEnd
-        )
-    }
-}
-
 pub struct Controller {
     progress_query: Option<Progress>,
-    time_step_query: Option<f64>,
+    time_step_query: Option<f64>, //todo: use enum instead with options such as "back to default after n ticks"
     time_step: f64,
     /// Log containing commands to undo or redo them.
     ///
@@ -159,6 +53,7 @@ pub struct Controller {
     time_stamp: Wrapping<Ticks>,
     forget: Wrapping<Ticks>,
     forward_fast_limit: Wrapping<Ticks>,
+    forward_fast_issued: Wrapping<Ticks>,
     /// Current log index, todo: reverse now that deque ends are reversed!!
     log_index: usize,
     progress: Progress,
@@ -222,7 +117,7 @@ impl Controller {
     pub fn time_stamp(&self) -> Wrapping<Ticks> {
         self.time_stamp
     }
-    /// Get the time stamp that is outside the log at the next tick.
+    /// Get the time stamp that is outside the log at the next forward tick.
     pub(super) fn forget(&self) -> Wrapping<Ticks> {
         self.forget
     }
@@ -235,6 +130,12 @@ impl Controller {
     pub fn log_back(&self) -> bool {
         self.log_index + 1 == self.log.len()
     }
+    pub fn log_front_one_tick_away(&self) -> bool {
+        self.log_index == 1
+    }
+    pub fn log_back_one_tick_away(&self) -> bool {
+        self.log_index + 2 == self.log.len()
+    }
     pub fn query_time_step(&mut self, time_step: f64) {
         self.time_step_query = Some(time_step);
     }
@@ -245,7 +146,10 @@ impl Controller {
             None
         }
     }
-    pub fn query_progress(&mut self, progress: Progress) {
+    pub fn query_progress(&mut self, mut progress: Progress) {
+        if matches!(progress, Progress::ForwardFast { .. }) {
+            self.forward_fast_issued = self.time_stamp;
+        }
         self.progress_query = Some(progress);
     }
     pub fn progress(&self) -> Progress {
@@ -267,7 +171,7 @@ impl Controller {
         v: Vec<Box<dyn ReversibleCommand>>,
         commands: &mut Commands<'_, '_>,
     ) {
-        debug_assert_eq!(
+        assert_eq!(
             self.progress,
             Progress::Forward,
             "`send_commands` should not be called during `progress`: `{:?}`, {self:#?}",
@@ -281,10 +185,15 @@ impl Controller {
         time_stamp: Wrapping<Ticks>,
         commands: &mut Commands<'_, '_>,
     ) {
-        debug_assert!(
+        assert!(
             matches!(self.progress, Progress::ForwardFast { .. }),
             "`send_commands` should not be called during `progress`: `{:?}`, {self:#?}",
             self.progress
+        );
+        assert!(
+            !time_stamp.further_in_the_future(self.forward_fast_limit, self.time_stamp),
+            "`send_commands` should not issue commands for {} which is past `forward_fast_limit`: `{:?}`, {self:#?}",
+            time_stamp, self.forward_fast_limit
         );
         let index = self.ticks_from_now(time_stamp) as usize;
         self.send_commands_raw(v, index, commands);
@@ -342,45 +251,57 @@ impl Controller {
         }
     }
     fn apply_progress_query(&mut self, or: Progress) {
-        let query = self.progress_query.take().unwrap_or(or);
-        self.log_end = self.progress.is_log(true) && !query.is_log(true);
-        if query.is_fast() {
-            if let Progress::ForwardFast { to_time_stamp } = query {
-                let mut reserve = self.ticks_from_now(to_time_stamp) as usize;
-                if reserve == 0 {
-                    // since the query is evaluated in this function at the same tick it was issued
-                    // (see `self.last` `FastForward` match case) it can be assumed this is not an
-                    // outdated jump to the current time stamp but instead the next time stamp with this value.
-                    reserve = self.consts().log_len;
-                } else if reserve == 1 {
-                    // this would have the same effect as `Forward` except calling more expensive systems.
-                    assert_eq!(self.delayed_commands.len(), 1, "{self:#?}");
-                    self.progress = Progress::Forward;
-                    self.fast_init = false;
-                    return;
-                }
-                if let Progress::ForwardFast {
-                    to_time_stamp: previous,
-                } = self.progress
+        let mut query = self.progress_query.take().unwrap_or(or);
+        match query {
+            Progress::ForwardFast { to_time_stamp } => {
+                if to_time_stamp == self.time_stamp() + Wrapping(1) {
+                    query = Progress::Forward;
+                } else if !to_time_stamp
+                    .further_in_the_future(self.time_stamp, self.forward_fast_issued)
                 {
-                    // `self.last` confirmed `previous` is closer to the present
-                    reserve -= self.ticks_from_now(previous) as usize;
+                    query = or;
+                } else {
+                    let mut reserve = self.ticks_from_now(to_time_stamp) as usize;
+                    if reserve == 0 {
+                        reserve = Ticks::MAX as usize + 1;
+                    }
+                    self.fast_init = true;
+                    let mut vd = VecDeque::from_iter((0..reserve).map(|_| Vec::new()));
+                    self.delayed_commands.append(&mut vd);
+                    self.forward_fast_limit = to_time_stamp;
                 }
-                let mut vd = VecDeque::from_iter((0..reserve).map(|_| Vec::new()));
-                self.delayed_commands.append(&mut vd);
-                self.forward_fast_limit = to_time_stamp;
-                self.fast_init = !matches!(self.progress, Progress::ForwardFast { .. });
-            } else {
-                //if query == Progress::ForwardFastLog | Progress::BackwardFastLog
-                assert_eq!(self.delayed_commands.len(), 1, "{self:#?}");
-                self.forward_fast_limit =
-                    self.time_stamp + Wrapping((self.log.len() - self.log_index) as Ticks);
-                self.fast_init = Some(self.progress) != self.progress_query;
             }
-        } else {
-            self.fast_init = false;
-            assert_eq!(self.delayed_commands.len(), 1, "{self:#?}");
+            Progress::ForwardLogEnd => {
+                if self.log_front_one_tick_away() || query == self.progress {
+                    // this would have the same effect as `ForwardLog` except calling more expensive systems.
+                    // this assures `fast_init` is not true two ticks in a row
+                    query = Progress::ForwardLog;
+                } else if self.log_front() {
+                    query = Progress::PauseLog;
+                } else {
+                    self.fast_init = true;
+                }
+            }
+            Progress::BackwardLogEnd => {
+                if self.log_back_one_tick_away() || query == self.progress {
+                    // this would have the same effect as `ForwardLog` except calling more expensive systems.
+                    // this assures `fast_init` is not true two ticks in a row
+                    query = Progress::BackwardLog;
+                } else if self.log_back() {
+                    query = Progress::PauseLog;
+                } else {
+                    self.fast_init = true;
+                }
+            }
+            Progress::ForwardLog if self.log_front() => {
+                query = Progress::PauseLog;
+            }
+            Progress::BackwardLog if self.log_back() => {
+                query = Progress::PauseLog;
+            }
+            _ => {}
         }
+        self.log_end = self.progress.is_log(true) && !query.is_log(true);
         self.progress = query;
     }
 }
@@ -476,6 +397,7 @@ impl Controller {
             time_stamp,
             forget: time_stamp - Wrapping(constants.max_log_index),
             forward_fast_limit: Default::default(), //only needs a valid value during fast forward progress
+            forward_fast_issued: Default::default(), //same
             log_index: 0,
             progress: Progress::Forward,
             pre_update_ran: false,
@@ -591,17 +513,13 @@ impl Controller {
     }
     fn last(&mut self, receivers: NonSendMut<'_, ControllerReceivers>, commands: Commands<'_, '_>) {
         self.pre_update_ran = false;
+        self.fast_init = false; //is set to true later in `apply_progress_query` if appropiate
         if let Some(time_step) = self.time_step_query.take() {
             self.time_step = time_step;
         }
         if self.log_end {
             self.log_end(commands);
             return;
-        }
-        if matches!(self.progress_query, Some(Progress::ForwardLog) | Some(Progress::ForwardLogEnd) if self.log_front())
-            || matches!(self.progress_query, Some(Progress::BackwardLog) | Some(Progress::BackwardLogEnd) if self.log_back())
-        {
-            self.progress_query = None;
         }
         match self.progress {
             Progress::Forward => {
@@ -610,15 +528,8 @@ impl Controller {
             }
             Progress::ForwardFast { to_time_stamp } => {
                 self.forward_commands(receivers, commands, true);
-                if to_time_stamp == self.time_stamp
-                    || matches!(
-                        self.progress_query, Some(Progress::ForwardFast { to_time_stamp: update })
-                        if update.further_in_the_future(to_time_stamp, self.time_stamp)
-                    )
-                {
+                if to_time_stamp == self.time_stamp {
                     self.apply_progress_query(Progress::Forward);
-                } else if self.fast_init {
-                    self.fast_init = false;
                 }
             }
             Progress::ForwardLog => {
@@ -629,8 +540,6 @@ impl Controller {
                 self.forward_log_commands(commands);
                 if self.log_front() {
                     self.apply_progress_query(Progress::PauseLog);
-                } else if self.fast_init {
-                    self.fast_init = false;
                 }
             }
             Progress::BackwardLog => {
@@ -645,8 +554,6 @@ impl Controller {
                 self.log_index += 1;
                 if self.log_back() {
                     self.apply_progress_query(Progress::PauseLog);
-                } else if self.fast_init {
-                    self.fast_init = false;
                 }
             }
             Progress::PauseLog | Progress::Pause => {

@@ -1,12 +1,23 @@
-use std::{collections::VecDeque, num::Wrapping};
+use std::num::Wrapping;
 
 use bevy::prelude::{App, CoreStage, Local, Res, ResMut};
 
-use crate::{commands::ReversibleCommandInitialized, controller::Progress, Ticks};
+use crate::{controller::Progress, Ticks};
 
-use super::{Controller, ControllerConsts, CONTROLLER_CONSTS};
+use super::{Controller, ControllerConsts};
 
-struct ControllerCmp {
+mod forward;
+mod forward_fast;
+mod forward_log;
+mod forward_log_end;
+mod backward_log;
+mod backward_log_end;
+mod log_end;
+mod pause;
+mod pause_log;
+
+#[derive(Clone, Copy)]
+pub(super) struct TestAssert {
     progress_query: Option<Progress>,
     log_len: usize,
     log_first_len: usize,
@@ -30,8 +41,8 @@ struct Failure<'a> {
     controller: &'a Controller,
 }
 
-impl ControllerCmp {
-    fn assert_eq(&self, controller: &Controller, test_index: usize, at_update: bool) {
+impl TestAssert {
+    pub(super) fn assert_eq(&self, controller: &Controller, test_index: usize, at_update: bool) {
         let failure = Failure {
             test_index,
             at_update,
@@ -100,7 +111,7 @@ impl ControllerCmp {
     }
 }
 
-impl Default for ControllerCmp {
+impl Default for TestAssert {
     fn default() -> Self {
         Self {
             progress_query: None,
@@ -119,48 +130,58 @@ impl Default for ControllerCmp {
     }
 }
 
-#[derive(Default)]
-struct Test {
+#[derive(Default, Clone, Copy)]
+pub(super) struct Test {
+    control: TestControl,
+    assert_at_update: TestAssert,
+    assert_at_end: TestAssert,
+}
+
+#[derive(Default, Clone, Copy)]
+pub(super) struct TestControl {
     progress_query: Option<Progress>,
-    time_step_query: Option<f64>,
-    at_update: ControllerCmp,
-    at_end: ControllerCmp,
+    time_step_query: Option<f64>
 }
 
 impl Test {
-    fn tests<const N: usize>(
-        log: VecDeque<Vec<Box<dyn ReversibleCommandInitialized>>>,
-        time_stamp: Wrapping<Ticks>,
+    pub(super) fn tests(
         constants: ControllerConsts,
-        tests: [Self; N],
+        setup: impl IntoIterator<Item = TestControl>,
+        tests: Vec<Self>,
     ) {
-        let (update, last): (
-            Vec<(Option<Progress>, Option<f64>, ControllerCmp)>,
-            Vec<ControllerCmp>,
-        ) = tests
-            .into_iter()
-            .map(|test| {
-                (
-                    (test.progress_query, test.time_step_query, test.at_update),
-                    test.at_end,
-                )
-            })
-            .unzip();
         let mut app = App::new();
-        Controller::insert_command(log, time_stamp, &mut app.world, constants);
+        Controller::insert_command(Default::default(), Default::default(), &mut app.world, constants);
         app.world.resource_mut::<Controller>().time_step = 0.0;
+
+        let tests_len = tests.len();
+        let (update, last): (Vec<(TestControl, Option<TestAssert>)>, Vec<Option<TestAssert>>) = setup
+            .into_iter()
+            .map(|control| ((control, None), None))
+            .chain(
+                tests
+                    .into_iter()
+                    .map(|test| ((test.control, Some(test.assert_at_update)), Some(test.assert_at_end)))
+            )
+            .unzip();
+
+        let len = update.len();
+        let offset = len - tests_len;
+            
         app.add_system_to_stage(CoreStage::PreUpdate, Controller::first_system);
         app.add_system_to_stage(
             CoreStage::Update,
             move |mut controller: ResMut<'_, Controller>, mut index: Local<'_, usize>| {
                 let entry = &update[*index];
-                if let Some(query) = entry.0 {
+                if let Some(query) = entry.0.progress_query {
                     controller.query_progress(query);
                 }
-                if let Some(time_step) = entry.1 {
+                if let Some(time_step) = entry.0.time_step_query {
                     controller.query_time_step(time_step);
                 }
-                entry.2.assert_eq(&controller, *index, true);
+                if let Some(assert) = entry.1{
+                    let test_index = *index - offset;
+                    assert.assert_eq(&controller, test_index, true);
+                }
                 *index += 1;
             },
         );
@@ -168,196 +189,14 @@ impl Test {
         app.add_system_to_stage(
             CoreStage::Last,
             move |controller: Res<'_, Controller>, mut index: Local<'_, usize>| {
-                last[*index].assert_eq(&controller, *index, false);
+                if let Some(assert) = &last[*index]{
+                    let test_index = *index - offset;
+                    assert.assert_eq(&controller, test_index, false);
+                }
                 *index += 1;
             },
         );
-        (0..N).for_each(|_| app.update());
+
+        (0..len).for_each(|_| app.update());
     }
-}
-
-/*
-TODO
-List of tests:
-- forward
--- keeps running at this progress
--- changes on query
-- forward fast
--- keeps running at this progress
--- sets fast_init to true for the first step
--- at the end switches to forward with no query
--- at the end switches to query
--- queries overwrite each other
--- immediately reacts on extending limit
-- forward log / backward log
--- keeps running at this progress
--- calls commands as expected
--- stops at the end end and changes to log pause
--- triggers log end when reacting on non-log progress query (test all)
--- reacts other log progresses immediately without triggering log end (test all)
-- forward fast log / backward fast log
--- keeps running at this progress
--- sets fast_init to true for the first step
--- calls commands as expected during correct time stamps
--- stops at the end end and changes to log pause without set query
--- stops at the end end and changes to query
--- queries overwrite each other while ignored by fast log variant
-- pause
--- keeps running at this progress
--- has zero time step
--- reacts other log progresses immediately
-- log pause
--- keeps running at this progress
--- has zero time step
--- refuses to change into other log progress that would overstep log ends
--- triggers log end when reacting on non-log progress query (test all)
--- reacts other log progresses immediately without triggering log end (test all)
-- log end
--- keeps running at this progress
--- has zero time step
--- switches to query next step (test all)
-
-check controller source to come up with more tests
-
-
-*/
-
-#[test]
-fn forward() {
-    Test::tests(
-        Default::default(),
-        Default::default(),
-        CONTROLLER_CONSTS,
-        [
-            Test {
-                //#0
-                progress_query: None,
-                time_step_query: None,
-                at_update: ControllerCmp {
-                    log_len: 1,
-                    time_stamp: 1,
-                    ..Default::default()
-                },
-                at_end: ControllerCmp {
-                    log_len: 1,
-                    time_stamp: 1,
-                    ..Default::default()
-                },
-            },
-            Test {
-                //#1
-                progress_query: None,
-                time_step_query: None,
-                at_update: ControllerCmp {
-                    log_len: 2,
-                    time_stamp: 2,
-                    ..Default::default()
-                },
-                at_end: ControllerCmp {
-                    log_len: 2,
-                    time_stamp: 2,
-                    ..Default::default()
-                },
-            },
-        ],
-    );
-}
-
-#[test]
-/// Test the init, the course and the end of FastForward including the behavior to then update progress to a previous query
-fn forward_fast() {
-    Test::tests(
-        Default::default(),
-        Default::default(),
-        CONTROLLER_CONSTS,
-        [
-            Test {
-                //#0
-                progress_query: Some(Progress::ForwardFast {
-                    to_time_stamp: Wrapping(3),
-                }),
-                time_step_query: None,
-                at_update: ControllerCmp {
-                    progress_query: Some(Progress::ForwardFast {
-                        to_time_stamp: Wrapping(3),
-                    }),
-                    progress: Progress::Forward,
-                    forward_fast_limit: None,
-                    delayed_commands_len: 1,
-                    fast_init: false,
-                    log_len: 1,
-                    time_stamp: 1,
-                    ..Default::default()
-                },
-                at_end: ControllerCmp {
-                    progress_query: None,
-                    progress: Progress::ForwardFast {
-                        to_time_stamp: Wrapping(3),
-                    },
-                    forward_fast_limit: Some(3),
-                    delayed_commands_len: 3,
-                    fast_init: true,
-                    log_len: 1,
-                    time_stamp: 1,
-                    ..Default::default()
-                },
-            },
-            Test {
-                //#1
-                progress_query: Some(Progress::Pause),
-                time_step_query: None,
-                at_update: ControllerCmp {
-                    progress_query: Some(Progress::Pause),
-                    progress: Progress::ForwardFast {
-                        to_time_stamp: Wrapping(3),
-                    },
-                    forward_fast_limit: Some(3),
-                    delayed_commands_len: 3,
-                    fast_init: true,
-                    log_len: 2,
-                    time_stamp: 2,
-                    ..Default::default()
-                },
-                at_end: ControllerCmp {
-                    progress_query: Some(Progress::Pause),
-                    progress: Progress::ForwardFast {
-                        to_time_stamp: Wrapping(3),
-                    },
-                    forward_fast_limit: Some(3),
-                    delayed_commands_len: 2,
-                    fast_init: false,
-                    log_len: 2,
-                    time_stamp: 2,
-                    ..Default::default()
-                },
-            },
-            Test {
-                //#2
-                progress_query: None,
-                time_step_query: None,
-                at_update: ControllerCmp {
-                    progress_query: Some(Progress::Pause),
-                    progress: Progress::ForwardFast {
-                        to_time_stamp: Wrapping(3),
-                    },
-                    forward_fast_limit: Some(3),
-                    delayed_commands_len: 2,
-                    fast_init: false,
-                    log_len: 3,
-                    time_stamp: 3,
-                    ..Default::default()
-                },
-                at_end: ControllerCmp {
-                    progress_query: None,
-                    progress: Progress::Pause,
-                    forward_fast_limit: None,
-                    delayed_commands_len: 1,
-                    fast_init: false,
-                    log_len: 3,
-                    time_stamp: 3,
-                    ..Default::default()
-                },
-            },
-        ],
-    );
 }

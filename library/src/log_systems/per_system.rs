@@ -5,7 +5,7 @@ use bevy::{
     prelude::{Commands, Res, ResMut},
 };
 
-use crate::controller::{Controller, CONTROLLER_CONSTS};
+use crate::controller::{consts::CONTROLLER_CONSTS, Controller};
 
 use super::{log::Log, NextTransition, StateOption};
 

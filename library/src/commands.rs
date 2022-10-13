@@ -21,24 +21,12 @@ pub use spawn_resource::*;
 
 use crate::{Despawned, DespawnedEntity};
 
+//TODO: Conflicting commands in controller detection? reaction? panic?
+
 /// Trait for reversible commands that are not yet initialized.
 pub trait ReversibleCommand: Send + Sync + 'static {
-    //returns `Some` if init was successful.
+    /// returns `Some` if init was successful or an alternative command could be deployed.
     fn init(self: Box<Self>, world: &mut World) -> Option<Box<dyn ReversibleCommandInitialized>>;
-}
-
-#[derive(Debug, Copy, Clone)]
-pub enum CommandAction {
-    Undo,
-    Redo,
-    UndoFinalize,
-    RedoFinalize,
-}
-
-impl CommandAction {
-    fn finalize(&self) -> bool {
-        matches!(self, Self::UndoFinalize | Self::RedoFinalize)
-    }
 }
 
 /// Trait for reversible commands that are initialized.
@@ -47,120 +35,28 @@ pub trait ReversibleCommandInitialized: Send + Sync + 'static {
     fn action(&mut self, world: &mut World, action: CommandAction);
 }
 
-trait CommandPanic {
-    fn get_entity<'a>(
-        world: &'a mut World,
-        entity: Entity,
-        action: CommandAction,
-    ) -> EntityMut<'a> {
-        match world.get_entity_mut(entity) {
-            Some(entity) => entity,
-            None => Self::panic(action, "entity not found"),
-        }
-    }
-    fn entity(world: &mut World, action: CommandAction, undo_spawns: bool, entity: Entity) {
-        let mut entity = Self::get_entity(world, entity, action);
-        if undo_spawns == matches!(action, CommandAction::Undo | CommandAction::RedoFinalize) {
-            if entity.remove::<DespawnedEntity>().is_none() {
-                Self::despawned_entity(action, false);
-            }
-        } else {
-            if entity.contains::<DespawnedEntity>() {
-                entity.insert(DespawnedEntity);
-            } else {
-                Self::despawned_entity(action, true);
-            }
-        }
-    }
-    fn component<T: Component>(
-        world: &mut World,
-        action: CommandAction,
-        undo_spawns: bool,
-        entity: Entity,
-    ) {
-        let mut entity = Self::get_entity(world, entity, action);
-        if entity.contains::<DespawnedEntity>() {
-            Self::despawned_entity(action, true)
-        }
-        if undo_spawns == matches!(action, CommandAction::Undo | CommandAction::RedoFinalize) {
-            if entity.contains::<T>() {
-                Self::t(action, true);
-            }
-            if !action.finalize() {
-                if let Some(value) = entity.remove::<Despawned<T>>() {
-                    entity.insert(value.0);
-                } else {
-                    Self::despawned_t(action, false);
-                }
-            }
-        } else {
-            if entity.contains::<Despawned<T>>() {
-                Self::despawned_t(action, true);
-            }
-            if !action.finalize() {
-                if let Some(value) = entity.remove::<T>() {
-                    entity.insert(Despawned(value));
-                } else {
-                    Self::t(action, false);
-                }
-            }
-        }
-    }
-    fn resource<T: Resource>(world: &mut World, action: CommandAction, undo_spawns: bool) {
-        if undo_spawns == matches!(action, CommandAction::Undo | CommandAction::RedoFinalize) {
-            if world.contains_resource::<T>() {
-                Self::t(action, true);
-            }
-            if !action.finalize() {
-                if let Some(value) = world.remove_resource::<Despawned<T>>() {
-                    world.insert_resource(value.0);
-                } else {
-                    Self::despawned_t(action, false);
-                }
-            }
-        } else {
-            if world.contains_resource::<Despawned<T>>() {
-                Self::despawned_t(action, true);
-            }
-            if !action.finalize() {
-                if let Some(value) = world.remove_resource::<T>() {
-                    world.insert_resource(Despawned(value));
-                } else {
-                    Self::t(action, false);
-                }
-            }
-        }
-    }
-    fn despawned_entity(action: CommandAction, found: bool) {
-        if found {
-            Self::panic::<()>(action, "`DespawnedEntity` found")
-        } else {
-            Self::panic::<()>(action, "`DespawnedEntity` not found")
-        }
-    }
-    fn despawned_t(action: CommandAction, found: bool) {
-        if found {
-            Self::panic(action, "`Despawned<T>` found")
-        } else {
-            Self::panic(action, "`Despawned<T>` not found")
-        }
-    }
-    fn t(action: CommandAction, found: bool) {
-        if found {
-            Self::panic(action, "`T` found")
-        } else {
-            Self::panic(action, "`T` not found")
-        }
-    }
-    fn panic<R>(action: CommandAction, s: &'static str) -> R {
-        panic!(
-            "Reversible command `{}` failed at \"{action:?}\": \"{s}\"",
-            type_name::<Self>()
-        );
-    }
+#[derive(Debug, Copy, Clone)]
+pub enum CommandAction {
+    /// Undo the actions done by the initialization
+    Undo,
+    /// Redo the actions done by the initialization
+    Redo,
+    /// Cleanup after the actions done by the initialization have been undone
+    UndoFinalize,
+    /// Cleanup after the actions done by the initialization have been redone
+    RedoFinalize,
 }
 
-impl<T> CommandPanic for T {}
+impl CommandAction {
+    /// This action causes cleanups
+    pub fn finalize(&self) -> bool {
+        matches!(self, Self::UndoFinalize | Self::RedoFinalize)
+    }
+    /// The command was previously undone before this action was issued.
+    pub fn currently_undone(&self) -> bool {
+        matches!(self, Self::Redo | Self::UndoFinalize)
+    }
+}
 
 /// Options for errorhandling of the error type `E` in reversible commands.
 ///
@@ -198,3 +94,131 @@ impl<E: Debug> Default for ReversibleCommandErrorHandling<E> {
         Self::LogError
     }
 }
+
+trait PresetFunctions {
+    fn get_entity<'a>(
+        world: &'a mut World,
+        entity: Entity,
+        action: CommandAction,
+    ) -> EntityMut<'a> {
+        world
+            .get_entity_mut(entity)
+            .unwrap_or_else(|| Self::panic(action, "entity not found"))
+    }
+    fn entity(world: &mut World, action: CommandAction, undo_spawns: bool, entity: Entity) {
+        let mut entity = Self::get_entity(world, entity, action);
+        if undo_spawns != action.currently_undone() {
+            //entity is currently not marked as despawned
+            //unmark entity as despawned or finalize unspawned state
+            if entity.remove::<DespawnedEntity>().is_some() {
+                if action.finalize() {
+                    entity.despawn();
+                }
+            } else {
+                Self::despawned_entity_panic(action, false);
+            }
+        } else {
+            //entity is currently marked as despawned
+            //mark entity as despawned or finalize spawned state
+            if entity.contains::<DespawnedEntity>() {
+                Self::despawned_entity_panic(action, true);
+            } else if !action.finalize() {
+                entity.insert(DespawnedEntity);
+            }
+        }
+    }
+    fn component<T: Component>(
+        world: &mut World,
+        action: CommandAction,
+        undo_spawns: bool,
+        entity: Entity,
+    ) {
+        let mut entity = Self::get_entity(world, entity, action);
+        if entity.contains::<DespawnedEntity>() {
+            Self::despawned_entity_panic(action, true)
+        }
+        if undo_spawns != action.currently_undone() {
+            //component is currently spawned
+            //spawn component or finalize unspawned state
+            if entity.contains::<T>() {
+                Self::t_panic(action, true);
+            } else if let Some(value) = entity.remove::<Despawned<T>>() {
+                if !action.finalize() {
+                    entity.insert(value.0);
+                }
+            } else {
+                Self::despawned_t_panic(action, false);
+            }
+        } else {
+            //component is currently not spawned
+            //despawn component or finalize spawned state
+            if entity.contains::<Despawned<T>>() {
+                Self::despawned_t_panic(action, true);
+            }
+            if !action.finalize() {
+                if let Some(value) = entity.remove::<T>() {
+                    entity.insert(Despawned(value));
+                } else {
+                    Self::t_panic(action, false);
+                }
+            }
+        }
+    }
+    fn resource<T: Resource>(world: &mut World, action: CommandAction, undo_spawns: bool) {
+        if undo_spawns != action.currently_undone() {
+            //resource is currently spawned
+            //spawn resource or finalize unspawned state
+            if world.contains_resource::<T>() {
+                Self::t_panic(action, true);
+            } else if let Some(value) = world.remove_resource::<Despawned<T>>() {
+                if !action.finalize() {
+                    world.insert_resource(value.0);
+                }
+            } else {
+                Self::despawned_t_panic(action, false);
+            }
+        } else {
+            //resource is currently not spawned
+            //despawn resource or finalize spawned state
+            if world.contains_resource::<Despawned<T>>() {
+                Self::despawned_t_panic(action, true);
+            }
+            if !action.finalize() {
+                if let Some(value) = world.remove_resource::<T>() {
+                    world.insert_resource(Despawned(value));
+                } else {
+                    Self::t_panic(action, false);
+                }
+            }
+        }
+    }
+    fn despawned_entity_panic(action: CommandAction, found: bool) {
+        if found {
+            Self::panic(action, "`DespawnedEntity` found")
+        } else {
+            Self::panic(action, "`DespawnedEntity` not found")
+        }
+    }
+    fn despawned_t_panic(action: CommandAction, found: bool) {
+        if found {
+            Self::panic(action, "`Despawned<T>` found")
+        } else {
+            Self::panic(action, "`Despawned<T>` not found")
+        }
+    }
+    fn t_panic(action: CommandAction, found: bool) {
+        if found {
+            Self::panic(action, "`T` found")
+        } else {
+            Self::panic(action, "`T` not found")
+        }
+    }
+    fn panic<R>(action: CommandAction, s: &'static str) -> R {
+        panic!(
+            "Reversible command `{}` failed at \"{action:?}\" because \"{s}\", which was not expected.",
+            type_name::<Self>()
+        );
+    }
+}
+
+impl<T> PresetFunctions for T {}

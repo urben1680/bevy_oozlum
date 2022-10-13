@@ -1,7 +1,7 @@
 use crate::{Despawned, DespawnedEntity};
 
 use super::{
-    CommandAction, CommandPanic, ReversibleCommand, ReversibleCommandErrorHandling,
+    CommandAction, PresetFunctions, ReversibleCommand, ReversibleCommandErrorHandling,
     ReversibleCommandInitialized,
 };
 use bevy::prelude::{Component, Entity, World};

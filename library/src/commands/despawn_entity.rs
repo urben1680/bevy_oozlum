@@ -1,5 +1,5 @@
 use super::{
-    CommandAction, CommandPanic, ReversibleCommand, ReversibleCommandErrorHandling,
+    CommandAction, PresetFunctions, ReversibleCommand, ReversibleCommandErrorHandling,
     ReversibleCommandInitialized,
 };
 use crate::DespawnedEntity;
