@@ -51,7 +51,16 @@ pub struct DespawnResourceInitialized<T: Resource> {
 }
 
 impl<T: Resource> ReversibleCommandInitialized for DespawnResourceInitialized<T> {
-    fn action(&mut self, world: &mut World, action: CommandAction) {
-        Self::resource::<T>(world, action, true);
+    fn undo(&mut self, world: &mut World) {
+        Self::resource::<T>(world, CommandAction::Undo, true);
+    }
+    fn redo(&mut self, world: &mut World) {
+        Self::resource::<T>(world, CommandAction::Redo, true);
+    }
+    fn redo_finalize(self: Box<Self>, world: &mut World) {
+        Self::resource::<T>(world, CommandAction::RedoFinalize, true);
+    }
+    fn undo_finalize(self: Box<Self>, world: &mut World) {
+        Self::resource::<T>(world, CommandAction::UndoFinalize, true);
     }
 }
