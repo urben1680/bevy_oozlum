@@ -54,7 +54,16 @@ pub struct DespawnEntityInitialized {
 }
 
 impl ReversibleCommandInitialized for DespawnEntityInitialized {
-    fn action(&mut self, world: &mut World, action: CommandAction) {
-        Self::entity(world, action, true, self.entity);
+    fn undo(&mut self, world: &mut World) {
+        Self::entity(world, CommandAction::Undo, true, self.entity);
+    }
+    fn redo(&mut self, world: &mut World) {
+        Self::entity(world, CommandAction::Redo, true, self.entity);
+    }
+    fn redo_finalize(self: Box<Self>, world: &mut World) {
+        Self::entity(world, CommandAction::RedoFinalize, true, self.entity);
+    }
+    fn undo_finalize(self: Box<Self>, world: &mut World) {
+        Self::entity(world, CommandAction::UndoFinalize, true, self.entity);
     }
 }

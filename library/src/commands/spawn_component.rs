@@ -70,7 +70,16 @@ pub struct SpawnComponentInitialized<T: Component> {
 }
 
 impl<T: Component> ReversibleCommandInitialized for SpawnComponentInitialized<T> {
-    fn action(&mut self, world: &mut World, action: CommandAction) {
-        Self::component::<T>(world, action, false, self.entity);
+    fn undo(&mut self, world: &mut World) {
+        Self::component::<T>(world, CommandAction::Undo, false, self.entity);
+    }
+    fn redo(&mut self, world: &mut World) {
+        Self::component::<T>(world, CommandAction::Redo, false, self.entity);
+    }
+    fn redo_finalize(self: Box<Self>, world: &mut World) {
+        Self::component::<T>(world, CommandAction::RedoFinalize, false, self.entity);
+    }
+    fn undo_finalize(self: Box<Self>, world: &mut World) {
+        Self::component::<T>(world, CommandAction::UndoFinalize, false, self.entity);
     }
 }

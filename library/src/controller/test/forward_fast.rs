@@ -23,18 +23,18 @@ fn forward_processes_none_query() {
                     progress_query: None,
                     time_step_query: None,
                 },
-                assert_at_update: TestAssert {
+                assert_at_update: Box::new(TestAssert {
                     progress: Progress::ForwardFast {
                         to_time_stamp: Wrapping(3),
                     },
                     progress_query: None,
                     log_len: 2,
-                    time_stamp: 2,
+                    time_stamp: 1,
                     fast_init: true,
                     delayed_commands_len: 3,
                     ..Default::default()
-                },
-                assert_at_end: TestAssert {
+                }),
+                assert_at_end: Box::new(TestAssert {
                     progress: Progress::ForwardFast {
                         to_time_stamp: Wrapping(3),
                     },
@@ -44,7 +44,7 @@ fn forward_processes_none_query() {
                     fast_init: false,
                     delayed_commands_len: 2,
                     ..Default::default()
-                },
+                }),
             },
             Test {
                 //test_index: 1
@@ -52,24 +52,24 @@ fn forward_processes_none_query() {
                     progress_query: None,
                     time_step_query: None,
                 },
-                assert_at_update: TestAssert {
+                assert_at_update: Box::new(TestAssert {
                     progress: Progress::ForwardFast {
                         to_time_stamp: Wrapping(3),
                     },
                     progress_query: None,
                     log_len: 3,
-                    time_stamp: 3,
+                    time_stamp: 2,
                     delayed_commands_len: 2,
                     ..Default::default()
-                },
-                assert_at_end: TestAssert {
+                }),
+                assert_at_end: Box::new(TestAssert {
                     progress: Progress::Forward,
                     progress_query: None,
                     log_len: 3,
                     time_stamp: 3,
                     delayed_commands_len: 1,
                     ..Default::default()
-                },
+                }),
             },
         ],
     );
@@ -87,18 +87,18 @@ fn forward_processes_query_forward() {
                     progress_query: Some(Progress::Forward),
                     time_step_query: None,
                 },
-                assert_at_update: TestAssert {
+                assert_at_update: Box::new(TestAssert {
                     progress: Progress::ForwardFast {
                         to_time_stamp: Wrapping(3),
                     },
                     progress_query: Some(Progress::Forward), //significant check
                     log_len: 2,
-                    time_stamp: 2,
+                    time_stamp: 1,
                     fast_init: true,
                     delayed_commands_len: 3,
                     ..Default::default()
-                },
-                assert_at_end: TestAssert {
+                }),
+                assert_at_end: Box::new(TestAssert {
                     progress: Progress::ForwardFast {
                         to_time_stamp: Wrapping(3),
                     },
@@ -108,7 +108,7 @@ fn forward_processes_query_forward() {
                     fast_init: false,
                     delayed_commands_len: 2,
                     ..Default::default()
-                },
+                }),
             },
             Test {
                 //test_index: 1
@@ -116,24 +116,24 @@ fn forward_processes_query_forward() {
                     progress_query: None,
                     time_step_query: None,
                 },
-                assert_at_update: TestAssert {
+                assert_at_update: Box::new(TestAssert {
                     progress: Progress::ForwardFast {
                         to_time_stamp: Wrapping(3),
                     },
                     progress_query: Some(Progress::Forward),
                     log_len: 3,
-                    time_stamp: 3,
+                    time_stamp: 2,
                     delayed_commands_len: 2,
                     ..Default::default()
-                },
-                assert_at_end: TestAssert {
+                }),
+                assert_at_end: Box::new(TestAssert {
                     progress: Progress::Forward, //significant check
                     progress_query: None,
                     log_len: 3,
                     time_stamp: 3,
                     delayed_commands_len: 1,
                     ..Default::default()
-                },
+                }),
             },
         ],
     );
@@ -153,7 +153,7 @@ fn forward_processes_query_forward_fast_closer() {
                     }),
                     time_step_query: None,
                 },
-                assert_at_update: TestAssert {
+                assert_at_update: Box::new(TestAssert {
                     progress: Progress::ForwardFast {
                         to_time_stamp: Wrapping(3),
                     },
@@ -161,12 +161,12 @@ fn forward_processes_query_forward_fast_closer() {
                         to_time_stamp: Wrapping(2),
                     }),
                     log_len: 2,
-                    time_stamp: 2,
+                    time_stamp: 1,
                     fast_init: true,
                     delayed_commands_len: 3,
                     ..Default::default()
-                },
-                assert_at_end: TestAssert {
+                }),
+                assert_at_end: Box::new(TestAssert {
                     progress: Progress::ForwardFast {
                         to_time_stamp: Wrapping(3),
                     },
@@ -178,7 +178,7 @@ fn forward_processes_query_forward_fast_closer() {
                     fast_init: false,
                     delayed_commands_len: 2,
                     ..Default::default()
-                },
+                }),
             },
             Test {
                 //test_index: 1
@@ -186,7 +186,7 @@ fn forward_processes_query_forward_fast_closer() {
                     progress_query: None,
                     time_step_query: None,
                 },
-                assert_at_update: TestAssert {
+                assert_at_update: Box::new(TestAssert {
                     progress: Progress::ForwardFast {
                         to_time_stamp: Wrapping(3),
                     },
@@ -194,18 +194,18 @@ fn forward_processes_query_forward_fast_closer() {
                         to_time_stamp: Wrapping(2),
                     }),
                     log_len: 3,
-                    time_stamp: 3,
+                    time_stamp: 2,
                     delayed_commands_len: 2,
                     ..Default::default()
-                },
-                assert_at_end: TestAssert {
+                }),
+                assert_at_end: Box::new(TestAssert {
                     progress: Progress::Forward, //significant check
                     progress_query: None,
                     log_len: 3,
                     time_stamp: 3,
                     delayed_commands_len: 1,
                     ..Default::default()
-                },
+                }),
             },
         ],
     );
@@ -225,7 +225,7 @@ fn forward_processes_query_forward_fast_equal() {
                     }),
                     time_step_query: None,
                 },
-                assert_at_update: TestAssert {
+                assert_at_update: Box::new(TestAssert {
                     progress: Progress::ForwardFast {
                         to_time_stamp: Wrapping(3),
                     },
@@ -233,12 +233,12 @@ fn forward_processes_query_forward_fast_equal() {
                         to_time_stamp: Wrapping(3),
                     }),
                     log_len: 2,
-                    time_stamp: 2,
+                    time_stamp: 1,
                     fast_init: true,
                     delayed_commands_len: 3,
                     ..Default::default()
-                },
-                assert_at_end: TestAssert {
+                }),
+                assert_at_end: Box::new(TestAssert {
                     progress: Progress::ForwardFast {
                         to_time_stamp: Wrapping(3),
                     },
@@ -250,7 +250,7 @@ fn forward_processes_query_forward_fast_equal() {
                     fast_init: false,
                     delayed_commands_len: 2,
                     ..Default::default()
-                },
+                }),
             },
             Test {
                 //test_index: 1
@@ -258,7 +258,7 @@ fn forward_processes_query_forward_fast_equal() {
                     progress_query: None,
                     time_step_query: None,
                 },
-                assert_at_update: TestAssert {
+                assert_at_update: Box::new(TestAssert {
                     progress: Progress::ForwardFast {
                         to_time_stamp: Wrapping(3),
                     },
@@ -266,18 +266,18 @@ fn forward_processes_query_forward_fast_equal() {
                         to_time_stamp: Wrapping(3),
                     }),
                     log_len: 3,
-                    time_stamp: 3,
+                    time_stamp: 2,
                     delayed_commands_len: 2,
                     ..Default::default()
-                },
-                assert_at_end: TestAssert {
+                }),
+                assert_at_end: Box::new(TestAssert {
                     progress: Progress::Forward, //significant check
                     progress_query: None,
                     log_len: 3,
                     time_stamp: 3,
                     delayed_commands_len: 1,
                     ..Default::default()
-                },
+                }),
             },
         ],
     );
@@ -297,7 +297,7 @@ fn forward_processes_query_forward_fast_one_tick_further() {
                     }),
                     time_step_query: None,
                 },
-                assert_at_update: TestAssert {
+                assert_at_update: Box::new(TestAssert {
                     progress: Progress::ForwardFast {
                         to_time_stamp: Wrapping(3),
                     },
@@ -305,12 +305,12 @@ fn forward_processes_query_forward_fast_one_tick_further() {
                         to_time_stamp: Wrapping(4),
                     }),
                     log_len: 2,
-                    time_stamp: 2,
+                    time_stamp: 1,
                     fast_init: true,
                     delayed_commands_len: 3,
                     ..Default::default()
-                },
-                assert_at_end: TestAssert {
+                }),
+                assert_at_end: Box::new(TestAssert {
                     progress: Progress::ForwardFast {
                         to_time_stamp: Wrapping(3),
                     },
@@ -322,7 +322,7 @@ fn forward_processes_query_forward_fast_one_tick_further() {
                     fast_init: false,
                     delayed_commands_len: 2,
                     ..Default::default()
-                },
+                }),
             },
             Test {
                 //test_index: 1
@@ -330,7 +330,7 @@ fn forward_processes_query_forward_fast_one_tick_further() {
                     progress_query: None,
                     time_step_query: None,
                 },
-                assert_at_update: TestAssert {
+                assert_at_update: Box::new(TestAssert {
                     progress: Progress::ForwardFast {
                         to_time_stamp: Wrapping(3),
                     },
@@ -338,18 +338,18 @@ fn forward_processes_query_forward_fast_one_tick_further() {
                         to_time_stamp: Wrapping(4),
                     }),
                     log_len: 3,
-                    time_stamp: 3,
+                    time_stamp: 2,
                     delayed_commands_len: 2,
                     ..Default::default()
-                },
-                assert_at_end: TestAssert {
+                }),
+                assert_at_end: Box::new(TestAssert {
                     progress: Progress::Forward, //significant check
                     progress_query: None,
                     log_len: 3,
                     time_stamp: 3,
                     delayed_commands_len: 1,
                     ..Default::default()
-                },
+                }),
             },
         ],
     );
@@ -369,7 +369,7 @@ fn forward_processes_query_forward_fast_two_ticks_further() {
                     }),
                     time_step_query: None,
                 },
-                assert_at_update: TestAssert {
+                assert_at_update: Box::new(TestAssert {
                     progress: Progress::ForwardFast {
                         to_time_stamp: Wrapping(3),
                     },
@@ -377,12 +377,12 @@ fn forward_processes_query_forward_fast_two_ticks_further() {
                         to_time_stamp: Wrapping(5),
                     }), //significant check
                     log_len: 2,
-                    time_stamp: 2,
+                    time_stamp: 1,
                     fast_init: true,
                     delayed_commands_len: 3,
                     ..Default::default()
-                },
-                assert_at_end: TestAssert {
+                }),
+                assert_at_end: Box::new(TestAssert {
                     progress: Progress::ForwardFast {
                         to_time_stamp: Wrapping(3),
                     },
@@ -394,7 +394,7 @@ fn forward_processes_query_forward_fast_two_ticks_further() {
                     fast_init: false,
                     delayed_commands_len: 2,
                     ..Default::default()
-                },
+                }),
             },
             Test {
                 //test_index: 1
@@ -402,7 +402,7 @@ fn forward_processes_query_forward_fast_two_ticks_further() {
                     progress_query: None,
                     time_step_query: None,
                 },
-                assert_at_update: TestAssert {
+                assert_at_update: Box::new(TestAssert {
                     progress: Progress::ForwardFast {
                         to_time_stamp: Wrapping(3),
                     },
@@ -410,11 +410,11 @@ fn forward_processes_query_forward_fast_two_ticks_further() {
                         to_time_stamp: Wrapping(5),
                     }),
                     log_len: 3,
-                    time_stamp: 3,
+                    time_stamp: 2,
                     delayed_commands_len: 2,
                     ..Default::default()
-                },
-                assert_at_end: TestAssert {
+                }),
+                assert_at_end: Box::new(TestAssert {
                     progress: Progress::ForwardFast {
                         to_time_stamp: Wrapping(5),
                     }, //significant check
@@ -424,7 +424,7 @@ fn forward_processes_query_forward_fast_two_ticks_further() {
                     fast_init: true, //significant check
                     delayed_commands_len: 3,
                     ..Default::default()
-                },
+                }),
             },
         ],
     );
@@ -442,18 +442,18 @@ fn forward_processes_query_forward_log() {
                     progress_query: Some(Progress::ForwardLog),
                     time_step_query: None,
                 },
-                assert_at_update: TestAssert {
+                assert_at_update: Box::new(TestAssert {
                     progress: Progress::ForwardFast {
                         to_time_stamp: Wrapping(3),
                     },
                     progress_query: Some(Progress::ForwardLog), //significant check
                     log_len: 2,
-                    time_stamp: 2,
+                    time_stamp: 1,
                     fast_init: true,
                     delayed_commands_len: 3,
                     ..Default::default()
-                },
-                assert_at_end: TestAssert {
+                }),
+                assert_at_end: Box::new(TestAssert {
                     progress: Progress::ForwardFast {
                         to_time_stamp: Wrapping(3),
                     },
@@ -463,7 +463,7 @@ fn forward_processes_query_forward_log() {
                     fast_init: false,
                     delayed_commands_len: 2,
                     ..Default::default()
-                },
+                }),
             },
             Test {
                 //test_index: 1
@@ -471,24 +471,24 @@ fn forward_processes_query_forward_log() {
                     progress_query: None,
                     time_step_query: None,
                 },
-                assert_at_update: TestAssert {
+                assert_at_update: Box::new(TestAssert {
                     progress: Progress::ForwardFast {
                         to_time_stamp: Wrapping(3),
                     },
                     progress_query: Some(Progress::ForwardLog),
                     log_len: 3,
-                    time_stamp: 3,
+                    time_stamp: 2,
                     delayed_commands_len: 2,
                     ..Default::default()
-                },
-                assert_at_end: TestAssert {
+                }),
+                assert_at_end: Box::new(TestAssert {
                     progress: Progress::PauseLog, //significant check
                     progress_query: None,
                     log_len: 3,
                     time_stamp: 3,
                     delayed_commands_len: 1,
                     ..Default::default()
-                },
+                }),
             },
         ],
     );
@@ -506,18 +506,18 @@ fn forward_processes_query_forward_log_end() {
                     progress_query: Some(Progress::ForwardLogEnd),
                     time_step_query: None,
                 },
-                assert_at_update: TestAssert {
+                assert_at_update: Box::new(TestAssert {
                     progress: Progress::ForwardFast {
                         to_time_stamp: Wrapping(3),
                     },
                     progress_query: Some(Progress::ForwardLogEnd), //significant check
                     log_len: 2,
-                    time_stamp: 2,
+                    time_stamp: 1,
                     fast_init: true,
                     delayed_commands_len: 3,
                     ..Default::default()
-                },
-                assert_at_end: TestAssert {
+                }),
+                assert_at_end: Box::new(TestAssert {
                     progress: Progress::ForwardFast {
                         to_time_stamp: Wrapping(3),
                     },
@@ -527,7 +527,7 @@ fn forward_processes_query_forward_log_end() {
                     fast_init: false,
                     delayed_commands_len: 2,
                     ..Default::default()
-                },
+                }),
             },
             Test {
                 //test_index: 1
@@ -535,24 +535,24 @@ fn forward_processes_query_forward_log_end() {
                     progress_query: None,
                     time_step_query: None,
                 },
-                assert_at_update: TestAssert {
+                assert_at_update: Box::new(TestAssert {
                     progress: Progress::ForwardFast {
                         to_time_stamp: Wrapping(3),
                     },
                     progress_query: Some(Progress::ForwardLogEnd),
                     log_len: 3,
-                    time_stamp: 3,
+                    time_stamp: 2,
                     delayed_commands_len: 2,
                     ..Default::default()
-                },
-                assert_at_end: TestAssert {
+                }),
+                assert_at_end: Box::new(TestAssert {
                     progress: Progress::PauseLog, //significant check
                     progress_query: None,
                     log_len: 3,
                     time_stamp: 3,
                     delayed_commands_len: 1,
                     ..Default::default()
-                },
+                }),
             },
         ],
     );
@@ -570,18 +570,18 @@ fn forward_processes_query_backward_log() {
                     progress_query: Some(Progress::BackwardLog),
                     time_step_query: None,
                 },
-                assert_at_update: TestAssert {
+                assert_at_update: Box::new(TestAssert {
                     progress: Progress::ForwardFast {
                         to_time_stamp: Wrapping(3),
                     },
                     progress_query: Some(Progress::BackwardLog), //significant check
                     log_len: 2,
-                    time_stamp: 2,
+                    time_stamp: 1,
                     fast_init: true,
                     delayed_commands_len: 3,
                     ..Default::default()
-                },
-                assert_at_end: TestAssert {
+                }),
+                assert_at_end: Box::new(TestAssert {
                     progress: Progress::ForwardFast {
                         to_time_stamp: Wrapping(3),
                     },
@@ -591,7 +591,7 @@ fn forward_processes_query_backward_log() {
                     fast_init: false,
                     delayed_commands_len: 2,
                     ..Default::default()
-                },
+                }),
             },
             Test {
                 //test_index: 1
@@ -599,24 +599,24 @@ fn forward_processes_query_backward_log() {
                     progress_query: None,
                     time_step_query: None,
                 },
-                assert_at_update: TestAssert {
+                assert_at_update: Box::new(TestAssert {
                     progress: Progress::ForwardFast {
                         to_time_stamp: Wrapping(3),
                     },
                     progress_query: Some(Progress::BackwardLog),
                     log_len: 3,
-                    time_stamp: 3,
+                    time_stamp: 2,
                     delayed_commands_len: 2,
                     ..Default::default()
-                },
-                assert_at_end: TestAssert {
+                }),
+                assert_at_end: Box::new(TestAssert {
                     progress: Progress::BackwardLog, //significant check
                     progress_query: None,
                     log_len: 3,
                     time_stamp: 3,
                     delayed_commands_len: 1,
                     ..Default::default()
-                },
+                }),
             },
         ],
     );
@@ -634,18 +634,18 @@ fn forward_processes_query_backward_log_end() {
                     progress_query: Some(Progress::BackwardLogEnd),
                     time_step_query: None,
                 },
-                assert_at_update: TestAssert {
+                assert_at_update: Box::new(TestAssert {
                     progress: Progress::ForwardFast {
                         to_time_stamp: Wrapping(3),
                     },
                     progress_query: Some(Progress::BackwardLogEnd), //significant check
                     log_len: 2,
-                    time_stamp: 2,
+                    time_stamp: 1,
                     fast_init: true,
                     delayed_commands_len: 3,
                     ..Default::default()
-                },
-                assert_at_end: TestAssert {
+                }),
+                assert_at_end: Box::new(TestAssert {
                     progress: Progress::ForwardFast {
                         to_time_stamp: Wrapping(3),
                     },
@@ -655,7 +655,7 @@ fn forward_processes_query_backward_log_end() {
                     fast_init: false,
                     delayed_commands_len: 2,
                     ..Default::default()
-                },
+                }),
             },
             Test {
                 //test_index: 1
@@ -663,17 +663,17 @@ fn forward_processes_query_backward_log_end() {
                     progress_query: None,
                     time_step_query: None,
                 },
-                assert_at_update: TestAssert {
+                assert_at_update: Box::new(TestAssert {
                     progress: Progress::ForwardFast {
                         to_time_stamp: Wrapping(3),
                     },
                     progress_query: Some(Progress::BackwardLogEnd),
                     log_len: 3,
-                    time_stamp: 3,
+                    time_stamp: 2,
                     delayed_commands_len: 2,
                     ..Default::default()
-                },
-                assert_at_end: TestAssert {
+                }),
+                assert_at_end: Box::new(TestAssert {
                     progress: Progress::BackwardLogEnd, //significant check
                     progress_query: None,
                     log_len: 3,
@@ -681,7 +681,7 @@ fn forward_processes_query_backward_log_end() {
                     fast_init: true, //significant check
                     delayed_commands_len: 1,
                     ..Default::default()
-                },
+                }),
             },
         ],
     );
@@ -699,18 +699,18 @@ fn forward_processes_query_pause() {
                     progress_query: Some(Progress::Pause),
                     time_step_query: None,
                 },
-                assert_at_update: TestAssert {
+                assert_at_update: Box::new(TestAssert {
                     progress: Progress::ForwardFast {
                         to_time_stamp: Wrapping(3),
                     },
                     progress_query: Some(Progress::Pause), //significant check
                     log_len: 2,
-                    time_stamp: 2,
+                    time_stamp: 1,
                     fast_init: true,
                     delayed_commands_len: 3,
                     ..Default::default()
-                },
-                assert_at_end: TestAssert {
+                }),
+                assert_at_end: Box::new(TestAssert {
                     progress: Progress::ForwardFast {
                         to_time_stamp: Wrapping(3),
                     },
@@ -720,7 +720,7 @@ fn forward_processes_query_pause() {
                     fast_init: false,
                     delayed_commands_len: 2,
                     ..Default::default()
-                },
+                }),
             },
             Test {
                 //test_index: 1
@@ -728,24 +728,24 @@ fn forward_processes_query_pause() {
                     progress_query: None,
                     time_step_query: None,
                 },
-                assert_at_update: TestAssert {
+                assert_at_update: Box::new(TestAssert {
                     progress: Progress::ForwardFast {
                         to_time_stamp: Wrapping(3),
                     },
                     progress_query: Some(Progress::Pause),
                     log_len: 3,
-                    time_stamp: 3,
+                    time_stamp: 2,
                     delayed_commands_len: 2,
                     ..Default::default()
-                },
-                assert_at_end: TestAssert {
+                }),
+                assert_at_end: Box::new(TestAssert {
                     progress: Progress::Pause, //significant check
                     progress_query: None,
                     log_len: 3,
                     time_stamp: 3,
                     delayed_commands_len: 1,
                     ..Default::default()
-                },
+                }),
             },
         ],
     );
@@ -763,18 +763,18 @@ fn forward_processes_query_pause_log() {
                     progress_query: Some(Progress::PauseLog),
                     time_step_query: None,
                 },
-                assert_at_update: TestAssert {
+                assert_at_update: Box::new(TestAssert {
                     progress: Progress::ForwardFast {
                         to_time_stamp: Wrapping(3),
                     },
                     progress_query: Some(Progress::PauseLog), //significant check
                     log_len: 2,
-                    time_stamp: 2,
+                    time_stamp: 1,
                     fast_init: true,
                     delayed_commands_len: 3,
                     ..Default::default()
-                },
-                assert_at_end: TestAssert {
+                }),
+                assert_at_end: Box::new(TestAssert {
                     progress: Progress::ForwardFast {
                         to_time_stamp: Wrapping(3),
                     },
@@ -784,7 +784,7 @@ fn forward_processes_query_pause_log() {
                     fast_init: false,
                     delayed_commands_len: 2,
                     ..Default::default()
-                },
+                }),
             },
             Test {
                 //test_index: 1
@@ -792,24 +792,24 @@ fn forward_processes_query_pause_log() {
                     progress_query: None,
                     time_step_query: None,
                 },
-                assert_at_update: TestAssert {
+                assert_at_update: Box::new(TestAssert {
                     progress: Progress::ForwardFast {
                         to_time_stamp: Wrapping(3),
                     },
                     progress_query: Some(Progress::PauseLog),
                     log_len: 3,
-                    time_stamp: 3,
+                    time_stamp: 2,
                     delayed_commands_len: 2,
                     ..Default::default()
-                },
-                assert_at_end: TestAssert {
+                }),
+                assert_at_end: Box::new(TestAssert {
                     progress: Progress::PauseLog, //significant check
                     progress_query: None,
                     log_len: 3,
                     time_stamp: 3,
                     delayed_commands_len: 1,
                     ..Default::default()
-                },
+                }),
             },
         ],
     );
@@ -827,18 +827,18 @@ fn forward_processes_query_overwritten() {
                     progress_query: Some(Progress::Pause),
                     time_step_query: None,
                 },
-                assert_at_update: TestAssert {
+                assert_at_update: Box::new(TestAssert {
                     progress: Progress::ForwardFast {
                         to_time_stamp: Wrapping(3),
                     },
                     progress_query: Some(Progress::Pause),
                     log_len: 2,
-                    time_stamp: 2,
+                    time_stamp: 1,
                     fast_init: true,
                     delayed_commands_len: 3,
                     ..Default::default()
-                },
-                assert_at_end: TestAssert {
+                }),
+                assert_at_end: Box::new(TestAssert {
                     progress: Progress::ForwardFast {
                         to_time_stamp: Wrapping(3),
                     },
@@ -848,7 +848,7 @@ fn forward_processes_query_overwritten() {
                     fast_init: false,
                     delayed_commands_len: 2,
                     ..Default::default()
-                },
+                }),
             },
             Test {
                 //test_index: 1
@@ -856,24 +856,24 @@ fn forward_processes_query_overwritten() {
                     progress_query: Some(Progress::PauseLog),
                     time_step_query: None,
                 },
-                assert_at_update: TestAssert {
+                assert_at_update: Box::new(TestAssert {
                     progress: Progress::ForwardFast {
                         to_time_stamp: Wrapping(3),
                     },
                     progress_query: Some(Progress::PauseLog), //significant check
                     log_len: 3,
-                    time_stamp: 3,
+                    time_stamp: 2,
                     delayed_commands_len: 2,
                     ..Default::default()
-                },
-                assert_at_end: TestAssert {
+                }),
+                assert_at_end: Box::new(TestAssert {
                     progress: Progress::PauseLog,
                     progress_query: None,
                     log_len: 3,
                     time_stamp: 3,
                     delayed_commands_len: 1,
                     ..Default::default()
-                },
+                }),
             },
         ],
     );

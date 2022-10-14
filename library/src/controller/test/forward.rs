@@ -20,20 +20,20 @@ fn processes_none_query() {
                 progress_query: None,
                 time_step_query: None,
             },
-            assert_at_update: TestAssert {
+            assert_at_update: Box::new(TestAssert {
+                progress: Progress::Forward,
+                progress_query: None,
+                log_len: 4,
+                time_stamp: 3,
+                ..Default::default()
+            }),
+            assert_at_end: Box::new(TestAssert {
                 progress: Progress::Forward,
                 progress_query: None,
                 log_len: 4,
                 time_stamp: 4,
                 ..Default::default()
-            },
-            assert_at_end: TestAssert {
-                progress: Progress::Forward,
-                progress_query: None,
-                log_len: 4,
-                time_stamp: 4,
-                ..Default::default()
-            },
+            }),
         }],
     );
 }
@@ -49,26 +49,26 @@ fn processes_query_forward() {
                 progress_query: Some(Progress::Forward),
                 time_step_query: None,
             },
-            assert_at_update: TestAssert {
+            assert_at_update: Box::new(TestAssert {
                 progress: Progress::Forward,
                 progress_query: Some(Progress::Forward),
                 log_len: 4,
-                time_stamp: 4,
+                time_stamp: 3,
                 ..Default::default()
-            },
-            assert_at_end: TestAssert {
+            }),
+            assert_at_end: Box::new(TestAssert {
                 progress: Progress::Forward,
                 progress_query: None,
                 log_len: 4,
                 time_stamp: 4,
                 ..Default::default()
-            },
+            }),
         }],
     );
 }
 
 #[test]
-fn processes_query_forward_fast_short() {
+fn processes_query_forward_fast_one_tick() {
     Test::tests(
         CONTROLLER_CONSTS,
         THREE_FORWARD,
@@ -80,28 +80,28 @@ fn processes_query_forward_fast_short() {
                 }),
                 time_step_query: None,
             },
-            assert_at_update: TestAssert {
+            assert_at_update: Box::new(TestAssert {
                 progress: Progress::Forward,
                 progress_query: Some(Progress::ForwardFast {
                     to_time_stamp: Wrapping(5),
                 }),
                 log_len: 4,
-                time_stamp: 4,
+                time_stamp: 3,
                 ..Default::default()
-            },
-            assert_at_end: TestAssert {
+            }),
+            assert_at_end: Box::new(TestAssert {
                 progress: Progress::Forward,
                 progress_query: None,
                 log_len: 4,
                 time_stamp: 4,
                 ..Default::default()
-            },
+            }),
         }],
     );
 }
 
 #[test]
-fn processes_query_forward_fast() {
+fn processes_query_forward_fast_two_ticks() {
     Test::tests(
         CONTROLLER_CONSTS,
         THREE_FORWARD,
@@ -113,16 +113,16 @@ fn processes_query_forward_fast() {
                 }),
                 time_step_query: None,
             },
-            assert_at_update: TestAssert {
+            assert_at_update: Box::new(TestAssert {
                 progress: Progress::Forward,
                 progress_query: Some(Progress::ForwardFast {
                     to_time_stamp: Wrapping(6),
                 }),
                 log_len: 4,
-                time_stamp: 4,
+                time_stamp: 3,
                 ..Default::default()
-            },
-            assert_at_end: TestAssert {
+            }),
+            assert_at_end: Box::new(TestAssert {
                 progress: Progress::ForwardFast {
                     to_time_stamp: Wrapping(6),
                 },
@@ -132,7 +132,7 @@ fn processes_query_forward_fast() {
                 fast_init: true,
                 delayed_commands_len: 3,
                 ..Default::default()
-            },
+            }),
         }],
     );
 }
@@ -148,20 +148,20 @@ fn processes_query_forward_log() {
                 progress_query: Some(Progress::ForwardLog),
                 time_step_query: None,
             },
-            assert_at_update: TestAssert {
+            assert_at_update: Box::new(TestAssert {
                 progress: Progress::Forward,
                 progress_query: Some(Progress::ForwardLog),
                 log_len: 4,
-                time_stamp: 4,
+                time_stamp: 3,
                 ..Default::default()
-            },
-            assert_at_end: TestAssert {
+            }),
+            assert_at_end: Box::new(TestAssert {
                 progress: Progress::PauseLog,
                 progress_query: None,
                 log_len: 4,
                 time_stamp: 4,
                 ..Default::default()
-            },
+            }),
         }],
     );
 }
@@ -177,20 +177,20 @@ fn processes_query_forward_log_end() {
                 progress_query: Some(Progress::ForwardLogEnd),
                 time_step_query: None,
             },
-            assert_at_update: TestAssert {
+            assert_at_update: Box::new(TestAssert {
                 progress: Progress::Forward,
                 progress_query: Some(Progress::ForwardLogEnd),
                 log_len: 4,
-                time_stamp: 4,
+                time_stamp: 3,
                 ..Default::default()
-            },
-            assert_at_end: TestAssert {
+            }),
+            assert_at_end: Box::new(TestAssert {
                 progress: Progress::PauseLog,
                 progress_query: None,
                 log_len: 4,
                 time_stamp: 4,
                 ..Default::default()
-            },
+            }),
         }],
     );
 }
@@ -206,20 +206,20 @@ fn processes_query_backward_log() {
                 progress_query: Some(Progress::BackwardLog),
                 time_step_query: None,
             },
-            assert_at_update: TestAssert {
+            assert_at_update: Box::new(TestAssert {
                 progress: Progress::Forward,
                 progress_query: Some(Progress::BackwardLog),
                 log_len: 4,
-                time_stamp: 4,
+                time_stamp: 3,
                 ..Default::default()
-            },
-            assert_at_end: TestAssert {
+            }),
+            assert_at_end: Box::new(TestAssert {
                 progress: Progress::BackwardLog,
                 progress_query: None,
                 log_len: 4,
                 time_stamp: 4,
                 ..Default::default()
-            },
+            }),
         }],
     );
 }
@@ -235,21 +235,21 @@ fn processes_query_backward_log_end() {
                 progress_query: Some(Progress::BackwardLogEnd),
                 time_step_query: None,
             },
-            assert_at_update: TestAssert {
+            assert_at_update: Box::new(TestAssert {
                 progress: Progress::Forward,
                 progress_query: Some(Progress::BackwardLogEnd),
                 log_len: 4,
-                time_stamp: 4,
+                time_stamp: 3,
                 ..Default::default()
-            },
-            assert_at_end: TestAssert {
+            }),
+            assert_at_end: Box::new(TestAssert {
                 progress: Progress::BackwardLogEnd,
                 progress_query: None,
                 log_len: 4,
                 time_stamp: 4,
                 fast_init: true,
                 ..Default::default()
-            },
+            }),
         }],
     );
 }
@@ -265,20 +265,20 @@ fn processes_query_pause() {
                 progress_query: Some(Progress::Pause),
                 time_step_query: None,
             },
-            assert_at_update: TestAssert {
+            assert_at_update: Box::new(TestAssert {
                 progress: Progress::Forward,
                 progress_query: Some(Progress::Pause),
                 log_len: 4,
-                time_stamp: 4,
+                time_stamp: 3,
                 ..Default::default()
-            },
-            assert_at_end: TestAssert {
+            }),
+            assert_at_end: Box::new(TestAssert {
                 progress: Progress::Pause,
                 progress_query: None,
                 log_len: 4,
                 time_stamp: 4,
                 ..Default::default()
-            },
+            }),
         }],
     );
 }
@@ -294,20 +294,20 @@ fn processes_query_pause_log() {
                 progress_query: Some(Progress::PauseLog),
                 time_step_query: None,
             },
-            assert_at_update: TestAssert {
+            assert_at_update: Box::new(TestAssert {
                 progress: Progress::Forward,
                 progress_query: Some(Progress::PauseLog),
                 log_len: 4,
-                time_stamp: 4,
+                time_stamp: 3,
                 ..Default::default()
-            },
-            assert_at_end: TestAssert {
+            }),
+            assert_at_end: Box::new(TestAssert {
                 progress: Progress::PauseLog,
                 progress_query: None,
                 log_len: 4,
                 time_stamp: 4,
                 ..Default::default()
-            },
+            }),
         }],
     );
 }

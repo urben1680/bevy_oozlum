@@ -52,7 +52,16 @@ pub struct SpawnResourceInitialized<T: Resource> {
 }
 
 impl<T: Resource> ReversibleCommandInitialized for SpawnResourceInitialized<T> {
-    fn action(&mut self, world: &mut World, action: CommandAction) {
-        Self::resource::<T>(world, action, false);
+    fn undo(&mut self, world: &mut World) {
+        Self::resource::<T>(world, CommandAction::Undo, false);
+    }
+    fn redo(&mut self, world: &mut World) {
+        Self::resource::<T>(world, CommandAction::Redo, false);
+    }
+    fn redo_finalize(self: Box<Self>, world: &mut World) {
+        Self::resource::<T>(world, CommandAction::RedoFinalize, false);
+    }
+    fn undo_finalize(self: Box<Self>, world: &mut World) {
+        Self::resource::<T>(world, CommandAction::UndoFinalize, false);
     }
 }

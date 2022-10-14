@@ -72,7 +72,16 @@ pub struct DespawnComponentInitialized<T: Component> {
 }
 
 impl<T: Component> ReversibleCommandInitialized for DespawnComponentInitialized<T> {
-    fn action(&mut self, world: &mut World, action: CommandAction) {
-        Self::component::<T>(world, action, true, self.entity);
+    fn undo(&mut self, world: &mut World) {
+        Self::component::<T>(world, CommandAction::Undo, true, self.entity);
+    }
+    fn redo(&mut self, world: &mut World) {
+        Self::component::<T>(world, CommandAction::Redo, true, self.entity);        
+    }
+    fn redo_finalize(self: Box<Self>, world: &mut World) {
+        Self::component::<T>(world, CommandAction::RedoFinalize, true, self.entity);        
+    }
+    fn undo_finalize(self: Box<Self>, world: &mut World) {
+        Self::component::<T>(world, CommandAction::UndoFinalize, true, self.entity);        
     }
 }

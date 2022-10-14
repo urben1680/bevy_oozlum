@@ -1,6 +1,6 @@
-use std::num::Wrapping;
+use std::{num::Wrapping, fmt::Debug};
 
-use bevy::prelude::{App, CoreStage, Local, Res, ResMut};
+use bevy::{prelude::{App, CoreStage, Local, Res, ResMut}, ecs::system::Resource};
 
 use crate::{controller::Progress, Ticks};
 
@@ -15,6 +15,11 @@ mod backward_log_end;
 mod log_end;
 mod pause;
 mod pause_log;
+
+/*
+todo:
+- test commands wenn system mockups und command mockups existieren
+*/
 
 #[derive(Clone, Copy)]
 pub(super) struct TestAssert {
@@ -35,79 +40,94 @@ pub(super) struct TestAssert {
 
 #[allow(dead_code)]
 #[derive(Debug)]
-struct Failure<'a> {
-    test_index: usize,
+struct TestMeta<'a, T: Debug> {
+    test_index: isize,
     at_update: bool,
     controller: &'a Controller,
+    param: &'a mut T,
+    log: Option<&'a Vec<PrettyPrintedString>>
 }
 
-impl TestAssert {
-    pub(super) fn assert_eq(&self, controller: &Controller, test_index: usize, at_update: bool) {
-        let failure = Failure {
-            test_index,
-            at_update,
-            controller,
-        };
+struct PrettyPrintedString(String);
+
+impl Debug for PrettyPrintedString{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.0.as_str())
+    }
+}
+
+trait TestSystem<T: Resource + Default + Debug>: Resource{
+    fn test(&self, meta: TestMeta<'_, T>);
+}
+
+struct NoTest;
+
+impl<T: Resource + Default + Debug> TestSystem<T> for NoTest{
+    fn test(&self, _meta: TestMeta<'_, T>) {}
+}
+
+impl TestSystem<()> for TestAssert{
+    fn test(&self, meta: TestMeta<'_, ()>){
         assert_eq!(
-            self.progress_query, controller.progress_query,
-            "controller.progress_query\n{failure:#?}"
+            self.progress_query, meta.controller.progress_query,
+            "controller.progress_query\n{meta:#?}"
         );
         assert_eq!(
             self.log_len,
-            controller.log.len(),
-            "controller.log.len()\n{failure:#?}"
+            meta.controller.log.len(),
+            "controller.log.len()\n{meta:#?}"
         );
         assert_eq!(
             Some(self.log_first_len),
-            controller.log.get(0).map(|c| c.len()),
-            "controller.log.get(1).map(|c|c.len())\n{failure:#?}"
+            meta.controller.log.get(0).map(|c| c.len()),
+            "controller.log.get(1).map(|c|c.len())\n{meta:#?}"
         );
         assert_eq!(
-            self.time_stamp, controller.time_stamp.0,
-            "controller.time_stamp\n{failure:#?}"
+            self.time_stamp, meta.controller.time_stamp.0,
+            "controller.time_stamp\n{meta:#?}"
         );
         assert_eq!(
-            controller.time_stamp - Wrapping(controller.consts().max_log_index),
-            controller.forget,
-            "controller.forget\n{failure:#?}"
+            meta.controller.time_stamp - Wrapping(meta.controller.consts().max_log_index),
+            meta.controller.forget,
+            "controller.forget\n{meta:#?}"
         );
         if let Some(forward_fast_limit) = self.forward_fast_limit {
             assert_eq!(
-                forward_fast_limit, controller.forward_fast_limit.0,
-                "controller.forward_fast_limit\n{failure:#?}"
+                forward_fast_limit, meta.controller.forward_fast_limit.0,
+                "controller.forward_fast_limit\n{meta:#?}"
             );
         }
         assert_eq!(
-            self.log_index, controller.log_index,
-            "controller.log_index\n{failure:#?}"
+            self.log_index, meta.controller.log_index,
+            "controller.log_index\n{meta:#?}"
         );
         assert_eq!(
-            self.progress, controller.progress,
-            "controller.progress\n{failure:#?}"
+            self.progress, meta.controller.progress,
+            "controller.progress\n{meta:#?}"
         );
         assert_eq!(
-            self.fast_init, controller.fast_init,
-            "controller.fast_init\n{failure:#?}"
+            self.fast_init, meta.controller.fast_init,
+            "controller.fast_init\n{meta:#?}"
         );
         assert_eq!(
-            self.log_end, controller.log_end,
-            "controller.log_end\n{failure:#?}"
+            self.log_end, meta.controller.log_end,
+            "controller.log_end\n{meta:#?}"
         );
         assert_eq!(
             self.delayed_commands_len,
-            controller.delayed_commands.len(),
-            "controller.delayed_commands.len()\n{failure:#?}"
+            meta.controller.delayed_commands.len(),
+            "controller.delayed_commands.len()\n{meta:#?}"
         );
         assert_eq!(
             Some(self.delayed_commands_first_len),
-            controller.delayed_commands.get(0).map(|c| c.len()),
-            "controller.delayed_commands.get(1).map(|c|c.len())\n{failure:#?}"
+            meta.controller.delayed_commands.get(0).map(|c| c.len()),
+            "controller.delayed_commands.get(1).map(|c|c.len())\n{meta:#?}"
         );
         assert_eq!(
-            self.commands_overflows, controller.commands_overflows,
-            "controller.commands_overflows\n{failure:#?}"
+            self.commands_overflows, meta.controller.commands_overflows,
+            "controller.commands_overflows\n{meta:#?}"
         );
-        assert!(controller.progress.is_pause() || (controller.pre_update_ran == at_update), "controller.progress.is_pause() || (controller.pre_update_ran == at_update)\n{failure:#?}");
+        assert!(meta.controller.progress.is_pause() || (meta.controller.pre_update_ran == meta.at_update), "controller.progress.is_pause() || (controller.pre_update_ran == at_update)\n{meta:#?}");
     }
 }
 
@@ -130,11 +150,17 @@ impl Default for TestAssert {
     }
 }
 
-#[derive(Default, Clone, Copy)]
-pub(super) struct Test {
+#[derive(Default)]
+pub(super) struct Test<T: Resource + Default + Debug> {
     control: TestControl,
-    assert_at_update: TestAssert,
-    assert_at_end: TestAssert,
+    assert_at_update: Box<dyn TestSystem<T>>,
+    assert_at_end: Box<dyn TestSystem<T>>,
+}
+
+impl<T: Resource + Default + Debug> Default for Box<dyn TestSystem<T>>{
+    fn default() -> Self {
+        Box::new(NoTest)
+    }
 }
 
 #[derive(Default, Clone, Copy)]
@@ -143,34 +169,43 @@ pub(super) struct TestControl {
     time_step_query: Option<f64>
 }
 
-impl Test {
+impl TestControl{
+    fn to_tuple<T: Resource + Default + Debug>(self) -> ((TestControl, Box<dyn TestSystem<T>>), Box<dyn TestSystem<T>>){
+        ((self, Box::new(NoTest)), Box::new(NoTest))
+    }
+}
+
+impl<T: Resource + Default + Debug> Test<T> {
     pub(super) fn tests(
         constants: ControllerConsts,
         setup: impl IntoIterator<Item = TestControl>,
-        tests: Vec<Self>,
+        tests: Vec<Test<T>>,
     ) {
         let mut app = App::new();
         Controller::insert_command(Default::default(), Default::default(), &mut app.world, constants);
         app.world.resource_mut::<Controller>().time_step = 0.0;
+        app.init_resource::<Vec<PrettyPrintedString>>();
+        app.init_resource::<T>();
 
         let tests_len = tests.len();
-        let (update, last): (Vec<(TestControl, Option<TestAssert>)>, Vec<Option<TestAssert>>) = setup
+
+        let (update, last): (Vec<(TestControl, Box<dyn TestSystem<T>>)>, Vec<Box<dyn TestSystem<T>>>) = setup
             .into_iter()
-            .map(|control| ((control, None), None))
+            .map(|control| control.to_tuple())
             .chain(
                 tests
                     .into_iter()
-                    .map(|test| ((test.control, Some(test.assert_at_update)), Some(test.assert_at_end)))
+                    .map(|test| ((test.control, test.assert_at_update), test.assert_at_end))
             )
             .unzip();
 
         let len = update.len();
-        let offset = len - tests_len;
+        let offset = (len - tests_len) as isize;
             
         app.add_system_to_stage(CoreStage::PreUpdate, Controller::first_system);
         app.add_system_to_stage(
             CoreStage::Update,
-            move |mut controller: ResMut<'_, Controller>, mut index: Local<'_, usize>| {
+            move |mut controller: ResMut<'_, Controller>, mut param: ResMut<'_, T>, mut index: Local<'_, usize>, mut log: ResMut<'_, Vec<PrettyPrintedString>>| {
                 let entry = &update[*index];
                 if let Some(query) = entry.0.progress_query {
                     controller.query_progress(query);
@@ -178,21 +213,23 @@ impl Test {
                 if let Some(time_step) = entry.0.time_step_query {
                     controller.query_time_step(time_step);
                 }
-                if let Some(assert) = entry.1{
-                    let test_index = *index - offset;
-                    assert.assert_eq(&controller, test_index, true);
-                }
+                let test_index = *index as isize - offset;
+                let meta = TestMeta { test_index, at_update: true, controller: &controller, param: &mut *param, log: Some(& *log) };
+                entry.1.test(meta);
+                let meta = TestMeta { test_index, at_update: true, controller: &controller, param: &mut *param, log: None };
+                log.push(PrettyPrintedString(format!("{meta:#?}")));
                 *index += 1;
             },
         );
         app.add_system_to_stage(CoreStage::PostUpdate, Controller::last_system);
         app.add_system_to_stage(
             CoreStage::Last,
-            move |controller: Res<'_, Controller>, mut index: Local<'_, usize>| {
-                if let Some(assert) = &last[*index]{
-                    let test_index = *index - offset;
-                    assert.assert_eq(&controller, test_index, false);
-                }
+            move |controller: Res<'_, Controller>, mut param: ResMut<'_, T>, mut index: Local<'_, usize>, mut log: ResMut<'_, Vec<PrettyPrintedString>>| {
+                let test_index = *index as isize - offset;
+                let meta = TestMeta { test_index, at_update: false, controller: &controller, param: &mut *param, log: Some(& *log) };
+                last[*index].test(meta);
+                let meta = TestMeta { test_index, at_update: false, controller: &controller, param: &mut *param, log: None };
+                log.push(PrettyPrintedString(format!("{meta:#?}")));
                 *index += 1;
             },
         );

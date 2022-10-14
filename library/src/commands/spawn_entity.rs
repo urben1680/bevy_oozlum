@@ -25,7 +25,16 @@ pub struct SpawnEntityInitialized {
 }
 
 impl ReversibleCommandInitialized for SpawnEntityInitialized {
-    fn action(&mut self, world: &mut World, action: CommandAction) {
-        Self::entity(world, action, false, self.entity);
+    fn undo(&mut self, world: &mut World) {
+        Self::entity(world, CommandAction::Undo, false, self.entity);
+    }
+    fn redo(&mut self, world: &mut World) {
+        Self::entity(world, CommandAction::Redo, false, self.entity);
+    }
+    fn redo_finalize(self: Box<Self>, world: &mut World) {
+        Self::entity(world, CommandAction::RedoFinalize, false, self.entity);
+    }
+    fn undo_finalize(self: Box<Self>, world: &mut World) {
+        Self::entity(world, CommandAction::UndoFinalize, false, self.entity);
     }
 }
