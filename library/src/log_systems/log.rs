@@ -33,21 +33,30 @@ impl<Marker, Transition, Index: Copy + Debug> Log<Marker, Transition, Index> {
     /// - `advance`: current state, transitioned time stamp, current time stamp
     /// - `next_transition`: current state, transitioned time stamp, current time stamp, returning next transition
     /// - `advance_transition`: past state, future state, transition, current time stamp
-    pub(super) fn advance<'w, 's, State: StateOption<Index = Index>, Params>(
+    pub(super) fn advance<State: StateOption<Index = Index>, RefParam, MutParam>(
         &mut self,
-        params: &mut Params,
-        states: &State::Param<'w>,
+        ref_param: &RefParam,
+        mut_param: &mut MutParam,
+        states: &State::Param<'_>,
         controller: &Controller,
         commands: &mut Commands<'_, '_>,
-        mut advance: impl FnMut(&mut Params, &State::Output, Wrapping<Ticks>, Wrapping<Ticks>),
+        mut advance: impl FnMut(
+            &RefParam,
+            &mut MutParam,
+            &State::Output,
+            Wrapping<Ticks>,
+            Wrapping<Ticks>,
+        ),
         mut next_transition: impl FnMut(
-            &mut Params,
+            &RefParam,
+            &mut MutParam,
             &State::Output,
             Wrapping<Ticks>,
             Wrapping<Ticks>,
         ) -> Option<NextTransition<State, Transition>>,
         advance_transition: impl FnMut(
-            &mut Params,
+            &RefParam,
+            &mut MutParam,
             &State::Output,
             &State::Output,
             &Transition,
@@ -67,13 +76,24 @@ impl<Marker, Transition, Index: Copy + Debug> Log<Marker, Transition, Index> {
                 type_name::<Marker>(), latest.state_index
             )
         });
-        advance(params, state, latest.time_stamp, controller.time_stamp());
-        if let Some(next) =
-            next_transition(params, state, latest.time_stamp, controller.time_stamp())
-        {
+        advance(
+            ref_param,
+            mut_param,
+            state,
+            latest.time_stamp,
+            controller.time_stamp(),
+        );
+        if let Some(next) = next_transition(
+            ref_param,
+            mut_param,
+            state,
+            latest.time_stamp,
+            controller.time_stamp(),
+        ) {
             controller.send_commands(next.commands, commands);
-            self.advance_next::<State, Params>(
-                params,
+            self.advance_next::<State, RefParam, MutParam>(
+                ref_param,
+                mut_param,
                 next.next_state_index,
                 next.transition,
                 states,
@@ -90,33 +110,37 @@ impl<Marker, Transition, Index: Copy + Debug> Log<Marker, Transition, Index> {
     /// returning time stamp at transition or limit if it happens earlier
     /// - `next_transition`: current state, transitioned time stamp, current time stamp, returning next transition
     /// - `advance_transition`: past state, future state, transition, current time stamp
-    pub(super) fn advance_fast<'w, 's, State: StateOption<Index = Index>, Params>(
+    pub(super) fn advance_fast<State: StateOption<Index = Index>, RefParam, MutParam>(
         &mut self,
-        params: &mut Params,
-        states: &State::Param<'w>,
+        ref_param: &RefParam,
+        mut_param: &mut MutParam,
+        states: &State::Param<'_>,
         controller: &Controller,
         commands: &mut Commands<'_, '_>,
         mut advance_up_to_transition_or_limit: impl FnMut(
-            &mut Params,
+            &RefParam,
+            &mut MutParam,
             &State::Output,
             Wrapping<Ticks>,
             Wrapping<Ticks>,
             Wrapping<Ticks>,
         ) -> Wrapping<Ticks>,
         mut next_transition: impl FnMut(
-            &mut Params,
+            &RefParam,
+            &mut MutParam,
             &State::Output,
             Wrapping<Ticks>,
             Wrapping<Ticks>,
         ) -> Option<NextTransition<State, Transition>>,
         advance_transition: impl FnMut(
-            &mut Params,
+            &RefParam,
+            &mut MutParam,
             &State::Output,
             &State::Output,
             &Transition,
             Wrapping<Ticks>,
         ),
-        debug: impl Fn(&mut Params) -> String,
+        debug: impl Fn(&RefParam, &mut MutParam) -> String,
     ) {
         const FN: &'static str = "advance_fast";
         let latest = self.entries.back().unwrap_or_else(|| {
@@ -147,16 +171,18 @@ impl<Marker, Transition, Index: Copy + Debug> Log<Marker, Transition, Index> {
             );
         });
         let time_stamp = advance_up_to_transition_or_limit(
-            params,
+            ref_param,
+            mut_param,
             state,
             latest.time_stamp,
             controller.time_stamp(),
             limit,
         );
-        if let Some(next) = next_transition(params, state, latest.time_stamp, limit) {
+        if let Some(next) = next_transition(ref_param, mut_param, state, latest.time_stamp, limit) {
             controller.send_delayed_commands(next.commands, time_stamp, commands);
-            self.advance_next::<State, Params>(
-                params,
+            self.advance_next::<State, RefParam, MutParam>(
+                ref_param,
+                mut_param,
                 next.next_state_index,
                 next.transition,
                 states,
@@ -167,20 +193,22 @@ impl<Marker, Transition, Index: Copy + Debug> Log<Marker, Transition, Index> {
         } else if time_stamp != limit {
             panic!(
                 "`Log<{}>::{FN}`: `next_transition` should return `Some`. `advance_up_to_transition_or_limit` was called with state at index: {:?}, time stamp: `Wrapping({})` and limit: `Wrapping({limit})` and did not return the limit, `next_transition` was called with the same state and `limit` afterwards. Additional information:\n{}",
-                type_name::<Marker>(), latest.state_index, controller.time_stamp(), debug(params)
+                type_name::<Marker>(), latest.state_index, controller.time_stamp(), debug(ref_param, mut_param)
             );
         }
     }
-    fn advance_next<'w, State: StateOption<Index = Index>, Params>(
+    fn advance_next<State: StateOption<Index = Index>, RefParam, MutParam>(
         &mut self,
-        params: &mut Params,
+        ref_param: &RefParam,
+        mut_param: &mut MutParam,
         next_state_index: Index,
         transition: Transition,
-        states: &State::Param<'w>,
+        states: &State::Param<'_>,
         controller: &Controller,
         state: &State::Output,
         mut advance_transition: impl FnMut(
-            &mut Params,
+            &RefParam,
+            &mut MutParam,
             &State::Output,
             &State::Output,
             &Transition,
@@ -217,7 +245,8 @@ impl<Marker, Transition, Index: Copy + Debug> Log<Marker, Transition, Index> {
             )
         });
         advance_transition(
-            params,
+            ref_param,
+            mut_param,
             state,
             next_state,
             &transition,
@@ -244,14 +273,22 @@ impl<Marker, Transition, Index: Copy + Debug> Log<Marker, Transition, Index> {
     /// Function arguments:
     /// - `advance`: current state, transitioned time stamp, current time stamp
     /// - `advance_transition`: past state, future state, transition, current time stamp
-    pub(super) fn advance_log<'w, State: StateOption<Index = Index>, Params>(
+    pub(super) fn advance_log<State: StateOption<Index = Index>, RefParam, MutParam>(
         &mut self,
-        params: &mut Params,
-        states: &State::Param<'w>,
+        ref_param: &RefParam,
+        mut_param: &mut MutParam,
+        states: &State::Param<'_>,
         controller: &Controller,
-        mut advance: impl FnMut(&mut Params, &State::Output, Wrapping<Ticks>, Wrapping<Ticks>),
+        mut advance: impl FnMut(
+            &RefParam,
+            &mut MutParam,
+            &State::Output,
+            Wrapping<Ticks>,
+            Wrapping<Ticks>,
+        ),
         mut advance_transition: impl FnMut(
-            &mut Params,
+            &RefParam,
+            &mut MutParam,
             &State::Output,
             &State::Output,
             &Transition,
@@ -273,7 +310,13 @@ impl<Marker, Transition, Index: Copy + Debug> Log<Marker, Transition, Index> {
                 type_name::<Marker>(), entry.state_index
             )
         });
-        advance(params, state, entry.time_stamp, controller.time_stamp());
+        advance(
+            ref_param,
+            mut_param,
+            state,
+            entry.time_stamp,
+            controller.time_stamp(),
+        );
         if let Some(next) = self.entries.get(entry_index + 1) {
             if controller.time_stamp() != next.time_stamp {
                 return;
@@ -285,7 +328,8 @@ impl<Marker, Transition, Index: Copy + Debug> Log<Marker, Transition, Index> {
                 entry.transition.assume_init_ref()
             };
             advance_transition(
-                params,
+                ref_param,
+                mut_param,
                 state,
                 next_state,
                 transition,
@@ -300,26 +344,29 @@ impl<Marker, Transition, Index: Copy + Debug> Log<Marker, Transition, Index> {
     /// - `advance_up_to_transition_or_limit`: current state, transitioned time stamp, current time stamp, limit time stamp,
     /// returning time stamp at transition or limit if it happens earlier
     /// - `advance_transition`: past state, future state, transition, current time stamp
-    pub(super) fn advance_log_fast<'w, State: StateOption<Index = Index>, Params>(
+    pub(super) fn advance_log_fast<State: StateOption<Index = Index>, RefParam, MutParam>(
         &mut self,
-        params: &mut Params,
-        states: &State::Param<'w>,
+        ref_param: &RefParam,
+        mut_param: &mut MutParam,
+        states: &State::Param<'_>,
         controller: &Controller,
         mut advance_up_to_transition_or_limit: impl FnMut(
-            &mut Params,
+            &RefParam,
+            &mut MutParam,
             &State::Output,
             Wrapping<Ticks>,
             Wrapping<Ticks>,
             Wrapping<Ticks>,
         ) -> Wrapping<Ticks>,
         mut advance_transition: impl FnMut(
-            &mut Params,
+            &RefParam,
+            &mut MutParam,
             &State::Output,
             &State::Output,
             &Transition,
             Wrapping<Ticks>,
         ),
-        debug: impl Fn(&mut Params) -> String,
+        debug: impl Fn(&RefParam, &mut MutParam) -> String,
     ) {
         const FN: &'static str = "advance_log_fast";
         let entry_index = self.entry_index as usize;
@@ -341,7 +388,8 @@ impl<Marker, Transition, Index: Copy + Debug> Log<Marker, Transition, Index> {
         });
         let limit = controller.forward_fast_limit();
         let time_stamp = advance_up_to_transition_or_limit(
-            params,
+            ref_param,
+            mut_param,
             state,
             entry.time_stamp,
             controller.time_stamp(),
@@ -351,7 +399,7 @@ impl<Marker, Transition, Index: Copy + Debug> Log<Marker, Transition, Index> {
             assert_eq!(
                 time_stamp, next.time_stamp,
                 "`Log<{}>::{FN}` with init `{}`: `advance_up_to_transition_or_limit` should return the limit time stamp `Wrapping({})`, not `Wrapping({})`. `advance_up_to_transition_or_limit` was called with state index {:?} and time stamp `Wrapping({})`. Additional information:\n{}",
-                type_name::<Marker>(), controller.fast_init(), limit, time_stamp, entry.state_index, controller.time_stamp(), debug(params)
+                type_name::<Marker>(), controller.fast_init(), limit, time_stamp, entry.state_index, controller.time_stamp(), debug(ref_param, mut_param)
             );
             self.entry_index += 1;
             let next_state = State::get_state(states, next.state_index).unwrap_or_else(|len|{
@@ -364,11 +412,13 @@ impl<Marker, Transition, Index: Copy + Debug> Log<Marker, Transition, Index> {
                 // SAFETY: transitions are always init if they are not stored in the back end of the log deque
                 entry.transition.assume_init_ref()
             };
-            advance_transition(params, state, next_state, transition, time_stamp);
+            advance_transition(
+                ref_param, mut_param, state, next_state, transition, time_stamp,
+            );
         } else if time_stamp != limit {
             panic!(
                 "`Log<{}>::{FN}`: `next_transition` should return `Some`. `advance_up_to_transition_or_limit` was called with state at index: {:?}, time stamp: `Wrapping({})` and limit: `Wrapping({limit})` and did not return the limit, `next_transition` was called with the same state and `limit` afterwards. Additional information:\n{}",
-                type_name::<Marker>(), entry.state_index, controller.time_stamp(), debug(params)
+                type_name::<Marker>(), entry.state_index, controller.time_stamp(), debug(ref_param, mut_param)
             );
         }
     }
@@ -377,14 +427,22 @@ impl<Marker, Transition, Index: Copy + Debug> Log<Marker, Transition, Index> {
     /// Function arguments:
     /// - `revert_log`: current state, transitioned time stamp, current time stamp
     /// - `revert_transition`: past state, future state, transition, current time stamp
-    pub(super) fn revert_log<'w, State: StateOption<Index = Index>, Params>(
+    pub(super) fn revert_log<State: StateOption<Index = Index>, RefParam, MutParam>(
         &mut self,
-        params: &mut Params,
-        states: &State::Param<'w>,
+        ref_param: &RefParam,
+        mut_param: &mut MutParam,
+        states: &State::Param<'_>,
         controller: &Controller,
-        mut revert: impl FnMut(&mut Params, &State::Output, Wrapping<Ticks>, Wrapping<Ticks>),
+        mut revert: impl FnMut(
+            &RefParam,
+            &mut MutParam,
+            &State::Output,
+            Wrapping<Ticks>,
+            Wrapping<Ticks>,
+        ),
         mut revert_transition: impl FnMut(
-            &mut Params,
+            &RefParam,
+            &mut MutParam,
             &State::Output,
             &State::Output,
             &Transition,
@@ -421,7 +479,8 @@ impl<Marker, Transition, Index: Copy + Debug> Log<Marker, Transition, Index> {
                 entry.transition.assume_init_ref()
             };
             revert_transition(
-                params,
+                ref_param,
+                mut_param,
                 past_state,
                 state,
                 transition,
@@ -429,26 +488,35 @@ impl<Marker, Transition, Index: Copy + Debug> Log<Marker, Transition, Index> {
             );
             state = past_state;
         }
-        revert(params, state, entry.time_stamp, controller.time_stamp());
+        revert(
+            ref_param,
+            mut_param,
+            state,
+            entry.time_stamp,
+            controller.time_stamp(),
+        );
     }
     /// Log mutation to be called during `Progress::RevertLogEnd`.
     ///
     /// Function arguments:
     /// - `revert_down_to_transition_or_limit`: current state, transitioned time stamp, current time stamp
     /// - `revert_transition`: past state, future state, transition, current time stamp
-    pub(super) fn revert_log_fast<'w, State: StateOption<Index = Index>, Params>(
+    pub(super) fn revert_log_fast<State: StateOption<Index = Index>, RefParam, MutParam>(
         &mut self,
-        params: &mut Params,
-        states: &State::Param<'w>,
+        ref_param: &RefParam,
+        mut_param: &mut MutParam,
+        states: &State::Param<'_>,
         controller: &Controller,
         mut revert_down_to_transition_or_limit: impl FnMut(
-            &mut Params,
+            &RefParam,
+            &mut MutParam,
             &State::Output,
             Wrapping<Ticks>,
             Wrapping<Ticks>,
         ),
         mut revert_transition: impl FnMut(
-            &mut Params,
+            &RefParam,
+            &mut MutParam,
             &State::Output,
             &State::Output,
             &Transition,
@@ -493,7 +561,8 @@ impl<Marker, Transition, Index: Copy + Debug> Log<Marker, Transition, Index> {
                 entry.transition.assume_init_ref()
             };
             revert_transition(
-                params,
+                ref_param,
+                mut_param,
                 past_state,
                 state,
                 transition,
@@ -504,7 +573,13 @@ impl<Marker, Transition, Index: Copy + Debug> Log<Marker, Transition, Index> {
         if self.entry_index == 0 {
             transitioned = controller.log_start();
         }
-        revert_down_to_transition_or_limit(params, state, transitioned, controller.time_stamp());
+        revert_down_to_transition_or_limit(
+            ref_param,
+            mut_param,
+            state,
+            transitioned,
+            controller.time_stamp(),
+        );
     }
     /// Log mutation to be called during log end.
     pub(super) fn log_end(&mut self) {

@@ -36,6 +36,13 @@ pub(super) struct ControllerReceivers {
     commands: Receiver<(usize, Vec<Box<dyn ReversibleCommand>>)>,
 }
 
+#[derive(PartialEq)]
+pub enum LogEndProximity{
+    AtEnd,
+    NextTick,
+    NotSoon
+}
+
 pub struct Controller {
     progress_query: Option<Progress>,
     time_step_query: Option<f64>, //todo: use enum instead with options such as "back to default after n ticks"
@@ -48,8 +55,8 @@ pub struct Controller {
     /// `VecDeque` has no `split_off_front` method: https://github.com/rust-lang/rust/issues/92547.
     /// The workaround uses needless allocations. So this should be done in the less common case: 2.
     /// Because of this the front of the `VecDeque` is the most recent end and the back the most past end of the log.
-    /// 
-    /// Non-log progresses have to make sure an empty element is inserted before the systems run 
+    ///
+    /// Non-log progresses have to make sure an empty element is inserted before the systems run
     /// because a command writes into it if the SyncChannel is full
     log: VecDeque<Vec<Box<dyn ReversibleCommandInitialized>>>,
     /// Current time stamp during reversible systems phase
@@ -59,6 +66,7 @@ pub struct Controller {
     forward_fast_issued: Wrapping<Ticks>,
     /// Current log index, todo: reverse now that deque ends are reversed!!
     log_index: usize,
+    backward: bool,
     progress: Progress,
     //progress_query: Progress,
     pre_update_ran: bool,
@@ -85,6 +93,7 @@ impl Debug for Controller {
             .field("forget", &self.forget)
             .field("forward_fast_limit", &self.forward_fast_limit)
             .field("log_index", &self.log_index)
+            .field("backward", &self.backward)
             .field("progress", &self.progress)
             .field("pre_update_ran", &self.pre_update_ran)
             .field("fast_init", &self.fast_init)
@@ -127,17 +136,31 @@ impl Controller {
     pub fn log_start(&self) -> Wrapping<Ticks> {
         self.time_stamp - Wrapping(self.log.len() as Ticks)
     }
-    pub fn log_front(&self) -> bool {
-        self.log_index == 0
+    /*
+    log index   0   1   2
+    end b&b     n   s   y
+    end b&!b    n   n   s
+    end f&b     s   n   n
+    end f&!b    y   s   n
+
+    s = soon
+    
+    */
+    pub fn log_front(&self) -> LogEndProximity {
+        match (self.backward, self.log_index){
+            (false, 0) => LogEndProximity::AtEnd,
+            (false, 1) => LogEndProximity::NextTick,
+            (true, 0) => LogEndProximity::NextTick,
+            _ => LogEndProximity::NotSoon
+        }
     }
-    pub fn log_back(&self) -> bool {
-        self.log_index + 1 == self.log.len()
-    }
-    pub fn log_front_one_tick_away(&self) -> bool {
-        self.log_index == 1
-    }
-    pub fn log_back_one_tick_away(&self) -> bool {
-        self.log_index + 2 == self.log.len()
+    pub fn log_back(&self) -> LogEndProximity {
+        match (self.backward, self.log.len() - self.log_index){
+            (true, 1) => LogEndProximity::AtEnd,
+            (true, 2) => LogEndProximity::NextTick,
+            (false, 1) => LogEndProximity::NextTick,
+            _ => LogEndProximity::NotSoon
+        }
     }
     pub fn query_time_step(&mut self, time_step: f64) {
         self.time_step_query = Some(time_step);
@@ -150,7 +173,9 @@ impl Controller {
         }
     }
     pub fn query_progress_forward_fast_in(&mut self, ticks: Ticks) {
-        self.query_progress(Progress::ForwardFast { to_time_stamp: self.time_stamp + Wrapping(ticks) });
+        self.query_progress(Progress::ForwardFast {
+            to_time_stamp: self.time_stamp + Wrapping(ticks),
+        });
     }
     pub fn query_progress(&mut self, progress: Progress) {
         if matches!(progress, Progress::ForwardFast { .. }) {
@@ -240,13 +265,34 @@ impl Controller {
             .expect("`log` should not be empty")
             .extend(commands);
     }
-    fn forward_stamps_indices(&mut self){
+    fn forward_stamps(&mut self) {
         self.time_stamp += 1;
         self.forget += 1;
     }
-    fn backward_stamps_indices(&mut self){
+    fn backward_stamps(&mut self) {
         self.time_stamp -= 1;
         self.forget -= 1;
+    }
+    fn forward_log_index(&mut self) {
+        if self.backward{
+            self.backward = false;
+        }
+        else {
+            self.log_index -= 1;
+        }
+    }
+    fn backward_log_index_successful(&mut self) -> bool {
+        if !self.backward{
+            self.backward = true;
+            self.log_index += 1;
+        }
+        else if self.log_index + 1 == self.log.len(){
+            return false;
+        }
+        else {
+            self.log_index += 1;
+        }
+        true
     }
     fn add_delayed_commands(
         &mut self,
@@ -285,32 +331,28 @@ impl Controller {
                 }
             }
             Progress::ForwardLogEnd => {
-                if self.log_front_one_tick_away() || query == self.progress {
-                    // this would have the same effect as `ForwardLog` except calling more expensive systems.
-                    // this assures `fast_init` is not true two ticks in a row
-                    query = Progress::ForwardLog;
-                } else if self.log_front() {
-                    query = Progress::PauseLog;
-                } else {
-                    self.fast_init = true;
+                match self.log_front(){
+                    LogEndProximity::AtEnd => query = Progress::PauseLog,
+                    LogEndProximity::NextTick => query = Progress::ForwardLog,
+                    LogEndProximity::NotSoon => self.fast_init = true
                 }
             }
             Progress::BackwardLogEnd => {
-                if self.log_back_one_tick_away() || query == self.progress {
-                    // this would have the same effect as `ForwardLog` except calling more expensive systems.
-                    // this assures `fast_init` is not true two ticks in a row
-                    query = Progress::BackwardLog;
-                } else if self.log_back() {
-                    query = Progress::PauseLog;
-                } else {
-                    self.fast_init = true;
+                match self.log_back(){
+                    LogEndProximity::AtEnd => query = Progress::PauseLog,
+                    LogEndProximity::NextTick => query = Progress::BackwardLog,
+                    LogEndProximity::NotSoon => self.fast_init = true
                 }
             }
-            Progress::ForwardLog if self.log_front() => {
-                query = Progress::PauseLog;
+            Progress::ForwardLog => {
+                if self.log_front() == LogEndProximity::AtEnd{
+                    query = Progress::PauseLog;
+                }
             }
-            Progress::BackwardLog if self.log_back() => {
-                query = Progress::PauseLog;
+            Progress::BackwardLog => {
+                if self.log_back() == LogEndProximity::AtEnd{
+                    query = Progress::PauseLog;
+                }
             }
             _ => {}
         }
@@ -329,20 +371,19 @@ impl Controller {
     >(
         controller: Res<'_, Self>,
     ) -> ShouldRun {
-        (
-            match (LOG, PAUSE, LOG_PAUSE) {
-                (false, false, false) => controller.progress.is_not_log_nor_pause(),
-                (false, false, true) => controller.progress == Progress::PauseLog,
-                (false, true, false) => controller.progress == Progress::Pause,
-                (false, true, true) => controller.progress.is_pause(),
-                (true, false, false) => controller.progress.is_log(false),
-                (true, false, true) => controller.progress.is_log(true),
-                (true, true, false) => {
-                    controller.progress.is_log(false) || controller.progress == Progress::Pause
-                }
-                (true, true, true) => !controller.progress.is_not_log_nor_pause(),
-            } || (LOG_END && controller.log_end)
-        ).into()
+        (match (LOG, PAUSE, LOG_PAUSE) {
+            (false, false, false) => controller.progress.is_not_log_nor_pause(),
+            (false, false, true) => controller.progress == Progress::PauseLog,
+            (false, true, false) => controller.progress == Progress::Pause,
+            (false, true, true) => controller.progress.is_pause(),
+            (true, false, false) => controller.progress.is_log(false),
+            (true, false, true) => controller.progress.is_log(true),
+            (true, true, false) => {
+                controller.progress.is_log(false) || controller.progress == Progress::Pause
+            }
+            (true, true, true) => !controller.progress.is_not_log_nor_pause(),
+        } || (LOG_END && controller.log_end))
+            .into()
     }
     pub fn run_criteria_forward(controller: Res<'_, Self>) -> ShouldRun {
         controller.after_pre_update_not_log_end(controller.progress == Progress::Forward)
@@ -392,8 +433,7 @@ impl Controller {
         world.insert_non_send_resource(ControllerReceivers {
             commands: commands_r,
         });
-        let mut delayed_commands =
-            VecDeque::with_capacity(constants.delayed_commands_ticks_capacity);
+        let mut delayed_commands = VecDeque::with_capacity(constants.delayed_events_ticks_capacity);
         delayed_commands.push_front(Default::default());
         world.insert_resource(Self {
             time_step_query: None,
@@ -405,6 +445,7 @@ impl Controller {
             forward_fast_limit: Default::default(), //only needs a valid value during fast forward progress
             forward_fast_issued: Default::default(), //same
             log_index: 0,
+            backward: false,
             progress: Progress::Forward,
             pre_update_ran: false,
             log_end: false,   //log_end systems must have been run before save
@@ -473,19 +514,19 @@ impl Controller {
                     let to_finalize = self.log.pop_back().expect("`MAX_LOG_LEN` should not be 0.");
                     if !to_finalize.is_empty() {
                         commands.add(|world: &mut World| {
-                            to_finalize.into_iter().for_each(|command| {
-                                command.redo_finalize(world)
-                            })
+                            to_finalize
+                                .into_iter()
+                                .for_each(|command| command.redo_finalize(world))
                         });
                     }
                 }
                 self.log.push_front(Default::default());
             }
             Progress::ForwardLog | Progress::ForwardLogEnd => {
-                self.log_index -= 1;
+                self.forward_log_index();
             }
             Progress::BackwardLog | Progress::BackwardLogEnd => {
-                self.backward_stamps_indices();
+                self.backward_stamps();
                 match self.log.get(self.log_index) {
                     Some(v) => {
                         if !v.is_empty() {
@@ -525,43 +566,39 @@ impl Controller {
         match self.progress {
             Progress::Forward => {
                 self.forward_commands(receivers, commands, false);
-                self.forward_stamps_indices();
+                self.forward_stamps();
                 self.apply_progress_query(self.progress);
             }
             Progress::ForwardFast { to_time_stamp } => {
                 self.forward_commands(receivers, commands, true);
-                self.forward_stamps_indices();
+                self.forward_stamps();
                 if to_time_stamp == self.time_stamp {
                     self.apply_progress_query(Progress::Forward);
                 }
             }
             Progress::ForwardLog => {
                 self.forward_log_commands(commands);
-                self.forward_stamps_indices();
+                self.forward_stamps();
                 self.apply_progress_query(Progress::ForwardLog);
             }
             Progress::ForwardLogEnd => {
                 self.forward_log_commands(commands);
-                self.forward_stamps_indices();
-                if self.log_front() {
+                self.forward_stamps();
+                if self.log_front() == LogEndProximity::AtEnd {
                     self.apply_progress_query(Progress::PauseLog);
                 }
             }
             Progress::BackwardLog => {
-                if self.log_back() {
-                    self.apply_progress_query(Progress::PauseLog);
+                if self.backward_log_index_successful(){
+                    self.apply_progress_query(Progress::BackwardLog);
                 }
                 else {
-                    self.apply_progress_query(Progress::BackwardLog);
-                    self.log_index += 1;
+                    self.apply_progress_query(Progress::PauseLog);
                 }
             }
             Progress::BackwardLogEnd => {
-                if self.log_back() {
+                if !self.backward_log_index_successful(){
                     self.apply_progress_query(Progress::PauseLog);
-                }
-                else {
-                    self.log_index += 1;
                 }
             }
             Progress::PauseLog | Progress::Pause => {
@@ -655,7 +692,7 @@ impl Controller {
         if matches!(self.progress_query, Some(progress) if progress.is_log(true)) {
             self.progress_query = None;
         }
-        if self.log_front() {
+        if self.log_front() == LogEndProximity::AtEnd {
             return;
         }
         //workaround for not having `VecDeque::split_off_front`, see https://github.com/rust-lang/rust/issues/92547
@@ -665,6 +702,7 @@ impl Controller {
         swap(&mut split_off, &mut self.log);
         //end of workaround
         self.log_index = 0;
+        self.backward = false;
         commands.add(move |world: &mut World| {
             split_off
                 .into_iter()
