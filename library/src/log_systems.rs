@@ -1,6 +1,6 @@
 mod log;
-mod per_entity;
-mod per_system;
+pub mod per_entity;
+pub mod per_system;
 
 #[cfg(test)]
 pub(crate) mod test;

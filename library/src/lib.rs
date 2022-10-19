@@ -7,7 +7,6 @@ use bevy::prelude::Component;
 
 pub mod commands;
 pub mod controller;
-pub mod event;
 pub mod log_systems;
 
 pub const DEFAULT_TIME_STEP: f64 = 0.02;
