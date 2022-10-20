@@ -268,7 +268,7 @@ pub(super) trait PerEntitySystems: PerEntity {
             });
         }
     }
-    fn advance_log_fast_system<'w, 's>(
+    fn advance_log_fast_system<'w, 's, const INIT: bool>(
         params: Self::Params<'w, 's>,
         mut query: Query<
             'w,
@@ -285,7 +285,7 @@ pub(super) trait PerEntitySystems: PerEntity {
         if Self::PAR_ITER_BATCH_SIZE == 0 {
             query.for_each_mut(|(mut items, mut log)| {
                 if Self::FAST_ADVANCE_SYSTEM {
-                    log.advance_log_fast::<Self::State, <Self as PerEntity>::Params<'_, '_>, QueryItem<'_, <Self as PerEntity>::Items>>(
+                    log.advance_log_fast::<Self::State, <Self as PerEntity>::Params<'_, '_>, QueryItem<'_, <Self as PerEntity>::Items>, INIT>(
                         &params,
                         &mut items,
                         &states,
@@ -308,7 +308,7 @@ pub(super) trait PerEntitySystems: PerEntity {
         } else {
             query.par_for_each_mut(Self::PAR_ITER_BATCH_SIZE, |(mut items, mut log)| {
                 if Self::FAST_ADVANCE_SYSTEM {
-                    log.advance_log_fast::<Self::State, <Self as PerEntity>::Params<'_, '_>, QueryItem<'_, <Self as PerEntity>::Items>>(
+                    log.advance_log_fast::<Self::State, <Self as PerEntity>::Params<'_, '_>, QueryItem<'_, <Self as PerEntity>::Items>, INIT>(
                         &params,
                         &mut items,
                         &states,
@@ -368,7 +368,7 @@ pub(super) trait PerEntitySystems: PerEntity {
             });
         }
     }
-    fn revert_log_fast_system<'w, 's>(
+    fn revert_log_fast_system<'w, 's, const INIT: bool>(
         params: Self::Params<'w, 's>,
         mut query: Query<
             'w,
@@ -385,7 +385,7 @@ pub(super) trait PerEntitySystems: PerEntity {
         if Self::PAR_ITER_BATCH_SIZE == 0 {
             query.for_each_mut(|(mut items, mut log)| {
                 if Self::FAST_REVERT_SYSTEM {
-                    log.revert_log_fast::<Self::State, <Self as PerEntity>::Params<'_, '_>, QueryItem<'_, <Self as PerEntity>::Items>>(
+                    log.revert_log_fast::<Self::State, <Self as PerEntity>::Params<'_, '_>, QueryItem<'_, <Self as PerEntity>::Items>, INIT>(
                         &params,
                         &mut items,
                         &states,
@@ -407,7 +407,7 @@ pub(super) trait PerEntitySystems: PerEntity {
         } else {
             query.par_for_each_mut(Self::PAR_ITER_BATCH_SIZE, |(mut items, mut log)| {
                 if Self::FAST_REVERT_SYSTEM {
-                    log.revert_log_fast::<Self::State, <Self as PerEntity>::Params<'_, '_>, QueryItem<'_, <Self as PerEntity>::Items>>(
+                    log.revert_log_fast::<Self::State, <Self as PerEntity>::Params<'_, '_>, QueryItem<'_, <Self as PerEntity>::Items>, INIT>(
                         &params,
                         &mut items,
                         &states,
