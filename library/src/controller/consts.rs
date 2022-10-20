@@ -35,11 +35,11 @@ impl ControllerConsts {
         )
     }
     #[cfg(test)]
-    pub(crate) fn get(world: &World) -> &Self{
+    pub(crate) fn get(world: &World) -> &Self {
         world.resource::<Controller>().consts()
     }
     #[cfg(not(test))]
-    pub(crate) const fn get(_world: &World) -> &Self{
+    pub(crate) const fn get(_world: &World) -> &Self {
         &CONTROLLER_CONSTS
     }
 }

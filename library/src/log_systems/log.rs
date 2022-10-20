@@ -90,7 +90,7 @@ impl<Marker, Transition, Index: Copy + Debug> Log<Marker, Transition, Index> {
             latest.time_stamp,
             controller.time_stamp(),
         ) {
-            controller.send_commands(next.commands, commands);
+            controller.send_commands(next.commands, commands, 0);
             self.advance_next::<State, RefParam, MutParam>(
                 ref_param,
                 mut_param,
@@ -149,7 +149,7 @@ impl<Marker, Transition, Index: Copy + Debug> Log<Marker, Transition, Index> {
                 type_name::<Marker>()
             )
         });
-        let limit = controller.forward_fast_limit();
+        let limit = controller.forward_fast_to();
         if self.entries.len() > 1 {
             let second = &self.entries[self.entries.len() - 2];
             if !controller
@@ -179,7 +179,8 @@ impl<Marker, Transition, Index: Copy + Debug> Log<Marker, Transition, Index> {
             limit,
         );
         if let Some(next) = next_transition(ref_param, mut_param, state, latest.time_stamp, limit) {
-            controller.send_delayed_commands(next.commands, time_stamp, commands);
+            let from_now = time_stamp.ticks_from_now(controller.time_stamp());
+            controller.send_commands(next.commands, commands, from_now);
             self.advance_next::<State, RefParam, MutParam>(
                 ref_param,
                 mut_param,
@@ -344,7 +345,12 @@ impl<Marker, Transition, Index: Copy + Debug> Log<Marker, Transition, Index> {
     /// - `advance_up_to_transition_or_limit`: current state, transitioned time stamp, current time stamp, limit time stamp,
     /// returning time stamp at transition or limit if it happens earlier
     /// - `advance_transition`: past state, future state, transition, current time stamp
-    pub(super) fn advance_log_fast<State: StateOption<Index = Index>, RefParam, MutParam, const INIT: bool>(
+    pub(super) fn advance_log_fast<
+        State: StateOption<Index = Index>,
+        RefParam,
+        MutParam,
+        const INIT: bool,
+    >(
         &mut self,
         ref_param: &RefParam,
         mut_param: &mut MutParam,
@@ -386,7 +392,7 @@ impl<Marker, Transition, Index: Copy + Debug> Log<Marker, Transition, Index> {
                 type_name::<Marker>(), entry.state_index
             )
         });
-        let limit = controller.forward_fast_limit();
+        let limit = controller.forward_fast_to();
         let time_stamp = advance_up_to_transition_or_limit(
             ref_param,
             mut_param,
@@ -501,7 +507,12 @@ impl<Marker, Transition, Index: Copy + Debug> Log<Marker, Transition, Index> {
     /// Function arguments:
     /// - `revert_down_to_transition_or_limit`: current state, transitioned time stamp, current time stamp
     /// - `revert_transition`: past state, future state, transition, current time stamp
-    pub(super) fn revert_log_fast<State: StateOption<Index = Index>, RefParam, MutParam, const INIT: bool>(
+    pub(super) fn revert_log_fast<
+        State: StateOption<Index = Index>,
+        RefParam,
+        MutParam,
+        const INIT: bool,
+    >(
         &mut self,
         ref_param: &RefParam,
         mut_param: &mut MutParam,
