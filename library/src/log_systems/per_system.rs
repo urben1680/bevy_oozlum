@@ -99,7 +99,7 @@ pub(super) trait PerSystemSystems: PerSystem {
         state: &<Self::State as StateOption>::Output,
         transitioned: Wrapping<u16>,
         now: Wrapping<u16>,
-    ) -> Option<NextTransition<Self::State, Self::Transition>>{
+    ) -> Option<NextTransition<Self::State, Self::Transition>> {
         Self::next_transition(mut_param, state, transitioned, now)
     }
     fn advance_dud_ref(
@@ -108,7 +108,7 @@ pub(super) trait PerSystemSystems: PerSystem {
         state: &<Self::State as StateOption>::Output,
         transitioned: Wrapping<u16>,
         now: Wrapping<u16>,
-    ){
+    ) {
         Self::advance(mut_param, state, transitioned, now);
     }
     fn revert_dud_ref(
@@ -117,7 +117,7 @@ pub(super) trait PerSystemSystems: PerSystem {
         state: &<Self::State as StateOption>::Output,
         transitioned: Wrapping<u16>,
         now: Wrapping<u16>,
-    ){
+    ) {
         Self::revert(mut_param, state, transitioned, now);
     }
     fn advance_up_to_transition_or_limit_dud_ref(
@@ -159,10 +159,7 @@ pub(super) trait PerSystemSystems: PerSystem {
     ) {
         Self::revert_transition(mut_param, past_state, future_state, transition, now);
     }
-    fn debug_dud_ref(
-        _ref_param: &(),
-        mut_param: &mut Self::Params<'_, '_>,
-    ) -> String {
+    fn debug_dud_ref(_ref_param: &(), mut_param: &mut Self::Params<'_, '_>) -> String {
         Self::debug(mut_param)
     }
     fn advance_system<'w, 's>(
