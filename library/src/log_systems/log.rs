@@ -344,7 +344,7 @@ impl<Marker, Transition, Index: Copy + Debug> Log<Marker, Transition, Index> {
     /// - `advance_up_to_transition_or_limit`: current state, transitioned time stamp, current time stamp, limit time stamp,
     /// returning time stamp at transition or limit if it happens earlier
     /// - `advance_transition`: past state, future state, transition, current time stamp
-    pub(super) fn advance_log_fast<State: StateOption<Index = Index>, RefParam, MutParam>(
+    pub(super) fn advance_log_fast<State: StateOption<Index = Index>, RefParam, MutParam, const INIT: bool>(
         &mut self,
         ref_param: &RefParam,
         mut_param: &mut MutParam,
@@ -377,7 +377,7 @@ impl<Marker, Transition, Index: Copy + Debug> Log<Marker, Transition, Index> {
                 type_name::<Marker>(), self.entry_index, self. entries.len()
             )
             });
-        if !controller.fast_init() && entry.time_stamp != controller.time_stamp() {
+        if !INIT && entry.time_stamp != controller.time_stamp() {
             return;
         }
         let state = State::get_state(states, entry.state_index).unwrap_or_else(|len|{
@@ -399,7 +399,7 @@ impl<Marker, Transition, Index: Copy + Debug> Log<Marker, Transition, Index> {
             assert_eq!(
                 time_stamp, next.time_stamp,
                 "`Log<{}>::{FN}` with init `{}`: `advance_up_to_transition_or_limit` should return the limit time stamp `Wrapping({})`, not `Wrapping({})`. `advance_up_to_transition_or_limit` was called with state index {:?} and time stamp `Wrapping({})`. Additional information:\n{}",
-                type_name::<Marker>(), controller.fast_init(), limit, time_stamp, entry.state_index, controller.time_stamp(), debug(ref_param, mut_param)
+                type_name::<Marker>(), INIT, limit, time_stamp, entry.state_index, controller.time_stamp(), debug(ref_param, mut_param)
             );
             self.entry_index += 1;
             let next_state = State::get_state(states, next.state_index).unwrap_or_else(|len|{
@@ -501,7 +501,7 @@ impl<Marker, Transition, Index: Copy + Debug> Log<Marker, Transition, Index> {
     /// Function arguments:
     /// - `revert_down_to_transition_or_limit`: current state, transitioned time stamp, current time stamp
     /// - `revert_transition`: past state, future state, transition, current time stamp
-    pub(super) fn revert_log_fast<State: StateOption<Index = Index>, RefParam, MutParam>(
+    pub(super) fn revert_log_fast<State: StateOption<Index = Index>, RefParam, MutParam, const INIT: bool>(
         &mut self,
         ref_param: &RefParam,
         mut_param: &mut MutParam,
@@ -524,7 +524,7 @@ impl<Marker, Transition, Index: Copy + Debug> Log<Marker, Transition, Index> {
         ),
     ) {
         const FN: &'static str = "revert_log_fast";
-        if !controller.fast_init() && self.entry_index == 0 {
+        if !INIT && self.entry_index == 0 {
             return;
         }
         let mut entry = self
@@ -536,7 +536,7 @@ impl<Marker, Transition, Index: Copy + Debug> Log<Marker, Transition, Index> {
                 type_name::<Marker>(), self.entry_index, self. entries.len()
             )
             });
-        if !controller.fast_init() && entry.time_stamp != controller.time_stamp() {
+        if !INIT && entry.time_stamp != controller.time_stamp() {
             return;
         }
         let mut transitioned = entry.time_stamp;

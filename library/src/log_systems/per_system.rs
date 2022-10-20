@@ -230,14 +230,14 @@ pub(super) trait PerSystemSystems: PerSystem {
             Self::advance_transition_dud_ref,
         )
     }
-    fn advance_log_fast_system<'w, 's>(
+    fn advance_log_fast_system<'w, 's, const INIT: bool>(
         mut params: Self::Params<'w, 's>,
         mut log: ResMut<'w, Log<Self, Self::Transition, <Self::State as StateOption>::Index>>,
         states: <Self::State as StateOption>::Param<'w>,
         controller: Res<'w, Controller>,
     ) {
         if Self::FAST_ADVANCE_SYSTEM {
-            log.advance_log_fast::<Self::State, (), Self::Params<'w, 's>>(
+            log.advance_log_fast::<Self::State, (), Self::Params<'w, 's>, INIT>(
                 &(),
                 &mut params,
                 &states,
@@ -272,14 +272,14 @@ pub(super) trait PerSystemSystems: PerSystem {
             Self::revert_transition_dud_ref,
         )
     }
-    fn revert_log_fast_system<'w, 's>(
+    fn revert_log_fast_system<'w, 's, const INIT: bool>(
         mut params: Self::Params<'w, 's>,
         mut log: ResMut<'w, Log<Self, Self::Transition, <Self::State as StateOption>::Index>>,
         states: <Self::State as StateOption>::Param<'w>,
         controller: Res<'w, Controller>,
     ) {
         if Self::FAST_REVERT_SYSTEM {
-            log.revert_log_fast::<Self::State, (), Self::Params<'w, 's>>(
+            log.revert_log_fast::<Self::State, (), Self::Params<'w, 's>, INIT>(
                 &(),
                 &mut params,
                 &states,
