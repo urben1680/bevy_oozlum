@@ -7,7 +7,7 @@ pub(crate) struct ControllerConsts {
     pub(crate) max_log_index: Ticks,
     pub(crate) max_log_index_usize: usize,
     pub(crate) log_len: usize,
-    pub(crate) commands_ticks_capacity: usize,
+    pub(crate) fast_forward_max: Ticks,
     pub(crate) sync_sender_capacity: usize,
     pub(crate) default_time_step: f64,
     pub(crate) debug_capacity: usize,
@@ -16,7 +16,7 @@ pub(crate) struct ControllerConsts {
 impl ControllerConsts {
     pub(crate) const fn new(
         max_log_index: Ticks,
-        commands_ticks_capacity: usize,
+        fast_forward_max: Ticks,
         sync_sender_capacity: usize,
         default_time_step: f64,
         debug_capacity: usize,
@@ -25,7 +25,7 @@ impl ControllerConsts {
             max_log_index,
             max_log_index_usize: max_log_index as usize,
             log_len: max_log_index as usize + 1,
-            commands_ticks_capacity,
+            fast_forward_max,
             sync_sender_capacity,
             default_time_step,
             debug_capacity,
@@ -34,7 +34,7 @@ impl ControllerConsts {
     pub(crate) const fn max_log_index_only(max_log_index: Ticks) -> Self {
         Self::new(
             max_log_index,
-            CONTROLLER_CONSTS.commands_ticks_capacity,
+            CONTROLLER_CONSTS.fast_forward_max,
             CONTROLLER_CONSTS.sync_sender_capacity,
             CONTROLLER_CONSTS.default_time_step,
             CONTROLLER_CONSTS.debug_capacity,
@@ -51,4 +51,4 @@ impl ControllerConsts {
 }
 
 pub(crate) const CONTROLLER_CONSTS: ControllerConsts =
-    ControllerConsts::new(Ticks::MAX, Ticks::MAX as usize >> 1, 1024, 0.02, 64);
+    ControllerConsts::new(Ticks::MAX, Ticks::MAX >> 1, 1024, 0.02, 64);
