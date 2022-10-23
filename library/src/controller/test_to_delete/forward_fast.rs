@@ -4,44 +4,13 @@ use crate::controller::{consts::CONTROLLER_CONSTS, progress::Progress};
 
 use super::{Test, TestAssert, TestControl};
 
-const PROGRESS_FORWARD_FAST_TO_3: [Control; 1] = [Control {
+const PROGRESS_FORWARD_FAST_TO_3: [TestControl; 1] = [TestControl {
     progress_query: Some(Progress::ForwardFast {
         to_time_stamp: Wrapping(3),
     }),
     time_step_query: None,
 }];
 
-#[test]
-fn processes_none_query() {
-    tests(
-        TEST_CONTROLLER_CONSTS,
-        THREE_FORWARD,
-        [Test {
-            //#1
-            after_first: DebugLog {
-                current: Progress::ForwardFast {
-                    a: true,
-                },
-                progress_query: None,
-                time_stamp: Wrapping(4),
-                log_len: 4,
-                ..Default::default()
-            },
-            after_last: DebugLog {
-                current: Progress::Forward {
-                    after_forward: true,
-                },
-                progress_query: None,
-                time_stamp: Wrapping(4),
-                log_len: 4,
-                ..Default::default()
-            },
-            ..Default::default()
-        }],
-    )
-}
-
-/*
 #[test]
 fn forward_processes_none_query() {
     Test::tests(
@@ -909,4 +878,3 @@ fn forward_processes_query_overwritten() {
         ],
     );
 }
-*/

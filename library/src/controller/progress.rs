@@ -56,7 +56,7 @@ pub(super) enum ProgressQueried {
 }
 
 #[derive(PartialEq, Debug)]
-pub(super) enum ProgressType {
+pub(super) enum ProgressLog {
     NotLog,
     ForwardLog,
     BackwardLog,

@@ -9,17 +9,17 @@ use super::{
 
 #[derive(Debug)]
 pub(super) struct DebugLogContainer {
-    after_first: DebugLog,
-    after_last: Option<DebugLog>,
+    pub(super) after_first: DebugLog,
+    pub(super) after_last: Option<DebugLog>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub(super) struct DebugLog {
     pub(super) time_step_query: Option<f64>,
     pub(super) time_step: f64,
     pub(super) first_ran: bool,
     pub(super) current: Progress,
-    pub(super) query: Option<ProgressQueried>,
+    pub(super) progress_query: Option<ProgressQueried>,
     pub(super) time_stamp: Wrapping<Ticks>,
     pub(super) forget: Wrapping<Ticks>,
     pub(super) forward_fast_limit: Wrapping<Ticks>,
@@ -36,7 +36,7 @@ impl From<&Controller> for DebugLog {
             time_step: value.time_step,
             first_ran: value.first_ran,
             current: value.current,
-            query: value.query,
+            progress_query: value.progress_query,
             time_stamp: value.time_stamp,
             forget: value.forget,
             forward_fast_limit: value.forward_fast_to,

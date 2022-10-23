@@ -1,313 +1,356 @@
 use std::num::Wrapping;
 
-use crate::controller::{consts::CONTROLLER_CONSTS, progress::Progress};
+use crate::controller::{
+    debug::DebugLog,
+    progress::{Progress, ProgressQueried, ProgressQuery},
+};
 
-use super::{Test, TestAssert, TestControl};
+use super::{tests, Control, Test, TEST_CONTROLLER_CONSTS};
 
-const THREE_FORWARD: [TestControl; 3] = [TestControl {
+const THREE_FORWARD: [Control; 3] = [Control {
     progress_query: None,
     time_step_query: None,
 }; 3];
 
 #[test]
 fn processes_none_query() {
-    Test::tests(
-        CONTROLLER_CONSTS,
+    tests(
+        TEST_CONTROLLER_CONSTS,
         THREE_FORWARD,
-        vec![Test {
-            //test_index: 0
-            control: TestControl {
+        [Test {
+            //#1
+            after_first: DebugLog {
+                current: Progress::Forward {
+                    after_forward: true,
+                },
                 progress_query: None,
-                time_step_query: None,
+                time_stamp: Wrapping(4),
+                log_len: 4,
+                ..Default::default()
             },
-            assert_at_update: Box::new(TestAssert {
-                progress: Progress::Forward,
+            after_last: DebugLog {
+                current: Progress::Forward {
+                    after_forward: true,
+                },
+                progress_query: None,
+                time_stamp: Wrapping(4),
+                log_len: 4,
+                ..Default::default()
+            },
+            ..Default::default()
+        }],
+    )
+}
+
+#[test]
+fn processes_query_forward() {
+    tests(
+        TEST_CONTROLLER_CONSTS,
+        THREE_FORWARD,
+        [Test {
+            //#1
+            before_first: Control {
+                progress_query: Some(ProgressQuery::Forward),
+                ..Default::default()
+            },
+            after_first: DebugLog {
+                current: Progress::Forward {
+                    after_forward: true,
+                },
+                progress_query: Some(ProgressQueried::Forward),
+                log_len: 4,
+                time_stamp: Wrapping(4),
+                ..Default::default()
+            },
+            after_last: DebugLog {
+                current: Progress::Forward {
+                    after_forward: true,
+                },
                 progress_query: None,
                 log_len: 4,
-                time_stamp: 3,
+                time_stamp: Wrapping(4),
                 ..Default::default()
-            }),
-            assert_at_end: Box::new(TestAssert {
-                progress: Progress::Forward,
-                progress_query: None,
-                log_len: 4,
-                time_stamp: 4,
-                ..Default::default()
-            }),
+            },
+            ..Default::default()
         }],
     );
 }
 
 #[test]
-fn processes_query_forward() {
-    Test::tests(
-        CONTROLLER_CONSTS,
+fn processes_query_forward_fast_zero_ticks() {
+    tests(
+        TEST_CONTROLLER_CONSTS,
         THREE_FORWARD,
-        vec![Test {
-            //test_index: 0
-            control: TestControl {
-                progress_query: Some(Progress::Forward),
-                time_step_query: None,
-            },
-            assert_at_update: Box::new(TestAssert {
-                progress: Progress::Forward,
-                progress_query: Some(Progress::Forward),
-                log_len: 4,
-                time_stamp: 3,
+        [Test {
+            //#1
+            before_first: Control {
+                progress_query: Some(ProgressQuery::ForwardFast {
+                    to_time_stamp: Wrapping(4),
+                }),
                 ..Default::default()
-            }),
-            assert_at_end: Box::new(TestAssert {
-                progress: Progress::Forward,
+            },
+            after_first: DebugLog {
+                current: Progress::Forward {
+                    after_forward: true,
+                },
+                progress_query: Some(ProgressQueried::ForwardFast {
+                    to_time_stamp: Wrapping(4),
+                    queried: Wrapping(3)
+                }),
+                log_len: 4,
+                time_stamp: Wrapping(4),
+                ..Default::default()
+            },
+            after_last: DebugLog {
+                current: Progress::Forward {
+                    after_forward: true,
+                },
                 progress_query: None,
                 log_len: 4,
-                time_stamp: 4,
+                time_stamp: Wrapping(4),
                 ..Default::default()
-            }),
+            },
+            ..Default::default()
         }],
     );
 }
 
 #[test]
 fn processes_query_forward_fast_one_tick() {
-    Test::tests(
-        CONTROLLER_CONSTS,
+    tests(
+        TEST_CONTROLLER_CONSTS,
         THREE_FORWARD,
-        vec![Test {
-            //test_index: 0
-            control: TestControl {
-                progress_query: Some(Progress::ForwardFast {
+        [Test {
+            //#1
+            before_first: Control {
+                progress_query: Some(ProgressQuery::ForwardFast {
                     to_time_stamp: Wrapping(5),
                 }),
-                time_step_query: None,
+                ..Default::default()
             },
-            assert_at_update: Box::new(TestAssert {
-                progress: Progress::Forward,
-                progress_query: Some(Progress::ForwardFast {
+            after_first: DebugLog {
+                current: Progress::Forward {
+                    after_forward: true,
+                },
+                progress_query: Some(ProgressQueried::ForwardFast {
                     to_time_stamp: Wrapping(5),
+                    queried: Wrapping(3)
                 }),
                 log_len: 4,
-                time_stamp: 3,
+                time_stamp: Wrapping(4),
                 ..Default::default()
-            }),
-            assert_at_end: Box::new(TestAssert {
-                progress: Progress::Forward,
+            },
+            after_last: DebugLog {
+                current: Progress::Forward {
+                    after_forward: true,
+                },
                 progress_query: None,
                 log_len: 4,
-                time_stamp: 4,
+                time_stamp: Wrapping(4),
                 ..Default::default()
-            }),
+            },
+            ..Default::default()
         }],
     );
 }
 
 #[test]
 fn processes_query_forward_fast_two_ticks() {
-    Test::tests(
-        CONTROLLER_CONSTS,
+    tests(
+        TEST_CONTROLLER_CONSTS,
         THREE_FORWARD,
-        vec![Test {
-            //test_index: 0
-            control: TestControl {
-                progress_query: Some(Progress::ForwardFast {
+        [Test {
+            //#1
+            before_first: Control {
+                progress_query: Some(ProgressQuery::ForwardFast {
                     to_time_stamp: Wrapping(6),
                 }),
-                time_step_query: None,
+                ..Default::default()
             },
-            assert_at_update: Box::new(TestAssert {
-                progress: Progress::Forward,
-                progress_query: Some(Progress::ForwardFast {
+            after_first: DebugLog {
+                current: Progress::Forward {
+                    after_forward: true,
+                },
+                progress_query: Some(ProgressQueried::ForwardFast {
                     to_time_stamp: Wrapping(6),
+                    queried: Wrapping(3)
                 }),
                 log_len: 4,
-                time_stamp: 3,
+                time_stamp: Wrapping(4),
                 ..Default::default()
-            }),
-            assert_at_end: Box::new(TestAssert {
-                progress: Progress::ForwardFast {
-                    to_time_stamp: Wrapping(6),
+            },
+            after_last: DebugLog {
+                current: Progress::ForwardFast { 
+                    after_forward_if_init: Some(true) 
                 },
+                forward_fast_limit: Wrapping(6),
                 progress_query: None,
                 log_len: 4,
-                time_stamp: 4,
-                fast_init: true,
-                delayed_commands_len: 3,
+                time_stamp: Wrapping(4),
+                delayed_commands_len: 2,
                 ..Default::default()
-            }),
+            },
+            ..Default::default()
         }],
     );
 }
 
 #[test]
 fn processes_query_forward_log() {
-    Test::tests(
-        CONTROLLER_CONSTS,
+    tests(
+        TEST_CONTROLLER_CONSTS,
         THREE_FORWARD,
-        vec![Test {
-            //test_index: 0
-            control: TestControl {
-                progress_query: Some(Progress::ForwardLog),
-                time_step_query: None,
-            },
-            assert_at_update: Box::new(TestAssert {
-                progress: Progress::Forward,
-                progress_query: Some(Progress::ForwardLog),
-                log_len: 4,
-                time_stamp: 3,
+        [Test {
+            //#1
+            before_first: Control {
+                progress_query: Some(ProgressQuery::ForwardLog),
                 ..Default::default()
-            }),
-            assert_at_end: Box::new(TestAssert {
-                progress: Progress::PauseLog,
+            },
+            after_first: DebugLog {
+                current: Progress::Forward {
+                    after_forward: true,
+                },
+                progress_query: Some(ProgressQueried::ForwardLog),
+                log_len: 4,
+                time_stamp: Wrapping(4),
+                ..Default::default()
+            },
+            after_last: DebugLog {
+                current: Progress::Pause { after_forward_if_log: Some(true) },
                 progress_query: None,
                 log_len: 4,
-                time_stamp: 4,
+                time_stamp: Wrapping(4),
                 ..Default::default()
-            }),
+            },
+            ..Default::default()
         }],
     );
 }
 
 #[test]
 fn processes_query_forward_log_end() {
-    Test::tests(
-        CONTROLLER_CONSTS,
+    tests(
+        TEST_CONTROLLER_CONSTS,
         THREE_FORWARD,
-        vec![Test {
-            //test_index: 0
-            control: TestControl {
-                progress_query: Some(Progress::ForwardLogEnd),
-                time_step_query: None,
-            },
-            assert_at_update: Box::new(TestAssert {
-                progress: Progress::Forward,
-                progress_query: Some(Progress::ForwardLogEnd),
-                log_len: 4,
-                time_stamp: 3,
+        [Test {
+            //#1
+            before_first: Control {
+                progress_query: Some(ProgressQuery::ForwardLogEnd),
                 ..Default::default()
-            }),
-            assert_at_end: Box::new(TestAssert {
-                progress: Progress::PauseLog,
+            },
+            after_first: DebugLog {
+                current: Progress::Forward {
+                    after_forward: true,
+                },
+                progress_query: Some(ProgressQueried::ForwardLogEnd),
+                log_len: 4,
+                time_stamp: Wrapping(4),
+                ..Default::default()
+            },
+            after_last: DebugLog {
+                current: Progress::Pause { after_forward_if_log: Some(true) },
                 progress_query: None,
                 log_len: 4,
-                time_stamp: 4,
+                time_stamp: Wrapping(4),
                 ..Default::default()
-            }),
+            },
+            ..Default::default()
         }],
     );
 }
 
 #[test]
 fn processes_query_backward_log() {
-    Test::tests(
-        CONTROLLER_CONSTS,
+    tests(
+        TEST_CONTROLLER_CONSTS,
         THREE_FORWARD,
-        vec![Test {
-            //test_index: 0
-            control: TestControl {
-                progress_query: Some(Progress::BackwardLog),
-                time_step_query: None,
-            },
-            assert_at_update: Box::new(TestAssert {
-                progress: Progress::Forward,
-                progress_query: Some(Progress::BackwardLog),
-                log_len: 4,
-                time_stamp: 3,
+        [Test {
+            //#1
+            before_first: Control {
+                progress_query: Some(ProgressQuery::BackwardLog),
                 ..Default::default()
-            }),
-            assert_at_end: Box::new(TestAssert {
-                progress: Progress::BackwardLog,
+            },
+            after_first: DebugLog {
+                current: Progress::Forward {
+                    after_forward: true,
+                },
+                progress_query: Some(ProgressQueried::BackwardLog),
+                log_len: 4,
+                time_stamp: Wrapping(4),
+                ..Default::default()
+            },
+            after_last: DebugLog {
+                current: Progress::BackwardLog { after_backward: false },
                 progress_query: None,
                 log_len: 4,
-                time_stamp: 4,
+                time_stamp: Wrapping(4),
                 ..Default::default()
-            }),
+            },
+            ..Default::default()
         }],
     );
 }
 
 #[test]
 fn processes_query_backward_log_end() {
-    Test::tests(
-        CONTROLLER_CONSTS,
+    tests(
+        TEST_CONTROLLER_CONSTS,
         THREE_FORWARD,
-        vec![Test {
-            //test_index: 0
-            control: TestControl {
-                progress_query: Some(Progress::BackwardLogEnd),
-                time_step_query: None,
-            },
-            assert_at_update: Box::new(TestAssert {
-                progress: Progress::Forward,
-                progress_query: Some(Progress::BackwardLogEnd),
-                log_len: 4,
-                time_stamp: 3,
+        [Test {
+            //#1
+            before_first: Control {
+                progress_query: Some(ProgressQuery::BackwardLogEnd),
                 ..Default::default()
-            }),
-            assert_at_end: Box::new(TestAssert {
-                progress: Progress::BackwardLogEnd,
+            },
+            after_first: DebugLog {
+                current: Progress::Forward {
+                    after_forward: true,
+                },
+                progress_query: Some(ProgressQueried::BackwardLogEnd),
+                log_len: 4,
+                time_stamp: Wrapping(4),
+                ..Default::default()
+            },
+            after_last: DebugLog {
+                current: Progress::BackwardLogEnd { after_backward_if_init: Some(false) },
                 progress_query: None,
                 log_len: 4,
-                time_stamp: 4,
-                fast_init: true,
+                time_stamp: Wrapping(4),
                 ..Default::default()
-            }),
+            },
+            ..Default::default()
         }],
     );
 }
 
 #[test]
 fn processes_query_pause() {
-    Test::tests(
-        CONTROLLER_CONSTS,
+    tests(
+        TEST_CONTROLLER_CONSTS,
         THREE_FORWARD,
-        vec![Test {
-            //test_index: 0
-            control: TestControl {
-                progress_query: Some(Progress::Pause),
-                time_step_query: None,
-            },
-            assert_at_update: Box::new(TestAssert {
-                progress: Progress::Forward,
-                progress_query: Some(Progress::Pause),
-                log_len: 4,
-                time_stamp: 3,
+        [Test {
+            //#1
+            before_first: Control {
+                progress_query: Some(ProgressQuery::Pause),
                 ..Default::default()
-            }),
-            assert_at_end: Box::new(TestAssert {
-                progress: Progress::Pause,
+            },
+            after_first: DebugLog {
+                current: Progress::Forward {
+                    after_forward: true,
+                },
+                progress_query: Some(ProgressQueried::Pause),
+                log_len: 4,
+                time_stamp: Wrapping(4),
+                ..Default::default()
+            },
+            after_last: DebugLog {
+                current: Progress::Pause { after_forward_if_log: None },
                 progress_query: None,
                 log_len: 4,
-                time_stamp: 4,
+                time_stamp: Wrapping(4),
                 ..Default::default()
-            }),
-        }],
-    );
-}
-
-#[test]
-fn processes_query_pause_log() {
-    Test::tests(
-        CONTROLLER_CONSTS,
-        THREE_FORWARD,
-        vec![Test {
-            //test_index: 0
-            control: TestControl {
-                progress_query: Some(Progress::PauseLog),
-                time_step_query: None,
             },
-            assert_at_update: Box::new(TestAssert {
-                progress: Progress::Forward,
-                progress_query: Some(Progress::PauseLog),
-                log_len: 4,
-                time_stamp: 3,
-                ..Default::default()
-            }),
-            assert_at_end: Box::new(TestAssert {
-                progress: Progress::PauseLog,
-                progress_query: None,
-                log_len: 4,
-                time_stamp: 4,
-                ..Default::default()
-            }),
+            ..Default::default()
         }],
     );
 }

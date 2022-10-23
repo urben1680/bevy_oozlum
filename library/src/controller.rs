@@ -8,7 +8,7 @@ use std::{
 use bevy::{
     ecs::world::Mut,
     log::info,
-    prelude::{Commands, NonSendMut, World},
+    prelude::{Commands, NonSendMut, ResMut, World},
     time::Time,
 };
 
@@ -20,7 +20,7 @@ use crate::{
 use self::{
     consts::ControllerConsts,
     debug::DebugLogContainer,
-    progress::{Progress, ProgressQueried, ProgressQuery, ProgressType},
+    progress::{Progress, ProgressLog, ProgressQueried, ProgressQuery},
 };
 
 pub(crate) mod consts;
@@ -29,8 +29,8 @@ pub(crate) mod progress;
 #[cfg(debug_assertions)]
 mod debug;
 
-//#[cfg(test)]
-//mod test;
+#[cfg(test)]
+mod test;
 
 /// `NonSend` resource containing sync channel `Receiver`s for forgets and delayed commands.
 pub(super) struct ControllerReceiver(Receiver<(usize, Vec<Box<dyn ReversibleCommand>>)>);
@@ -43,7 +43,7 @@ pub(super) struct Controller {
     first_ran: bool,
 
     current: Progress,
-    query: Option<ProgressQueried>,
+    progress_query: Option<ProgressQueried>,
     time_stamp: Wrapping<Ticks>,
     forget: Wrapping<Ticks>,
     forward_fast_to: Wrapping<Ticks>,
@@ -87,6 +87,7 @@ impl Controller {
         commands: &mut Commands<'_, '_>,
         from_now: Ticks,
     ) {
+        assert!(from_now <= self.consts().fast_forward_max, "todo");
         match self.commands_sender.try_send((from_now as usize, v)) {
             Ok(_) => {}
             Err(TrySendError::Full((index, command))) => commands.add(move |world: &mut World| {
@@ -101,8 +102,8 @@ impl Controller {
     }
     pub(super) fn into_world(
         time_stamp: Wrapping<Ticks>,
-        log: VecDeque<Vec<Box<dyn ReversibleCommandInitialized>>>,
         after_forward: bool,
+        log: VecDeque<Vec<Box<dyn ReversibleCommandInitialized>>>,
         constants: ControllerConsts,
         world: &mut World,
     ) {
@@ -115,13 +116,13 @@ impl Controller {
             time: Default::default(),
             first_ran: false,
             current: Progress::Forward { after_forward },
-            query: None,
+            progress_query: None,
             time_stamp,
             forget: time_stamp - Wrapping(constants.max_log_index),
             forward_fast_to: Default::default(),
             log,
             log_index: 0,
-            delayed_commands: VecDeque::with_capacity(constants.commands_ticks_capacity),
+            delayed_commands: VecDeque::with_capacity(constants.fast_forward_max as usize),
             commands_overflows: 0,
             commands_sender,
 
@@ -132,10 +133,20 @@ impl Controller {
             constants,
         });
     }
-    pub(super) fn process_first(&mut self, commands: &mut Commands<'_, '_>) {
+    pub(super) fn system_first(mut controller: ResMut<'_, Self>, commands: Commands<'_, '_>) {
+        controller.first(commands);
+    }
+    pub(super) fn system_last(
+        mut controller: ResMut<'_, Self>,
+        receivers: NonSendMut<'_, ControllerReceiver>,
+        commands: Commands<'_, '_>,
+    ) {
+        controller.last(receivers, commands);
+    }
+    pub(super) fn first(&mut self, commands: Commands<'_, '_>) {
         match self.current {
             Progress::Forward { after_forward } => {
-                if self.first_time() {
+                if self.time_is_up() {
                     self.first_forward_not_log(commands);
                     self.stamps_indices_forward(after_forward, false);
                     self.first_ran = true;
@@ -146,11 +157,11 @@ impl Controller {
             } => {
                 self.time.update();
                 self.first_forward_not_log(commands);
-                self.stamps_indices_forward(after_forward_if_init == Some(true), false);
+                self.stamps_indices_forward(after_forward_if_init != Some(false), false);
                 self.first_ran = true;
             }
             Progress::ForwardLog { after_forward } => {
-                if self.first_time() {
+                if self.time_is_up() {
                     self.stamps_indices_forward(after_forward, true);
                     self.first_ran = true;
                 }
@@ -162,7 +173,7 @@ impl Controller {
                 self.first_ran = true;
             }
             Progress::BackwardLog { after_backward } => {
-                if self.first_time() {
+                if self.time_is_up() {
                     self.stamps_indices_backward(after_backward);
                     self.first_backward(commands);
                     self.first_ran = true;
@@ -186,7 +197,7 @@ impl Controller {
         #[cfg(debug_assertions)]
         self.update_debug(true);
     }
-    pub(super) fn process_last(
+    pub(super) fn last(
         &mut self,
         receivers: NonSendMut<'_, ControllerReceiver>,
         commands: Commands<'_, '_>,
@@ -197,9 +208,9 @@ impl Controller {
             Progress::Forward { .. } => {
                 self.last_forward_commands(receivers, commands, false);
                 self.current = Progress::Forward {
-                    after_forward: false,
+                    after_forward: true,
                 };
-                self.apply_progress_query(ProgressType::NotLog);
+                self.apply_progress_query(ProgressLog::NotLog);
             }
             Progress::ForwardFast { .. } => {
                 self.last_forward_commands(receivers, commands, true);
@@ -207,7 +218,7 @@ impl Controller {
                     self.current = Progress::Pause {
                         after_forward_if_log: None,
                     };
-                    self.apply_progress_query(ProgressType::NotLog);
+                    self.apply_progress_query(ProgressLog::NotLog);
                 } else {
                     self.current = Progress::ForwardFast {
                         after_forward_if_init: None,
@@ -224,15 +235,15 @@ impl Controller {
                         after_forward: true,
                     },
                 };
-                self.apply_progress_query(ProgressType::ForwardLog);
+                self.apply_progress_query(ProgressLog::ForwardLog);
             }
             Progress::ForwardLogEnd { .. } => {
                 self.last_forward_commands_log(commands);
-                self.current = Progress::Pause {
-                    after_forward_if_log: Some(true),
-                };
                 if self.log_index_min() {
-                    self.apply_progress_query(ProgressType::ForwardLog);
+                    self.current = Progress::Pause {
+                        after_forward_if_log: Some(true),
+                    };
+                    self.apply_progress_query(ProgressLog::ForwardLog);
                 }
             }
             Progress::BackwardLog { .. } => {
@@ -244,14 +255,14 @@ impl Controller {
                         after_backward: true,
                     },
                 };
-                self.apply_progress_query(ProgressType::BackwardLog);
+                self.apply_progress_query(ProgressLog::BackwardLog);
             }
             Progress::BackwardLogEnd { .. } => {
                 if self.log_index_max() {
                     self.current = Progress::Pause {
                         after_forward_if_log: Some(false),
                     };
-                    self.apply_progress_query(ProgressType::BackwardLog);
+                    self.apply_progress_query(ProgressLog::BackwardLog);
                 } else {
                     self.current = Progress::BackwardLogEnd {
                         after_backward_if_init: None,
@@ -261,14 +272,14 @@ impl Controller {
             Progress::Pause {
                 after_forward_if_log,
             } => match after_forward_if_log {
-                None => self.apply_progress_query(ProgressType::NotLog),
-                Some(false) => self.apply_progress_query(ProgressType::BackwardLog),
-                Some(true) => self.apply_progress_query(ProgressType::ForwardLog),
+                None => self.apply_progress_query(ProgressLog::NotLog),
+                Some(false) => self.apply_progress_query(ProgressLog::BackwardLog),
+                Some(true) => self.apply_progress_query(ProgressLog::ForwardLog),
             },
             Progress::LogClose { after_forward } => {
                 self.log_close_split(commands, after_forward);
                 self.current = Progress::Forward { after_forward };
-                self.apply_progress_query(ProgressType::NotLog)
+                self.apply_progress_query(ProgressLog::NotLog)
             }
         }
         #[cfg(debug_assertions)]
@@ -294,8 +305,8 @@ impl Controller {
         self.log_index += 1;
         assert_ne!(self.log_index, self.log.len());
     }
-    fn query(&mut self, query: ProgressQuery) {
-        self.query = Some(match query {
+    fn query_progress(&mut self, query: ProgressQuery) {
+        self.progress_query = Some(match query {
             ProgressQuery::Forward => ProgressQueried::Forward,
             ProgressQuery::ForwardFast { to_time_stamp } => ProgressQueried::ForwardFast {
                 to_time_stamp,
@@ -308,7 +319,10 @@ impl Controller {
             ProgressQuery::Pause => ProgressQueried::Pause,
         });
     }
-    fn first_forward_not_log(&mut self, commands: &mut Commands<'_, '_>) {
+    fn query_time_step(&mut self, query: f64) {
+        self.time_step_query = Some(query);
+    }
+    fn first_forward_not_log(&mut self, mut commands: Commands<'_, '_>) {
         if self.log.len() == self.consts().log_len {
             let to_finalize = self.log.pop_back().expect("`MAX_LOG_LEN` should not be 0.");
             if !to_finalize.is_empty() {
@@ -321,7 +335,7 @@ impl Controller {
         }
         self.log.push_front(Default::default());
     }
-    fn first_backward(&mut self, commands: &mut Commands<'_, '_>) {
+    fn first_backward(&mut self, mut commands: Commands<'_, '_>) {
         self.time_stamp -= 1;
         self.forget -= 1;
         if let Some(v) = self.log.get(self.log_index) {
@@ -340,7 +354,7 @@ impl Controller {
             });
         }
     }
-    fn first_time(&mut self) -> bool {
+    fn time_is_up(&mut self) -> bool {
         self.elapsed -= self.time.delta_seconds_f64();
         self.time.update();
         if self.elapsed > 0.0 {
@@ -425,38 +439,31 @@ impl Controller {
             })
         }
     }
-    fn apply_progress_query(&mut self, current: ProgressType) {
-        /*
-                    f f f f b b b b f p f p b p b p
-                            !       !       !
-        time stamp  0 1 2 3 3 2 1 0 0 0 1 1 1 1 0 0
-        log index   3 2 1 0 0 1 2 3
-        cmd b/a     a a a a b b b b
-
-        leichter: funktion die am anfang stamp/indices setzt mit after_turn bool
-
-        */
-        if self.query.is_none() {
+    fn apply_progress_query(&mut self, progress_log: ProgressLog) {
+        if self.progress_query.is_none() {
             return;
         }
+        #[cfg(test)]
+        {
+            self.forward_fast_to = Default::default();
+        }
         let after_forward = match self.current {
-            Progress::LogClose { after_forward } => {
-                debug_assert_eq!(current, ProgressType::NotLog);
-                after_forward
-            }
+            Progress::LogClose { after_forward } => after_forward,
             _ => true,
         };
-        match (self.query.unwrap(), current) {
-            (ProgressQueried::Forward, ProgressType::NotLog) => {
-                self.query = None;
-                self.current = Progress::Forward { after_forward }
+        match (self.progress_query.unwrap(), progress_log) {
+            (ProgressQueried::Forward, ProgressLog::NotLog) => {
+                self.progress_query = None;
+                self.current = Progress::Forward { after_forward };
             }
-            (ProgressQueried::Forward, ProgressType::ForwardLog) => {
+            (ProgressQueried::Forward, ProgressLog::ForwardLog)
+            | (ProgressQueried::ForwardFast { .. }, ProgressLog::ForwardLog) => {
                 self.current = Progress::LogClose {
                     after_forward: true,
                 };
             }
-            (ProgressQueried::Forward, ProgressType::BackwardLog) => {
+            (ProgressQueried::Forward, ProgressLog::BackwardLog)
+            | (ProgressQueried::ForwardFast { .. }, ProgressLog::BackwardLog) => {
                 self.current = Progress::LogClose {
                     after_forward: false,
                 };
@@ -466,17 +473,13 @@ impl Controller {
                     to_time_stamp,
                     queried,
                 },
-                ProgressType::NotLog,
+                ProgressLog::NotLog,
             ) => {
-                self.query = None;
+                self.progress_query = None;
                 if to_time_stamp == self.time_stamp + Wrapping(1) {
                     self.current = Progress::Forward { after_forward };
-                } 
-                else if to_time_stamp.further_in_the_future(self.time_stamp, queried) {
-                    let mut reserve = self.time_stamp.ticks_from_now(to_time_stamp) as usize;
-                    if reserve == 0 {
-                        reserve = Ticks::MAX as usize + 1;
-                    }
+                } else if to_time_stamp.further_in_the_future(self.time_stamp, queried) {
+                    let reserve = to_time_stamp.ticks_from_now(self.time_stamp) as usize;
                     let mut vd = VecDeque::from_iter((0..reserve).map(|_| Vec::new()));
                     self.delayed_commands.append(&mut vd);
                     self.forward_fast_to = to_time_stamp;
@@ -485,44 +488,28 @@ impl Controller {
                     };
                 }
             }
-            (ProgressQueried::ForwardFast { .. }, ProgressType::ForwardLog) => {
-                self.current = Progress::LogClose {
-                    after_forward: true,
-                };
+            (ProgressQueried::ForwardLog, ProgressLog::NotLog)
+            | (ProgressQueried::ForwardLogEnd, ProgressLog::NotLog) => {
+                assert!(self.log_index_min());
+                self.progress_query = None;
+                self.current = Progress::Pause { after_forward_if_log: Some(after_forward) };
             }
-            (ProgressQueried::ForwardFast { .. }, ProgressType::BackwardLog) => {
-                self.current = Progress::LogClose {
-                    after_forward: false,
-                };
-            }
-            (ProgressQueried::ForwardLog, ProgressType::BackwardLog) => {
-                self.query = None;
-                self.current = Progress::ForwardLog {
-                    after_forward: false,
-                };
-            }
-            (ProgressQueried::ForwardLog, _) => {
-                self.query = None;
+            (ProgressQueried::ForwardLog, ProgressLog::ForwardLog) => {
+                self.progress_query = None;
                 if !self.log_index_min() {
                     self.current = Progress::ForwardLog {
                         after_forward: true,
                     };
                 }
             }
-            (ProgressQueried::ForwardLogEnd, ProgressType::NotLog) => {
-                self.query = None;
-                self.current = match self.log_index {
-                    0 => Progress::Pause {
-                        after_forward_if_log: None,
-                    },
-                    1 => Progress::ForwardLog { after_forward },
-                    _ => Progress::ForwardLogEnd {
-                        after_forward_if_init: Some(after_forward),
-                    },
+            (ProgressQueried::ForwardLog, ProgressLog::BackwardLog) => {
+                self.progress_query = None;
+                self.current = Progress::ForwardLog {
+                    after_forward: false,
                 };
             }
-            (ProgressQueried::ForwardLogEnd, ProgressType::ForwardLog) => {
-                self.query = None;
+            (ProgressQueried::ForwardLogEnd, ProgressLog::ForwardLog) => {
+                self.progress_query = None;
                 self.current = match self.log_index {
                     0 => Progress::Pause {
                         after_forward_if_log: Some(true),
@@ -535,8 +522,8 @@ impl Controller {
                     },
                 };
             }
-            (ProgressQueried::ForwardLogEnd, ProgressType::BackwardLog) => {
-                self.query = None;
+            (ProgressQueried::ForwardLogEnd, ProgressLog::BackwardLog) => {
+                self.progress_query = None;
                 self.current = match self.log_index {
                     0 => Progress::ForwardLog {
                         after_forward: false,
@@ -546,8 +533,8 @@ impl Controller {
                     },
                 };
             }
-            (ProgressQueried::BackwardLog, ProgressType::BackwardLog) => {
-                self.query = None;
+            (ProgressQueried::BackwardLog, ProgressLog::BackwardLog) => {
+                self.progress_query = None;
                 if !self.log_index_max() {
                     self.current = Progress::BackwardLog {
                         after_backward: true,
@@ -555,13 +542,13 @@ impl Controller {
                 }
             }
             (ProgressQueried::BackwardLog, _) => {
-                self.query = None;
+                self.progress_query = None;
                 self.current = Progress::BackwardLog {
                     after_backward: false,
                 };
             }
-            (ProgressQueried::BackwardLogEnd, ProgressType::BackwardLog) => {
-                self.query = None;
+            (ProgressQueried::BackwardLogEnd, ProgressLog::BackwardLog) => {
+                self.progress_query = None;
                 self.current = match self.log.len() - self.log_index {
                     0 => Progress::Pause {
                         after_forward_if_log: Some(false),
@@ -575,8 +562,8 @@ impl Controller {
                 };
             }
             (ProgressQueried::BackwardLogEnd, _) => {
-                self.query = None;
-                self.current = match self.log_index {
+                self.progress_query = None;
+                self.current = match self.log.len() - self.log_index {
                     0 => Progress::BackwardLog {
                         after_backward: false,
                     },
@@ -585,20 +572,20 @@ impl Controller {
                     },
                 };
             }
-            (ProgressQueried::Pause, ProgressType::NotLog) => {
-                self.query = None;
+            (ProgressQueried::Pause, ProgressLog::NotLog) => {
+                self.progress_query = None;
                 self.current = Progress::Pause {
                     after_forward_if_log: None,
                 };
             }
-            (ProgressQueried::Pause, ProgressType::ForwardLog) => {
-                self.query = None;
+            (ProgressQueried::Pause, ProgressLog::ForwardLog) => {
+                self.progress_query = None;
                 self.current = Progress::Pause {
                     after_forward_if_log: Some(true),
                 };
             }
-            (ProgressQueried::Pause, ProgressType::BackwardLog) => {
-                self.query = None;
+            (ProgressQueried::Pause, ProgressLog::BackwardLog) => {
+                self.progress_query = None;
                 self.current = Progress::Pause {
                     after_forward_if_log: Some(false),
                 };
@@ -612,20 +599,21 @@ impl Controller {
         self.log_index + 1 == self.log.len()
     }
     fn log_close_split(&mut self, mut commands: Commands<'_, '_>, after_forward: bool) {
-        let mut at = self.log_index;
-        self.log_index = 0;
-        if !after_forward{
-            at += 1;
-        }
-        else if at == 0{
+        if after_forward && self.log_index == 0 {
             return;
         }
-        let split_off = self.log.split_off(at);
         commands.add(move |world: &mut World| {
-            split_off
-                .into_iter()
-                .flatten()
-                .for_each(|command| command.undo_finalize(world))
+            world.resource_scope(move |world, mut controller: Mut<'_, Self>| {
+                if !after_forward {
+                    controller.log_index += 1;
+                    //stamps?
+                }
+                (0..controller.log_index)
+                    .into_iter()
+                    .flat_map(|_| controller.log.pop_front().expect("todo"))
+                    .for_each(|commands| commands.undo_finalize(world));
+                controller.log_index = 0;
+            });
         });
     }
 }
