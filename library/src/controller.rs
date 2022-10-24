@@ -215,8 +215,8 @@ impl Controller {
             Progress::ForwardFast { .. } => {
                 self.last_forward_commands(receivers, commands, true);
                 if self.forward_fast_to == self.time_stamp {
-                    self.current = Progress::Pause {
-                        after_forward_if_log: None,
+                    self.current = Progress::Forward {
+                        after_forward: true,
                     };
                     self.apply_progress_query(ProgressLog::NotLog);
                 } else {
@@ -440,12 +440,12 @@ impl Controller {
         }
     }
     fn apply_progress_query(&mut self, progress_log: ProgressLog) {
-        if self.progress_query.is_none() {
-            return;
-        }
         #[cfg(test)]
         {
             self.forward_fast_to = Default::default();
+        }
+        if self.progress_query.is_none() {
+            return;
         }
         let after_forward = match self.current {
             Progress::LogClose { after_forward } => after_forward,
@@ -492,7 +492,9 @@ impl Controller {
             | (ProgressQueried::ForwardLogEnd, ProgressLog::NotLog) => {
                 assert!(self.log_index_min());
                 self.progress_query = None;
-                self.current = Progress::Pause { after_forward_if_log: Some(after_forward) };
+                self.current = Progress::Pause {
+                    after_forward_if_log: Some(after_forward),
+                };
             }
             (ProgressQueried::ForwardLog, ProgressLog::ForwardLog) => {
                 self.progress_query = None;

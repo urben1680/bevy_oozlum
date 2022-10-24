@@ -1,6 +1,10 @@
 use std::num::Wrapping;
 
+use bevy::{ecs::system::Command, prelude::World};
+
 use crate::Ticks;
+
+use super::Controller;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub(super) enum Progress {
@@ -62,7 +66,8 @@ pub(super) enum ProgressLog {
     BackwardLog,
 }
 
-pub(super) enum Previous {
-    Forward,
-    Backward,
+impl Command for ProgressQuery {
+    fn write(self, world: &mut World) {
+        world.resource_mut::<Controller>().query_progress(self);
+    }
 }
