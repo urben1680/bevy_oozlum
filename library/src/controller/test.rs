@@ -24,9 +24,9 @@ const TEST_CONTROLLER_CONSTS: ControllerConsts = ControllerConsts {
 
 #[derive(Default)]
 struct Test {
-    before_first_commands: Vec<fn(&mut World)>,
+    before_first_commands: Vec<Box<dyn TestCommandTrait + Send + Sync + 'static>>,
     after_first_check: DebugLog,
-    after_first_commands: Vec<fn(&mut World)>,
+    after_first_commands: Vec<Box<dyn TestCommandTrait + Send + Sync + 'static>>,
     after_last_check: DebugLog,
 }
 
@@ -37,15 +37,15 @@ fn tests<I: IntoIterator<Item = Option<ProgressQuery>>, const N: usize>(
 ) {
     //convert input
     let (before_first_commands, (after_first_commands, (after_first_checks, after_last_checks))): (
-        VecDeque<Vec<fn(&mut World)>>,
+        VecDeque<Vec<Box<dyn TestCommandTrait + Send + Sync + 'static>>>,
         (
-            VecDeque<Vec<fn(&mut World)>>,
+            VecDeque<Vec<Box<dyn TestCommandTrait + Send + Sync + 'static>>>,
             (VecDeque<Option<DebugLog>>, VecDeque<Option<DebugLog>>),
         ),
     ) = setup
         .into_iter()
         .map(|control| {
-            let vec: Vec<fn(&mut World)> = match control {
+            let vec: Vec<Box<dyn TestCommandTrait + Send + Sync + 'static>> = match control {
                 Some(control) => vec![control.into()],
                 None => vec![],
             };
@@ -69,14 +69,14 @@ fn tests<I: IntoIterator<Item = Option<ProgressQuery>>, const N: usize>(
         .unzip();
     let ticks = before_first_commands.len();
 
-    let command_system = |mut vd: VecDeque<Vec<fn(&mut World)>>| {
+    let command_system = |mut vd: VecDeque<Vec<Box<dyn TestCommandTrait + Send + Sync + 'static>>>| {
         move |mut commands: Commands<'_, '_>| {
             let cv = vd.pop_front().unwrap();
             if cv.is_empty() {
                 return;
             }
             commands.add(move |world: &mut World| {
-                cv.into_iter().for_each(|c| c(world));
+                cv.into_iter().for_each(|mut c| c.write(world));
             });
         }
     };
@@ -150,38 +150,20 @@ impl Default for DebugLog {
     }
 }
 
-impl Into<fn(&mut World)> for ProgressQuery {
-    fn into(self) -> fn(&mut World) {
-        match self{
-            ProgressQuery::Forward => |world| ProgressQuery::Forward.write(world),
-            ProgressQuery::ForwardFast { to_time_stamp } => {
-                match to_time_stamp.0{
-                    0 => forward_fast::<0>,
-                    1 => forward_fast::<1>,
-                    2 => forward_fast::<2>,
-                    3 => forward_fast::<3>,
-                    4 => forward_fast::<4>,
-                    5 => forward_fast::<5>,
-                    6 => forward_fast::<6>,
-                    7 => forward_fast::<7>,
-                    8 => forward_fast::<8>,
-                    9 => forward_fast::<9>,
-                    10 => forward_fast::<10>,
-                    n => unimplemented!("`Into<fn(&mut World)>` not implemented for `ProgressQuery::ForwardFast {{ to_time_stamp: Wrapping({n}) }}`")
-                }
-            },
-            ProgressQuery::ForwardLog => |world| ProgressQuery::ForwardLog.write(world),
-            ProgressQuery::ForwardLogEnd => |world| ProgressQuery::ForwardLogEnd.write(world),
-            ProgressQuery::BackwardLog => |world| ProgressQuery::BackwardLog.write(world),
-            ProgressQuery::BackwardLogEnd => |world| ProgressQuery::BackwardLogEnd.write(world),
-            ProgressQuery::Pause => |world| ProgressQuery::Pause.write(world)
-        }
+struct TestCommand<C: Command>(Option<C>);
+
+trait TestCommandTrait{
+    fn write(&mut self, world: &mut World);
+}
+
+impl<C: Command> TestCommandTrait for TestCommand<C>{
+    fn write(&mut self, world: &mut World){
+        self.0.take().unwrap().write(world);
     }
 }
 
-fn forward_fast<const N: Ticks>(world: &mut World) {
-    ProgressQuery::ForwardFast {
-        to_time_stamp: Wrapping(N),
+impl<C: Command> From<C> for Box<dyn TestCommandTrait + Send + Sync + 'static>{
+    fn from(command: C) -> Self {
+        Box::new(TestCommand(Some(command)))
     }
-    .write(world);
-}
+} 
