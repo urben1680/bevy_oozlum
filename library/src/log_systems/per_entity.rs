@@ -10,7 +10,7 @@ use bevy::{
 
 use crate::{
     controller::{consts::CONTROLLER_CONSTS, Controller},
-    DespawnedEntity, LOG_ONLY_PAR_ITER_BATCH_SIZE, ToTimeStamp,
+    DespawnedEntity, ToTimeStamp, LOG_ONLY_PAR_ITER_BATCH_SIZE,
 };
 
 use super::{log::Log, NextTransition, StateOption};

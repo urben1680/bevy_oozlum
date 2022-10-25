@@ -53,7 +53,7 @@ pub(super) enum ProgressQueried {
     },
     ForwardLog,
     BackwardLog,
-    LogTo (Wrapping<Ticks>),
+    LogTo(Wrapping<Ticks>),
     Pause,
 }
 

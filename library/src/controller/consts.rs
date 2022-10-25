@@ -51,4 +51,9 @@ impl ControllerConsts {
 }
 
 pub(crate) const CONTROLLER_CONSTS: ControllerConsts =
-    ControllerConsts::new(Ticks::MAX, Ticks::MAX >> 1, 1024, 0.02, 64);
+    ControllerConsts::new(
+        Ticks::MAX - 1, //cannot be max because log index = 0 refers to pre_log meta which lowers the max log len by one
+        Ticks::MAX >> 1, 
+        1024, 0.02, 
+        64
+    );

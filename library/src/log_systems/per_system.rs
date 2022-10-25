@@ -5,7 +5,10 @@ use bevy::{
     prelude::{Commands, Res, ResMut},
 };
 
-use crate::{controller::{consts::CONTROLLER_CONSTS, Controller}, Ticks, ToTimeStamp};
+use crate::{
+    controller::{consts::CONTROLLER_CONSTS, Controller},
+    Ticks, ToTimeStamp,
+};
 
 use super::{log::Log, NextTransition, StateOption};
 
@@ -136,7 +139,7 @@ pub(super) trait PerSystemSystems: PerSystem {
         state: &<Self::State as StateOption>::Output,
         transitioned: Wrapping<Ticks>,
         now: Wrapping<Ticks>,
-        limit: ToTimeStamp
+        limit: ToTimeStamp,
     ) {
         Self::backward_to_transition_or_limit(mut_param, state, transitioned, now, limit);
     }
