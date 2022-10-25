@@ -5,8 +5,6 @@ use bevy::{
     prelude::{App, Commands, CoreStage, ResMut, World},
 };
 
-use crate::Ticks;
-
 use super::{
     consts::{ControllerConsts, CONTROLLER_CONSTS},
     debug::DebugLog,
@@ -15,9 +13,9 @@ use super::{
 };
 
 mod forward;
-//mod forward_fast;
+mod forward_to;
 
-const TEST_CONTROLLER_CONSTS: ControllerConsts = ControllerConsts {
+const CONTROLLER_CONSTS_TIME_STEP_ZERO: ControllerConsts = ControllerConsts {
     default_time_step: 0.0,
     ..CONTROLLER_CONSTS
 };
@@ -69,17 +67,18 @@ fn tests<I: IntoIterator<Item = Option<ProgressQuery>>, const N: usize>(
         .unzip();
     let ticks = before_first_commands.len();
 
-    let command_system = |mut vd: VecDeque<Vec<Box<dyn TestCommandTrait + Send + Sync + 'static>>>| {
-        move |mut commands: Commands<'_, '_>| {
-            let cv = vd.pop_front().unwrap();
-            if cv.is_empty() {
-                return;
+    let command_system =
+        |mut vd: VecDeque<Vec<Box<dyn TestCommandTrait + Send + Sync + 'static>>>| {
+            move |mut commands: Commands<'_, '_>| {
+                let cv = vd.pop_front().unwrap();
+                if cv.is_empty() {
+                    return;
+                }
+                commands.add(move |world: &mut World| {
+                    cv.into_iter().for_each(|mut c| c.write(world));
+                });
             }
-            commands.add(move |world: &mut World| {
-                cv.into_iter().for_each(|mut c| c.write(world));
-            });
-        }
-    };
+        };
     let check_system = |mut vd: VecDeque<Option<DebugLog>>, after_first: bool| {
         move |controller: ResMut<'_, Controller>| {
             if let Some(check) = vd.pop_front().unwrap() {
@@ -141,7 +140,7 @@ impl Default for DebugLog {
             progress_query: None,
             time_stamp: Wrapping(0),
             forget: -Wrapping(CONTROLLER_CONSTS.max_log_index),
-            forward_fast_limit: Default::default(),
+            to_time_stamp: Default::default(),
             log_len: 1,
             log_index: 0,
             delayed_commands_len: 0,
@@ -152,18 +151,18 @@ impl Default for DebugLog {
 
 struct TestCommand<C: Command>(Option<C>);
 
-trait TestCommandTrait{
+trait TestCommandTrait {
     fn write(&mut self, world: &mut World);
 }
 
-impl<C: Command> TestCommandTrait for TestCommand<C>{
-    fn write(&mut self, world: &mut World){
+impl<C: Command> TestCommandTrait for TestCommand<C> {
+    fn write(&mut self, world: &mut World) {
         self.0.take().unwrap().write(world);
     }
 }
 
-impl<C: Command> From<C> for Box<dyn TestCommandTrait + Send + Sync + 'static>{
+impl<C: Command> From<C> for Box<dyn TestCommandTrait + Send + Sync + 'static> {
     fn from(command: C) -> Self {
         Box::new(TestCommand(Some(command)))
     }
-} 
+}

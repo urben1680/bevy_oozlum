@@ -10,7 +10,7 @@ use bevy::{
 
 use crate::{
     controller::{consts::CONTROLLER_CONSTS, Controller},
-    DespawnedEntity, LOG_ONLY_PAR_ITER_BATCH_SIZE,
+    DespawnedEntity, LOG_ONLY_PAR_ITER_BATCH_SIZE, ToTimeStamp,
 };
 
 use super::{log::Log, NextTransition, StateOption};
@@ -21,8 +21,8 @@ pub trait PerEntity: Send + Sync + Sized + 'static {
     type State: StateOption;
     type Transition: Send + Sync;
     const DEFAULT_LOG_CAPACITY: usize = CONTROLLER_CONSTS.log_len;
-    const FAST_ADVANCE_SYSTEM: bool = false;
-    const FAST_REVERT_SYSTEM: bool = false;
+    const FORWARD_TO_SYSTEM: bool = false;
+    const BACKWARD_TO_SYSTEM: bool = false;
     const PAR_ITER_BATCH_SIZE: usize = 0;
     fn next_transition(
         params: &Self::Params<'_, '_>,
@@ -31,50 +31,51 @@ pub trait PerEntity: Send + Sync + Sized + 'static {
         transitioned: Wrapping<u16>,
         now: Wrapping<u16>,
     ) -> Option<NextTransition<Self::State, Self::Transition>>;
-    fn advance(
+    fn forward(
         params: &Self::Params<'_, '_>,
         items: &mut QueryItem<'_, Self::Items>,
         state: &<Self::State as StateOption>::Output,
         transitioned: Wrapping<u16>,
         now: Wrapping<u16>,
     );
-    fn revert(
+    fn backward(
         params: &Self::Params<'_, '_>,
         items: &mut QueryItem<'_, Self::Items>,
         state: &<Self::State as StateOption>::Output,
         transitioned: Wrapping<u16>,
         now: Wrapping<u16>,
     );
-    fn advance_up_to_transition_or_limit(
+    fn forward_to_transition_or_limit(
         params: &Self::Params<'_, '_>,
         items: &mut QueryItem<'_, Self::Items>,
         state: &<Self::State as StateOption>::Output,
         transitioned: Wrapping<u16>,
         now: Wrapping<u16>,
-        limit: Wrapping<u16>,
+        limit: ToTimeStamp,
     ) -> Wrapping<u16> {
         #[allow(clippy::no_effect)]
         (params, items, state, transitioned, now, limit);
         panic!(
-            "`<{} as PerEntity>::advance_up_to_transition_or_limit` should be implemented if `FAST_ADVANCE_SYSTEM` is set to `true`.",
+            "`<{} as PerEntity>::advance_up_to_transition_or_limit` should be implemented if `FORWARD_TO_SYSTEM` is set to `true`.",
             type_name::<Self>()
         );
     }
-    fn revert_down_to_transition_or_limit(
+    fn backward_to_transition_or_limit(
         params: &Self::Params<'_, '_>,
         items: &mut QueryItem<'_, Self::Items>,
         state: &<Self::State as StateOption>::Output,
         transitioned: Wrapping<u16>,
         now: Wrapping<u16>,
+        limit: ToTimeStamp,
     ) {
         #[allow(clippy::no_effect)]
-        (params, items, state, transitioned, now);
+        (params, items, state, transitioned, now, limit);
         panic!(
-            "`<{} as PerEntity>::revert_down_to_transition_or_limit` should be implemented if `FAST_REVERT_SYSTEM` is set to `true`.",
+            "`<{} as PerEntity>::revert_down_to_transition_or_limit` should be implemented if `BACKWARD_TO_SYSTEM` is set to `true`.",
             type_name::<Self>()
         );
     }
-    fn advance_transition(
+    fn forward_transition(
         params: &Self::Params<'_, '_>,
         items: &mut QueryItem<'_, Self::Items>,
         past_state: &<Self::State as StateOption>::Output,
@@ -85,7 +86,7 @@ pub trait PerEntity: Send + Sync + Sized + 'static {
         #[allow(clippy::no_effect)]
         (params, items, past_state, future_state, transition, now); //calm clippy without adding `_` prefixes to trait function signature
     }
-    fn revert_transition(
+    fn backward_transition(
         params: &Self::Params<'_, '_>,
         items: &mut QueryItem<'_, Self::Items>,
         past_state: &<Self::State as StateOption>::Output,
@@ -108,7 +109,7 @@ pub trait PerEntity: Send + Sync + Sized + 'static {
 }
 
 pub(super) trait PerEntitySystems: PerEntity {
-    fn advance_system<'w, 's>(
+    fn forward_system<'w, 's>(
         params: Self::Params<'w, 's>,
         mut query: Query<
             '_,
@@ -126,36 +127,36 @@ pub(super) trait PerEntitySystems: PerEntity {
         if Self::PAR_ITER_BATCH_SIZE == 0 {
             commands.command_scope(|mut commands| {
                 query.for_each_mut(|(mut items, mut log)| {
-                    log.advance::<Self::State, <Self as PerEntity>::Params<'_, '_>, QueryItem<'_, <Self as PerEntity>::Items>>(
+                    log.forward::<Self::State, <Self as PerEntity>::Params<'_, '_>, QueryItem<'_, <Self as PerEntity>::Items>>(
                         &params,
                         &mut items,
                         &states,
                         &controller,
                         &mut commands,
-                        Self::advance,
+                        Self::forward,
                         Self::next_transition,
-                        Self::advance_transition,
+                        Self::forward_transition,
                     );
                 });
             });
         } else {
             query.par_for_each_mut(Self::PAR_ITER_BATCH_SIZE, |(mut items, mut log)| {
                 commands.command_scope(|mut commands| {
-                    log.advance::<Self::State, <Self as PerEntity>::Params<'_, '_>, QueryItem<'_, <Self as PerEntity>::Items>>(
+                    log.forward::<Self::State, <Self as PerEntity>::Params<'_, '_>, QueryItem<'_, <Self as PerEntity>::Items>>(
                         &params,
                         &mut items,
                         &states,
                         &controller,
                         &mut commands,
-                        Self::advance,
+                        Self::forward,
                         Self::next_transition,
-                        Self::advance_transition,
+                        Self::forward_transition,
                     );
                 });
             });
         }
     }
-    fn advance_fast_system<'w, 's>(
+    fn forward_to_system<'w, 's>(
         params: Self::Params<'w, 's>,
         mut query: Query<
             'w,
@@ -173,28 +174,28 @@ pub(super) trait PerEntitySystems: PerEntity {
         if Self::PAR_ITER_BATCH_SIZE == 0 {
             commands.command_scope(|mut commands| {
                 query.for_each_mut(|(mut items, mut log)| {
-                    if Self::FAST_ADVANCE_SYSTEM {
-                        log.advance_fast::<Self::State, <Self as PerEntity>::Params<'_, '_>, QueryItem<'_, <Self as PerEntity>::Items>>(
+                    if Self::FORWARD_TO_SYSTEM {
+                        log.forward_to::<Self::State, <Self as PerEntity>::Params<'_, '_>, QueryItem<'_, <Self as PerEntity>::Items>>(
                             &params,
                             &mut items,
                             &states,
                             &controller,
                             &mut commands,
-                            Self::advance_up_to_transition_or_limit,
+                            Self::forward_to_transition_or_limit,
                             Self::next_transition,
-                            Self::advance_transition,
+                            Self::forward_transition,
                             Self::debug,
                         );
                     } else {
-                        log.advance::<Self::State, <Self as PerEntity>::Params<'_, '_>, QueryItem<'_, <Self as PerEntity>::Items>>(
+                        log.forward::<Self::State, <Self as PerEntity>::Params<'_, '_>, QueryItem<'_, <Self as PerEntity>::Items>>(
                             &params,
                             &mut items,
                             &states,
                             &controller,
                             &mut commands,
-                            Self::advance,
+                            Self::forward,
                             Self::next_transition,
-                            Self::advance_transition,
+                            Self::forward_transition,
                         );
                     }
                 });
@@ -202,35 +203,35 @@ pub(super) trait PerEntitySystems: PerEntity {
         } else {
             query.par_for_each_mut(Self::PAR_ITER_BATCH_SIZE, |(mut items, mut log)| {
                 commands.command_scope(|mut commands| {
-                    if Self::FAST_ADVANCE_SYSTEM {
-                        log.advance_fast::<Self::State, <Self as PerEntity>::Params<'_, '_>, QueryItem<'_, <Self as PerEntity>::Items>>(
+                    if Self::FORWARD_TO_SYSTEM {
+                        log.forward_to::<Self::State, <Self as PerEntity>::Params<'_, '_>, QueryItem<'_, <Self as PerEntity>::Items>>(
                             &params,
                             &mut items,
                             &states,
                             &controller,
                             &mut commands,
-                            Self::advance_up_to_transition_or_limit,
+                            Self::forward_to_transition_or_limit,
                             Self::next_transition,
-                            Self::advance_transition,
+                            Self::forward_transition,
                             Self::debug,
                         );
                     } else {
-                        log.advance::<Self::State, <Self as PerEntity>::Params<'_, '_>, QueryItem<'_, <Self as PerEntity>::Items>>(
+                        log.forward::<Self::State, <Self as PerEntity>::Params<'_, '_>, QueryItem<'_, <Self as PerEntity>::Items>>(
                             &params,
                             &mut items,
                             &states,
                             &controller,
                             &mut commands,
-                            Self::advance,
+                            Self::forward,
                             Self::next_transition,
-                            Self::advance_transition,
+                            Self::forward_transition,
                         );
                     }
                 });
             });
         }
     }
-    fn advance_log_system<'w, 's>(
+    fn forward_log_system<'w, 's>(
         params: Self::Params<'w, 's>,
         mut query: Query<
             'w,
@@ -246,29 +247,29 @@ pub(super) trait PerEntitySystems: PerEntity {
     ) {
         if Self::PAR_ITER_BATCH_SIZE == 0 {
             query.for_each_mut(|(mut items, mut log)| {
-                log.advance_log::<Self::State, <Self as PerEntity>::Params<'_, '_>, QueryItem<'_, <Self as PerEntity>::Items>>(
+                log.forward_log::<Self::State, <Self as PerEntity>::Params<'_, '_>, QueryItem<'_, <Self as PerEntity>::Items>>(
                     &params,
                     &mut items,
                     &states,
                     &controller,
-                    Self::advance,
-                    Self::advance_transition,
+                    Self::forward,
+                    Self::forward_transition,
                 )
             });
         } else {
             query.par_for_each_mut(Self::PAR_ITER_BATCH_SIZE, |(mut items, mut log)| {
-                log.advance_log::<Self::State, <Self as PerEntity>::Params<'_, '_>, QueryItem<'_, <Self as PerEntity>::Items>>(
+                log.forward_log::<Self::State, <Self as PerEntity>::Params<'_, '_>, QueryItem<'_, <Self as PerEntity>::Items>>(
                     &params,
                     &mut items,
                     &states,
                     &controller,
-                    Self::advance,
-                    Self::advance_transition,
+                    Self::forward,
+                    Self::forward_transition,
                 )
             });
         }
     }
-    fn advance_log_fast_system<'w, 's, const INIT: bool>(
+    fn forward_log_to_system<'w, 's, const INIT: bool>(
         params: Self::Params<'w, 's>,
         mut query: Query<
             'w,
@@ -284,53 +285,53 @@ pub(super) trait PerEntitySystems: PerEntity {
     ) {
         if Self::PAR_ITER_BATCH_SIZE == 0 {
             query.for_each_mut(|(mut items, mut log)| {
-                if Self::FAST_ADVANCE_SYSTEM {
-                    log.advance_log_fast::<Self::State, <Self as PerEntity>::Params<'_, '_>, QueryItem<'_, <Self as PerEntity>::Items>, INIT>(
+                if Self::FORWARD_TO_SYSTEM {
+                    log.forward_log_to::<Self::State, <Self as PerEntity>::Params<'_, '_>, QueryItem<'_, <Self as PerEntity>::Items>, INIT>(
                         &params,
                         &mut items,
                         &states,
                         &controller,
-                        Self::advance_up_to_transition_or_limit,
-                        Self::advance_transition,
+                        Self::forward_to_transition_or_limit,
+                        Self::forward_transition,
                         Self::debug,
                     );
                 } else {
-                    log.advance_log::<Self::State, <Self as PerEntity>::Params<'_, '_>, QueryItem<'_, <Self as PerEntity>::Items>>(
+                    log.forward_log::<Self::State, <Self as PerEntity>::Params<'_, '_>, QueryItem<'_, <Self as PerEntity>::Items>>(
                         &params,
                         &mut items,
                         &states,
                         &controller,
-                        Self::advance,
-                        Self::advance_transition,
+                        Self::forward,
+                        Self::forward_transition,
                     );
                 }
             });
         } else {
             query.par_for_each_mut(Self::PAR_ITER_BATCH_SIZE, |(mut items, mut log)| {
-                if Self::FAST_ADVANCE_SYSTEM {
-                    log.advance_log_fast::<Self::State, <Self as PerEntity>::Params<'_, '_>, QueryItem<'_, <Self as PerEntity>::Items>, INIT>(
+                if Self::FORWARD_TO_SYSTEM {
+                    log.forward_log_to::<Self::State, <Self as PerEntity>::Params<'_, '_>, QueryItem<'_, <Self as PerEntity>::Items>, INIT>(
                         &params,
                         &mut items,
                         &states,
                         &controller,
-                        Self::advance_up_to_transition_or_limit,
-                        Self::advance_transition,
+                        Self::forward_to_transition_or_limit,
+                        Self::forward_transition,
                         Self::debug,
                     );
                 } else {
-                    log.advance_log::<Self::State, <Self as PerEntity>::Params<'_, '_>, QueryItem<'_, <Self as PerEntity>::Items>>(
+                    log.forward_log::<Self::State, <Self as PerEntity>::Params<'_, '_>, QueryItem<'_, <Self as PerEntity>::Items>>(
                         &params,
                         &mut items,
                         &states,
                         &controller,
-                        Self::advance,
-                        Self::advance_transition,
+                        Self::forward,
+                        Self::forward_transition,
                     );
                 }
             });
         }
     }
-    fn revert_log_system<'w, 's>(
+    fn backward_log_system<'w, 's>(
         params: Self::Params<'w, 's>,
         mut query: Query<
             'w,
@@ -346,29 +347,29 @@ pub(super) trait PerEntitySystems: PerEntity {
     ) {
         if Self::PAR_ITER_BATCH_SIZE == 0 {
             query.for_each_mut(|(mut items, mut log)| {
-                log.revert_log::<Self::State, <Self as PerEntity>::Params<'_, '_>, QueryItem<'_, <Self as PerEntity>::Items>>(
+                log.backward_log::<Self::State, <Self as PerEntity>::Params<'_, '_>, QueryItem<'_, <Self as PerEntity>::Items>>(
                     &params,
                     &mut items,
                     &states,
                     &controller,
-                    Self::revert,
-                    Self::revert_transition,
+                    Self::backward,
+                    Self::backward_transition,
                 )
             });
         } else {
             query.par_for_each_mut(Self::PAR_ITER_BATCH_SIZE, |(mut items, mut log)| {
-                log.revert_log::<Self::State, <Self as PerEntity>::Params<'_, '_>, QueryItem<'_, <Self as PerEntity>::Items>>(
+                log.backward_log::<Self::State, <Self as PerEntity>::Params<'_, '_>, QueryItem<'_, <Self as PerEntity>::Items>>(
                     &params,
                     &mut items,
                     &states,
                     &controller,
-                    Self::revert,
-                    Self::revert_transition,
+                    Self::backward,
+                    Self::backward_transition,
                 )
             });
         }
     }
-    fn revert_log_fast_system<'w, 's, const INIT: bool>(
+    fn backward_to_system<'w, 's, const INIT: bool>(
         params: Self::Params<'w, 's>,
         mut query: Query<
             'w,
@@ -384,45 +385,45 @@ pub(super) trait PerEntitySystems: PerEntity {
     ) {
         if Self::PAR_ITER_BATCH_SIZE == 0 {
             query.for_each_mut(|(mut items, mut log)| {
-                if Self::FAST_REVERT_SYSTEM {
-                    log.revert_log_fast::<Self::State, <Self as PerEntity>::Params<'_, '_>, QueryItem<'_, <Self as PerEntity>::Items>, INIT>(
+                if Self::BACKWARD_TO_SYSTEM {
+                    log.backward_log_to::<Self::State, <Self as PerEntity>::Params<'_, '_>, QueryItem<'_, <Self as PerEntity>::Items>, INIT>(
                         &params,
                         &mut items,
                         &states,
                         &controller,
-                        Self::revert_down_to_transition_or_limit,
-                        Self::revert_transition,
+                        Self::backward_to_transition_or_limit,
+                        Self::backward_transition,
                     );
                 } else {
-                    log.revert_log::<Self::State, <Self as PerEntity>::Params<'_, '_>, QueryItem<'_, <Self as PerEntity>::Items>>(
+                    log.backward_log::<Self::State, <Self as PerEntity>::Params<'_, '_>, QueryItem<'_, <Self as PerEntity>::Items>>(
                         &params,
                         &mut items,
                         &states,
                         &controller,
-                        Self::revert,
-                        Self::revert_transition,
+                        Self::backward,
+                        Self::backward_transition,
                     );
                 }
             });
         } else {
             query.par_for_each_mut(Self::PAR_ITER_BATCH_SIZE, |(mut items, mut log)| {
-                if Self::FAST_REVERT_SYSTEM {
-                    log.revert_log_fast::<Self::State, <Self as PerEntity>::Params<'_, '_>, QueryItem<'_, <Self as PerEntity>::Items>, INIT>(
+                if Self::BACKWARD_TO_SYSTEM {
+                    log.backward_log_to::<Self::State, <Self as PerEntity>::Params<'_, '_>, QueryItem<'_, <Self as PerEntity>::Items>, INIT>(
                         &params,
                         &mut items,
                         &states,
                         &controller,
-                        Self::revert_down_to_transition_or_limit,
-                        Self::revert_transition,
+                        Self::backward_to_transition_or_limit,
+                        Self::backward_transition,
                     );
                 } else {
-                    log.revert_log::<Self::State, <Self as PerEntity>::Params<'_, '_>, QueryItem<'_, <Self as PerEntity>::Items>>(
+                    log.backward_log::<Self::State, <Self as PerEntity>::Params<'_, '_>, QueryItem<'_, <Self as PerEntity>::Items>>(
                         &params,
                         &mut items,
                         &states,
                         &controller,
-                        Self::revert,
-                        Self::revert_transition,
+                        Self::backward,
+                        Self::backward_transition,
                     );
                 }
             });
@@ -455,11 +456,11 @@ pub(super) trait PerEntitySystems: PerEntity {
     ) {
         if LOG_ONLY_PAR_ITER_BATCH_SIZE == 0 {
             query.for_each_mut(|mut log| {
-                log.log_end();
+                log.log_close();
             });
         } else {
             query.par_for_each_mut(LOG_ONLY_PAR_ITER_BATCH_SIZE, |mut log| {
-                log.log_end();
+                log.log_close();
             });
         }
     }

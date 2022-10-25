@@ -18,6 +18,27 @@ pub const LOG_ONLY_PAR_ITER_BATCH_SIZE: usize = 0;
 /// Must be a smaller integer type than `usize`.
 pub type Ticks = u16;
 
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ToTimeStamp{
+    pub to_time_stamp: Wrapping<Ticks>,
+    pub delta_abs: Ticks
+}
+
+impl ToTimeStamp{
+    fn to_future(now: Wrapping<Ticks>, to: Wrapping<Ticks>) -> Self{
+        Self {
+            to_time_stamp: to,
+            delta_abs: (to - now).0
+        }
+    }
+    fn to_past(now: Wrapping<Ticks>, to: Wrapping<Ticks>) -> Self{
+        Self {
+            to_time_stamp: to,
+            delta_abs: (now - to).0
+        }
+    }
+}
+
 pub trait TicksRelative {
     fn ticks_ago(&self, reference: Wrapping<Ticks>) -> Ticks;
     fn ticks_from_now(&self, reference: Wrapping<Ticks>) -> Ticks;

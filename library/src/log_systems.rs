@@ -20,16 +20,16 @@ pub trait StateOption: Resource {
     type Output;
     /// Returns the element at given index or else the length of the internal vector if  `index` is out of range.
     fn get_state<'w: 'a, 'a>(
-        param: &'a Self::Param<'w>,
+        states: &'a Self::Param<'w>,
         index: Self::Index,
-    ) -> Result<&'a Self::Output, usize>;
+    ) -> &'a Self::Output;
 }
 
 pub struct State<T: Resource, Index: Send + Sync + 'static = usize>(PhantomData<(T, Index)>)
 where
     usize: From<Index>;
 
-pub struct StateCollection<T> {
+pub struct StateCollection<T> { //todo versioning, const param?
     pub resource: Vec<T>,
 }
 
@@ -41,11 +41,10 @@ where
     type Param<'w> = Res<'w, StateCollection<T>>;
     type Output = T;
     fn get_state<'w: 'a, 'a>(
-        param: &'a Self::Param<'w>,
+        states: &'a Self::Param<'w>,
         index: Self::Index,
-    ) -> Result<&'a Self::Output, usize> {
-        let index = usize::from(index);
-        param.resource.get(index).ok_or(param.resource.len())
+    ) -> &'a Self::Output {
+        &states.resource[usize::from(index)]
     }
 }
 
@@ -54,10 +53,10 @@ impl StateOption for () {
     type Param<'w> = ();
     type Output = ();
     fn get_state<'w: 'a, 'a>(
-        _param: &Self::Param<'w>,
+        _states: &Self::Param<'w>,
         _index: Self::Index,
-    ) -> Result<&'a Self::Output, usize> {
-        Ok(&())
+    ) -> &'a Self::Output {
+        &()
     }
 }
 

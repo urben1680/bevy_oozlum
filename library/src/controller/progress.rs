@@ -11,19 +11,19 @@ pub(super) enum Progress {
     Forward {
         after_forward: bool,
     },
-    ForwardFast {
+    ForwardTo {
         after_forward_if_init: Option<bool>,
     },
     ForwardLog {
         after_forward: bool,
     },
-    ForwardLogEnd {
+    ForwardLogTo {
         after_forward_if_init: Option<bool>,
     },
     BackwardLog {
         after_backward: bool,
     },
-    BackwardLogEnd {
+    BackwardLogTo {
         after_backward_if_init: Option<bool>,
     },
     Pause {
@@ -37,25 +37,23 @@ pub(super) enum Progress {
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum ProgressQuery {
     Forward,
-    ForwardFast { to_time_stamp: Wrapping<Ticks> },
+    ForwardTo(Wrapping<Ticks>),
     ForwardLog,
-    ForwardLogEnd,
     BackwardLog,
-    BackwardLogEnd,
+    LogTo(Wrapping<Ticks>),
     Pause,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub(super) enum ProgressQueried {
     Forward,
-    ForwardFast {
+    ForwardTo {
         to_time_stamp: Wrapping<Ticks>,
         queried: Wrapping<Ticks>,
     },
     ForwardLog,
-    ForwardLogEnd,
     BackwardLog,
-    BackwardLogEnd,
+    LogTo (Wrapping<Ticks>),
     Pause,
 }
 

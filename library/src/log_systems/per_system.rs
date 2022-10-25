@@ -5,7 +5,7 @@ use bevy::{
     prelude::{Commands, Res, ResMut},
 };
 
-use crate::controller::{consts::CONTROLLER_CONSTS, Controller};
+use crate::{controller::{consts::CONTROLLER_CONSTS, Controller}, Ticks, ToTimeStamp};
 
 use super::{log::Log, NextTransition, StateOption};
 
@@ -19,28 +19,28 @@ pub trait PerSystem: Send + Sync + Sized + 'static {
     fn next_transition(
         params: &mut Self::Params<'_, '_>,
         state: &<Self::State as StateOption>::Output,
-        transitioned: Wrapping<u16>,
-        now: Wrapping<u16>,
+        transitioned: Wrapping<Ticks>,
+        now: Wrapping<Ticks>,
     ) -> Option<NextTransition<Self::State, Self::Transition>>;
-    fn advance(
+    fn forward(
         params: &mut Self::Params<'_, '_>,
         state: &<Self::State as StateOption>::Output,
-        transitioned: Wrapping<u16>,
-        now: Wrapping<u16>,
+        transitioned: Wrapping<Ticks>,
+        now: Wrapping<Ticks>,
     );
-    fn revert(
+    fn backward(
         params: &mut Self::Params<'_, '_>,
         state: &<Self::State as StateOption>::Output,
-        transitioned: Wrapping<u16>,
-        now: Wrapping<u16>,
+        transitioned: Wrapping<Ticks>,
+        now: Wrapping<Ticks>,
     );
-    fn advance_up_to_transition_or_limit(
+    fn forward_to_transition_or_limit(
         params: &mut Self::Params<'_, '_>,
         state: &<Self::State as StateOption>::Output,
-        transitioned: Wrapping<u16>,
-        now: Wrapping<u16>,
-        limit: Wrapping<u16>,
-    ) -> Wrapping<u16> {
+        transitioned: Wrapping<Ticks>,
+        now: Wrapping<Ticks>,
+        limit: ToTimeStamp,
+    ) -> Wrapping<Ticks> {
         #[allow(clippy::no_effect)]
         (params, state, transitioned, now, limit);
         panic!(
@@ -48,40 +48,40 @@ pub trait PerSystem: Send + Sync + Sized + 'static {
             type_name::<Self>()
         );
     }
-    fn revert_down_to_transition_or_limit(
+    fn backward_to_transition_or_limit(
         params: &mut Self::Params<'_, '_>,
         state: &<Self::State as StateOption>::Output,
-        transitioned: Wrapping<u16>,
-        now: Wrapping<u16>,
+        transitioned: Wrapping<Ticks>,
+        now: Wrapping<Ticks>,
+        limit: ToTimeStamp,
     ) {
         #[allow(clippy::no_effect)]
-        (params, state, transitioned, now);
+        (params, state, transitioned, now, limit);
         panic!(
             "`<{} as PerSystem>::revert_down_to_transition_or_limit` should be implemented if `FAST_REVERT_SYSTEM` is set to `true`.",
             type_name::<Self>()
         );
     }
-    fn advance_transition(
+    fn forward_transition(
         params: &mut Self::Params<'_, '_>,
         past_state: &<Self::State as StateOption>::Output,
         future_state: &<Self::State as StateOption>::Output,
         transition: &Self::Transition,
-        now: Wrapping<u16>,
+        now: Wrapping<Ticks>,
     ) {
         #[allow(clippy::no_effect)]
         (params, past_state, future_state, transition, now); //calm clippy without adding `_` prefixes to trait function signature
     }
-    fn revert_transition(
+    fn backward_transition(
         params: &mut Self::Params<'_, '_>,
         past_state: &<Self::State as StateOption>::Output,
         future_state: &<Self::State as StateOption>::Output,
         transition: &Self::Transition,
-        now: Wrapping<u16>,
+        now: Wrapping<Ticks>,
     ) {
         #[allow(clippy::no_effect)]
         (params, past_state, future_state, transition, now); //calm clippy without adding `_` prefixes to trait function signature
     }
-    /// only used in fast-forward
     fn debug(params: &mut Self::Params<'_, '_>) -> String {
         #[allow(clippy::no_effect)]
         (params,);
@@ -97,90 +97,91 @@ pub(super) trait PerSystemSystems: PerSystem {
         _ref_param: &(),
         mut_param: &mut Self::Params<'_, '_>,
         state: &<Self::State as StateOption>::Output,
-        transitioned: Wrapping<u16>,
-        now: Wrapping<u16>,
+        transitioned: Wrapping<Ticks>,
+        now: Wrapping<Ticks>,
     ) -> Option<NextTransition<Self::State, Self::Transition>> {
         Self::next_transition(mut_param, state, transitioned, now)
     }
-    fn advance_dud_ref(
+    fn forward_dud_ref(
         _ref_param: &(),
         mut_param: &mut Self::Params<'_, '_>,
         state: &<Self::State as StateOption>::Output,
-        transitioned: Wrapping<u16>,
-        now: Wrapping<u16>,
+        transitioned: Wrapping<Ticks>,
+        now: Wrapping<Ticks>,
     ) {
-        Self::advance(mut_param, state, transitioned, now);
+        Self::forward(mut_param, state, transitioned, now);
     }
-    fn revert_dud_ref(
+    fn backward_dud_ref(
         _ref_param: &(),
         mut_param: &mut Self::Params<'_, '_>,
         state: &<Self::State as StateOption>::Output,
-        transitioned: Wrapping<u16>,
-        now: Wrapping<u16>,
+        transitioned: Wrapping<Ticks>,
+        now: Wrapping<Ticks>,
     ) {
-        Self::revert(mut_param, state, transitioned, now);
+        Self::backward(mut_param, state, transitioned, now);
     }
-    fn advance_up_to_transition_or_limit_dud_ref(
+    fn forward_to_transition_or_limit_dud_ref(
         _ref_param: &(),
         mut_param: &mut Self::Params<'_, '_>,
         state: &<Self::State as StateOption>::Output,
-        transitioned: Wrapping<u16>,
-        now: Wrapping<u16>,
-        limit: Wrapping<u16>,
-    ) -> Wrapping<u16> {
-        Self::advance_up_to_transition_or_limit(mut_param, state, transitioned, now, limit)
+        transitioned: Wrapping<Ticks>,
+        now: Wrapping<Ticks>,
+        limit: ToTimeStamp,
+    ) -> Wrapping<Ticks> {
+        Self::forward_to_transition_or_limit(mut_param, state, transitioned, now, limit)
     }
-    fn revert_down_to_transition_or_limit_dud_ref(
+    fn backward_to_transition_or_limit_dud_ref(
         _ref_param: &(),
         mut_param: &mut Self::Params<'_, '_>,
         state: &<Self::State as StateOption>::Output,
-        transitioned: Wrapping<u16>,
-        now: Wrapping<u16>,
+        transitioned: Wrapping<Ticks>,
+        now: Wrapping<Ticks>,
+        limit: ToTimeStamp
     ) {
-        Self::revert_down_to_transition_or_limit(mut_param, state, transitioned, now);
+        Self::backward_to_transition_or_limit(mut_param, state, transitioned, now, limit);
     }
-    fn advance_transition_dud_ref(
+    fn forward_transition_dud_ref(
         _ref_param: &(),
         mut_param: &mut Self::Params<'_, '_>,
         past_state: &<Self::State as StateOption>::Output,
         future_state: &<Self::State as StateOption>::Output,
         transition: &Self::Transition,
-        now: Wrapping<u16>,
+        now: Wrapping<Ticks>,
     ) {
-        Self::advance_transition(mut_param, past_state, future_state, transition, now);
+        Self::forward_transition(mut_param, past_state, future_state, transition, now);
     }
-    fn revert_transition_dud_ref(
+    fn bacward_transition_dud_ref(
         _ref_param: &(),
         mut_param: &mut Self::Params<'_, '_>,
         past_state: &<Self::State as StateOption>::Output,
         future_state: &<Self::State as StateOption>::Output,
         transition: &Self::Transition,
-        now: Wrapping<u16>,
+        now: Wrapping<Ticks>,
     ) {
-        Self::revert_transition(mut_param, past_state, future_state, transition, now);
+        Self::backward_transition(mut_param, past_state, future_state, transition, now);
     }
     fn debug_dud_ref(_ref_param: &(), mut_param: &mut Self::Params<'_, '_>) -> String {
         Self::debug(mut_param)
     }
-    fn advance_system<'w, 's>(
+    fn forward_system<'w, 's>(
         mut params: Self::Params<'w, 's>,
         mut log: ResMut<'w, Log<Self, Self::Transition, <Self::State as StateOption>::Index>>,
         states: <Self::State as StateOption>::Param<'w>,
         controller: Res<'w, Controller>,
         mut commands: Commands<'w, 's>,
     ) {
-        log.advance::<Self::State, (), Self::Params<'w, 's>>(
+        log.forward::<Self::State, (), Self::Params<'w, 's>>(
             &(),
             &mut params,
             &states,
             &controller,
             &mut commands,
-            Self::advance_dud_ref,
+            Self::forward_dud_ref,
             Self::next_transition_dud_ref,
-            Self::advance_transition_dud_ref,
+            Self::forward_transition_dud_ref,
         );
     }
-    fn advance_fast_system<'w, 's>(
+    fn forward_to_system<'w, 's>(
         mut params: Self::Params<'w, 's>,
         mut log: ResMut<'w, Log<Self, Self::Transition, <Self::State as StateOption>::Index>>,
         states: <Self::State as StateOption>::Param<'w>,
@@ -188,110 +189,110 @@ pub(super) trait PerSystemSystems: PerSystem {
         mut commands: Commands<'w, 's>,
     ) {
         if Self::FAST_ADVANCE_SYSTEM {
-            log.advance_fast::<Self::State, (), Self::Params<'w, 's>>(
+            log.forward_to::<Self::State, (), Self::Params<'w, 's>>(
                 &(),
                 &mut params,
                 &states,
                 &controller,
                 &mut commands,
-                Self::advance_up_to_transition_or_limit_dud_ref,
+                Self::forward_to_transition_or_limit_dud_ref,
                 Self::next_transition_dud_ref,
-                Self::advance_transition_dud_ref,
+                Self::forward_transition_dud_ref,
                 Self::debug_dud_ref,
             );
         } else {
-            log.advance::<Self::State, (), Self::Params<'w, 's>>(
+            log.forward::<Self::State, (), Self::Params<'w, 's>>(
                 &(),
                 &mut params,
                 &states,
                 &controller,
                 &mut commands,
-                Self::advance_dud_ref,
+                Self::forward_dud_ref,
                 Self::next_transition_dud_ref,
-                Self::advance_transition_dud_ref,
+                Self::forward_transition_dud_ref,
             );
         }
     }
-    fn advance_log_system<'w, 's>(
+    fn forward_log_system<'w, 's>(
         mut params: Self::Params<'w, 's>,
         mut log: ResMut<'w, Log<Self, Self::Transition, <Self::State as StateOption>::Index>>,
         states: <Self::State as StateOption>::Param<'w>,
         controller: Res<'w, Controller>,
     ) {
-        log.advance_log::<Self::State, (), Self::Params<'w, 's>>(
+        log.forward_log::<Self::State, (), Self::Params<'w, 's>>(
             &(),
             &mut params,
             &states,
             &controller,
-            Self::advance_dud_ref,
-            Self::advance_transition_dud_ref,
+            Self::forward_dud_ref,
+            Self::forward_transition_dud_ref,
         )
     }
-    fn advance_log_fast_system<'w, 's, const INIT: bool>(
+    fn forward_log_to_system<'w, 's, const INIT: bool>(
         mut params: Self::Params<'w, 's>,
         mut log: ResMut<'w, Log<Self, Self::Transition, <Self::State as StateOption>::Index>>,
         states: <Self::State as StateOption>::Param<'w>,
         controller: Res<'w, Controller>,
     ) {
         if Self::FAST_ADVANCE_SYSTEM {
-            log.advance_log_fast::<Self::State, (), Self::Params<'w, 's>, INIT>(
+            log.forward_log_to::<Self::State, (), Self::Params<'w, 's>, INIT>(
                 &(),
                 &mut params,
                 &states,
                 &controller,
-                Self::advance_up_to_transition_or_limit_dud_ref,
-                Self::advance_transition_dud_ref,
+                Self::forward_to_transition_or_limit_dud_ref,
+                Self::forward_transition_dud_ref,
                 Self::debug_dud_ref,
             );
         } else {
-            log.advance_log::<Self::State, (), Self::Params<'w, 's>>(
+            log.forward_log::<Self::State, (), Self::Params<'w, 's>>(
                 &(),
                 &mut params,
                 &states,
                 &controller,
-                Self::advance_dud_ref,
-                Self::advance_transition_dud_ref,
+                Self::forward_dud_ref,
+                Self::forward_transition_dud_ref,
             );
         }
     }
-    fn revert_log_system<'w, 's>(
+    fn backward_log_system<'w, 's>(
         mut params: Self::Params<'w, 's>,
         mut log: ResMut<'w, Log<Self, Self::Transition, <Self::State as StateOption>::Index>>,
         states: <Self::State as StateOption>::Param<'w>,
         controller: Res<'w, Controller>,
     ) {
-        log.revert_log::<Self::State, (), Self::Params<'w, 's>>(
+        log.backward_log::<Self::State, (), Self::Params<'w, 's>>(
             &(),
             &mut params,
             &states,
             &controller,
-            Self::revert_dud_ref,
-            Self::revert_transition_dud_ref,
+            Self::backward_dud_ref,
+            Self::bacward_transition_dud_ref,
         )
     }
-    fn revert_log_fast_system<'w, 's, const INIT: bool>(
+    fn backward_log_to_system<'w, 's, const INIT: bool>(
         mut params: Self::Params<'w, 's>,
         mut log: ResMut<'w, Log<Self, Self::Transition, <Self::State as StateOption>::Index>>,
         states: <Self::State as StateOption>::Param<'w>,
         controller: Res<'w, Controller>,
     ) {
         if Self::FAST_REVERT_SYSTEM {
-            log.revert_log_fast::<Self::State, (), Self::Params<'w, 's>, INIT>(
+            log.backward_log_to::<Self::State, (), Self::Params<'w, 's>, INIT>(
                 &(),
                 &mut params,
                 &states,
                 &controller,
-                Self::revert_down_to_transition_or_limit_dud_ref,
-                Self::revert_transition_dud_ref,
+                Self::backward_to_transition_or_limit_dud_ref,
+                Self::bacward_transition_dud_ref,
             );
         } else {
-            log.revert_log::<Self::State, (), Self::Params<'w, 's>>(
+            log.backward_log::<Self::State, (), Self::Params<'w, 's>>(
                 &(),
                 &mut params,
                 &states,
                 &controller,
-                Self::revert_dud_ref,
-                Self::revert_transition_dud_ref,
+                Self::backward_dud_ref,
+                Self::bacward_transition_dud_ref,
             );
         }
     }
@@ -301,10 +302,10 @@ pub(super) trait PerSystemSystems: PerSystem {
     ) {
         log.age_check(&controller);
     }
-    fn log_end_system<'w, 's>(
+    fn log_close_system<'w, 's>(
         mut log: ResMut<'w, Log<Self, Self::Transition, <Self::State as StateOption>::Index>>,
     ) {
-        log.log_end();
+        log.log_close();
     }
 }
 
