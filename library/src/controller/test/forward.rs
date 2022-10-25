@@ -8,7 +8,7 @@ use crate::controller::{
 use super::{tests, Test, CONTROLLER_CONSTS_TIME_STEP_ZERO};
 
 const THREE_FORWARD: [Option<ProgressQuery>; 3] = [None; 3];
-const TIME_STAMP_4_AFTER_FIRST_CHECK: DebugLog = DebugLog{
+const TIME_STAMP_4_AFTER_FIRST_CHECK: DebugLog = DebugLog {
     current: Progress::Forward {
         after_forward: true,
     },
@@ -24,7 +24,7 @@ const TIME_STAMP_4_AFTER_FIRST_CHECK: DebugLog = DebugLog{
     delayed_commands_len: 0,
     commands_overflows: 0,
 };
-const TIME_STAMP_4_AFTER_LAST_CHECK: DebugLog = DebugLog{
+const TIME_STAMP_4_AFTER_LAST_CHECK: DebugLog = DebugLog {
     current: Progress::Forward {
         after_forward: true,
     },
@@ -88,7 +88,10 @@ fn processes_query_forward_to_not_future() {
         [Test {
             before_first_commands: vec![ProgressQuery::ForwardTo(Wrapping(4)).into()],
             after_first_check: DebugLog {
-                progress_query: Some(ProgressQueried::ForwardTo { to_time_stamp: Wrapping(4), queried: Wrapping(3) }),
+                progress_query: Some(ProgressQueried::ForwardTo {
+                    to_time_stamp: Wrapping(4),
+                    queried: Wrapping(3),
+                }),
                 ..TIME_STAMP_4_AFTER_FIRST_CHECK
             },
             after_last_check: DebugLog {
@@ -111,7 +114,10 @@ fn processes_query_forward_to_one_tick() {
         [Test {
             before_first_commands: vec![ProgressQuery::ForwardTo(Wrapping(5)).into()],
             after_first_check: DebugLog {
-                progress_query: Some(ProgressQueried::ForwardTo { to_time_stamp: Wrapping(5), queried: Wrapping(3) }),
+                progress_query: Some(ProgressQueried::ForwardTo {
+                    to_time_stamp: Wrapping(5),
+                    queried: Wrapping(3),
+                }),
                 ..TIME_STAMP_4_AFTER_FIRST_CHECK
             },
             after_last_check: DebugLog {
@@ -134,11 +140,16 @@ fn processes_query_forward_to_two_ticks() {
         [Test {
             before_first_commands: vec![ProgressQuery::ForwardTo(Wrapping(6)).into()],
             after_first_check: DebugLog {
-                progress_query: Some(ProgressQueried::ForwardTo { to_time_stamp: Wrapping(6), queried: Wrapping(3) }),
+                progress_query: Some(ProgressQueried::ForwardTo {
+                    to_time_stamp: Wrapping(6),
+                    queried: Wrapping(3),
+                }),
                 ..TIME_STAMP_4_AFTER_FIRST_CHECK
             },
             after_last_check: DebugLog {
-                current: Progress::ForwardTo { after_forward_if_init: Some(true) },
+                current: Progress::ForwardTo {
+                    after_forward_if_init: Some(true),
+                },
                 progress_query: None,
                 delayed_commands_len: 2,
                 to_time_stamp: Wrapping(6),
@@ -161,7 +172,9 @@ fn processes_query_forward_log() {
                 ..TIME_STAMP_4_AFTER_FIRST_CHECK
             },
             after_last_check: DebugLog {
-                current: Progress::Pause { after_forward_if_log: Some(true) },
+                current: Progress::Pause {
+                    after_forward_if_log: Some(true),
+                },
                 progress_query: None,
                 ..TIME_STAMP_4_AFTER_LAST_CHECK
             },
@@ -182,7 +195,9 @@ fn processes_query_backward_log() {
                 ..TIME_STAMP_4_AFTER_FIRST_CHECK
             },
             after_last_check: DebugLog {
-                current: Progress::BackwardLog { after_backward: false },
+                current: Progress::BackwardLog {
+                    after_backward: false,
+                },
                 progress_query: None,
                 ..TIME_STAMP_4_AFTER_LAST_CHECK
             },
@@ -205,7 +220,9 @@ fn processes_query_pause() {
                 ..TIME_STAMP_4_AFTER_FIRST_CHECK
             },
             after_last_check: DebugLog {
-                current: Progress::Pause { after_forward_if_log: None },
+                current: Progress::Pause {
+                    after_forward_if_log: None,
+                },
                 progress_query: None,
                 ..TIME_STAMP_4_AFTER_LAST_CHECK
             },

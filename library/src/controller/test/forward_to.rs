@@ -7,8 +7,9 @@ use crate::controller::{
 
 use super::{tests, Test, CONTROLLER_CONSTS_TIME_STEP_ZERO};
 
-const PROGRESS_FORWARD_TO_TO_3: [Option<ProgressQuery>; 1] = [Some(ProgressQuery::ForwardTo(Wrapping(3)))];
-const TIME_STAMP_2_AFTER_FIRST_CHECK: DebugLog = DebugLog{
+const PROGRESS_FORWARD_TO_TO_3: [Option<ProgressQuery>; 1] =
+    [Some(ProgressQuery::ForwardTo(Wrapping(3)))];
+const TIME_STAMP_2_AFTER_FIRST_CHECK: DebugLog = DebugLog {
     current: Progress::ForwardTo {
         after_forward_if_init: Some(true),
     },
@@ -24,7 +25,7 @@ const TIME_STAMP_2_AFTER_FIRST_CHECK: DebugLog = DebugLog{
     delayed_commands_len: 2,
     commands_overflows: 0,
 };
-const TIME_STAMP_2_AFTER_LAST_CHECK: DebugLog = DebugLog{
+const TIME_STAMP_2_AFTER_LAST_CHECK: DebugLog = DebugLog {
     current: Progress::ForwardTo {
         after_forward_if_init: None,
     },
@@ -40,7 +41,7 @@ const TIME_STAMP_2_AFTER_LAST_CHECK: DebugLog = DebugLog{
     delayed_commands_len: 1,
     commands_overflows: 0,
 };
-const TIME_STAMP_3_AFTER_FIRST_CHECK: DebugLog = DebugLog{
+const TIME_STAMP_3_AFTER_FIRST_CHECK: DebugLog = DebugLog {
     current: Progress::ForwardTo {
         after_forward_if_init: None,
     },
@@ -56,7 +57,7 @@ const TIME_STAMP_3_AFTER_FIRST_CHECK: DebugLog = DebugLog{
     delayed_commands_len: 1,
     commands_overflows: 0,
 };
-const TIME_STAMP_3_AFTER_LAST_CHECK: DebugLog = DebugLog{
+const TIME_STAMP_3_AFTER_LAST_CHECK: DebugLog = DebugLog {
     current: Progress::Forward {
         after_forward: true,
     },
@@ -158,14 +159,20 @@ fn processes_query_forward_to_not_future() {
                     current: Progress::ForwardTo {
                         after_forward_if_init: Some(true),
                     },
-                    progress_query: Some(ProgressQueried::ForwardTo { to_time_stamp: Wrapping(3), queried: Wrapping(1) }),
+                    progress_query: Some(ProgressQueried::ForwardTo {
+                        to_time_stamp: Wrapping(3),
+                        queried: Wrapping(1),
+                    }),
                     ..TIME_STAMP_2_AFTER_FIRST_CHECK
                 },
                 after_last_check: DebugLog {
                     current: Progress::ForwardTo {
                         after_forward_if_init: None,
                     },
-                    progress_query: Some(ProgressQueried::ForwardTo { to_time_stamp: Wrapping(3), queried: Wrapping(1) }),
+                    progress_query: Some(ProgressQueried::ForwardTo {
+                        to_time_stamp: Wrapping(3),
+                        queried: Wrapping(1),
+                    }),
                     ..TIME_STAMP_2_AFTER_LAST_CHECK
                 },
                 ..Default::default()
@@ -176,7 +183,10 @@ fn processes_query_forward_to_not_future() {
                     current: Progress::ForwardTo {
                         after_forward_if_init: None,
                     },
-                    progress_query: Some(ProgressQueried::ForwardTo { to_time_stamp: Wrapping(3), queried: Wrapping(1) }),
+                    progress_query: Some(ProgressQueried::ForwardTo {
+                        to_time_stamp: Wrapping(3),
+                        queried: Wrapping(1),
+                    }),
                     ..TIME_STAMP_3_AFTER_FIRST_CHECK
                 },
                 after_last_check: DebugLog {
@@ -205,14 +215,20 @@ fn processes_query_forward_to_one_tick() {
                     current: Progress::ForwardTo {
                         after_forward_if_init: Some(true),
                     },
-                    progress_query: Some(ProgressQueried::ForwardTo { to_time_stamp: Wrapping(4), queried: Wrapping(1) }),
+                    progress_query: Some(ProgressQueried::ForwardTo {
+                        to_time_stamp: Wrapping(4),
+                        queried: Wrapping(1),
+                    }),
                     ..TIME_STAMP_2_AFTER_FIRST_CHECK
                 },
                 after_last_check: DebugLog {
                     current: Progress::ForwardTo {
                         after_forward_if_init: None,
                     },
-                    progress_query: Some(ProgressQueried::ForwardTo { to_time_stamp: Wrapping(4), queried: Wrapping(1) }),
+                    progress_query: Some(ProgressQueried::ForwardTo {
+                        to_time_stamp: Wrapping(4),
+                        queried: Wrapping(1),
+                    }),
                     ..TIME_STAMP_2_AFTER_LAST_CHECK
                 },
                 ..Default::default()
@@ -223,7 +239,10 @@ fn processes_query_forward_to_one_tick() {
                     current: Progress::ForwardTo {
                         after_forward_if_init: None,
                     },
-                    progress_query: Some(ProgressQueried::ForwardTo { to_time_stamp: Wrapping(4), queried: Wrapping(1) }),
+                    progress_query: Some(ProgressQueried::ForwardTo {
+                        to_time_stamp: Wrapping(4),
+                        queried: Wrapping(1),
+                    }),
                     ..TIME_STAMP_3_AFTER_FIRST_CHECK
                 },
                 after_last_check: DebugLog {
@@ -252,14 +271,20 @@ fn processes_query_forward_to_two_ticks() {
                     current: Progress::ForwardTo {
                         after_forward_if_init: Some(true),
                     },
-                    progress_query: Some(ProgressQueried::ForwardTo { to_time_stamp: Wrapping(5), queried: Wrapping(1) }),
+                    progress_query: Some(ProgressQueried::ForwardTo {
+                        to_time_stamp: Wrapping(5),
+                        queried: Wrapping(1),
+                    }),
                     ..TIME_STAMP_2_AFTER_FIRST_CHECK
                 },
                 after_last_check: DebugLog {
                     current: Progress::ForwardTo {
                         after_forward_if_init: None,
                     },
-                    progress_query: Some(ProgressQueried::ForwardTo { to_time_stamp: Wrapping(5), queried: Wrapping(1) }),
+                    progress_query: Some(ProgressQueried::ForwardTo {
+                        to_time_stamp: Wrapping(5),
+                        queried: Wrapping(1),
+                    }),
                     ..TIME_STAMP_2_AFTER_LAST_CHECK
                 },
                 ..Default::default()
@@ -270,7 +295,10 @@ fn processes_query_forward_to_two_ticks() {
                     current: Progress::ForwardTo {
                         after_forward_if_init: None,
                     },
-                    progress_query: Some(ProgressQueried::ForwardTo { to_time_stamp: Wrapping(5), queried: Wrapping(1) }),
+                    progress_query: Some(ProgressQueried::ForwardTo {
+                        to_time_stamp: Wrapping(5),
+                        queried: Wrapping(1),
+                    }),
                     ..TIME_STAMP_3_AFTER_FIRST_CHECK
                 },
                 after_last_check: DebugLog {
@@ -323,7 +351,9 @@ fn processes_query_forward_log() {
                     ..TIME_STAMP_3_AFTER_FIRST_CHECK
                 },
                 after_last_check: DebugLog {
-                    current: Progress::Pause { after_forward_if_log: Some(true) },
+                    current: Progress::Pause {
+                        after_forward_if_log: Some(true),
+                    },
                     progress_query: None,
                     ..TIME_STAMP_3_AFTER_LAST_CHECK
                 },
@@ -332,7 +362,6 @@ fn processes_query_forward_log() {
         ],
     )
 }
-
 
 /*
 todo: query log_to
