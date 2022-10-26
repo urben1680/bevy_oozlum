@@ -106,7 +106,7 @@ trait PresetFunctions {
     ) -> EntityMut<'a> {
         world
             .get_entity_mut(entity)
-            .unwrap_or_else(|| Self::panic(action, "entity not found"))
+            .unwrap_or_else(|| Self::panic(action, "entity was not found"))
     }
     fn entity(world: &mut World, action: CommandAction, undo_spawns: bool, entity: Entity) {
         let mut entity = Self::get_entity(world, entity, action);
@@ -197,23 +197,23 @@ trait PresetFunctions {
     }
     fn despawned_entity_panic(action: CommandAction, found: bool) {
         if found {
-            Self::panic(action, "`DespawnedEntity` found")
+            Self::panic(action, "`DespawnedEntity` was found")
         } else {
-            Self::panic(action, "`DespawnedEntity` not found")
+            Self::panic(action, "`DespawnedEntity` was not found")
         }
     }
     fn despawned_t_panic(action: CommandAction, found: bool) {
         if found {
-            Self::panic(action, "`Despawned<T>` found")
+            Self::panic(action, "`Despawned<T>` was found")
         } else {
-            Self::panic(action, "`Despawned<T>` not found")
+            Self::panic(action, "`Despawned<T>` was not found")
         }
     }
     fn t_panic(action: CommandAction, found: bool) {
         if found {
-            Self::panic(action, "`T` found")
+            Self::panic(action, "`T` was found")
         } else {
-            Self::panic(action, "`T` not found")
+            Self::panic(action, "`T` was not found")
         }
     }
     fn panic<R>(action: CommandAction, s: &'static str) -> R {

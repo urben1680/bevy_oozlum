@@ -26,11 +26,11 @@ pub(super) enum Progress {
     BackwardLogTo {
         after_backward_if_init: Option<bool>,
     },
-    Pause {
-        after_forward_if_log: Option<bool>,
-    },
     LogClose {
         after_forward: bool,
+    },
+    Pause {
+        after_forward_if_log: Option<bool>,
     },
 }
 

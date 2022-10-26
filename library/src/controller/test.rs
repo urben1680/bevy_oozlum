@@ -2,7 +2,7 @@ use std::{collections::VecDeque, num::Wrapping};
 
 use bevy::{
     ecs::system::Command,
-    prelude::{App, Commands, CoreStage, ResMut, World},
+    prelude::{App, Commands, CoreStage, Res, ResMut, World},
 };
 
 use super::{
@@ -13,6 +13,7 @@ use super::{
 };
 
 mod forward;
+mod forward_log;
 mod forward_to;
 
 const CONTROLLER_CONSTS_TIME_STEP_ZERO: ControllerConsts = ControllerConsts {
@@ -80,9 +81,10 @@ fn tests<I: IntoIterator<Item = Option<ProgressQuery>>, const N: usize>(
             }
         };
     let check_system = |mut vd: VecDeque<Option<DebugLog>>, after_first: bool| {
-        move |controller: ResMut<'_, Controller>| {
+        move |controller: Res<'_, Controller>, mut count: ResMut<'_, usize>| {
             if let Some(check) = vd.pop_front().unwrap() {
                 let i = N - vd.len();
+                *count += 1;
                 if after_first {
                     let log = &controller.debug.front().unwrap().after_first;
                     assert_eq!(
@@ -110,6 +112,7 @@ fn tests<I: IntoIterator<Item = Option<ProgressQuery>>, const N: usize>(
 
     //set up controller systems and tests
     let mut app = App::new();
+    app.init_resource::<usize>();
     Controller::into_world(
         Wrapping(0),
         true,
@@ -126,6 +129,7 @@ fn tests<I: IntoIterator<Item = Option<ProgressQuery>>, const N: usize>(
 
     //run
     (0..ticks).for_each(|_| app.update());
+    assert_eq!(*app.world.resource::<usize>(), N * 2, "not all tests ran");
 }
 
 impl Default for DebugLog {
@@ -134,7 +138,7 @@ impl Default for DebugLog {
             time_step_query: None,
             time_step: 0.0,
             first_ran: false,
-            current: Progress::Forward {
+            progress_current: Progress::Forward {
                 after_forward: true,
             },
             progress_query: None,

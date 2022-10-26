@@ -21,6 +21,9 @@ impl ControllerConsts {
         default_time_step: f64,
         debug_capacity: usize,
     ) -> Self {
+        if max_log_index == Ticks::MAX {
+            panic!("`max_log_index` should not be equal `Ticks::MAX` because log indices are off by one to adress pre_log meta. See `log_system::Log::entry`");
+        }
         Self {
             max_log_index,
             max_log_index_usize: max_log_index as usize,
@@ -51,9 +54,4 @@ impl ControllerConsts {
 }
 
 pub(crate) const CONTROLLER_CONSTS: ControllerConsts =
-    ControllerConsts::new(
-        Ticks::MAX - 1, //cannot be max because log index = 0 refers to pre_log meta which lowers the max log len by one
-        Ticks::MAX >> 1, 
-        1024, 0.02, 
-        64
-    );
+    ControllerConsts::new(Ticks::MAX - 1, Ticks::MAX >> 1, 1024, 0.02, 64);
