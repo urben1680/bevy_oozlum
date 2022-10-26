@@ -33,6 +33,8 @@ struct Meta<Index> {
 }
 
 impl<Marker, Transition, Index: Copy + Debug> Log<Marker, Transition, Index> {
+    const LOG_INDEX_OUT_OF_RANGE: &'static str =
+        "`log_index` should be smaller or equal `log.len()`";
     fn latest(&self) -> &Meta<Index> {
         self.log
             .back()
@@ -43,48 +45,54 @@ impl<Marker, Transition, Index: Copy + Debug> Log<Marker, Transition, Index> {
         match self.log.len() {
             0 => None,
             1 => Some(&self.pre_log),
-            _ => Some(&self.log.get(self.log.len() - 2).expect("todo").meta),
+            len => Some(&self.log.get(len - 2).unwrap().meta),
         }
     }
     fn entry(&self) -> &Meta<Index> {
         if self.log_index == 0 {
-            &self.pre_log
-        } else if let Some(entry) = self.log.get((self.log_index - 1) as usize) {
-            &entry.meta
-        } else {
-            panic!("todo");
+            return &self.pre_log;
         }
+        &self
+            .log
+            .get((self.log_index - 1) as usize)
+            .expect(Self::LOG_INDEX_OUT_OF_RANGE)
+            .meta
     }
     fn entry_with_transition(&self) -> (&Meta<Index>, Option<&Transition>) {
         if self.log_index == 0 {
-            (&self.pre_log, None)
-        } else if let Some(entry) = self.log.get((self.log_index - 1) as usize) {
-            (&entry.meta, Some(&entry.transition_with_previous))
-        } else {
-            panic!("todo");
+            return (&self.pre_log, None);
         }
+        self.log
+            .get((self.log_index - 1) as usize)
+            .map(|x| (&x.meta, Some(&x.transition_with_previous)))
+            .expect(Self::LOG_INDEX_OUT_OF_RANGE)
     }
     fn before_entry(&self) -> Option<&Meta<Index>> {
-        if self.log_index == 0 {
-            None
-        } else if self.log_index == 1 {
-            Some(&self.pre_log)
-        } else if let Some(before) = self.log.get((self.log_index - 2) as usize) {
-            Some(&before.meta)
-        } else {
-            panic!("log_index invalid");
+        match self.log_index {
+            0 => None,
+            1 => Some(&self.pre_log),
+            i => Some(
+                &self
+                    .log
+                    .get((i - 2) as usize)
+                    .expect(Self::LOG_INDEX_OUT_OF_RANGE)
+                    .meta,
+            ),
         }
     }
-    fn after_entry(&self) -> Option<(&Meta<Index>, &Transition)> {
-        if self.log.is_empty() {
-            None
-        } else if let Some(after) = self.log.get(self.log_index as usize) {
-            Some((&after.meta, &after.transition_with_previous))
-        } else if self.log_index as usize == self.log.len() {
-            None
-        } else {
-            panic!("log_index invalid");
+    fn after_entry(&self) -> Option<&LogTransition<Transition, Index>> {
+        if self.log.len() == self.log_index as usize {
+            if self.log.is_empty() && self.log_index != 0 {
+                panic!("{}", Self::LOG_INDEX_OUT_OF_RANGE);
+            }
+            return None;
         }
+        Some(
+            &self
+                .log
+                .get(self.log_index as usize)
+                .expect(Self::LOG_INDEX_OUT_OF_RANGE),
+        )
     }
     pub(super) fn forward<State: StateOption<Index = Index>, RefParam, MutParam>(
         &mut self,
@@ -305,16 +313,16 @@ impl<Marker, Transition, Index: Copy + Debug> Log<Marker, Transition, Index> {
             controller.time_stamp(),
         );
         if let Some(next) = self.after_entry() {
-            if controller.time_stamp() != next.0.transitioned {
+            if controller.time_stamp() != next.meta.transitioned {
                 return;
             }
-            let next_state = State::get_state(states, next.0.state_index);
+            let next_state = State::get_state(states, next.meta.state_index);
             advance_transition(
                 ref_param,
                 mut_param,
                 state,
                 next_state,
-                next.1,
+                &next.transition_with_previous,
                 controller.time_stamp(),
             );
             self.log_index += 1;
@@ -363,9 +371,16 @@ impl<Marker, Transition, Index: Copy + Debug> Log<Marker, Transition, Index> {
             controller.to_time_stamp(),
         );
         if let Some(next) = self.after_entry() {
-            assert_eq!(time_stamp, next.0.transitioned, "todo");
-            let next_state = State::get_state(states, next.0.state_index);
-            advance_transition(ref_param, mut_param, state, next_state, next.1, time_stamp);
+            assert_eq!(time_stamp, next.meta.transitioned, "todo");
+            let next_state = State::get_state(states, next.meta.state_index);
+            advance_transition(
+                ref_param,
+                mut_param,
+                state,
+                next_state,
+                &next.transition_with_previous,
+                time_stamp,
+            );
             self.log_index += 1;
         } else if time_stamp != controller.to_time_stamp().to_time_stamp {
             panic!("todo");

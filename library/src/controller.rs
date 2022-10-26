@@ -42,7 +42,7 @@ pub(super) struct Controller {
     time: Time,
     first_ran: bool,
 
-    current: Progress,
+    progress_current: Progress,
     progress_query: Option<ProgressQueried>,
     time_stamp: Wrapping<Ticks>,
     forget: Wrapping<Ticks>,
@@ -118,7 +118,7 @@ impl Controller {
             elapsed: 0.0,
             time: Default::default(),
             first_ran: false,
-            current: Progress::Forward { after_forward },
+            progress_current: Progress::Forward { after_forward },
             progress_query: None,
             time_stamp,
             forget: time_stamp - Wrapping(constants.max_log_index),
@@ -147,7 +147,7 @@ impl Controller {
         controller.last(receivers, commands);
     }
     pub(super) fn first(&mut self, commands: Commands<'_, '_>) {
-        match self.current {
+        match self.progress_current {
             Progress::Forward { after_forward } => {
                 if self.time_is_up() {
                     self.first_forward_not_log(commands);
@@ -207,10 +207,10 @@ impl Controller {
     ) {
         self.first_ran = false;
         self.time_step = self.time_step_query.take().unwrap_or(self.time_step);
-        match self.current {
+        match self.progress_current {
             Progress::Forward { .. } => {
                 self.last_forward_commands(receivers, commands, false);
-                self.current = Progress::Forward {
+                self.progress_current = Progress::Forward {
                     after_forward: true,
                 };
                 self.apply_progress_query(ProgressLog::NotLog);
@@ -218,19 +218,19 @@ impl Controller {
             Progress::ForwardTo { .. } => {
                 self.last_forward_commands(receivers, commands, true);
                 if self.to_time_stamp.to_time_stamp == self.time_stamp {
-                    self.current = Progress::Forward {
+                    self.progress_current = Progress::Forward {
                         after_forward: true,
                     };
                     self.apply_progress_query(ProgressLog::NotLog);
                 } else {
-                    self.current = Progress::ForwardTo {
+                    self.progress_current = Progress::ForwardTo {
                         after_forward_if_init: None,
                     };
                 }
             }
             Progress::ForwardLog { .. } => {
                 self.last_forward_commands_log(commands);
-                self.current = match self.log_index_min() {
+                self.progress_current = match self.log_index_min() {
                     true => Progress::Pause {
                         after_forward_if_log: Some(true),
                     },
@@ -243,18 +243,18 @@ impl Controller {
             Progress::ForwardLogTo { .. } => {
                 self.last_forward_commands_log(commands);
                 if self.to_time_stamp.to_time_stamp == self.time_stamp {
-                    self.current = Progress::Pause {
+                    self.progress_current = Progress::Pause {
                         after_forward_if_log: Some(true),
                     };
                     self.apply_progress_query(ProgressLog::ForwardLog);
                 } else {
-                    self.current = Progress::ForwardLogTo {
+                    self.progress_current = Progress::ForwardLogTo {
                         after_forward_if_init: None,
                     };
                 }
             }
             Progress::BackwardLog { .. } => {
-                self.current = match self.log_index_max() {
+                self.progress_current = match self.log_index_max() {
                     true => Progress::Pause {
                         after_forward_if_log: Some(false),
                     },
@@ -266,12 +266,12 @@ impl Controller {
             }
             Progress::BackwardLogTo { .. } => {
                 if self.to_time_stamp.to_time_stamp == self.time_stamp {
-                    self.current = Progress::Pause {
+                    self.progress_current = Progress::Pause {
                         after_forward_if_log: Some(false),
                     };
                     self.apply_progress_query(ProgressLog::BackwardLog);
                 } else {
-                    self.current = Progress::BackwardLogTo {
+                    self.progress_current = Progress::BackwardLogTo {
                         after_backward_if_init: None,
                     };
                 }
@@ -285,7 +285,7 @@ impl Controller {
             },
             Progress::LogClose { after_forward } => {
                 self.log_close_split(commands, after_forward);
-                self.current = Progress::Forward { after_forward };
+                self.progress_current = Progress::Forward { after_forward };
                 self.apply_progress_query(ProgressLog::NotLog)
             }
         }
@@ -342,11 +342,9 @@ impl Controller {
         self.log.push_front(Default::default());
     }
     fn first_backward(&mut self, mut commands: Commands<'_, '_>) {
-        self.time_stamp -= 1;
-        self.forget -= 1;
         if let Some(v) = self.log.get(self.log_index) {
             if v.is_empty() {
-                panic!("todo");
+                return;
             }
             commands.add(|world: &mut World| {
                 world.resource_scope(|world, mut controller: Mut<'_, Self>| {
@@ -453,24 +451,24 @@ impl Controller {
         if self.progress_query.is_none() {
             return;
         }
-        let after_forward = match self.current {
+        let after_forward = match self.progress_current {
             Progress::LogClose { after_forward } => after_forward,
             _ => true,
         };
         match (self.progress_query.unwrap(), progress_log) {
             (ProgressQueried::Forward, ProgressLog::NotLog) => {
                 self.progress_query = None;
-                self.current = Progress::Forward { after_forward };
+                self.progress_current = Progress::Forward { after_forward };
             }
             (ProgressQueried::Forward, ProgressLog::ForwardLog)
             | (ProgressQueried::ForwardTo { .. }, ProgressLog::ForwardLog) => {
-                self.current = Progress::LogClose {
+                self.progress_current = Progress::LogClose {
                     after_forward: true,
                 };
             }
             (ProgressQueried::Forward, ProgressLog::BackwardLog)
             | (ProgressQueried::ForwardTo { .. }, ProgressLog::BackwardLog) => {
-                self.current = Progress::LogClose {
+                self.progress_current = Progress::LogClose {
                     after_forward: false,
                 };
             }
@@ -483,13 +481,13 @@ impl Controller {
             ) => {
                 self.progress_query = None;
                 if to_time_stamp == self.time_stamp + Wrapping(1) {
-                    self.current = Progress::Forward { after_forward };
+                    self.progress_current = Progress::Forward { after_forward };
                 } else if to_time_stamp.further_in_the_future(self.time_stamp, queried) {
                     let reserve = to_time_stamp.ticks_from_now(self.time_stamp) as usize;
                     let mut vd = VecDeque::from_iter((0..reserve).map(|_| Vec::new()));
                     self.delayed_commands.append(&mut vd);
                     self.to_time_stamp = ToTimeStamp::to_future(self.time_stamp, to_time_stamp);
-                    self.current = Progress::ForwardTo {
+                    self.progress_current = Progress::ForwardTo {
                         after_forward_if_init: Some(after_forward),
                     };
                 }
@@ -497,40 +495,41 @@ impl Controller {
             (ProgressQueried::ForwardLog, ProgressLog::NotLog) => {
                 assert!(self.log_index_min());
                 self.progress_query = None;
-                self.current = Progress::Pause {
+                self.progress_current = Progress::Pause {
                     after_forward_if_log: Some(after_forward),
                 };
             }
             (ProgressQueried::ForwardLog, ProgressLog::ForwardLog) => {
                 self.progress_query = None;
                 if !self.log_index_min() {
-                    self.current = Progress::ForwardLog {
+                    self.progress_current = Progress::ForwardLog {
                         after_forward: true,
                     };
                 }
             }
             (ProgressQueried::ForwardLog, ProgressLog::BackwardLog) => {
                 self.progress_query = None;
-                self.current = Progress::ForwardLog {
+                self.progress_current = Progress::ForwardLog {
                     after_forward: false,
                 };
             }
             (ProgressQueried::BackwardLog, ProgressLog::BackwardLog) => {
                 self.progress_query = None;
                 if !self.log_index_max() {
-                    self.current = Progress::BackwardLog {
+                    self.progress_current = Progress::BackwardLog {
                         after_backward: true,
                     };
                 }
             }
             (ProgressQueried::BackwardLog, _) => {
                 self.progress_query = None;
-                self.current = Progress::BackwardLog {
+                self.progress_current = Progress::BackwardLog {
                     after_backward: false,
                 };
             }
             (ProgressQueried::LogTo(to_time_stamp), ProgressLog::NotLog) => {
-                self.current = if self.log_to_future_if_not_now(to_time_stamp).is_none() {
+                self.progress_query = None;
+                self.progress_current = if self.log_to_future_if_not_now(to_time_stamp).is_none() {
                     Progress::Pause {
                         after_forward_if_log: Some(true),
                     }
@@ -542,7 +541,8 @@ impl Controller {
                 };
             }
             (ProgressQueried::LogTo(to_time_stamp), ProgressLog::ForwardLog) => {
-                self.current = match self.log_to_future_if_not_now(to_time_stamp) {
+                self.progress_query = None;
+                self.progress_current = match self.log_to_future_if_not_now(to_time_stamp) {
                     None => Progress::Pause {
                         after_forward_if_log: Some(true),
                     },
@@ -561,7 +561,8 @@ impl Controller {
                 };
             }
             (ProgressQueried::LogTo(to_time_stamp), ProgressLog::BackwardLog) => {
-                self.current = match self.log_to_future_if_not_now(to_time_stamp) {
+                self.progress_query = None;
+                self.progress_current = match self.log_to_future_if_not_now(to_time_stamp) {
                     None => Progress::Pause {
                         after_forward_if_log: Some(false),
                     },
@@ -581,19 +582,19 @@ impl Controller {
             }
             (ProgressQueried::Pause, ProgressLog::NotLog) => {
                 self.progress_query = None;
-                self.current = Progress::Pause {
+                self.progress_current = Progress::Pause {
                     after_forward_if_log: None,
                 };
             }
             (ProgressQueried::Pause, ProgressLog::ForwardLog) => {
                 self.progress_query = None;
-                self.current = Progress::Pause {
+                self.progress_current = Progress::Pause {
                     after_forward_if_log: Some(true),
                 };
             }
             (ProgressQueried::Pause, ProgressLog::BackwardLog) => {
                 self.progress_query = None;
-                self.current = Progress::Pause {
+                self.progress_current = Progress::Pause {
                     after_forward_if_log: Some(false),
                 };
             }
@@ -605,7 +606,7 @@ impl Controller {
         if to_time_stamp.further_in_the_future(log_future_end, log_past_end)
             || to_time_stamp.further_in_the_past(log_past_end, log_future_end)
         {
-            panic!("`ProgressQueried::LogTo({to_time_stamp})` out of range of `{log_past_end}..={log_future_end}.");
+            panic!("`ProgressQueried::LogTo(Wrapping({to_time_stamp}))` out of range of `Wrapping({log_past_end})..=Wrapping({log_future_end})`.");
         }
         if to_time_stamp == self.time_stamp {
             None
