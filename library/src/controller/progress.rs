@@ -44,19 +44,6 @@ pub enum ProgressQuery {
     Pause,
 }
 
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub(super) enum ProgressQueried {
-    Forward,
-    ForwardTo {
-        to_time_stamp: Wrapping<Ticks>,
-        queried: Wrapping<Ticks>,
-    },
-    ForwardLog,
-    BackwardLog,
-    LogTo(Wrapping<Ticks>),
-    Pause,
-}
-
 #[derive(PartialEq, Debug)]
 pub(super) enum ProgressLog {
     NotLog,
@@ -68,4 +55,10 @@ impl Command for ProgressQuery {
     fn write(self, world: &mut World) {
         world.resource_mut::<Controller>().query_progress(self);
     }
+}
+
+pub enum ProgressQueryError{
+    ForwardToOrLogTo,
+    QueryFortwardToPresent,
+    QueryOutOfRange(RangeInclusive<Wrapping<Ticks>>)
 }

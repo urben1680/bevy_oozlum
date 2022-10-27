@@ -39,7 +39,7 @@ fn processes_none_query() {
             after_last_check: STEP_4_CHECK,
             ..Default::default()
         }],
-    )
+    );
 }
 
 #[test]
@@ -62,7 +62,7 @@ fn processes_query_forward() {
             },
             ..Default::default()
         }],
-    )
+    );
 }
 
 #[test]
@@ -88,7 +88,7 @@ fn processes_query_forward_to_not_future() {
             },
             ..Default::default()
         }],
-    )
+    );
 }
 
 #[test]
@@ -114,7 +114,7 @@ fn processes_query_forward_to_one_tick() {
             },
             ..Default::default()
         }],
-    )
+    );
 }
 
 #[test]
@@ -142,7 +142,7 @@ fn processes_query_forward_to_two_ticks() {
             },
             ..Default::default()
         }],
-    )
+    );
 }
 
 #[test]
@@ -165,7 +165,7 @@ fn processes_query_forward_log() {
             },
             ..Default::default()
         }],
-    )
+    );
 }
 
 #[test]
@@ -188,7 +188,7 @@ fn processes_query_backward_log() {
             },
             ..Default::default()
         }],
-    )
+    );
 }
 
 #[test]
@@ -211,7 +211,7 @@ fn processes_query_log_to_now() {
             },
             ..Default::default()
         }],
-    )
+    );
 }
 
 #[test]
@@ -235,7 +235,7 @@ fn processes_query_log_to_past() {
             },
             ..Default::default()
         }],
-    )
+    );
 }
 
 #[test]
@@ -255,7 +255,7 @@ fn processes_query_log_to_invalid() {
             after_last_check: STEP_4_CHECK,
             ..Default::default()
         }],
-    )
+    );
 }
 
 #[test]
@@ -278,5 +278,5 @@ fn processes_query_pause() {
             },
             ..Default::default()
         }],
-    )
+    );
 }
