@@ -3,7 +3,6 @@ use std::{
     collections::VecDeque,
     fmt::Debug,
     marker::PhantomData,
-    mem::{needs_drop, MaybeUninit},
     num::Wrapping,
 };
 
