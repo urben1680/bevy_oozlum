@@ -1,7 +1,7 @@
 #![deny(rust_2018_idioms)]
 #![feature(generic_associated_types)]
 
-use std::num::Wrapping;
+use std::{num::Wrapping, ops::RangeInclusive};
 
 use bevy::prelude::Component;
 
@@ -44,7 +44,7 @@ pub trait TicksRelative {
     fn ticks_from_now(&self, reference: Wrapping<Ticks>) -> Ticks;
     fn further_in_the_future(&self, other: Wrapping<Ticks>, reference: Wrapping<Ticks>) -> bool;
     fn further_in_the_past(&self, other: Wrapping<Ticks>, reference: Wrapping<Ticks>) -> bool;
-    fn in_between(&self, earlier: Wrapping<Ticks>, later: Wrapping<Ticks>) -> bool;
+    fn in_range(&self, range: &RangeInclusive<Wrapping<Ticks>>) -> bool;
 }
 
 impl TicksRelative for Wrapping<Ticks> {
@@ -60,8 +60,9 @@ impl TicksRelative for Wrapping<Ticks> {
     fn further_in_the_past(&self, other: Self, reference: Self) -> bool {
         self.ticks_ago(reference) > other.ticks_ago(reference)
     }
-    fn in_between(&self, earlier: Wrapping<Ticks>, later: Wrapping<Ticks>) -> bool {
-        later.further_in_the_future(*self, earlier)
+    fn in_range(&self, range: &RangeInclusive<Wrapping<Ticks>>) -> bool {
+        !self.further_in_the_future(*range.end(), *range.start()) &&
+        !self.further_in_the_past(*range.start(), *range.end())
     }
 }
 
