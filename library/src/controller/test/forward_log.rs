@@ -2,12 +2,12 @@ use std::num::Wrapping;
 
 use crate::controller::{
     debug::DebugLog,
-    progress::{Progress, ProgressQueried, ProgressQuery},
+    progress::{Progress, ProgressQuery},
 };
 
 use super::{tests, Test, CONTROLLER_CONSTS_TIME_STEP_ZERO};
 
-const THREE_FORWARD_THREE_BACKWARD_ONE_FORWARD: [Option<ProgressQuery>; 7] = [
+const THREE_FORWARD_THREE_BACKWARD_ONE_FORWARD_LOG: [Option<ProgressQuery>; 7] = [
     None,
     None,
     Some(ProgressQuery::BackwardLog),
@@ -36,7 +36,7 @@ const STEP_8_CHECK: DebugLog = DebugLog {
 
 #[test]
 fn processes_none_query() {
-    const THREE_FORWARD_THREE_BACKWARD_ZERO_FORWARD: [Option<ProgressQuery>; 6] = [
+    const THREE_FORWARD_THREE_BACKWARD_ZERO_FORWARD_LOG: [Option<ProgressQuery>; 6] = [
         None,
         None,
         Some(ProgressQuery::BackwardLog),
@@ -81,7 +81,7 @@ fn processes_none_query() {
 
     tests(
         CONTROLLER_CONSTS_TIME_STEP_ZERO,
-        THREE_FORWARD_THREE_BACKWARD_ZERO_FORWARD,
+        THREE_FORWARD_THREE_BACKWARD_ZERO_FORWARD_LOG,
         [
             Test {
                 //#1
@@ -122,17 +122,17 @@ fn processes_none_query() {
 fn processes_query_forward() {
     tests(
         CONTROLLER_CONSTS_TIME_STEP_ZERO,
-        THREE_FORWARD_THREE_BACKWARD_ONE_FORWARD,
+        THREE_FORWARD_THREE_BACKWARD_ONE_FORWARD_LOG,
         [Test {
             //#1
             before_first_commands: vec![ProgressQuery::Forward.into()],
             after_first_check: DebugLog {
-                progress_query: Some(ProgressQueried::Forward),
+                progress_query: Some(ProgressQuery::Forward),
                 ..STEP_8_CHECK
             },
             after_last_check: DebugLog {
-                progress_current: Progress::LogClose { after_forward: true },
-                progress_query: Some(ProgressQueried::Forward),
+                progress_current: Progress::LogClose { after_backward: false },
+                progress_query: Some(ProgressQuery::Forward),
                 ..STEP_8_CHECK
             },
             ..Default::default()
@@ -140,15 +140,15 @@ fn processes_query_forward() {
         Test {
             //#2
             after_first_check: DebugLog {
-                progress_current: Progress::LogClose { after_forward: true },
-                progress_query: Some(ProgressQueried::Forward),
+                progress_current: Progress::LogClose { after_backward: false },
+                progress_query: Some(ProgressQuery::Forward),
                 ..STEP_8_CHECK
             },
             after_last_check: DebugLog {
-                progress_current: Progress::Forward { after_forward: true },
+                progress_current: Progress::Forward,
                 progress_query: None,
                 log_index: 0,
-                log_len: 2,
+                log_len: 1,
                 time_stamp: Wrapping(2),
                 ..STEP_8_CHECK
             },
@@ -161,17 +161,17 @@ fn processes_query_forward() {
 fn processes_query_forward_to_not_future(){
     tests(
         CONTROLLER_CONSTS_TIME_STEP_ZERO,
-        THREE_FORWARD_THREE_BACKWARD_ONE_FORWARD,
+        THREE_FORWARD_THREE_BACKWARD_ONE_FORWARD_LOG,
         [Test {
             //#1
             before_first_commands: vec![ProgressQuery::ForwardTo(Wrapping(2)).into()],
             after_first_check: DebugLog {
-                progress_query: Some(ProgressQueried::ForwardTo { to_time_stamp: Wrapping(2), queried: Wrapping(1) }),
+                progress_query: Some(ProgressQuery::ForwardTo(Wrapping(2))),
                 ..STEP_8_CHECK
             },
             after_last_check: DebugLog {
-                progress_current: Progress::LogClose { after_forward: true },
-                progress_query: Some(ProgressQueried::ForwardTo { to_time_stamp: Wrapping(2), queried: Wrapping(1) }),
+                progress_current: Progress::LogClose { after_backward: false },
+                progress_query: Some(ProgressQuery::ForwardTo(Wrapping(2))),
                 ..STEP_8_CHECK
             },
             ..Default::default()
@@ -179,12 +179,12 @@ fn processes_query_forward_to_not_future(){
         Test {
             //#2
             after_first_check: DebugLog {
-                progress_current: Progress::LogClose { after_forward: true },
-                progress_query: Some(ProgressQueried::ForwardTo { to_time_stamp: Wrapping(2), queried: Wrapping(1) }),
+                progress_current: Progress::LogClose { after_backward: false },
+                progress_query: Some(ProgressQuery::ForwardTo(Wrapping(2))),
                 ..STEP_8_CHECK
             },
             after_last_check: DebugLog {
-                progress_current: Progress::Forward { after_forward: true },
+                progress_current: Progress::Forward,
                 progress_query: None,
                 log_index: 0,
                 log_len: 2,
@@ -200,17 +200,17 @@ fn processes_query_forward_to_not_future(){
 fn processes_query_forward_to_one_tick(){
     tests(
         CONTROLLER_CONSTS_TIME_STEP_ZERO,
-        THREE_FORWARD_THREE_BACKWARD_ONE_FORWARD,
+        THREE_FORWARD_THREE_BACKWARD_ONE_FORWARD_LOG,
         [Test {
             //#1
             before_first_commands: vec![ProgressQuery::ForwardTo(Wrapping(3)).into()],
             after_first_check: DebugLog {
-                progress_query: Some(ProgressQueried::ForwardTo { to_time_stamp: Wrapping(3), queried: Wrapping(1) }),
+                progress_query: Some(ProgressQuery::ForwardTo(Wrapping(3))),
                 ..STEP_8_CHECK
             },
             after_last_check: DebugLog {
-                progress_current: Progress::LogClose { after_forward: true },
-                progress_query: Some(ProgressQueried::ForwardTo { to_time_stamp: Wrapping(3), queried: Wrapping(1) }),
+                progress_current: Progress::LogClose { after_backward: false },
+                progress_query: Some(ProgressQuery::ForwardTo(Wrapping(3))),
                 ..STEP_8_CHECK
             },
             ..Default::default()
@@ -218,12 +218,12 @@ fn processes_query_forward_to_one_tick(){
         Test {
             //#2
             after_first_check: DebugLog {
-                progress_current: Progress::LogClose { after_forward: true },
-                progress_query: Some(ProgressQueried::ForwardTo { to_time_stamp: Wrapping(3), queried: Wrapping(1) }),
+                progress_current: Progress::LogClose { after_backward: false },
+                progress_query: Some(ProgressQuery::ForwardTo(Wrapping(3))),
                 ..STEP_8_CHECK
             },
             after_last_check: DebugLog {
-                progress_current: Progress::Forward { after_forward: true },
+                progress_current: Progress::Forward,
                 progress_query: None,
                 log_index: 0,
                 log_len: 2,
@@ -239,17 +239,17 @@ fn processes_query_forward_to_one_tick(){
 fn processes_query_forward_to_two_ticks(){
     tests(
         CONTROLLER_CONSTS_TIME_STEP_ZERO,
-        THREE_FORWARD_THREE_BACKWARD_ONE_FORWARD,
+        THREE_FORWARD_THREE_BACKWARD_ONE_FORWARD_LOG,
         [Test {
             //#1
             before_first_commands: vec![ProgressQuery::ForwardTo(Wrapping(4)).into()],
             after_first_check: DebugLog {
-                progress_query: Some(ProgressQueried::ForwardTo { to_time_stamp: Wrapping(4), queried: Wrapping(1) }),
+                progress_query: Some(ProgressQuery::ForwardTo(Wrapping(4))),
                 ..STEP_8_CHECK
             },
             after_last_check: DebugLog {
-                progress_current: Progress::LogClose { after_forward: true },
-                progress_query: Some(ProgressQueried::ForwardTo { to_time_stamp: Wrapping(4), queried: Wrapping(1) }),
+                progress_current: Progress::LogClose { after_backward: false },
+                progress_query: Some(ProgressQuery::ForwardTo(Wrapping(4))),
                 ..STEP_8_CHECK
             },
             ..Default::default()
@@ -257,12 +257,12 @@ fn processes_query_forward_to_two_ticks(){
         Test {
             //#2
             after_first_check: DebugLog {
-                progress_current: Progress::LogClose { after_forward: true },
-                progress_query: Some(ProgressQueried::ForwardTo { to_time_stamp: Wrapping(4), queried: Wrapping(1) }),
+                progress_current: Progress::LogClose { after_backward: false },
+                progress_query: Some(ProgressQuery::ForwardTo(Wrapping(4))),
                 ..STEP_8_CHECK
             },
             after_last_check: DebugLog {
-                progress_current: Progress::ForwardTo { after_forward_if_init: Some(true) },
+                progress_current: Progress::ForwardTo { init: true },
                 progress_query: None,
                 log_index: 0,
                 log_len: 2,
@@ -280,12 +280,12 @@ fn processes_query_forward_to_two_ticks(){
 fn processes_query_forward_log(){
     tests(
         CONTROLLER_CONSTS_TIME_STEP_ZERO,
-        THREE_FORWARD_THREE_BACKWARD_ONE_FORWARD,
+        THREE_FORWARD_THREE_BACKWARD_ONE_FORWARD_LOG,
         [Test {
             //#1
             before_first_commands: vec![ProgressQuery::ForwardLog.into()],
             after_first_check: DebugLog {
-                progress_query: Some(ProgressQueried::ForwardLog),
+                progress_query: Some(ProgressQuery::ForwardLog),
                 ..STEP_8_CHECK
             },
             after_last_check: DebugLog {
@@ -301,12 +301,12 @@ fn processes_query_forward_log(){
 fn processes_query_backward_log(){
     tests(
         CONTROLLER_CONSTS_TIME_STEP_ZERO,
-        THREE_FORWARD_THREE_BACKWARD_ONE_FORWARD,
+        THREE_FORWARD_THREE_BACKWARD_ONE_FORWARD_LOG,
         [Test {
             //#1
             before_first_commands: vec![ProgressQuery::BackwardLog.into()],
             after_first_check: DebugLog {
-                progress_query: Some(ProgressQueried::BackwardLog),
+                progress_query: Some(ProgressQuery::BackwardLog),
                 ..STEP_8_CHECK
             },
             after_last_check: DebugLog {
@@ -322,12 +322,12 @@ fn processes_query_backward_log(){
 fn processes_query_log_to_now(){
     tests(
         CONTROLLER_CONSTS_TIME_STEP_ZERO,
-        THREE_FORWARD_THREE_BACKWARD_ONE_FORWARD,
+        THREE_FORWARD_THREE_BACKWARD_ONE_FORWARD_LOG,
         [Test {
             //#1
             before_first_commands: vec![ProgressQuery::LogTo(Wrapping(2)).into()],
             after_first_check: DebugLog {
-                progress_query: Some(ProgressQueried::LogTo(Wrapping(2))),
+                progress_query: Some(ProgressQuery::LogTo(Wrapping(2))),
                 ..STEP_8_CHECK
             },
             after_last_check: DebugLog {
@@ -343,12 +343,12 @@ fn processes_query_log_to_now(){
 fn processes_query_log_to_past(){
     tests(
         CONTROLLER_CONSTS_TIME_STEP_ZERO,
-        THREE_FORWARD_THREE_BACKWARD_ONE_FORWARD,
+        THREE_FORWARD_THREE_BACKWARD_ONE_FORWARD_LOG,
         [Test {
             //#1
             before_first_commands: vec![ProgressQuery::LogTo(Wrapping(1)).into()],
             after_first_check: DebugLog {
-                progress_query: Some(ProgressQueried::LogTo(Wrapping(1))),
+                progress_query: Some(ProgressQuery::LogTo(Wrapping(1))),
                 ..STEP_8_CHECK
             },
             after_last_check: DebugLog {
@@ -365,12 +365,12 @@ fn processes_query_log_to_past(){
 fn processes_query_log_to_future(){
     tests(
         CONTROLLER_CONSTS_TIME_STEP_ZERO,
-        THREE_FORWARD_THREE_BACKWARD_ONE_FORWARD,
+        THREE_FORWARD_THREE_BACKWARD_ONE_FORWARD_LOG,
         [Test {
             //#1
             before_first_commands: vec![ProgressQuery::LogTo(Wrapping(3)).into()],
             after_first_check: DebugLog {
-                progress_query: Some(ProgressQueried::LogTo(Wrapping(3))),
+                progress_query: Some(ProgressQuery::LogTo(Wrapping(3))),
                 ..STEP_8_CHECK
             },
             after_last_check: DebugLog {
@@ -385,17 +385,17 @@ fn processes_query_log_to_future(){
 
 #[test]
 #[should_panic(
-    expected = "`ProgressQueried::LogTo(Wrapping(4))` out of range of `Wrapping(0)..=Wrapping(3)`."
+    expected = "`ProgressQuery::LogTo(Wrapping(4))` out of range of `Wrapping(0)..=Wrapping(3)`."
 )]
 fn processes_query_log_to_invalid(){
     tests(
         CONTROLLER_CONSTS_TIME_STEP_ZERO,
-        THREE_FORWARD_THREE_BACKWARD_ONE_FORWARD,
+        THREE_FORWARD_THREE_BACKWARD_ONE_FORWARD_LOG,
         [Test {
             //#1
             before_first_commands: vec![ProgressQuery::LogTo(Wrapping(4)).into()],
             after_first_check: DebugLog {
-                progress_query: Some(ProgressQueried::LogTo(Wrapping(4))),
+                progress_query: Some(ProgressQuery::LogTo(Wrapping(4))),
                 ..STEP_8_CHECK
             },
             after_last_check: STEP_8_CHECK,
@@ -408,12 +408,12 @@ fn processes_query_log_to_invalid(){
 fn processes_query_pause(){
     tests(
         CONTROLLER_CONSTS_TIME_STEP_ZERO,
-        THREE_FORWARD_THREE_BACKWARD_ONE_FORWARD,
+        THREE_FORWARD_THREE_BACKWARD_ONE_FORWARD_LOG,
         [Test {
             //#1
             before_first_commands: vec![ProgressQuery::Pause.into()],
             after_first_check: DebugLog {
-                progress_query: Some(ProgressQueried::Pause),
+                progress_query: Some(ProgressQuery::Pause),
                 ..STEP_8_CHECK
             },
             after_last_check: DebugLog {
