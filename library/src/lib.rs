@@ -61,8 +61,8 @@ impl TicksRelative for Wrapping<Ticks> {
         self.ticks_ago(reference) > other.ticks_ago(reference)
     }
     fn in_range(&self, range: &RangeInclusive<Wrapping<Ticks>>) -> bool {
-        !self.further_in_the_future(*range.end(), *range.start()) &&
-        !self.further_in_the_past(*range.start(), *range.end())
+        !self.further_in_the_future(*range.end(), *range.start())
+            && !self.further_in_the_past(*range.start(), *range.end())
     }
 }
 

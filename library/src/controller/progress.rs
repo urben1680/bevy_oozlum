@@ -1,4 +1,4 @@
-use std::{num::Wrapping, ops::RangeInclusive};
+use std::{default, num::Wrapping, ops::RangeInclusive};
 
 use bevy::{ecs::system::Command, prelude::World};
 
@@ -6,8 +6,9 @@ use crate::Ticks;
 
 use super::Controller;
 
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug, Default)]
 pub(super) enum Progress {
+    #[default]
     Forward,
     ForwardTo {
         init: bool,
@@ -25,15 +26,6 @@ pub(super) enum Progress {
         after_backward_if_init: Option<bool>,
     },
     LogClose {
-        /*
-        - log forward then close: no changes to log index or stamps
-        - log backward then close: forward would not call stamps_forward. But to simplify non-log progress, now stamps should be altered so forward can carelessly call stamps_forward
-        - log pause: same as log backward if after_forward_if_log = Some(false)
-
-        stamps_forward:
-            self.time_stamp += 1;
-            self.forget += 1;
-        */
         after_backward: bool,
     },
     Pause {
@@ -61,10 +53,13 @@ pub(super) enum ProgressLog {
 impl Command for ProgressQuery {
     fn write(self, world: &mut World) {
         let mut controller = world.resource_mut::<Controller>();
-        if let Err(err) = controller.query_progress(self){
+        if let Err(err) = controller.query_progress(self) {
             #[cfg(debug_assertions)]
             {
-                panic!("Invalid progress query: {self:?}, error: {err:?}, controller log: {:#?}", controller.debug);
+                panic!(
+                    "Invalid progress query: {self:?}, error: {err:?}, controller log: {:#?}",
+                    controller.debug
+                );
             }
             #[cfg(not(debug_assertions))]
             {
@@ -74,17 +69,16 @@ impl Command for ProgressQuery {
     }
 }
 
-#[derive(Debug)]
-pub enum ProgressQueryError{
+#[derive(Debug, PartialEq)]
+pub enum ProgressQueryError {
     ForwardToOrLogTo,
-    QueryFortwardToPresent,
-    QueryOutOfRange(RangeInclusive<Wrapping<Ticks>>)
+    QueryOutOfRange(RangeInclusive<Wrapping<Ticks>>),
 }
 
-pub enum QueryLimit{
+pub enum QueryLimit {
     CurrentlyNotQueryable,
     CurrentLimit {
-        forward_to_panic: Wrapping<Ticks>,
-        log_to_range: RangeInclusive<Wrapping<Ticks>>
-    }
+        forward_to_range: RangeInclusive<Wrapping<Ticks>>,
+        log_to_range: RangeInclusive<Wrapping<Ticks>>,
+    },
 }

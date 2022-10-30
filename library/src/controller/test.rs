@@ -1,213 +1,220 @@
-use std::{collections::VecDeque, num::Wrapping};
+use std::{collections::VecDeque, iter::repeat, mem::take, num::Wrapping};
 
-use bevy::{
-    ecs::system::Command,
-    prelude::{App, Commands, CoreStage, Res, ResMut, World},
+use bevy::prelude::{App, Commands, CoreStage, Res, ResMut};
+
+use crate::{
+    commands::{ReversibleCommand, ReversibleCommandInitialized},
+    Ticks,
 };
 
-use crate::{commands::{ReversibleCommand, ReversibleCommandInitialized}, log_systems::{per_system::PerSystem, NextTransition}, Ticks};
-
 use super::{
-    consts::{ControllerConsts, CONTROLLER_CONSTS},
-    debug::{DebugLog, DebugLogContainer},
-    progress::{Progress, ProgressQuery},
+    consts::ControllerConsts,
+    progress::{Progress, ProgressQuery, ProgressQueryError},
     Controller,
 };
 
 mod forward;
 mod forward_to;
-//mod forward_log;
 
-const CONTROLLER_CONSTS_TIME_STEP_ZERO: ControllerConsts = ControllerConsts {
-    default_time_step: 0.0,
-    ..CONTROLLER_CONSTS
-};
+#[derive(PartialEq, Debug, Clone, Copy)]
+enum Command {
+    Init,
+    Undo,
+    Redo,
+    UndoFinalize,
+    RedoFinalize,
+}
 
-#[derive(Default)]
+/// Contains all controller values that are read by `Log` methods.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+struct CommandTest {
+    time_stamp: Wrapping<Ticks>,
+    to_time_stamp: Wrapping<Ticks>,
+    forget: Wrapping<Ticks>,
+    /// `TestLog` is created in pairs at each `Forward`/`ForwardTo` tick with different values for `first`.
+    /// This way the correct order of calls to `ReversibleCommandsInitialized` methods can be checked.
+    first: bool,
+}
+
+#[derive(Debug, Default)]
+struct TestLogCollection {
+    added: VecDeque<CommandTest>,
+    removed: VecDeque<CommandTest>,
+    log: Vec<Command>,
+}
+
 struct Test {
-    before_first_commands: Vec<Box<dyn TestCommandTrait + Send + Sync + 'static>>,
-    after_first_check: DebugLog,
-    after_first_commands: Vec<Box<dyn TestCommandTrait + Send + Sync + 'static>>,
-    after_last_check: DebugLog,
+    time_stamp: Ticks,
+    progress_current: Progress,
+    progress_query: Option<ProgressQuery>,
+    commands: Vec<Command>,
 }
 
-fn tests<I: IntoIterator<Item = Option<ProgressQuery>>, const N: usize>(
-    constants: ControllerConsts,
-    setup: I,
-    tests: [Test; N],
-) -> VecDeque<DebugLogContainer> {
-    //convert input
-    let (before_first_commands, (after_first_commands, (after_first_checks, after_last_checks))): (
-        VecDeque<Vec<Box<dyn TestCommandTrait + Send + Sync + 'static>>>,
-        (
-            VecDeque<Vec<Box<dyn TestCommandTrait + Send + Sync + 'static>>>,
-            (VecDeque<Option<DebugLog>>, VecDeque<Option<DebugLog>>),
-        ),
-    ) = setup
-        .into_iter()
-        .map(|control| {
-            let vec: Vec<Box<dyn TestCommandTrait + Send + Sync + 'static>> = match control {
-                Some(control) => vec![control.into()],
-                None => vec![],
-            };
-            (vec, (vec![LogAtIndexLenCommand.into()], (None, None)))
-        })
-        .chain(tests.into_iter().map(|mut test| {
-            //setting these values here makes `tests` less verbose
-            let forget_delta = Wrapping(constants.max_log_index);
-            test.after_first_check.forget = test.after_first_check.time_stamp - forget_delta;
-            test.after_first_check.first_ran = true;
-            test.after_last_check.forget = test.after_last_check.time_stamp - forget_delta;
-            test.after_last_check.first_ran = false;
-            test.after_first_commands.push(LogAtIndexLenCommand.into());
-            (
-                test.before_first_commands,
-                (
-                    test.after_first_commands,
-                    (Some(test.after_first_check), Some(test.after_last_check)),
-                ),
-            )
-        }))
-        .unzip();
-    let ticks = before_first_commands.len();
-
-    let command_system =
-        |mut vd: VecDeque<Vec<Box<dyn TestCommandTrait + Send + Sync + 'static>>>| {
-            move |mut commands: Commands<'_, '_>| {
-                let cv = vd.pop_front().unwrap();
-                commands.add(move |world: &mut World| {
-                    cv.into_iter().for_each(|mut c| c.write(world));
-                });
-            }
+impl CommandTest {
+    fn new_pair(controller: &Controller) -> Vec<Box<dyn ReversibleCommand>> {
+        let new_box = |first: bool, controller: &Controller| {
+            Box::new(CommandTest {
+                time_stamp: controller.time_stamp(),
+                to_time_stamp: controller.to_time_stamp().to_time_stamp,
+                forget: controller.forget(),
+                first,
+            })
         };
-    let check_system = |mut vd: VecDeque<Option<DebugLog>>, after_first: bool| {
-        move |controller: Res<'_, Controller>, mut count: ResMut<'_, usize>| {
-            if let Some(check) = vd.pop_front().unwrap() {
-                let i = N - vd.len();
-                *count += 1;
-                if after_first {
-                    if matches!(controller.progress_current, Progress::Forward | Progress::ForwardTo{ .. }){
-                        assert_eq!(controller.log_index, 0);
-                        assert_eq!(controller.log.get(0).unwrap().len(), 0);
-                    }
-                    let log = &controller.debug.front().unwrap().after_first;
-                    assert_eq!(
-                        log, &check,
-                        "\nTest #{i} (after_first)\n{:#?}",
-                        controller.debug
-                    );
-                } else {
-                    let log = controller
-                        .debug
-                        .front()
-                        .unwrap()
-                        .after_last
-                        .as_ref()
-                        .unwrap();
-                    assert_eq!(
-                        log, &check,
-                        "\nTest #{i} (after_last)\n{:#?}",
-                        controller.debug
-                    );
-                }
+        vec![new_box(true, controller), new_box(false, controller)]
+    }
+}
+
+impl ReversibleCommand for CommandTest {
+    fn init(
+        self: Box<Self>,
+        world: &mut bevy::prelude::World,
+    ) -> Option<Box<dyn ReversibleCommandInitialized>> {
+        let mut collection = world.resource_mut::<TestLogCollection>();
+        if let Some(front) = collection.added.front() {
+            let mut stamp = front.time_stamp;
+            if self.first {
+                stamp += 1;
             }
+            assert_eq!(stamp, self.time_stamp, "{collection:#?}");
+        } else if !self.first {
+            panic!()
         }
-    };
-
-    //set up controller systems and tests
-    let mut app = App::new();
-    app.init_resource::<usize>();
-    Controller::into_world(
-        Wrapping(0),
-        VecDeque::with_capacity(constants.log_len),
-        constants,
-        &mut app.world,
-    );
-    app.add_system_to_stage(CoreStage::First, command_system(before_first_commands));
-    app.add_system_to_stage(CoreStage::PreUpdate, Controller::system_first);
-    app.add_system_to_stage(CoreStage::Update, command_system(after_first_commands));
-    app.add_system_to_stage(CoreStage::Update, check_system(after_first_checks, true));
-    app.add_system_to_stage(CoreStage::PostUpdate, Controller::system_last);
-    app.add_system_to_stage(CoreStage::Last, check_system(after_last_checks, false));
-
-    //run
-    (0..ticks).for_each(|_| app.update());
-    assert_eq!(*app.world.resource::<usize>(), N * 2, "not all tests ran");
-
-    app.world.remove_resource::<Controller>().unwrap().debug
-}
-
-impl Default for DebugLog {
-    fn default() -> Self {
-        Self {
-            time_step_query: None,
-            time_step: 0.0,
-            first_ran: false,
-            progress_current: Progress::Forward,
-            progress_query: None,
-            time_stamp: Wrapping(0),
-            forget: -Wrapping(CONTROLLER_CONSTS.max_log_index),
-            to_time_stamp: Default::default(),
-            log_len: 1,
-            log_at_index_len: 0,
-            log_index: 0,
-            delayed_commands_len: 1,
-            commands_overflows: 0,
-        }
-    }
-}
-
-struct TestCommand<C: Command>(Option<C>);
-
-trait TestCommandTrait {
-    fn write(&mut self, world: &mut World);
-}
-
-impl<C: Command> TestCommandTrait for TestCommand<C> {
-    fn write(&mut self, world: &mut World) {
-        self.0.take().unwrap().write(world);
-    }
-}
-
-impl<C: Command> From<C> for Box<dyn TestCommandTrait + Send + Sync + 'static> {
-    fn from(command: C) -> Self {
-        Box::new(TestCommand(Some(command)))
-    }
-}
-
-struct LogAtIndexLenCommand;
-
-impl ReversibleCommand for LogAtIndexLenCommand{
-    fn init(self: Box<Self>, _: &mut World) -> Option<Box<dyn crate::commands::ReversibleCommandInitialized>> {
+        collection.added.push_front(*self);
+        collection.log.push(Command::Init);
         Some(self)
     }
 }
 
-impl ReversibleCommandInitialized for LogAtIndexLenCommand{
-    fn redo(&mut self, _: &mut World) {}
-    fn undo(&mut self, _: &mut World) {}
-    fn redo_finalize(self: Box<Self>, _: &mut World) {}
-    fn undo_finalize(self: Box<Self>, _: &mut World) {}
-}
-
-impl Command for LogAtIndexLenCommand{
-    fn write(self, world: &mut World) {
-        let mut controller = world.resource_mut::<Controller>();
-        assert!(controller.first_ran, "{}", controller.time_stamp);
-        if !matches!(controller.progress_current, Progress::Forward | Progress::ForwardTo { .. }){
-            return;
-        }
-        let v = (0..controller.time_stamp.0).map(|_| Box::new(LogAtIndexLenCommand) as _).collect();
-        controller.add_delayed_commands(0, v);
+impl ReversibleCommandInitialized for CommandTest {
+    fn undo(&mut self, world: &mut bevy::prelude::World) {
+        let mut collection = world.resource_mut::<TestLogCollection>();
+        let element = collection.added.pop_front().unwrap();
+        assert_eq!(*self, element);
+        collection.removed.push_front(element);
+        collection.log.push(Command::Undo);
+    }
+    fn redo(&mut self, world: &mut bevy::prelude::World) {
+        let mut collection = world.resource_mut::<TestLogCollection>();
+        let element = collection.removed.pop_front().unwrap();
+        assert_eq!(*self, element);
+        collection.added.push_front(element);
+        collection.log.push(Command::Redo);
+    }
+    fn undo_finalize(self: Box<Self>, world: &mut bevy::prelude::World) {
+        let mut collection = world.resource_mut::<TestLogCollection>();
+        let element = collection.removed.pop_back().unwrap();
+        assert_eq!(*self, element);
+        collection.log.push(Command::UndoFinalize);
+    }
+    fn redo_finalize(self: Box<Self>, world: &mut bevy::prelude::World) {
+        let mut collection = world.resource_mut::<TestLogCollection>();
+        let element = collection.added.pop_back().unwrap();
+        assert_eq!(*self, element);
+        collection.log.push(Command::RedoFinalize);
     }
 }
 
-trait ShowTestResult{
-    fn show_result(self);
+trait RunTests {
+    fn run(self, result: Result<(), ProgressQueryError>);
 }
 
-impl ShowTestResult for VecDeque<DebugLogContainer>{
-    fn show_result(self) {
-        println!("{self:#?}");
+impl<const N: usize> RunTests for [Test; N] {
+    fn run(self, result: Result<(), ProgressQueryError>) {
+        let constants = ControllerConsts::new(
+            2,   //forget after 2 additional steps
+            2,   //panic at jumping further than 2 steps
+            0,   //second `CommandTest` should be added without sync_channel
+            0.0, //next step at each app update
+            10,
+        );
+
+        let (mut before_first, mut after_first): (Vec<_>, Vec<_>) = self
+            .into_iter()
+            .map(|step| {
+                (
+                    (step.progress_current, step.progress_query),
+                    (step.time_stamp, step.commands),
+                )
+            })
+            .rev()
+            .unzip();
+
+        let mut app = App::new();
+        app.init_resource::<TestLogCollection>();
+        app.init_resource::<usize>();
+        app.insert_resource::<Result<(), ProgressQueryError>>(Ok(()));
+        Controller::into_world(
+            Wrapping(0),
+            VecDeque::with_capacity(constants.log_len),
+            constants,
+            &mut app.world,
+        );
+
+        app.add_system_to_stage(
+            CoreStage::First,
+            move |controller: Res<'_, Controller>,
+                  commands: Commands<'_, '_>,
+                  mut error: ResMut<'_, Result<(), ProgressQueryError>>| {
+                if error.is_err() {
+                    return;
+                }
+                let (progress_current, progress_query) = before_first.pop().unwrap();
+                assert_eq!(progress_current, controller.progress_current);
+                if let Some(progress_query) = progress_query {
+                    *error = controller.query_procress_command(commands, progress_query);
+                }
+            },
+        );
+        app.add_system_to_stage(CoreStage::PreUpdate, Controller::system_first);
+        app.add_system_to_stage(
+            CoreStage::Update,
+            |controller: Res<'_, Controller>, mut commands: Commands<'_, '_>| match controller
+                .progress_current
+            {
+                Progress::Forward => {
+                    controller.send_commands(CommandTest::new_pair(&controller), &mut commands, 0);
+                }
+                Progress::ForwardTo { .. } => controller.send_commands(
+                    CommandTest::new_pair(&controller),
+                    &mut commands,
+                    controller.to_time_stamp.delta_abs - 1,
+                ),
+                _ => {}
+            },
+        );
+        app.add_system_to_stage(CoreStage::PostUpdate, Controller::system_last);
+        app.add_system_to_stage(
+            CoreStage::Last,
+            move |mut log: ResMut<'_, TestLogCollection>,
+                  controller: Res<'_, Controller>,
+                  mut test_count: ResMut<'_, usize>,
+                  error: Res<'_, Result<(), ProgressQueryError>>| {
+                *test_count += 1;
+                if error.is_err() {
+                    return;
+                }
+                let (stamp, mut commands) = after_first.pop().unwrap();
+                if !matches!(
+                    controller.progress_current,
+                    Progress::LogClose { .. } | Progress::Pause { .. }
+                ) {
+                    assert_eq!(Wrapping(stamp), controller.time_stamp);
+                }
+                let log = take(&mut log.log);
+                commands = commands
+                    .into_iter()
+                    .flat_map(|c| repeat(c).take(2))
+                    .collect();
+                assert_eq!(commands, log);
+            },
+        );
+
+        (0..N).for_each(|_| app.update());
+        assert_eq!(N, *app.world.resource::<usize>(), "not all tests ran");
+        assert_eq!(
+            result,
+            *app.world.resource::<Result<(), ProgressQueryError>>(),
+            "unexpected result"
+        );
     }
 }
