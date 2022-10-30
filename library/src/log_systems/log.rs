@@ -1,10 +1,4 @@
-use std::{
-    any::type_name,
-    collections::VecDeque,
-    fmt::Debug,
-    marker::PhantomData,
-    num::Wrapping,
-};
+use std::{any::type_name, collections::VecDeque, fmt::Debug, marker::PhantomData, num::Wrapping};
 
 use bevy::prelude::{Commands, Component};
 
@@ -219,8 +213,7 @@ impl<Marker, Transition, Index: Copy + Debug> Log<Marker, Transition, Index> {
             latest.transitioned,
             controller.time_stamp(),
         ) {
-            let from_now = time_stamp.ticks_from_now(controller.time_stamp());
-            controller.send_commands(next.commands, commands, from_now);
+            controller.send_commands(next.commands, commands, limit.delta_abs - 1);
             self.next_transition::<State, RefParam, MutParam>(
                 ref_param,
                 mut_param,
