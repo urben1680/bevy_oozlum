@@ -33,6 +33,44 @@ pub(super) enum Progress {
     },
 }
 
+#[derive(PartialEq, Debug)]
+pub(super) enum TimeStampChange {
+    NoChange,
+    PlusOne,
+    MinusOne,
+}
+
+impl Progress {
+    pub(super) fn time_stamp_change(&self) -> TimeStampChange {
+        match self {
+            Progress::Forward
+            | Progress::ForwardTo { .. }
+            | Progress::ForwardLog {
+                after_forward: true,
+            }
+            | Progress::ForwardLogTo {
+                after_forward_if_init: None,
+            }
+            | Progress::ForwardLogTo {
+                after_forward_if_init: Some(true),
+            } => TimeStampChange::PlusOne,
+            Progress::BackwardLog {
+                after_backward: true,
+            }
+            | Progress::BackwardLogTo {
+                after_backward_if_init: None,
+            }
+            | Progress::BackwardLogTo {
+                after_backward_if_init: Some(true),
+            }
+            | Progress::LogClose {
+                after_backward: true,
+            } => TimeStampChange::MinusOne,
+            _ => TimeStampChange::NoChange,
+        }
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum ProgressQuery {
     Forward,
@@ -69,12 +107,13 @@ impl Command for ProgressQuery {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum ProgressQueryError {
-    ForwardToOrLogTo,
+    ToProgressActive,
     QueryOutOfRange(RangeInclusive<Wrapping<Ticks>>),
 }
 
+#[derive(Debug)]
 pub enum QueryLimit {
     CurrentlyNotQueryable,
     CurrentLimit {

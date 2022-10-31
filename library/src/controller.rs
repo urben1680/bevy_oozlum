@@ -11,10 +11,12 @@ use bevy::{
     log::info,
     prelude::{Commands, NonSendMut, Res, ResMut, World},
     time::Time,
+    utils::tracing::instrument::WithSubscriber,
 };
 
 use crate::{
     commands::{ReversibleCommand, ReversibleCommandInitialized},
+    controller::progress::TimeStampChange,
     log_systems::{per_system::PerSystem, NextTransition},
     Ticks, TicksRelative, ToTimeStamp,
 };
@@ -53,7 +55,7 @@ pub(super) struct Controller {
     forget: Wrapping<Ticks>,
     to_time_stamp: ToTimeStamp,
 
-    log: VecDeque<Vec<Box<dyn ReversibleCommandInitialized>>>,
+    log: VecDeque<Vec<Box<dyn ReversibleCommandInitialized>>>, //don't use .capacity() instead of the value in constants to keep the data consistent across VecDeque implementation details
     log_index: usize,
     delayed_commands: VecDeque<Vec<Box<dyn ReversibleCommand>>>,
     commands_overflows: u64,
@@ -128,7 +130,7 @@ impl Controller {
             to_time_stamp: Default::default(),
             log,
             log_index: 0,
-            delayed_commands: VecDeque::with_capacity(constants.fast_forward_max as usize),
+            delayed_commands: VecDeque::with_capacity(constants.delayed_commands_capacity),
             commands_overflows: 0,
             commands_sender,
 
@@ -153,6 +155,10 @@ impl Controller {
         match self.progress_current {
             Progress::Forward => {
                 if self.time_is_up() {
+                    assert_ne!(
+                        self.delayed_commands.len(),
+                        self.consts().delayed_commands_capacity
+                    );
                     self.delayed_commands.push_back(Default::default());
                     self.first_forward_not_log(commands);
                     self.stamps_indices_forward(None);
@@ -337,13 +343,26 @@ impl Controller {
     fn stamps_indices_forward(&mut self, after_forward_if_log: Option<bool>) {
         match after_forward_if_log {
             None => {
+                debug_assert_eq!(
+                    self.progress_current.time_stamp_change(),
+                    TimeStampChange::PlusOne
+                );
                 self.time_stamp += 1;
                 self.forget += 1;
                 assert_eq!(self.log_index, 0);
                 assert_ne!(self.log.len(), 0);
             }
-            Some(false) => {}
+            Some(false) => {
+                debug_assert_eq!(
+                    self.progress_current.time_stamp_change(),
+                    TimeStampChange::NoChange
+                );
+            }
             Some(true) => {
+                debug_assert_eq!(
+                    self.progress_current.time_stamp_change(),
+                    TimeStampChange::PlusOne
+                );
                 self.time_stamp += 1;
                 self.forget += 1;
                 self.log_index -= 1;
@@ -352,8 +371,16 @@ impl Controller {
     }
     fn stamps_indices_backward(&mut self, after_backward: bool, log_close: bool) {
         if !after_backward {
+            debug_assert_eq!(
+                self.progress_current.time_stamp_change(),
+                TimeStampChange::NoChange
+            );
             return;
         }
+        debug_assert_eq!(
+            self.progress_current.time_stamp_change(),
+            TimeStampChange::MinusOne
+        );
         self.time_stamp -= 1;
         self.forget -= 1;
         self.log_index += 1;
@@ -369,7 +396,7 @@ impl Controller {
     }
     pub fn query_procress_command(
         &self,
-        mut commands: Commands<'_, '_>,
+        commands: &mut Commands<'_, '_>,
         query: ProgressQuery,
     ) -> Result<(), ProgressQueryError> {
         self.can_query_progress(query)?;
@@ -379,94 +406,64 @@ impl Controller {
         Ok(())
     }
     pub fn query_limit(&self) -> QueryLimit {
-        match self.progress_current {
+        if matches!(
+            self.progress_current,
             Progress::ForwardTo { .. }
-            | Progress::ForwardLogTo { .. }
-            | Progress::BackwardLogTo { .. } => QueryLimit::CurrentlyNotQueryable,
-            Progress::Forward if !self.first_ran => {
-                let mut past = self.log_past_end();
-                if self.log.len() == self.consts().log_len {
-                    past += 1;
-                }
-                let forward_to_start = self.time_stamp + Wrapping(2);
-                let forward_to_end =
-                    self.time_stamp + Wrapping(self.delayed_commands.capacity() as Ticks);
-                let forward_to_range = forward_to_start..=forward_to_end;
-                let log_to_range = past..=(self.log_future_end() + Wrapping(1));
-                QueryLimit::CurrentLimit {
-                    forward_to_range,
-                    log_to_range,
-                }
+                | Progress::ForwardLogTo { .. }
+                | Progress::BackwardLogTo { .. }
+        ) {
+            return QueryLimit::CurrentlyNotQueryable;
+        }
+        let time_stamp_change = self.progress_current.time_stamp_change();
+        let mut forward_to_start = self.time_stamp;
+        match time_stamp_change {
+            TimeStampChange::PlusOne if !self.first_ran => forward_to_start += 2,
+            TimeStampChange::MinusOne if !self.first_ran => {}
+            _ => forward_to_start += 1,
+        };
+        let forward_to_end = forward_to_start + Wrapping(self.consts().forward_to_max - 1);
+        let mut log_to_start = self.log_past_end();
+        let mut log_to_end = self.log_future_end();
+        if matches!(self.progress_current, Progress::Forward if !self.first_ran) {
+            log_to_end += 1;
+            if log_to_start == self.forget {
+                log_to_start += 1;
             }
-            Progress::ForwardLog {
-                after_forward: true,
-            } if !self.first_ran => {
-                let forward_to_start = self.time_stamp + Wrapping(2);
-                let forward_to_end =
-                    forward_to_start + Wrapping(self.delayed_commands.capacity() as Ticks);
-                let forward_to_range = forward_to_start..=forward_to_end;
-                let log_to_range = self.log_past_end()..=(self.log_future_end() + Wrapping(1));
-                QueryLimit::CurrentLimit {
-                    forward_to_range,
-                    log_to_range,
-                }
-            }
-            Progress::BackwardLog {
-                after_backward: true,
-            }
-            | Progress::LogClose {
-                after_backward: true,
-            } if !self.first_ran => {
-                let forward_to_end =
-                    self.time_stamp + Wrapping(self.delayed_commands.capacity() as Ticks);
-                let forward_to_range = self.time_stamp..=forward_to_end;
-                let log_to_range = self.log_past_end()..=(self.log_future_end() + Wrapping(1));
-                QueryLimit::CurrentLimit {
-                    forward_to_range,
-                    log_to_range,
-                }
-            }
-            _ => {
-                let forward_to_start = self.time_stamp + Wrapping(1);
-                let forward_to_end =
-                    forward_to_start + Wrapping(self.delayed_commands.capacity() as Ticks);
-                let forward_to_range = forward_to_start..=forward_to_end;
-                let log_to_range = self.log_past_end()..=(self.log_future_end() + Wrapping(1));
-                QueryLimit::CurrentLimit {
-                    forward_to_range,
-                    log_to_range,
-                }
-            }
+        }
+        let forward_to_range = forward_to_start..=forward_to_end;
+        let log_to_range = log_to_start..=log_to_end;
+        //println!("time_stamp_change: {time_stamp_change:#?}, first_ran: {:#?} forward_to_range: {forward_to_range:#?}, log_to_range: {log_to_range:#?}", self.first_ran);
+        QueryLimit::CurrentLimit {
+            forward_to_range,
+            log_to_range,
         }
     }
     fn can_query_progress(&self, query: ProgressQuery) -> Result<(), ProgressQueryError> {
-        if let QueryLimit::CurrentLimit {
-            forward_to_range,
-            log_to_range,
-        } = self.query_limit()
-        {
-            match query {
-                ProgressQuery::ForwardTo(to) if !to.in_range(&forward_to_range) => {
-                    Err(ProgressQueryError::QueryOutOfRange(
-                        *forward_to_range.start()..=*forward_to_range.end(),
-                    ))
-                }
-                ProgressQuery::LogTo(to) if !to.in_range(&log_to_range) => {
-                    Err(ProgressQueryError::QueryOutOfRange(
-                        *log_to_range.start()..=*log_to_range.end(),
-                    ))
-                }
-                _ => Ok(()),
+        match (self.query_limit(), query) {
+            (
+                QueryLimit::CurrentLimit {
+                    forward_to_range, ..
+                },
+                ProgressQuery::ForwardTo(to),
+            ) if !to.in_range(&forward_to_range) => Err(ProgressQueryError::QueryOutOfRange(
+                *forward_to_range.start()..=*forward_to_range.end(),
+            )),
+            (QueryLimit::CurrentLimit { log_to_range, .. }, ProgressQuery::LogTo(to))
+                if !to.in_range(&log_to_range) =>
+            {
+                Err(ProgressQueryError::QueryOutOfRange(
+                    *log_to_range.start()..=*log_to_range.end(),
+                ))
             }
-        } else {
-            Err(ProgressQueryError::ForwardToOrLogTo)
+            (QueryLimit::CurrentlyNotQueryable, _) => Err(ProgressQueryError::ToProgressActive),
+            _ => Ok(()),
         }
     }
     fn query_time_step(&mut self, query: f64) {
         self.time_step_query = Some(query);
     }
     fn first_forward_not_log(&mut self, mut commands: Commands<'_, '_>) {
-        if self.log.len() == self.consts().log_len {
+        if self.log.len() == self.consts().log_capacity {
             let to_finalize = self.log.pop_back().expect("`MAX_LOG_LEN` should not be 0.");
             if !to_finalize.is_empty() {
                 commands.add(|world: &mut World| {
@@ -612,10 +609,18 @@ impl Controller {
                     self.to_time_stamp = ToTimeStamp::to_future(self.time_stamp, to_time_stamp);
                     let reserve = self.to_time_stamp.delta_abs as usize;
                     assert!(
-                        reserve + self.delayed_commands.len() <= self.delayed_commands.capacity()
+                        reserve + self.delayed_commands.len()
+                            <= self.consts().delayed_commands_capacity
                     );
                     let mut vd = VecDeque::from_iter((0..reserve).map(|_| Vec::new()));
                     self.delayed_commands.append(&mut vd);
+                    /*
+                    println!(
+                        "append successful, reserve: {reserve}, len: {}, capacity: {}",
+                        self.delayed_commands.len(),
+                        self.consts().delayed_commands_capacity
+                    );
+                    */
                     self.progress_current = Progress::ForwardTo { init: true };
                 }
             }
@@ -730,9 +735,7 @@ impl Controller {
     fn log_to_future_if_not_now(&self, to_time_stamp: Wrapping<Ticks>) -> Option<bool> {
         let log_future_end = self.log_future_end();
         let log_past_end = self.log_past_end();
-        if to_time_stamp.further_in_the_future(log_future_end, log_past_end)
-            || to_time_stamp.further_in_the_past(log_past_end, log_future_end)
-        {
+        if !to_time_stamp.in_range(&(log_past_end..=log_future_end)) {
             panic!("`ProgressQueried::LogTo(Wrapping({to_time_stamp}))` out of range of `Wrapping({log_past_end})..=Wrapping({log_future_end})`.");
         }
         if to_time_stamp == self.time_stamp {

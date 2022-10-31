@@ -247,7 +247,7 @@ impl<Marker, Transition, Index: Copy + Debug> Log<Marker, Transition, Index> {
         ),
     ) {
         if self.log_index == controller.consts().max_log_index {
-            assert_eq!(self.log.len(), controller.consts().log_len, "todo");
+            assert_eq!(self.log.len(), controller.consts().log_capacity, "todo");
             let oldest = self.log.pop_front().expect("todo");
             self.pre_log = oldest.meta;
         } else {
