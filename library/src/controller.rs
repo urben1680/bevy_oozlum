@@ -2,22 +2,19 @@ use std::{
     collections::VecDeque,
     iter::FromIterator,
     num::Wrapping,
-    ops::RangeInclusive,
-    sync::mpsc::{sync_channel, Receiver, SyncSender, TryRecvError, TrySendError},
+    sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError},
 };
 
 use bevy::{
     ecs::world::Mut,
     log::info,
-    prelude::{Commands, NonSendMut, Res, ResMut, World},
+    prelude::{Commands, NonSendMut, ResMut, World},
     time::Time,
-    utils::tracing::instrument::WithSubscriber,
 };
 
 use crate::{
     commands::{ReversibleCommand, ReversibleCommandInitialized},
     controller::progress::TimeStampChange,
-    log_systems::{per_system::PerSystem, NextTransition},
     Ticks, TicksRelative, ToTimeStamp,
 };
 
