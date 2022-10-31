@@ -16,7 +16,7 @@ pub trait PerSystem: Send + Sync + Sized + 'static {
     type Params<'w, 's>: SystemParam;
     type State: StateOption;
     type Transition: Send + Sync;
-    const DEFAULT_LOG_CAPACITY: usize = CONTROLLER_CONSTS.log_len;
+    const DEFAULT_LOG_CAPACITY: usize = CONTROLLER_CONSTS.log_capacity;
     const FAST_ADVANCE_SYSTEM: bool = false;
     const FAST_REVERT_SYSTEM: bool = false;
     fn next_transition(

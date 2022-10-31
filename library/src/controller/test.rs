@@ -14,6 +14,8 @@ use super::{
 };
 
 mod forward;
+mod forward_log;
+mod forward_log_to;
 mod forward_to;
 
 #[derive(PartialEq, Debug, Clone, Copy)]
@@ -43,6 +45,7 @@ struct TestLogCollection {
     log: Vec<Command>,
 }
 
+#[derive(Clone)]
 struct Test {
     time_stamp: Ticks,
     progress_current: Progress,
@@ -116,28 +119,50 @@ impl ReversibleCommandInitialized for CommandTest {
 
 trait RunTests {
     fn run(self, result: Result<(), ProgressQueryError>);
+    fn sub_run(self, apply_query_at_first_ran: bool) -> Result<(), ProgressQueryError>;
 }
 
 impl<const N: usize> RunTests for [Test; N] {
     fn run(self, result: Result<(), ProgressQueryError>) {
+        assert_eq!(
+            result,
+            self.clone().sub_run(false),
+            "unexpected result when querying when first did not ran"
+        );
+        assert_eq!(
+            result,
+            self.sub_run(true),
+            "unexpected result when querying when first did ran"
+        );
+    }
+    fn sub_run(self, apply_query_at_first_ran: bool) -> Result<(), ProgressQueryError> {
+        //todo: run test twice, one where the query is applied before and one after the firts controller system
+
         let constants = ControllerConsts::new(
-            2,   //forget after 2 additional steps
+            2,   //forget after 4 steps
             2,   //panic at jumping further than 2 steps
             0,   //second `CommandTest` should be added without sync_channel
             0.0, //next step at each app update
             10,
         );
 
-        let (mut before_first, mut after_first): (Vec<_>, Vec<_>) = self
-            .into_iter()
-            .map(|step| {
-                (
-                    (step.progress_current, step.progress_query),
-                    (step.time_stamp, step.commands),
-                )
-            })
-            .rev()
-            .unzip();
+        let (mut before_first, (mut after_first, mut after_last)): (Vec<_>, (Vec<_>, Vec<_>)) =
+            self.into_iter()
+                .map(|step| {
+                    if apply_query_at_first_ran {
+                        (
+                            (step.progress_current, None),
+                            (step.progress_query, (step.time_stamp, step.commands)),
+                        )
+                    } else {
+                        (
+                            (step.progress_current, step.progress_query),
+                            (None, (step.time_stamp, step.commands)),
+                        )
+                    }
+                })
+                .rev()
+                .unzip();
 
         let mut app = App::new();
         app.init_resource::<TestLogCollection>();
@@ -145,7 +170,7 @@ impl<const N: usize> RunTests for [Test; N] {
         app.insert_resource::<Result<(), ProgressQueryError>>(Ok(()));
         Controller::into_world(
             Wrapping(0),
-            VecDeque::with_capacity(constants.log_len),
+            VecDeque::with_capacity(constants.log_capacity),
             constants,
             &mut app.world,
         );
@@ -153,33 +178,52 @@ impl<const N: usize> RunTests for [Test; N] {
         app.add_system_to_stage(
             CoreStage::First,
             move |controller: Res<'_, Controller>,
-                  commands: Commands<'_, '_>,
-                  mut error: ResMut<'_, Result<(), ProgressQueryError>>| {
-                if error.is_err() {
-                    return;
-                }
+                  test_count: Res<'_, usize>,
+                  mut error: ResMut<'_, Result<(), ProgressQueryError>>,
+                  mut commands: Commands<'_, '_>| {
                 let (progress_current, progress_query) = before_first.pop().unwrap();
-                assert_eq!(progress_current, controller.progress_current);
+                assert_eq!(
+                    progress_current, controller.progress_current,
+                    "time_stamp : {}",
+                    controller.time_stamp
+                );
                 if let Some(progress_query) = progress_query {
-                    *error = controller.query_procress_command(commands, progress_query);
+                    *error = controller.query_procress_command(&mut commands, progress_query);
+                    if error.is_err() {
+                        assert_eq!(*test_count + 1, N, "error must occure at the last test")
+                    }
                 }
             },
         );
         app.add_system_to_stage(CoreStage::PreUpdate, Controller::system_first);
         app.add_system_to_stage(
             CoreStage::Update,
-            |controller: Res<'_, Controller>, mut commands: Commands<'_, '_>| match controller
-                .progress_current
-            {
-                Progress::Forward => {
-                    controller.send_commands(CommandTest::new_pair(&controller), &mut commands, 0);
+            move |controller: Res<'_, Controller>,
+                  test_count: Res<'_, usize>,
+                  mut commands: Commands<'_, '_>,
+                  mut error: ResMut<'_, Result<(), ProgressQueryError>>| {
+                match controller.progress_current {
+                    Progress::Forward => {
+                        controller.send_commands(
+                            CommandTest::new_pair(&controller),
+                            &mut commands,
+                            0,
+                        );
+                    }
+                    Progress::ForwardTo { .. } => controller.send_commands(
+                        CommandTest::new_pair(&controller),
+                        &mut commands,
+                        controller.to_time_stamp.delta_abs - 1,
+                    ),
+                    _ => {}
                 }
-                Progress::ForwardTo { .. } => controller.send_commands(
-                    CommandTest::new_pair(&controller),
-                    &mut commands,
-                    controller.to_time_stamp.delta_abs - 1,
-                ),
-                _ => {}
+                let progress_query = after_first.pop().unwrap();
+                if let Some(progress_query) = progress_query {
+                    *error = controller.query_procress_command(&mut commands, progress_query);
+                    if error.is_err() {
+                        assert_eq!(*test_count + 1, N, "error must occure at the last test")
+                    }
+                }
             },
         );
         app.add_system_to_stage(CoreStage::PostUpdate, Controller::system_last);
@@ -187,13 +231,9 @@ impl<const N: usize> RunTests for [Test; N] {
             CoreStage::Last,
             move |mut log: ResMut<'_, TestLogCollection>,
                   controller: Res<'_, Controller>,
-                  mut test_count: ResMut<'_, usize>,
-                  error: Res<'_, Result<(), ProgressQueryError>>| {
+                  mut test_count: ResMut<'_, usize>| {
                 *test_count += 1;
-                if error.is_err() {
-                    return;
-                }
-                let (stamp, mut commands) = after_first.pop().unwrap();
+                let (stamp, mut commands_check) = after_last.pop().unwrap();
                 if !matches!(
                     controller.progress_current,
                     Progress::LogClose { .. } | Progress::Pause { .. }
@@ -201,20 +241,18 @@ impl<const N: usize> RunTests for [Test; N] {
                     assert_eq!(Wrapping(stamp), controller.time_stamp);
                 }
                 let log = take(&mut log.log);
-                commands = commands
+                commands_check = commands_check
                     .into_iter()
                     .flat_map(|c| repeat(c).take(2))
                     .collect();
-                assert_eq!(commands, log);
+                assert_eq!(commands_check, log, "time_stamp: {}", controller.time_stamp);
             },
         );
 
         (0..N).for_each(|_| app.update());
         assert_eq!(N, *app.world.resource::<usize>(), "not all tests ran");
-        assert_eq!(
-            result,
-            *app.world.resource::<Result<(), ProgressQueryError>>(),
-            "unexpected result"
-        );
+        app.world
+            .remove_resource::<Result<(), ProgressQueryError>>()
+            .unwrap()
     }
 }

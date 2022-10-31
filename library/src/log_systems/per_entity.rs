@@ -20,7 +20,7 @@ pub trait PerEntity: Send + Sync + Sized + 'static {
     type Items: WorldQuery;
     type State: StateOption;
     type Transition: Send + Sync;
-    const DEFAULT_LOG_CAPACITY: usize = CONTROLLER_CONSTS.log_len;
+    const DEFAULT_LOG_CAPACITY: usize = CONTROLLER_CONSTS.log_capacity;
     const FORWARD_TO_SYSTEM: bool = false;
     const BACKWARD_TO_SYSTEM: bool = false;
     const PAR_ITER_BATCH_SIZE: usize = 0;

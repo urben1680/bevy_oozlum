@@ -56,7 +56,6 @@ fn forward_query_forward() {
 
 #[test]
 fn forward_query_forward_to_present() {
-    std::panic::set_hook(Box::new(|_| {}));
     [Test {
         time_stamp: 1,
         progress_current: Progress::Forward,
