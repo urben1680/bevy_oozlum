@@ -136,8 +136,6 @@ impl<const N: usize> RunTests for [Test; N] {
         );
     }
     fn sub_run(self, apply_query_at_first_ran: bool) -> Result<(), ProgressQueryError> {
-        //todo: run test twice, one where the query is applied before and one after the firts controller system
-
         let constants = ControllerConsts::new(
             2,   //forget after 4 steps
             2,   //panic at jumping further than 2 steps
