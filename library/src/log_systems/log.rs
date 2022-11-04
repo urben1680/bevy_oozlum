@@ -25,6 +25,12 @@ struct Meta<Index> {
     state_index: Index,
 }
 
+pub(crate) const fn assert_max_log_index(max_log_index: Ticks) {
+    if max_log_index == Ticks::MAX {
+        panic!("`max_log_index` should not be equal `Ticks::MAX` because log indices are off by one to adress pre_log meta");
+    }
+}
+
 impl<Marker, Transition, Index: Copy + Debug> Log<Marker, Transition, Index> {
     const LOG_INDEX_OUT_OF_RANGE: &'static str =
         "`log_index` should be smaller or equal `log.len()`";

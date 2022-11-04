@@ -1,4 +1,4 @@
-use std::num::Wrapping;
+use std::{num::Wrapping, ops::RangeInclusive};
 
 use crate::Ticks;
 
@@ -7,7 +7,7 @@ use super::{
     Controller,
 };
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub(super) struct DebugLogContainer {
     pub(super) after_last: Option<DebugLog>,
     pub(super) after_first: DebugLog,
@@ -20,6 +20,8 @@ pub(super) struct DebugLog {
     pub(super) first_ran: bool,
     pub(super) progress_current: Progress,
     pub(super) progress_query: Option<ProgressQuery>,
+    pub(super) forward_fast_range: RangeInclusive<Wrapping<Ticks>>,
+    pub(super) log_range: RangeInclusive<Wrapping<Ticks>>,
     pub(super) time_stamp: Wrapping<Ticks>,
     pub(super) forget: Wrapping<Ticks>,
     pub(super) to_time_stamp: Wrapping<Ticks>,
@@ -38,6 +40,8 @@ impl From<&Controller> for DebugLog {
             first_ran: value.first_ran,
             progress_current: value.progress_current,
             progress_query: value.progress_query,
+            forward_fast_range: value.forward_fast_range(),
+            log_range: value.log_range(),
             time_stamp: value.time_stamp,
             forget: value.forget,
             to_time_stamp: value.to_time_stamp.to_time_stamp,

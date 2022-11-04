@@ -4,7 +4,7 @@ use crate::Ticks;
 
 #[derive(PartialEq, Debug, Copy, Clone)]
 pub(crate) struct ControllerConsts {
-    pub(crate) max_log_index: Ticks,
+    pub(crate) max_log_index: Ticks, //not Ticks::MAX, ideally: Ticks::MAX >> n
     pub(crate) max_log_index_usize: usize,
     pub(crate) log_capacity: usize,
     pub(crate) forward_to_max: Ticks,
@@ -22,12 +22,8 @@ impl ControllerConsts {
         default_time_step: f64,
         debug_capacity: usize,
     ) -> Self {
-        if max_log_index == Ticks::MAX {
-            panic!("`max_log_index` should not be equal `Ticks::MAX` because log indices are off by one to adress pre_log meta. See `log_system::Log::entry`");
-        }
-        if forward_to_max == 0 {
-            panic!("`fast_forward_max` should not be 0");
-        }
+        crate::controller::assert_forward_to_max(forward_to_max);
+        crate::log_systems::log::assert_max_log_index(max_log_index);
         Self {
             max_log_index,
             max_log_index_usize: max_log_index as usize,

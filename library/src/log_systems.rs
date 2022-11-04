@@ -1,4 +1,4 @@
-mod log;
+pub mod log;
 pub mod per_entity;
 pub mod per_system;
 
