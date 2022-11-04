@@ -6,78 +6,51 @@ use crate::Ticks;
 
 use super::Controller;
 
-#[derive(Clone, Copy, PartialEq, Debug, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Hash)]
 pub(super) enum Progress {
     #[default]
     Forward,
-    ForwardTo {
-        init: bool,
-    },
-    ForwardLog {
-        after_forward: bool,
-    },
-    ForwardLogTo {
-        after_forward_if_init: Option<bool>,
-    },
-    BackwardLog {
-        after_backward: bool,
-    },
-    BackwardLogTo {
-        after_backward_if_init: Option<bool>,
-    },
-    LogClose {
-        after_backward: bool,
-    },
-    Pause {
-        after_forward_if_log: Option<bool>,
-    },
+    /// Inner value: init`
+    ForwardFast(bool),
+    /// Inner value: after_forward
+    ForwardLog(bool),
+    /// Inner value: after_forward_if_init
+    ForwardLogFast(Option<bool>),
+    /// Inner value: after_backward
+    BackwardLog(bool),
+    /// Inner value: after_backward_if_init
+    BackwardLogFast(Option<bool>),
+    /// Inner value: after_backward
+    LogClose(bool),
+    /// Inner value: after_forward_if_log
+    Pause(Option<bool>),
 }
 
-#[derive(PartialEq, Debug)]
-pub(super) enum TimeStampChange {
-    NoChange,
-    PlusOne,
-    MinusOne,
+enum After {
+    AfterForward,
+    AfterBackward,
 }
-
-impl Progress {
-    pub(super) fn time_stamp_change(&self) -> TimeStampChange {
-        match self {
-            Progress::Forward
-            | Progress::ForwardTo { .. }
-            | Progress::ForwardLog {
-                after_forward: true,
-            }
-            | Progress::ForwardLogTo {
-                after_forward_if_init: None,
-            }
-            | Progress::ForwardLogTo {
-                after_forward_if_init: Some(true),
-            } => TimeStampChange::PlusOne,
-            Progress::BackwardLog {
-                after_backward: true,
-            }
-            | Progress::BackwardLogTo {
-                after_backward_if_init: None,
-            }
-            | Progress::BackwardLogTo {
-                after_backward_if_init: Some(true),
-            }
-            | Progress::LogClose {
-                after_backward: true,
-            } => TimeStampChange::MinusOne,
-            _ => TimeStampChange::NoChange,
-        }
-    }
+enum AfterIfInit {
+    InitAfterForward,
+    InitAfterBackward,
+    NotInit,
+}
+enum AfterIfLog {
+    LogAfterForward,
+    LogAfterBackward,
+    NotLog,
+}
+enum Init {
+    Init,
+    NotInit,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum ProgressQuery {
     Forward,
-    ForwardTo(Wrapping<Ticks>),
-    ForwardLog,
-    BackwardLog,
-    LogTo(Wrapping<Ticks>),
+    ForwardFastTo(Wrapping<Ticks>), //changes to Forward at time_stamp
+    LogTo(Wrapping<Ticks>),         //changes to Pause at time_stamp
+    LogFastTo(Wrapping<Ticks>),     //changes to Pause at time_stamp
     Pause,
 }
 
@@ -86,6 +59,29 @@ pub(super) enum ProgressLog {
     NotLog,
     ForwardLog,
     BackwardLog,
+}
+
+impl ProgressLog {
+    pub(super) fn after_forward(&self) -> bool {
+        match self {
+            ProgressLog::NotLog => true,
+            ProgressLog::ForwardLog => true,
+            ProgressLog::BackwardLog => false,
+        }
+    }
+    pub(super) fn after_backward(&self) -> bool {
+        !self.after_forward()
+    }
+    pub(super) fn after_forward_if_log(&self) -> Option<bool> {
+        match self {
+            ProgressLog::NotLog => None,
+            ProgressLog::ForwardLog => Some(true),
+            ProgressLog::BackwardLog => Some(false),
+        }
+    }
+    pub(super) fn after_backward_if_log(&self) -> Option<bool> {
+        self.after_forward_if_log().map(|b| !b)
+    }
 }
 
 impl Command for ProgressQuery {
@@ -105,19 +101,4 @@ impl Command for ProgressQuery {
             }
         }
     }
-}
-
-#[derive(Debug, PartialEq, Clone)]
-pub enum ProgressQueryError {
-    ToProgressActive,
-    QueryOutOfRange(RangeInclusive<Wrapping<Ticks>>),
-}
-
-#[derive(Debug)]
-pub enum QueryLimit {
-    CurrentlyNotQueryable,
-    CurrentLimit {
-        forward_to_range: RangeInclusive<Wrapping<Ticks>>,
-        log_to_range: RangeInclusive<Wrapping<Ticks>>,
-    },
 }
