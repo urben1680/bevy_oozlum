@@ -1,5 +1,5 @@
 #![deny(rust_2018_idioms)]
-#![feature(generic_associated_types)]
+//#![feature(generic_associated_types)]
 
 use std::{num::Wrapping, ops::RangeInclusive};
 

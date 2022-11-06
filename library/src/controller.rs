@@ -119,15 +119,13 @@ impl Controller {
             }
         }
     }
-    pub(super) fn into_world(
+    pub(super) fn new(
         time_stamp: Wrapping<Ticks>,
         log: VecDeque<Vec<Box<dyn ReversibleCommandInitialized>>>,
         constants: ControllerConsts,
-        world: &mut World,
-    ) {
+    ) -> (Self, ControllerReceiver) {
         let (commands_sender, commands_receiver) = sync_channel(constants.sync_sender_capacity);
-        world.insert_non_send_resource(ControllerReceiver(commands_receiver));
-        world.insert_resource(Self {
+        let controller = Self {
             time_step_query: None,
             time_step: constants.default_time_step,
             elapsed: 0.0,
@@ -150,7 +148,8 @@ impl Controller {
 
             #[cfg(test)]
             constants,
-        });
+        };
+        (controller, ControllerReceiver(commands_receiver))
     }
     pub(super) fn system_first(mut controller: ResMut<'_, Self>, commands: Commands<'_, '_>) {
         controller.first(commands);
@@ -404,7 +403,7 @@ impl Controller {
         self.progress_query = Some(query);
         Ok(())
     }
-    pub fn query_procress_command(
+    pub fn query_progress_command(
         &self,
         commands: &mut Commands<'_, '_>,
         query: ProgressQuery,
