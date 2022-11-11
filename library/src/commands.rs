@@ -31,7 +31,6 @@ pub trait ReversibleCommand: Send + Sync + 'static {
 
 /// Trait for reversible commands that are initialized.
 pub trait ReversibleCommandInitialized: Send + Sync + 'static {
-    /// Redo or undo the command. `Self` needs to track itself if `redo` or `undo`is to be applied. The first call to this function is `undo`.
     fn undo(&mut self, world: &mut World);
     fn redo(&mut self, world: &mut World);
     fn redo_finalize(self: Box<Self>, world: &mut World);
