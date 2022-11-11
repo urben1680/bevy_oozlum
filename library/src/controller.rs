@@ -65,12 +65,6 @@ pub(super) struct Controller {
     constants: ControllerConsts,
 }
 
-#[derive(Debug)]
-pub struct QueryRange {
-    forward_fast: RangeInclusive<Wrapping<Ticks>>,
-    log: RangeInclusive<Wrapping<Ticks>>,
-}
-
 pub(crate) const fn assert_forward_to_max(forward_to_max: Ticks) {
     if forward_to_max == 0 {
         panic!("`forward_to_max` must not be 0 to take at least the commands of the current step");
@@ -419,14 +413,15 @@ impl Controller {
         query: ProgressQuery,
     ) -> Result<(), RangeInclusive<Wrapping<Ticks>>> {
         match query {
-            ProgressQuery::LogFastTo(to) => {
+            ProgressQuery::ForwardFastTo(to) => {
                 let range = self.forward_fast_range();
                 match to.in_range(&range) {
                     false => Err(range),
                     true => Ok(()),
                 }
             }
-            ProgressQuery::LogTo(to) => {
+            ProgressQuery::LogTo(to) |
+            ProgressQuery::LogFastTo(to) => {
                 let range = self.log_range();
                 match to.in_range(&range) {
                     false => Err(range),
@@ -569,7 +564,7 @@ impl Controller {
                 if to_time_stamp == self.time_stamp + Wrapping(1) {
                     self.progress_current = Progress::Forward;
                 } else {
-                    self.to_time_stamp.to_time_stamp = to_time_stamp;
+                    self.update_to_time_stamp(true, Some(to_time_stamp));
                     let reserve = self.to_time_stamp.delta_abs as usize;
                     assert!(
                         reserve + self.delayed_commands.len()
@@ -611,11 +606,11 @@ impl Controller {
                 self.progress_current = match self.log_to_future_if_not_now(to_time_stamp) {
                     None => Progress::Pause(Some(after_forward)),
                     Some(false) => {
-                        self.to_time_stamp.to_time_stamp = to_time_stamp;
+                        self.update_to_time_stamp(false, Some(to_time_stamp));
                         Progress::BackwardLogFast(Some(!after_forward))
                     }
                     Some(true) => {
-                        self.to_time_stamp.to_time_stamp = to_time_stamp;
+                        self.update_to_time_stamp(true, Some(to_time_stamp));
                         Progress::ForwardLogFast(Some(after_forward))
                     }
                 }
@@ -627,6 +622,14 @@ impl Controller {
                 self.progress_query = None;
                 self.progress_current = Progress::Pause(progress_log.after_forward_if_log());
             }
+        }
+    }
+    fn update_to_time_stamp(&mut self, forward: bool, to: Option<Wrapping<Ticks>>) {
+        let to = to.unwrap_or(self.to_time_stamp.to_time_stamp);
+        self.to_time_stamp.to_time_stamp = to;
+        self.to_time_stamp.delta_abs = match forward {
+            false => (self.time_stamp - to).0,
+            true => (to - self.time_stamp).0,
         }
     }
     fn log_to_future_if_not_now(&self, to_time_stamp: Wrapping<Ticks>) -> Option<bool> {

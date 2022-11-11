@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{VecDeque, BTreeMap},
     iter::repeat,
     mem::take,
     num::Wrapping,
@@ -19,6 +19,45 @@ use super::{
     Controller,
 };
 
+const MAX_LOG_INDEX: Ticks = 2;
+const MAX_LOG_LEN: usize = MAX_LOG_INDEX as usize + 2;
+const FORWARD_TO_MAX: Ticks = 3;
+
+/*
+(match self {
+    Progress::Forward => vec![
+        vec![Command::Init],
+        vec![Command::RedoFinalize, Command::Init],
+        vec![Command::RedoFinalize, Command::RedoFinalize, Command::Init],
+    ],
+    Progress::ForwardFast(..) => vec![vec![], vec![Command::Init, Command::Init]],
+    Progress::ForwardLog(..) | Progress::ForwardLogFast(..) => {
+        vec![vec![Command::Redo], vec![Command::Redo, Command::Redo]]
+    }
+    Progress::BackwardLog(..) | Progress::BackwardLogFast(..) => {
+        vec![vec![Command::Undo], vec![Command::Undo, Command::Undo]]
+    }
+    Progress::LogClose(false) => vec![
+        vec![],
+        vec![Command::UndoFinalize],
+        vec![Command::UndoFinalize, Command::UndoFinalize],
+    ],
+    Progress::LogClose(true) => vec![
+        vec![],
+        vec![Command::UndoFinalize],
+        vec![Command::UndoFinalize, Command::UndoFinalize],
+        vec![
+            Command::UndoFinalize,
+            Command::UndoFinalize,
+            Command::UndoFinalize,
+        ],
+    ],
+    Progress::Pause(..) => vec![vec![]],
+})
+*/
+
+mod forward;
+
 #[derive(Clone)]
 struct Test {
     /// controller.time_stamp value that reversible systems will see
@@ -35,7 +74,7 @@ struct Test {
     query: Query,
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Hash, PartialEq, Eq, Debug, PartialOrd, Ord)]
 enum Query {
     None,
     Forward,
@@ -143,12 +182,23 @@ impl ReversibleCommandInitialized for CommandTest {
 }
 
 impl Test {
-    fn forward_fast_to(
+    fn panic_prefix(query: Option<Query>, index: usize, at_first_ran: bool) -> String{
+        match query{
+            None => format!("test index: {index}, at_first_ran: {at_first_ran:?}"),
+            Some(query) => format!("test branch {query:?}, test index: {index}, at_first_ran: {at_first_ran:?}\n")
+        }
+    }
+    fn forward_fast_range(&self) -> RangeInclusive<Wrapping<Ticks>>{
+        Wrapping(*self.forward_fast_range.start())..=Wrapping(*self.forward_fast_range.end())
+    }
+    fn log_range(&self) -> RangeInclusive<Wrapping<Ticks>>{
+        Wrapping(*self.log_range.start())..=Wrapping(*self.log_range.end())
+    }
+    fn query_forward_fast_to(
         &self,
         start_if_in_range: Option<bool>,
     ) -> (ProgressQuery, Result<(), RangeInclusive<Wrapping<Ticks>>>) {
-        let range =
-            Wrapping(*self.forward_fast_range.start())..=Wrapping(*self.forward_fast_range.end());
+        let range = self.forward_fast_range();
         match start_if_in_range {
             None => (
                 ProgressQuery::ForwardFastTo(*range.end() + Wrapping(1)),
@@ -158,24 +208,22 @@ impl Test {
             Some(true) => (ProgressQuery::ForwardFastTo(*range.start()), Ok(())),
         }
     }
-    fn log_to(
+    fn query_log_to(
         &self,
         start_if_in_range: Option<bool>,
     ) -> (ProgressQuery, Result<(), RangeInclusive<Wrapping<Ticks>>>) {
-        let range =
-            Wrapping(*self.forward_fast_range.start())..=Wrapping(*self.forward_fast_range.end());
+        let range = self.log_range();
         match start_if_in_range {
             None => (ProgressQuery::LogTo(*range.end() + Wrapping(1)), Err(range)),
             Some(false) => (ProgressQuery::LogTo(*range.end()), Ok(())),
             Some(true) => (ProgressQuery::LogTo(*range.start()), Ok(())),
         }
     }
-    fn log_fast_to(
+    fn query_log_fast_to(
         &self,
         start_if_in_range: Option<bool>,
     ) -> (ProgressQuery, Result<(), RangeInclusive<Wrapping<Ticks>>>) {
-        let range =
-            Wrapping(*self.forward_fast_range.start())..=Wrapping(*self.forward_fast_range.end());
+        let range = self.log_range();
         match start_if_in_range {
             None => (
                 ProgressQuery::LogFastTo(*range.end() + Wrapping(1)),
@@ -185,37 +233,34 @@ impl Test {
             Some(true) => (ProgressQuery::LogFastTo(*range.start()), Ok(())),
         }
     }
-    fn query(&self, controller: &Controller, commands: &mut Commands<'_, '_>, index: usize) {
+    fn query(&self, controller: &Controller, commands: &mut Commands<'_, '_>, panic_prefix: &String) {
         let (query, expected) = match self.query {
             Query::None => return,
             Query::Forward => (ProgressQuery::Forward, Ok(())),
-            Query::ForwardFastToRangeStart => self.forward_fast_to(Some(true)),
-            Query::ForwardFastToRangeEnd => self.forward_fast_to(Some(false)),
-            Query::ForwardFastToOutOfRange => self.forward_fast_to(None),
-            Query::LogToRangeStart => self.log_to(Some(true)),
-            Query::LogToRangeEnd => self.log_to(Some(false)),
-            Query::LogToOutOfRange => self.log_to(None),
-            Query::LogFastToRangeStart => self.log_fast_to(Some(true)),
-            Query::LogFastToRangeEnd => self.log_fast_to(Some(false)),
-            Query::LogFastToOutOfRange => self.log_fast_to(None),
+            Query::ForwardFastToRangeStart => self.query_forward_fast_to(Some(true)),
+            Query::ForwardFastToRangeEnd => self.query_forward_fast_to(Some(false)),
+            Query::ForwardFastToOutOfRange => self.query_forward_fast_to(None),
+            Query::LogToRangeStart => self.query_log_to(Some(true)),
+            Query::LogToRangeEnd => self.query_log_to(Some(false)),
+            Query::LogToOutOfRange => self.query_log_to(None),
+            Query::LogFastToRangeStart => self.query_log_fast_to(Some(true)),
+            Query::LogFastToRangeEnd => self.query_log_fast_to(Some(false)),
+            Query::LogFastToOutOfRange => self.query_log_fast_to(None),
             Query::Pause => (ProgressQuery::Pause, Ok(())),
         };
         match (controller.query_progress_command(commands, query), expected) {
             (Ok(()), Ok(())) => (),
             (Err(r1), Err(r2)) => assert_eq!(
-                r1, r2, "test index {index}, errors should be equal, debug:\n{:#?}", controller.debug),
-            (Err(r), Ok(..)) => panic!(
-                "test index {index}, test should not result in Err({r:?}), debug:\n{:#?}",
+                r1, r2, "{panic_prefix}{query:?}: errors should be equal, debug:\n{:#?}", controller.debug),
+            (a, b) => panic!(
+                "{panic_prefix}{query:?}: test should result in {b:?}, not {a:?}, debug:\n{:#?}",
                 controller.debug
-            ),
-            (Ok(()), Err(r)) => panic!(
-                "test index {index}, test should result in Err({r:?}), debug:\n{:#?}",
-                controller.debug
-            ),
+            )
         }
     }
     fn before_first_ran(
         tests: Res<'_, Vec<Self>>,
+        test_query: Res<'_, Option<Query>>,
         index: Res<'_, usize>,
         at_first_ran: Res<'_, bool>,
         controller: Res<'_, Controller>,
@@ -223,27 +268,40 @@ impl Test {
     ) {
         let index = *index;
         let test = &tests[index];
+        let panic_prefix = Self::panic_prefix(*test_query, index, *at_first_ran);
         let progress_current = test.progress_current;
         assert_eq!(
             progress_current, controller.progress_current,
-            "test index {index}, progress_current should be {progress_current:?}, debug:\n{:#?}",
+            "{panic_prefix}progress_current should be {progress_current:?}, debug:\n{:#?}",
             controller.debug
         );
         if !*at_first_ran {
-            test.query(&controller, &mut commands, index);
+            test.query(&controller, &mut commands, &panic_prefix);
         }
     }
     fn at_first_ran(
         tests: Res<'_, Vec<Self>>,
+        test_query: Res<'_, Option<Query>>,
         index: Res<'_, usize>,
         at_first_ran: Res<'_, bool>,
         controller: Res<'_, Controller>,
-        mut commands: Commands<'_, '_>,
+        mut commands: Commands<'_, '_>
     ) {
         let index = *index;
         let test = &tests[index];
+        let panic_prefix = Self::panic_prefix(*test_query, index, *at_first_ran);
+
+        assert!(test.log_range.len() <= MAX_LOG_LEN, "{panic_prefix}, test log_len should have a max len of {MAX_LOG_LEN}");
+        assert_eq!(test.forward_fast_range.len(), FORWARD_TO_MAX as usize, "{panic_prefix}, test forward_fast_range should have a len of {FORWARD_TO_MAX}");
+        assert!(controller.first_ran, "{panic_prefix}, first_ran should be true, debug:\n{:#?}",
+        controller.debug);
+        assert_eq!(controller.forward_fast_range(), test.forward_fast_range(), "{panic_prefix}forward fast range should match, debug:\n{:#?}",
+        controller.debug);
+        assert_eq!(controller.log_range(), test.log_range(), "{panic_prefix}log range should match, debug:\n{:#?}",
+        controller.debug);
+
         if *at_first_ran {
-            test.query(&controller, &mut commands, index);
+            test.query(&controller, &mut commands, &panic_prefix);
         }
         match controller.progress_current {
             Progress::Forward => {
@@ -252,7 +310,9 @@ impl Test {
             Progress::ForwardFast { .. } => controller.send_commands(
                 CommandTest::new_vec(&controller),
                 &mut commands,
-                controller.to_time_stamp.delta_abs - 1,
+                controller.to_time_stamp.delta_abs.checked_sub(1).unwrap_or_else(||panic!(
+                    "{panic_prefix}to_time_stamp.delta_abs should not be zero, debug:\n{:#?}", controller.debug
+                )),
             ),
             _ => {}
         }
@@ -264,15 +324,15 @@ impl Test {
             (true, Some(time_stamp)) => assert_eq!(
                 controller.time_stamp,
                 Wrapping(time_stamp),
-                "test index {index}, time_stamp should be {time_stamp}, debug:\n{:#?}",
+                "{panic_prefix}time_stamp should be {time_stamp}, debug:\n{:#?}",
                 controller.debug
             ),
             (true, None) => panic!(
-                "test index {index}, time_stamp should be Some at this test, debug:\n{:#?}",
+                "{panic_prefix}time_stamp should be Some at this test, debug:\n{:#?}",
                 controller.debug
             ),
             (false, Some(..)) => panic!(
-                "test index {index}, time_stamp should be None at this test, debug:\n{:#?}",
+                "{panic_prefix}time_stamp should be None at this test, debug:\n{:#?}",
                 controller.debug
             ),
             (false, None) => {}
@@ -280,12 +340,15 @@ impl Test {
     }
     fn after_first_ran(
         tests: Res<'_, Vec<Self>>,
+        test_query: Res<'_, Option<Query>>,
         mut index_res: ResMut<'_, usize>,
+        at_first_ran: Res<'_, bool>,
         controller: Res<'_, Controller>,
         mut log: ResMut<'_, TestLogCollection>,
     ) {
         let index = *index_res;
         let test = &tests[index];
+        let panic_prefix = Self::panic_prefix(*test_query, index, *at_first_ran);
         let log = take(&mut log.log);
         let commands_check: Vec<Command> = test
             .commands
@@ -294,30 +357,36 @@ impl Test {
             .collect();
         assert_eq!(
             commands_check, log,
-            "test index {index}, commands should be {commands_check:#?}, debug:\n{:#?}",
+            "{panic_prefix}commands should be {commands_check:#?}, debug:\n{:#?}",
             controller.debug
         );
         *index_res += 1;
     }
-    fn test_all_queries(setup: Vec<Self>, branches: HashMap<Query, Vec<Self>>) {
+    fn test_all_queries(setup: Vec<Self>, mut branches: BTreeMap<Query, Vec<Self>>) {
+        assert!(
+            branches.insert(Query::ForwardFastToOutOfRange, vec![]).is_none() &&
+            branches.insert(Query::LogToOutOfRange, vec![]).is_none() &&
+            branches.insert(Query::LogFastToOutOfRange, vec![]).is_none(),
+            "out of range queries should not be present as they are added automatically"
+        );
         assert_eq!(branches.len(), 12, "all queries should be tested");
         assert!(!setup.is_empty(), "setup should not be empty");
         for (query, mut branch) in branches.into_iter() {
             let mut tests = setup.clone();
             tests.last_mut().unwrap().query = query;
             tests.append(&mut branch);
-            Self::test(tests);
+            Self::test(tests, Some(query));
         }
     }
-    fn test(tests: Vec<Self>) {
-        Self::test_with_at_first_ran(tests.clone(), false);
-        Self::test_with_at_first_ran(tests, true);
+    fn test(tests: Vec<Self>, query: Option<Query>) {
+        Self::test_with_at_first_ran(tests.clone(), query, false);
+        Self::test_with_at_first_ran(tests, query, true);
     }
-    fn test_with_at_first_ran(tests: Vec<Self>, at_first_ran: bool) {
+    fn test_with_at_first_ran(tests: Vec<Self>, query: Option<Query>, at_first_ran: bool) {
         let len = tests.len();
         let constants = ControllerConsts::new(
-            2,   //forget after 4 steps
-            2,   //panic at jumping further than 2 steps
+            MAX_LOG_INDEX,   //forget after 4 steps
+            FORWARD_TO_MAX,   //panic at jumping further than 3 steps
             1,   //third and fourth `CommandTest` should be added without sync_channel
             0.0, //next step at each app update
             len,
@@ -330,9 +399,11 @@ impl Test {
 
         let mut app = App::new();
         app.init_resource::<usize>()
+            .init_resource::<TestLogCollection>()
             .insert_resource(at_first_ran)
             .insert_resource(tests)
             .insert_resource(controller)
+            .insert_resource(query)
             .insert_non_send_resource(receiver)
             .add_system_to_stage(CoreStage::First, Self::before_first_ran)
             .add_system_to_stage(CoreStage::PreUpdate, Controller::system_first)
