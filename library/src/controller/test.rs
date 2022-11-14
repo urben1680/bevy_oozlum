@@ -6,7 +6,7 @@ use std::{
     ops::RangeInclusive,
 };
 
-use bevy::prelude::{App, Commands, CoreStage, ParallelSystemDescriptorCoercion, Res, ResMut};
+use bevy::prelude::{App, Commands, CoreStage, ParallelSystemDescriptorCoercion, Res, ResMut, DerefMut, Deref, Resource};
 
 use crate::{
     commands::{ReversibleCommand, ReversibleCommandInitialized},
@@ -108,12 +108,24 @@ struct CommandTest {
     in_this_step: u8,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Resource)]
 struct TestLogCollection {
     added: VecDeque<CommandTest>,
     removed: VecDeque<CommandTest>,
     log: Vec<Command>,
 }
+
+#[derive(Resource, DerefMut, Deref)]
+struct Tests(Vec<Test>);
+
+#[derive(Resource, DerefMut, Deref)]
+struct AtFirstRan(bool);
+
+#[derive(Resource, DerefMut, Deref)]
+struct TestQuery(Option<Query>);
+
+#[derive(Resource, DerefMut, Deref, Default)]
+struct TestIndex(usize);
 
 impl CommandTest {
     fn new_vec(controller: &Controller) -> Vec<Box<dyn ReversibleCommand>> {
@@ -259,10 +271,10 @@ impl Test {
         }
     }
     fn before_first_ran(
-        tests: Res<'_, Vec<Self>>,
-        test_query: Res<'_, Option<Query>>,
-        index: Res<'_, usize>,
-        at_first_ran: Res<'_, bool>,
+        tests: Res<'_, Tests>,
+        test_query: Res<'_, TestQuery>,
+        index: Res<'_, TestIndex>,
+        at_first_ran: Res<'_, AtFirstRan>,
         controller: Res<'_, Controller>,
         mut commands: Commands<'_, '_>,
     ) {
@@ -280,10 +292,10 @@ impl Test {
         }
     }
     fn at_first_ran(
-        tests: Res<'_, Vec<Self>>,
-        test_query: Res<'_, Option<Query>>,
-        index: Res<'_, usize>,
-        at_first_ran: Res<'_, bool>,
+        tests: Res<'_, Tests>,
+        test_query: Res<'_, TestQuery>,
+        index: Res<'_, TestIndex>,
+        at_first_ran: Res<'_, AtFirstRan>,
         controller: Res<'_, Controller>,
         mut commands: Commands<'_, '_>
     ) {
@@ -339,10 +351,10 @@ impl Test {
         }
     }
     fn after_first_ran(
-        tests: Res<'_, Vec<Self>>,
-        test_query: Res<'_, Option<Query>>,
-        mut index_res: ResMut<'_, usize>,
-        at_first_ran: Res<'_, bool>,
+        tests: Res<'_, Tests>,
+        test_query: Res<'_, TestQuery>,
+        mut index_res: ResMut<'_, TestIndex>,
+        at_first_ran: Res<'_, AtFirstRan>,
         controller: Res<'_, Controller>,
         mut log: ResMut<'_, TestLogCollection>,
     ) {
@@ -360,7 +372,7 @@ impl Test {
             "{panic_prefix}commands should be {commands_check:#?}, debug:\n{:#?}",
             controller.debug
         );
-        *index_res += 1;
+        *index_res.0 += 1;
     }
     fn test_all_queries(setup: Vec<Self>, mut branches: BTreeMap<Query, Vec<Self>>) {
         assert!(
@@ -391,20 +403,19 @@ impl Test {
             0.0, //next step at each app update
             len,
         );
-        let (controller, receiver) = Controller::new(
+        let controller = Controller::new(
             Wrapping(0),
             VecDeque::with_capacity(constants.log_capacity),
             constants,
         );
 
         let mut app = App::new();
-        app.init_resource::<usize>()
+        app.init_resource::<TestIndex>()
             .init_resource::<TestLogCollection>()
-            .insert_resource(at_first_ran)
-            .insert_resource(tests)
+            .insert_resource(AtFirstRan(at_first_ran))
+            .insert_resource(Tests(tests))
             .insert_resource(controller)
-            .insert_resource(query)
-            .insert_non_send_resource(receiver)
+            .insert_resource(TestQuery(query))
             .add_system_to_stage(CoreStage::First, Self::before_first_ran)
             .add_system_to_stage(CoreStage::PreUpdate, Controller::system_first)
             .add_system_to_stage(CoreStage::Update, Self::at_first_ran)
@@ -417,7 +428,7 @@ impl Test {
             .add_system_to_stage(CoreStage::Last, Self::after_first_ran);
 
         let mut count = 0;
-        while *app.world.resource::<usize>() < len {
+        while app.world.resource::<TestIndex>().0 < len {
             app.update();
             assert_ne!(count, len, "every app update should progress controller");
             count += 1;

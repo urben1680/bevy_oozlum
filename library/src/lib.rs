@@ -1,9 +1,9 @@
 #![deny(rust_2018_idioms)]
-#![feature(generic_associated_types)]
+//#![feature(generic_associated_types)]
 
 use std::{num::Wrapping, ops::RangeInclusive};
 
-use bevy::prelude::Component;
+use bevy::prelude::{Component, Resource};
 
 pub mod commands;
 pub mod controller;
@@ -54,12 +54,12 @@ impl TicksRelative for Wrapping<Ticks> {
 /// Buffer component/resource that contains despawned data so it can be recovered.
 ///
 /// It is stored as a SparseSet as it is never queried but only accessed by commands to bring them back or to drop them finally.
-#[derive(Component)]
+#[derive(Component, Resource)]
 #[component(storage = "SparseSet")]
 struct Despawned<T: Send + Sync + 'static>(T);
 
 /// Flag Component to mark an `Entity` as despawned.
 ///
 /// It is not stored as a SparseSet because it is rarely added, and even more rarely removed but is filtered on at every reversible system query.
-#[derive(Component)]
+#[derive(Component, Resource)]
 struct DespawnedEntity;

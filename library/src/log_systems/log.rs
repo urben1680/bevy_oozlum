@@ -1,12 +1,12 @@
-use std::{any::type_name, collections::VecDeque, fmt::Debug, marker::PhantomData, num::Wrapping};
+use std::{collections::VecDeque, fmt::Debug, marker::PhantomData, num::Wrapping};
 
-use bevy::prelude::{Commands, Component};
+use bevy::prelude::{Commands, Component, Resource};
 
 use crate::{controller::Controller, Ticks, TicksRelative, ToTimeStamp};
 
 use super::{NextTransition, StateOption};
 
-#[derive(Component)]
+#[derive(Component, Resource)]
 pub struct Log<Marker, Transition, Index> {
     log_index: Ticks,
     log: VecDeque<LogTransition<Transition, Index>>,

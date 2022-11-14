@@ -3,13 +3,13 @@ use std::{
     iter::FromIterator,
     num::Wrapping,
     ops::RangeInclusive,
-    sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError},
+    sync::{mpsc::{sync_channel, Receiver, SyncSender, TrySendError}, Mutex},
 };
 
 use bevy::{
     ecs::world::Mut,
     log::info,
-    prelude::{Commands, NonSendMut, ResMut, World},
+    prelude::{Commands, ResMut, World, Resource},
     time::Time,
 };
 
@@ -36,9 +36,7 @@ mod debug;
 #[cfg(test)]
 mod test;
 
-/// `NonSend` resource containing sync channel `Receiver`s for forgets and delayed commands.
-pub(super) struct ControllerReceiver(Receiver<(usize, Vec<Box<dyn ReversibleCommand>>)>);
-
+#[derive(Resource)]
 pub(super) struct Controller {
     time_step_query: Option<f64>, //todo: use enum instead with options such as "back to default after n ticks"
     time_step: f64,
@@ -58,6 +56,7 @@ pub(super) struct Controller {
     delayed_commands: VecDeque<Vec<Box<dyn ReversibleCommand>>>,
     commands_overflows: u64,
     commands_sender: SyncSender<(usize, Vec<Box<dyn ReversibleCommand>>)>,
+    commands_receiver: Mutex<Receiver<(usize, Vec<Box<dyn ReversibleCommand>>)>>,
 
     #[cfg(debug_assertions)]
     debug: VecDeque<DebugLogContainer>,
@@ -117,9 +116,9 @@ impl Controller {
         time_stamp: Wrapping<Ticks>,
         log: VecDeque<Vec<Box<dyn ReversibleCommandInitialized>>>,
         constants: ControllerConsts,
-    ) -> (Self, ControllerReceiver) {
+    ) -> Self {
         let (commands_sender, commands_receiver) = sync_channel(constants.sync_sender_capacity);
-        let controller = Self {
+        Self {
             time_step_query: None,
             time_step: constants.default_time_step,
             elapsed: 0.0,
@@ -136,24 +135,23 @@ impl Controller {
             delayed_commands: VecDeque::with_capacity(constants.delayed_commands_capacity),
             commands_overflows: 0,
             commands_sender,
+            commands_receiver: Mutex::new(commands_receiver),
 
             #[cfg(debug_assertions)]
             debug: VecDeque::with_capacity(constants.debug_capacity),
 
             #[cfg(test)]
             constants,
-        };
-        (controller, ControllerReceiver(commands_receiver))
+        }
     }
     pub(super) fn system_first(mut controller: ResMut<'_, Self>, commands: Commands<'_, '_>) {
         controller.first(commands);
     }
     pub(super) fn system_last(
         mut controller: ResMut<'_, Self>,
-        receivers: NonSendMut<'_, ControllerReceiver>,
         commands: Commands<'_, '_>,
     ) {
-        controller.last(receivers, commands);
+        controller.last(commands);
     }
     pub(super) fn first(&mut self, commands: Commands<'_, '_>) {
         match self.progress_current {
@@ -217,7 +215,6 @@ impl Controller {
     }
     pub(super) fn last(
         &mut self,
-        receiver: NonSendMut<'_, ControllerReceiver>,
         commands: Commands<'_, '_>,
     ) {
         self.first_ran = false;
@@ -226,7 +223,7 @@ impl Controller {
             Progress::Forward => {
                 self.progress_current = Progress::Forward;
                 self.apply_progress_query(ProgressLog::NotLog);
-                if !self.last_forward_commands_sent(receiver, commands) {
+                if !self.last_forward_commands_sent(commands) {
                     self.update_debug(false);
                 }
             }
@@ -238,7 +235,7 @@ impl Controller {
                 } else {
                     self.progress_current = Progress::ForwardFast(false);
                 }
-                if !self.last_forward_commands_sent(receiver, commands) {
+                if !self.last_forward_commands_sent(commands) {
                     self.update_debug(false);
                 }
             }
@@ -494,11 +491,9 @@ impl Controller {
     }
     fn last_forward_commands_sent(
         &mut self,
-        receiver: NonSendMut<'_, ControllerReceiver>,
         mut commands: Commands<'_, '_>,
     ) -> bool {
-        receiver
-            .0
+        self.commands_receiver.lock().expect("last access should not have panicked")
             .try_iter()
             .for_each(|(index, command)| self.add_delayed_commands(index, command));
 

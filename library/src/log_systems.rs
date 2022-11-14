@@ -14,7 +14,7 @@ use bevy::{
 
 use crate::commands::ReversibleCommand;
 
-pub trait StateOption: Resource {
+pub trait StateOption {
     type Index: Send + Sync + Copy + Debug + 'static;
     type Param<'w>: SystemParam + Send + Sync;
     type Output;
@@ -26,6 +26,7 @@ pub struct State<T: Resource, Index: Send + Sync + 'static = usize>(PhantomData<
 where
     usize: From<Index>;
 
+#[derive(Resource)]
 pub struct StateCollection<T> {
     //todo versioning, const param?
     pub resource: Vec<T>,
