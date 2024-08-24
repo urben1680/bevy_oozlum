@@ -1,9 +1,10 @@
 use core::{num::NonZeroUsize, ops::Range};
 
-use bevy::{
-    ecs::system::Resource,
-    prelude::{IntoSystem, ReadOnlySystem, Res},
-};
+use bevy::ecs::schedule::ScheduleLabel;
+use bevy::ecs::{system::Resource, world::World};
+
+use crate::log::{Packed, WithTimestamp};
+use crate::{BackwardSchedule, ForwardSchedule, RevUpdate};
 
 // todo: updates in log directions einschließen?
 
@@ -32,7 +33,7 @@ benötigt für steuerung:
 /// It keepts track what the current frame is and to which frame one can go forward and backward in time.
 #[derive(Debug, Clone, Resource)]
 pub struct RevMeta {
-    /// The maximum amount of states of the world that is logged to be jumped in.
+    /// The maximum amount of states of the world that is logged to be jumped in, or None if growth is unrestricted.
     ///
     /// As the world is always in a certain state, the amount cannot be zero.
     ///
@@ -41,13 +42,12 @@ pub struct RevMeta {
     /// - regularily set this value to not less than `now() + 2 - frame` before the next update
     /// - set it to `None`, disabling forgetting world states
     ///
-    /// Reducing this value alone does not cause deallocations, this has to be done manually with each log deque if desired.
+    /// Reducing this value alone does not cause deallocations, this has to be done manually with each [`crate::log`] struct if desired.
     ///
     /// Changing this value is always possible but only comes into effect when updating the world during [`Direction::Forward`].
     pub max_len: Option<NonZeroUsize>,
-    start: usize,
     now: usize,
-    end: usize,
+    range: Range<usize>,
     direction: Direction,
     queue: Option<Direction>,
 }
@@ -67,9 +67,8 @@ impl RevMeta {
         }
         Self {
             max_len,
-            start: now,
             now,
-            end: now + 1,
+            range: now..now + 1,
             direction: match paused {
                 true => Direction::Pause,
                 false => Direction::Forward,
@@ -83,9 +82,15 @@ impl RevMeta {
     pub fn now(&self) -> usize {
         self.now
     }
+    pub fn with_timestamp<T>(&self, data: T) -> WithTimestamp<T> {
+        WithTimestamp {
+            data,
+            logged_at: Packed(self.now),
+        }
+    }
     /// Returns the frame range that can be returned to using [`Self::queue_log`].
     pub fn range(&self) -> Range<usize> {
-        self.start..self.end
+        self.range.clone()
     }
     /// Queue to go forward.
     ///
@@ -94,9 +99,8 @@ impl RevMeta {
         self.queue = Some(Direction::Forward);
     }
     pub fn queue_log(&mut self, to: usize) -> Result<usize, Range<usize>> {
-        let log_range = self.range();
-        if !log_range.contains(&to) {
-            return Err(log_range);
+        if !self.range().contains(&to) {
+            return Err(self.range());
         }
         let updates_until_pause = to.abs_diff(self.now);
         self.queue = Some(NonZeroUsize::new(updates_until_pause).map_or(
@@ -115,7 +119,26 @@ impl RevMeta {
     pub fn queue_pause(&mut self) {
         self.queue = Some(Direction::Pause);
     }
-    pub(crate) fn update(&mut self) {
+    pub fn update(world: &mut World) {
+        let mut this = world.get_resource_mut::<Self>().expect(Self::EXIST_MSG);
+        if this.range.end == usize::MAX {
+            todo!("")
+        }
+        this.update_inner();
+        let result = match this.direction {
+            Direction::Forward | Direction::ForwardLog { .. } => {
+                world.try_run_schedule(ForwardSchedule(RevUpdate.intern()))
+            }
+            Direction::BackwardLog { .. } => {
+                world.try_run_schedule(BackwardSchedule(RevUpdate.intern()))
+            }
+            Direction::Pause => return,
+        };
+        if result.is_err() {
+            todo!("")
+        }
+    }
+    pub fn update_inner(&mut self) {
         match self.queue.take() {
             Some(queue) => {
                 self.direction = queue;
@@ -146,24 +169,20 @@ impl RevMeta {
     }
     fn update_forward(&mut self) {
         self.now += 1;
-        self.end = self.now.checked_add(1).expect(Self::END_MAX_MSG);
+        self.range.end = self.now.checked_add(1).expect(Self::END_MAX_MSG);
         if let Some(max_len) = self.max_len {
-            self.start = self.start.max(self.end.saturating_sub(max_len.get()));
+            self.range.start = self
+                .range
+                .start
+                .max(self.range.end.saturating_sub(max_len.get()));
         }
-    }
-    pub(crate) fn noop_read_system() -> impl ReadOnlySystem {
-        IntoSystem::into_system(|_: Res<Self>| {})
     }
 }
 
 fn reduction_successful(updates_until_pause: &mut NonZeroUsize) -> bool {
-    match NonZeroUsize::new(updates_until_pause.get() - 1) {
-        Some(reduced) => {
-            *updates_until_pause = reduced;
-            true
-        }
-        None => false,
-    }
+    NonZeroUsize::new(updates_until_pause.get() - 1)
+        .map(|reduced| *updates_until_pause = reduced)
+        .is_some()
 }
 
 #[cfg(test)]
@@ -176,38 +195,36 @@ mod test {
     /// Constructs [`RevMeta`] and asserts the values are valid
     fn arrange(
         max_len: Option<NonZeroUsize>,
-        start: usize,
         now: usize,
-        end_inclusive: usize,
+        range: Range<usize>,
         direction: Direction,
     ) -> RevMeta {
         let meta = RevMeta {
             max_len,
-            start,
             now,
-            end: end_inclusive,
+            range: range.clone(),
             direction,
             queue: None,
         };
-        assert!(start <= now, "{meta:?}");
+        assert!(range.start <= now, "{meta:?}");
         match direction {
-            Direction::Forward => assert_eq!(now, end_inclusive, "{meta:?}"),
+            Direction::Forward => assert_eq!(now, range.end + 1, "{meta:?}"),
             Direction::ForwardLog {
                 updates_until_pause,
             } => {
-                assert!(now <= end_inclusive, "{meta:?}");
-                assert!(
-                    now + updates_until_pause.get() - 1 <= end_inclusive,
-                    "{meta:?}"
-                );
+                assert!(now < range.end, "{meta:?}");
+                assert!(now + updates_until_pause.get() <= range.end, "{meta:?}");
             }
             Direction::BackwardLog {
                 updates_until_pause,
             } => {
-                assert!(now <= end_inclusive, "{meta:?}");
-                assert!(start + updates_until_pause.get() - 1 <= now, "{meta:?}");
+                assert!(now < range.end, "{meta:?}");
+                assert!(
+                    range.start + updates_until_pause.get() - 1 <= now,
+                    "{meta:?}"
+                );
             }
-            Direction::Pause => assert!(now <= end_inclusive, "{meta:?}"),
+            Direction::Pause => assert!(now < range.end, "{meta:?}"),
         }
         meta
     }
@@ -217,14 +234,13 @@ mod test {
         let mut meta = arrange(
             None,
             0,
-            0,
-            1,
+            0..2,
             Direction::ForwardLog {
                 updates_until_pause: TWO,
             },
         );
 
-        meta.update();
+        meta.update_inner();
         assert_eq!(
             meta.direction(),
             Direction::ForwardLog {
@@ -233,7 +249,7 @@ mod test {
         );
         assert_eq!(meta.now(), 1);
 
-        meta.update();
+        meta.update_inner();
         assert_eq!(meta.direction(), Direction::Pause);
         assert_eq!(meta.now(), 1);
     }
@@ -242,15 +258,14 @@ mod test {
     fn log_backward_defaults_to_pause() {
         let mut meta = arrange(
             None,
-            0,
             1,
-            1,
+            0..2,
             Direction::BackwardLog {
                 updates_until_pause: TWO,
             },
         );
 
-        meta.update();
+        meta.update_inner();
         assert_eq!(
             meta.direction(),
             Direction::BackwardLog {
@@ -259,7 +274,7 @@ mod test {
         );
         assert_eq!(meta.now(), 0);
 
-        meta.update();
+        meta.update_inner();
         assert_eq!(meta.direction(), Direction::Pause);
         assert_eq!(meta.now(), 0);
     }
@@ -268,20 +283,20 @@ mod test {
     fn start_grows_according_to_max_len() {
         let mut meta = RevMeta::new(Some(TWO), 0, false);
 
-        meta.update();
+        meta.update_inner();
         assert_eq!(meta.now(), 1);
         assert_eq!(meta.range(), 0..2);
 
-        meta.update();
+        meta.update_inner();
         assert_eq!(meta.now(), 2);
         assert_eq!(meta.range(), 1..3);
     }
 
     #[test]
     fn queue_log_to_out_of_range_fails() {
-        let mut meta = arrange(None, 1, 2, 3, Direction::Pause);
+        let mut meta = arrange(None, 2, 1..4, Direction::Pause);
 
-        assert_eq!(meta.queue_log(0), Err(1..3));
-        assert_eq!(meta.queue_log(3), Err(1..3));
+        assert_eq!(meta.queue_log(0), Err(1..4));
+        assert_eq!(meta.queue_log(4), Err(1..4));
     }
 }

@@ -2,7 +2,7 @@ use std::{
     any::TypeId,
     borrow::Cow,
     marker::PhantomData,
-    sync::{Arc, RwLock},
+    sync::{Arc, Mutex},
 };
 
 use bevy::{
@@ -13,25 +13,25 @@ use bevy::{
         schedule::InternedSystemSet,
         world::{unsafe_world_cell::UnsafeWorldCell, DeferredWorld},
     },
-    prelude::{Condition, IntoSystem, ReadOnlySystem, System, SystemSet, World},
+    prelude::{Condition, IntoSystem, ReadOnlySystem, Res, System, SystemSet, World},
 };
 
 use crate::{
     app::{check_tick, EMPTY_ARCHETYPE_COMPONENT_ACCESS, EMPTY_COMPONENT_ACCESS},
-    log::{LimitLen, RareTransitionLog},
+    log::{OnePerFrame, RareTransitionLog},
     meta::{Direction, RevMeta},
 };
 
 struct RevConditionForward<T> {
     condition: T,
-    log: Arc<RwLock<RareTransitionLog<LimitLen>>>,
+    log: Arc<Mutex<RareTransitionLog<OnePerFrame>>>,
     name: String,
     component_access: Access<ComponentId>,
     archetype_component_access: Access<ArchetypeComponentId>,
 }
 
 struct RevConditionBackward<In: Send + Sync + 'static> {
-    log: Arc<RwLock<RareTransitionLog<LimitLen>>>,
+    log: Arc<Mutex<RareTransitionLog<OnePerFrame>>>,
     name: String,
     tick: Tick,
     _in: PhantomData<In>,
@@ -54,7 +54,7 @@ pub(crate) fn forward_backward_conditions<
     name_forward.push_str(" (forward condition)");
     name_backward.push_str(" (backward condition)");
 
-    let log: Arc<RwLock<RareTransitionLog<LimitLen>>> = Default::default();
+    let log: Arc<Mutex<RareTransitionLog<OnePerFrame>>> = Default::default();
 
     let forward = RevConditionForward {
         condition,
@@ -84,11 +84,9 @@ impl<T: System<Out = bool> + ReadOnlySystem> System for RevConditionForward<T> {
         TypeId::of::<Self>()
     }
     fn component_access(&self) -> &Access<ComponentId> {
-        // needs mirrored field because returning &'a A from RwLockReadGuard<'a, A> triggers error[E0515]
         &self.component_access
     }
     fn archetype_component_access(&self) -> &Access<ArchetypeComponentId> {
-        // needs mirrored field because returning &'a A from RwLockReadGuard<'a, A> triggers error[E0515]
         &self.archetype_component_access
     }
     fn is_send(&self) -> bool {
@@ -107,7 +105,7 @@ impl<T: System<Out = bool> + ReadOnlySystem> System for RevConditionForward<T> {
         };
         // no clone needed because it is expected that condition as a ReadOnlySystem would not mutate RevMeta
         let meta = meta.expect(RevMeta::EXIST_MSG);
-        let mut log = self.log.try_write().unwrap();
+        let mut log = self.log.try_lock().unwrap();
         if meta.direction() == Direction::Forward {
             let out = unsafe {
                 // SAFETY:
@@ -115,7 +113,8 @@ impl<T: System<Out = bool> + ReadOnlySystem> System for RevConditionForward<T> {
                 // - update_archetype_component_access was called by the caller of Self::run_unsafe
                 self.condition.run_unsafe(input, world)
             };
-            log.forward(&meta, out.then_some(()));
+            log.pop_past_by_len(meta);
+            log.push_present(out.then_some(().into()));
             out
         } else {
             log.forward_log().expect("todo").is_some()
@@ -131,17 +130,17 @@ impl<T: System<Out = bool> + ReadOnlySystem> System for RevConditionForward<T> {
         self.condition.queue_deferred(world)
     }
     fn initialize(&mut self, world: &mut World) {
-        let mut dummy = RevMeta::noop_read_system();
+        let mut reads_meta = IntoSystem::into_system(|_: Res<RevMeta>| {});
 
         self.condition.initialize(world);
-        dummy.initialize(world);
+        reads_meta.initialize(world);
 
-        self.component_access.extend(dummy.component_access());
+        self.component_access.extend(reads_meta.component_access());
         self.component_access
             .extend(self.condition.component_access());
 
         self.archetype_component_access
-            .extend(dummy.archetype_component_access());
+            .extend(reads_meta.archetype_component_access());
         self.archetype_component_access
             .extend(self.condition.archetype_component_access());
     }
@@ -168,10 +167,11 @@ impl<T: System<Out = bool> + ReadOnlySystem> System for RevConditionForward<T> {
 unsafe impl<T: System<Out = bool> + ReadOnlySystem> ReadOnlySystem for RevConditionForward<T> {
     fn run_readonly(&mut self, input: Self::In, world: &World) -> Self::Out {
         let meta = world.get_resource::<RevMeta>().expect(RevMeta::EXIST_MSG);
-        let mut log = self.log.try_write().unwrap();
+        let mut log = self.log.try_lock().unwrap();
         if meta.direction() == Direction::Forward {
             let out = self.condition.run_readonly(input, world);
-            log.forward(&meta, out.then_some(()));
+            log.pop_past_by_len(meta);
+            log.push_present(out.then_some(().into()));
             out
         } else {
             log.forward_log().expect("todo").is_some()
@@ -182,7 +182,7 @@ unsafe impl<T: System<Out = bool> + ReadOnlySystem> ReadOnlySystem for RevCondit
 impl<In: Send + Sync + 'static> RevConditionBackward<In> {
     fn run_inner(&mut self) -> bool {
         self.log
-            .try_write()
+            .try_lock()
             .unwrap()
             .backward_log()
             .expect("todo")
