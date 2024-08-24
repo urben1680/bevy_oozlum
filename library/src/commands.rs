@@ -34,13 +34,17 @@ pub trait RevCommand<Marker>: Send + 'static {
     fn apply(self, world: &mut World) -> Option<impl InitializedRevCommand>;
 }
 
-impl<T: InitializedRevCommand, F: FnOnce(&mut World) -> Option<T> + Send + 'static> RevCommand<fn(&mut World) -> Option<T>> for F {
+impl<T: InitializedRevCommand, F: FnOnce(&mut World) -> Option<T> + Send + 'static>
+    RevCommand<fn(&mut World) -> Option<T>> for F
+{
     fn apply(self, world: &mut World) -> Option<impl InitializedRevCommand> {
         self(world)
     }
 }
 
-impl<T: InitializedRevCommand, F: FnOnce(&mut World) -> T + Send + 'static> RevCommand<fn(&mut World) -> T> for F {
+impl<T: InitializedRevCommand, F: FnOnce(&mut World) -> T + Send + 'static>
+    RevCommand<fn(&mut World) -> T> for F
+{
     fn apply(self, world: &mut World) -> Option<impl InitializedRevCommand> {
         Some(self(world))
     }
@@ -69,12 +73,10 @@ pub trait InitializedRevCommand: Send + 'static {
 struct RevCommandBuffer(VecDeque<SyncCell<Box<dyn InitializedRevCommand>>>);
 
 #[derive(Default)]
-pub(crate) struct CommandsLog(
-    TransitionsLog<SyncCell<Box<dyn InitializedRevCommand>>, WithTimestamp>,
-);
+pub struct CommandsLog(TransitionsLog<SyncCell<Box<dyn InitializedRevCommand>>, WithTimestamp>);
 
 impl CommandsLog {
-    pub(crate) fn forward(&mut self, world: &mut World) {
+    pub fn forward(&mut self, world: &mut World) {
         let meta = world
             .get_resource::<RevMeta>()
             .expect(RevMeta::EXIST_MSG)
@@ -83,19 +85,14 @@ impl CommandsLog {
             for command in self.0.drain_future_transitions().rev() {
                 SyncCell::to_inner(command).undone_finalize(world);
             }
-            for command in self
-                .0
-                .pop_front_by_timestamp(&meta)
-                .into_iter()
-                .flat_map(|entry| entry.data)
-            {
+            for command in self.0.drain_past_by_timestamp(&meta) {
                 SyncCell::to_inner(command).redone_finalize(world);
             }
             let mut buffer = world.get_resource_or_insert_with(RevCommandBuffer::default);
             if !buffer.0.is_empty() {
-                let _infallibe = self.0.push_back(|mut log| {
+                let _infallibe = self.0.push_present(|mut log| {
                     log.append(&mut buffer.0);
-                    meta.now().into()
+                    meta.now()
                 });
             }
         } else {
@@ -110,13 +107,12 @@ impl CommandsLog {
             }
         }
     }
-    pub(crate) fn backward(&mut self, world: &mut World) {
+    pub fn backward(&mut self, world: &mut World) {
         for command in self
             .0
             .backward_log()
             .expect("todo not out of log")
             .into_iter()
-            .rev()
         {
             command.get().undo(world);
         }

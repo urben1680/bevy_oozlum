@@ -11,6 +11,8 @@ use bevy::{
 use set_configs::IntoRevSystemSetConfigs;
 use system_configs::IntoRevSystemConfigs;
 
+use crate::{BackwardSchedule, ForwardSchedule};
+
 mod set_configs;
 mod system_configs;
 
@@ -32,7 +34,7 @@ impl RevApp for App {
         &mut self,
         schedule: impl ScheduleLabel,
         systems: impl IntoRevSystemConfigs<Marker>,
-    ) -> &mut App {
+    ) -> &mut Self {
         let schedule = schedule.intern();
         let configs = systems.into_rev_configs();
         self.add_systems(ForwardSchedule(schedule), configs.forward)
@@ -49,19 +51,6 @@ impl RevApp for App {
         self.configure_sets(ForwardSchedule(schedule), configs.forward_sys)
             .configure_sets(BackwardSchedule(schedule), configs.backward_cmds_sys)
             .configure_sets(BackwardSchedule(schedule), configs.backward_sys)
-    }
-}
-
-/// Should be initialized before BackwardSchedule, see CommandsBackward::has_deferred
-#[derive(ScheduleLabel, Copy, Clone, Debug, Hash, PartialEq, Eq)]
-struct ForwardSchedule(Interned<dyn ScheduleLabel>);
-
-#[derive(ScheduleLabel, Copy, Clone, Debug, Hash, PartialEq, Eq)]
-struct BackwardSchedule(Interned<dyn ScheduleLabel>);
-
-impl BackwardSchedule {
-    fn new(schedule: &impl ScheduleLabel) -> Self {
-        Self(schedule.intern())
     }
 }
 
