@@ -82,6 +82,9 @@ impl RevMeta {
     pub fn now(&self) -> usize {
         self.now
     }
+    pub fn past_len(&self) -> usize {
+        self.now - self.range.start
+    }
     pub fn with_timestamp<T>(&self, data: T) -> WithTimestamp<T> {
         WithTimestamp {
             data,

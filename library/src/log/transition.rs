@@ -66,9 +66,11 @@ impl<T> TransitionLog<T> {
         self.transitions.front()
     }
     pub fn pop_past(&mut self) -> Option<T> {
-        self.transitions
-            .pop_front()
-            .inspect(|_| self.index = self.index.checked_sub(1).expect(BACKWARD_EXPECT_MSG))
+        if self.index == 0 {
+            // if the current log position is at the past end, transitions.front() is not a past value but a future value
+            return None;
+        }
+        self.transitions.pop_front().inspect(|_| self.index -= 1)
     }
     pub fn push_present(&mut self, transition: T) {
         self.transitions.truncate(self.index);
@@ -145,15 +147,14 @@ impl<T, Amount: Copy> TransitionLog<WithAmount<WithTimestamp<T>, Amount>> {
 
 impl<const N: usize, T> TransitionLog<NPerFrame<N, T>> {
     pub fn pop_past_by_len(&mut self, meta: &RevMeta) -> Option<NPerFrame<N, T>> {
-        if self.len() >= meta.range().len() * N {
+        if self.index > meta.past_len() * N {
             self.pop_past()
         } else {
             None
         }
     }
     pub fn drain_past_by_len(&mut self, meta: &RevMeta) -> Drain<NPerFrame<N, T>> {
-        let past_len = meta.now() - meta.range().start;
-        let excessive = self.index.saturating_sub(past_len * N);
+        let excessive = self.index.saturating_sub(meta.past_len() * N);
         self.index -= excessive;
         self.transitions.drain(..excessive)
     }
@@ -164,7 +165,7 @@ impl<const N: usize, T, Amount: Copy> TransitionLog<WithAmount<NPerFrame<N, T>, 
         &mut self,
         meta: &RevMeta,
     ) -> Option<WithAmount<NPerFrame<N, T>, Amount>> {
-        if self.len() >= meta.range().len() * N {
+        if self.index > meta.past_len() {
             self.pop_past()
         } else {
             None
@@ -174,8 +175,7 @@ impl<const N: usize, T, Amount: Copy> TransitionLog<WithAmount<NPerFrame<N, T>, 
         &mut self,
         meta: &RevMeta,
     ) -> Drain<WithAmount<NPerFrame<N, T>, Amount>> {
-        let past_len = meta.now() - meta.range().start;
-        let excessive = self.index.saturating_sub(past_len * N);
+        let excessive = self.index.saturating_sub(meta.past_len() * N);
         self.index -= excessive;
         self.transitions.drain(..excessive)
     }
