@@ -13,6 +13,7 @@ TODO:
 - impl Reflection für logs
 - cfg für ecs only (keine App), logging
 - examples
+- documentations, besonders mit informationen welche Methoden für deterministische Logik geeignet ist
 */
 
 use std::hash::Hash;

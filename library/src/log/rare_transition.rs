@@ -87,6 +87,10 @@ impl<T> RareTransitionLog<T> {
         self.transitions.front()
     }
     pub fn pop_past(&mut self) -> Option<RareData<T>> {
+        if self.index == 0 {
+            // if the current log position is at the past end, transitions.front() is not a past value but a future value
+            return None;
+        }
         self.transitions.pop_front().inspect(|entry| {
             self.index -= 1;
             self.len -= entry.len().get();
@@ -221,7 +225,7 @@ impl<const N: usize, T> RareTransitionLog<NPerFrame<N, T>> {
         let past_end = self.past_end()?;
         let excessive_len = self
             .len
-            .checked_sub((meta.now() - meta.range().start) * N)?;
+            .checked_sub(meta.past_len() * N)?;
         if excessive_len >= past_end.len().get() {
             self.pop_past()
         } else {
@@ -259,7 +263,7 @@ impl<const N: usize, T, Amount: Copy> RareTransitionLog<WithAmount<NPerFrame<N, 
         let past_end = self.past_end()?;
         let excessive_len = self
             .len
-            .checked_sub((meta.now() - meta.range().start) * N)?;
+            .checked_sub(meta.past_len() * N)?;
         if excessive_len >= past_end.len().get() {
             self.pop_past()
         } else {
