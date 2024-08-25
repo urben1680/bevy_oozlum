@@ -1,8 +1,5 @@
 use core::fmt::Debug;
-use std::{
-    collections::{TryReserveError, VecDeque},
-    usize,
-};
+use std::collections::{TryReserveError, VecDeque};
 
 use bevy::ecs::{component::Component, system::Resource};
 
@@ -15,7 +12,7 @@ pub struct ValueLog<T> {
     /// The log of values, with two partitions:
     /// - Past values in the indices `[0, self.future_index[`
     /// - Future values in the indices `[self.future_index, self.values.len()[`
-    /// 
+    ///
     /// The present value is not part of this deque and traversing the log swaps
     /// the present value from before and now while keeping the above partitions.
     values: VecDeque<T>,
@@ -238,7 +235,8 @@ mod test {
     impl MetaAndLogs {
         fn new(present: usize, max_len: Option<NonZeroUsize>) -> Self {
             let meta = RevMeta::new(max_len, 0, false);
-            let with_timestamp = ValueLog::<WithTimestamp<usize>>::from(meta.with_timestamp(present));
+            let with_timestamp =
+                ValueLog::<WithTimestamp<usize>>::from(meta.with_timestamp(present));
             let one_per_frame = OnePerFrame::<usize>::from(present);
             let one_per_frame = ValueLog::<OnePerFrame<usize>>::from(one_per_frame);
             Self {
@@ -265,7 +263,8 @@ mod test {
                 self.with_timestamp[0]
             );
             assert_eq!(
-                self.with_timestamp[0].present().data, value,
+                self.with_timestamp[0].present().data,
+                value,
                 "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
                 self.meta,
                 previous.with_timestamp[0],
@@ -274,7 +273,7 @@ mod test {
 
             self.with_timestamp[1].push_present(self.meta.with_timestamp(value));
             let middle = self.with_timestamp[1].clone();
-            self.with_timestamp[1].drain_past_by_timestamp(&self.meta);
+            let _ = self.with_timestamp[1].drain_past_by_timestamp(&self.meta);
             assert_eq!(
                 self.with_timestamp[1].len(),
                 expected_log_len,
@@ -284,7 +283,8 @@ mod test {
                 self.with_timestamp[1]
             );
             assert_eq!(
-                self.with_timestamp[1].present().data, value,
+                self.with_timestamp[1].present().data,
+                value,
                 "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
                 self.meta,
                 previous.with_timestamp[1],
@@ -303,7 +303,8 @@ mod test {
                 self.one_per_frame[0]
             );
             assert_eq!(
-                self.one_per_frame[0].present().0, value,
+                self.one_per_frame[0].present().0,
+                value,
                 "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
                 self.meta,
                 previous.one_per_frame[0],
@@ -312,7 +313,7 @@ mod test {
 
             self.one_per_frame[1].push_present(value.into());
             let middle = self.one_per_frame[1].clone();
-            self.one_per_frame[1].drain_past_by_len(&self.meta);
+            let _ = self.one_per_frame[1].drain_past_by_len(&self.meta);
             assert_eq!(
                 self.one_per_frame[1].len(),
                 expected_log_len,
@@ -322,7 +323,8 @@ mod test {
                 self.one_per_frame[1]
             );
             assert_eq!(
-                self.one_per_frame[1].present().0, value,
+                self.one_per_frame[1].present().0,
+                value,
                 "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
                 self.meta,
                 previous.one_per_frame[1],

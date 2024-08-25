@@ -33,11 +33,14 @@ impl<T> RareValueLog<T> {
     pub const fn new(present: T) -> Self {
         Self {
             values: VecDeque::new(),
-            present: RareData { data: present, skips: Packed(0) },
+            present: RareData {
+                data: present,
+                skips: Packed(0),
+            },
             future_index: 0,
             skips: 0,
             skips_max: 0,
-            len: 0
+            len: 0,
         }
     }
 }
