@@ -82,7 +82,7 @@ impl CommandsLog {
             .expect(RevMeta::EXIST_MSG)
             .clone();
         if meta.direction() == Direction::Forward {
-            for command in self.0.drain_future_transitions().rev() {
+            for command in self.0.drain_future().0.rev() {
                 SyncCell::to_inner(command).undone_finalize(world);
             }
             for command in self.0.drain_past_by_timestamp(&meta) {

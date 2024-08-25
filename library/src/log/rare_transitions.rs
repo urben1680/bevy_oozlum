@@ -1,9 +1,8 @@
 use std::{
     collections::{
-        vec_deque::{Drain, IterMut},
         TryReserveError, VecDeque,
     },
-    fmt::Debug,
+    fmt::Debug
 };
 
 use bevy::ecs::{component::Component, system::Resource};
@@ -11,8 +10,7 @@ use bevy::ecs::{component::Component, system::Resource};
 use crate::meta::RevMeta;
 
 use super::{
-    amount_to_usize, AmountErr, DataEntry, LogMut, NPerFrame, OutOfLog, Packed, RareData,
-    RareTransitionLog, WithAmount, WithTimestamp,
+    amount_to_usize, AmountErr, DataEntry, LogMut, NPerFrame, OutOfLog, Packed, RareTransitionLog, LogIter, WithAmount, WithTimestamp
 };
 
 #[derive(Debug, Clone, Component, Resource)]
@@ -109,18 +107,18 @@ where
     pub fn transitions_shrink_to_fit(&mut self) {
         self.transitions.shrink_to_fit()
     }
-    pub fn past_end(&self) -> Option<&RareData<WithAmount<U, Amount>>> {
-        self.amounts.past_end()
+    pub fn past_end(&self) -> Option<U> {
+        self.amounts.past_end().map(|with_amount| with_amount.entry)
     }
-    pub fn pop_past(&mut self) -> Option<RareData<DataEntry<Drain<T>, U>>> {
+    pub fn pop_past(&mut self) -> Option<DataEntry<impl LogIter<T>, U>> {
         let entry = self.amounts.pop_past();
         self.drain_past_by_amount(entry)
     }
-    pub fn drain_future_entries(&mut self) -> Drain<RareData<WithAmount<U, Amount>>> {
-        self.amounts.drain_future()
-    }
-    pub fn drain_future_transitions(&mut self) -> Drain<T> {
-        self.transitions.drain(self.index..)
+    pub fn drain_future(&mut self) -> (impl LogIter<T>, impl LogIter<U>) {
+        (
+            self.transitions.drain(self.index..),
+            self.amounts.drain_future().map(|with_amount| with_amount.entry)
+        )
     }
     pub fn clear(&mut self) {
         self.amounts.clear();
@@ -130,7 +128,7 @@ where
     pub fn push_present<Out: Into<U>>(
         &mut self,
         c: impl FnOnce(LogMut<T>) -> Out,
-    ) -> Result<Option<U>, AmountErr<T, U, Amount>> {
+    ) -> Result<Option<U>, AmountErr<impl LogIter<T>, U, Amount>> {
         self.transitions.truncate(self.index);
         let previous_len = self.transitions.len();
         let entry = c(LogMut(&mut self.transitions)).into();
@@ -155,7 +153,7 @@ where
             }),
         }
     }
-    pub fn backward_log(&mut self) -> Result<Option<DataEntry<IterMut<T>, U>>, OutOfLog> {
+    pub fn backward_log(&mut self) -> Result<Option<DataEntry<impl LogIter<&mut T>, U>>, OutOfLog> {
         Ok(self.amounts.backward_log()?.map(|with_amount| {
             let old_index = self.index;
             self.index -= amount_to_usize(with_amount.amount.0);
@@ -166,7 +164,7 @@ where
             }
         }))
     }
-    pub fn forward_log(&mut self) -> Result<Option<DataEntry<IterMut<T>, U>>, OutOfLog> {
+    pub fn forward_log(&mut self) -> Result<Option<DataEntry<impl LogIter<&mut T>, U>>, OutOfLog> {
         Ok(self.amounts.forward_log()?.map(|with_amount| {
             let old_index = self.index;
             self.index += amount_to_usize(with_amount.amount.0);
@@ -179,17 +177,14 @@ where
     }
     fn drain_past_by_amount(
         &mut self,
-        with_amount: Option<RareData<WithAmount<U, Amount>>>,
-    ) -> Option<RareData<DataEntry<Drain<T>, U>>> {
+        with_amount: Option<WithAmount<U, Amount>>,
+    ) -> Option<DataEntry<impl LogIter<T>, U>> {
         with_amount.map(|with_amount| {
-            let amount = amount_to_usize(with_amount.data.amount.0);
+            let amount = amount_to_usize(with_amount.amount.0);
             self.index -= amount;
-            RareData {
-                data: DataEntry {
-                    data: self.transitions.drain(..amount),
-                    entry: with_amount.data.entry,
-                },
-                skips_before_value: with_amount.skips_before_value,
+            DataEntry {
+                data: self.transitions.drain(..amount),
+                entry: with_amount.entry,
             }
         })
     }
@@ -202,15 +197,15 @@ where
     pub fn pop_past_by_timestamp(
         &mut self,
         meta: &RevMeta,
-    ) -> Option<RareData<DataEntry<Drain<T>, WithTimestamp<U>>>> {
+    ) -> Option<DataEntry<impl LogIter<T>, WithTimestamp<U>>> {
         let entry = self.amounts.pop_past_by_timestamp(meta);
         self.drain_past_by_amount(entry)
     }
-    pub fn drain_past_by_timestamp(&mut self, meta: &RevMeta) -> Drain<T> {
+    pub fn drain_past_by_timestamp(&mut self, meta: &RevMeta) -> impl LogIter<T> {
         let amount: usize = self
             .amounts
             .drain_past_by_timestamp(meta)
-            .map(|entry| amount_to_usize(entry.data.amount.0))
+            .map(|entry| amount_to_usize(entry.amount.0))
             .sum();
         self.index -= amount;
         self.transitions.drain(..amount)
@@ -224,15 +219,15 @@ where
     pub fn pop_past_by_len(
         &mut self,
         meta: &RevMeta,
-    ) -> Option<RareData<DataEntry<Drain<T>, NPerFrame<N, U>>>> {
+    ) -> Option<DataEntry<impl LogIter<T>, NPerFrame<N, U>>> {
         let entry = self.amounts.pop_past_by_len(meta);
         self.drain_past_by_amount(entry)
     }
-    pub fn drain_past_by_len(&mut self, meta: &RevMeta) -> Drain<T> {
+    pub fn drain_past_by_len(&mut self, meta: &RevMeta) -> impl LogIter<T> {
         let amount: usize = self
             .amounts
             .drain_past_by_len(meta)
-            .map(|entry| amount_to_usize(entry.data.amount.0))
+            .map(|entry| amount_to_usize(entry.amount.0))
             .sum();
         self.index -= amount;
         self.transitions.drain(..amount)
@@ -311,7 +306,7 @@ mod test {
                 self.with_timestamp[0]
             );
 
-            self.with_timestamp[1].drain_past_by_timestamp(&self.meta);
+            let _ = self.with_timestamp[1].drain_past_by_timestamp(&self.meta);
             let middle = self.with_timestamp[1].clone();
             let is_ok = self.with_timestamp[1]
                 .push_present(|mut log| {
@@ -374,7 +369,7 @@ mod test {
                 })
                 .is_ok();
             let middle = self.one_per_frame[1].clone();
-            self.one_per_frame[1].drain_past_by_len(&self.meta);
+            let _ = self.one_per_frame[1].drain_past_by_len(&self.meta);
             assert_eq!(
                 is_ok, expected_ok,
                 "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",

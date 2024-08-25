@@ -1,6 +1,6 @@
 use core::fmt::Debug;
 use std::{
-    collections::{vec_deque::Drain, TryReserveError, VecDeque},
+    collections::{TryReserveError, VecDeque},
     usize,
 };
 
@@ -8,7 +8,7 @@ use bevy::ecs::{component::Component, system::Resource};
 
 use crate::meta::RevMeta;
 
-use super::{NPerFrame, OutOfLog, WithAmount, WithTimestamp};
+use super::{LogIter, NPerFrame, OutOfLog, WithAmount, WithTimestamp};
 
 #[derive(Debug, Default, Clone, Component, Resource)]
 pub struct ValueLog<T> {
@@ -19,32 +19,35 @@ pub struct ValueLog<T> {
     /// The present value is not part of this deque and traversing the log swaps
     /// the present value from before and now while keeping the above partitions.
     values: VecDeque<T>,
-    /// The present value, easily accessible to read them as often as desired.
-    present_value: T,
+    /// The present value, easily accessible to read.
+    present: T,
     /// The index of the nearest future value in `self.values`, if there is any.
     future_index: usize,
 }
 
 impl<T> From<T> for ValueLog<T> {
-    fn from(present_value: T) -> Self {
-        Self {
-            values: VecDeque::new(),
-            present_value,
-            future_index: 0,
-        }
+    fn from(present: T) -> Self {
+        Self::new(present)
     }
 }
 
 impl<T> ValueLog<T> {
-    pub fn with_capacity(present_value: T, capacity: usize) -> Self {
+    pub const fn new(present: T) -> Self {
+        Self {
+            values: VecDeque::new(),
+            present,
+            future_index: 0,
+        }
+    }
+    pub fn with_capacity(present: T, capacity: usize) -> Self {
         Self {
             values: VecDeque::with_capacity(capacity),
-            present_value,
+            present,
             future_index: 0,
         }
     }
     pub fn into_inner(self) -> T {
-        self.present_value
+        self.present
     }
     pub fn len(&self) -> usize {
         self.values.len()
@@ -73,73 +76,69 @@ impl<T> ValueLog<T> {
     pub fn shrink_to_fit(&mut self) {
         self.values.shrink_to_fit()
     }
-    /// Past value or `None` if the oldest value is considered as the present value
+    /// Most past value or `None` if the oldest value is considered to be the present value
     pub fn past_end(&self) -> Option<&T> {
         if self.future_index == 0 {
-            None // self.values front is currently the present value, not a past value
+            None
         } else {
-            let past_end = self.values.front();
-            debug_assert!(past_end.is_some());
-            past_end
+            self.values.front()
         }
     }
     pub fn pop_past(&mut self) -> Option<T> {
         if self.future_index == 0 {
-            None // self.values front is currently the present value, not a past value
+            None
         } else {
             self.future_index -= 1;
-            let past_end = self.values.pop_front();
-            debug_assert!(past_end.is_some());
-            past_end
+            self.values.pop_front()
         }
     }
     pub fn present(&self) -> &T {
-        &self.present_value
+        &self.present
     }
     pub fn push_present(&mut self, value: T) {
         self.values.truncate(self.future_index);
-        let previous = core::mem::replace(&mut self.present_value, value);
+        let previous = core::mem::replace(&mut self.present, value);
         self.values.push_back(previous);
         self.future_index += 1;
     }
-    pub fn drain_future(&mut self) -> Drain<T> {
+    pub fn drain_future(&mut self) -> impl LogIter<T> {
         self.values.drain(self.future_index..)
     }
-    pub fn clear(&mut self, present_value: T) {
+    pub fn clear(&mut self, present: T) {
         self.values.clear();
-        self.present_value = present_value;
+        self.present = present;
         self.future_index = 0;
     }
     pub fn backward_log(&mut self) -> Result<(), OutOfLog> {
         // from:
         //  values:        [1, 2, 4]
-        //  present_value: 3
+        //  present:       3
         //  future_index:  2
         // to:
         //  values:        [1, 3, 4]
-        //  present_value: 2
+        //  present:       2
         //  future_index:  1
 
         self.future_index = self.future_index.checked_sub(1).ok_or(OutOfLog)?;
         let now_future = self.values.get_mut(self.future_index).expect("todo");
-        core::mem::swap(&mut self.present_value, now_future);
+        core::mem::swap(&mut self.present, now_future);
         Ok(())
     }
     pub fn forward_log(&mut self) -> Result<(), OutOfLog> {
         // from:
         //  values:        [1, 3, 4]
-        //  present_value: 2
+        //  present:       2
         //  future_index:  1
         // to:
         //  values:        [1, 2, 4]
-        //  present_value: 3
+        //  present:       3
         //  future_index:  2
 
         if self.future_index == self.values.len() {
             return Err(OutOfLog);
         }
         let now_future = self.values.get_mut(self.future_index).expect("todo");
-        core::mem::swap(&mut self.present_value, now_future);
+        core::mem::swap(&mut self.present, now_future);
         self.future_index += 1;
         Ok(())
     }
@@ -147,14 +146,13 @@ impl<T> ValueLog<T> {
 
 impl<T> ValueLog<WithTimestamp<T>> {
     pub fn pop_past_by_timestamp(&mut self, meta: &RevMeta) -> Option<WithTimestamp<T>> {
-        let past_end = self.past_end()?;
-        if past_end.logged_at.0 < meta.range().start {
+        if self.past_end()?.logged_at.0 < meta.range().start {
             self.pop_past()
         } else {
             None
         }
     }
-    pub fn drain_past_by_timestamp(&mut self, meta: &RevMeta) -> Drain<WithTimestamp<T>> {
+    pub fn drain_past_by_timestamp(&mut self, meta: &RevMeta) -> impl LogIter<WithTimestamp<T>> {
         let partition_point = self
             .values
             .partition_point(|entry| entry.logged_at.0 < meta.range().start);
@@ -168,8 +166,7 @@ impl<T, Amount: Copy> ValueLog<WithAmount<WithTimestamp<T>, Amount>> {
         &mut self,
         meta: &RevMeta,
     ) -> Option<WithAmount<WithTimestamp<T>, Amount>> {
-        let past_end = self.past_end()?;
-        if past_end.entry.logged_at.0 < meta.range().start {
+        if self.past_end()?.entry.logged_at.0 < meta.range().start {
             self.pop_past()
         } else {
             None
@@ -178,7 +175,7 @@ impl<T, Amount: Copy> ValueLog<WithAmount<WithTimestamp<T>, Amount>> {
     pub(crate) fn drain_past_by_timestamp(
         &mut self,
         meta: &RevMeta,
-    ) -> Drain<WithAmount<WithTimestamp<T>, Amount>> {
+    ) -> impl LogIter<WithAmount<WithTimestamp<T>, Amount>> {
         let partition_point = self
             .values
             .partition_point(|entry| entry.entry.logged_at.0 < meta.range().start);
@@ -195,7 +192,7 @@ impl<const N: usize, T> ValueLog<NPerFrame<N, T>> {
             None
         }
     }
-    pub fn drain_past_by_len(&mut self, meta: &RevMeta) -> Drain<NPerFrame<N, T>> {
+    pub fn drain_past_by_len(&mut self, meta: &RevMeta) -> impl LogIter<NPerFrame<N, T>> {
         let excessive = self.future_index.saturating_sub(meta.past_len() * N);
         self.future_index -= excessive;
         self.values.drain(..excessive)
@@ -216,7 +213,7 @@ impl<const N: usize, T, Amount: Copy> ValueLog<WithAmount<NPerFrame<N, T>, Amoun
     pub(crate) fn drain_past_by_len(
         &mut self,
         meta: &RevMeta,
-    ) -> Drain<WithAmount<NPerFrame<N, T>, Amount>> {
+    ) -> impl LogIter<WithAmount<NPerFrame<N, T>, Amount>> {
         let excessive = self.future_index.saturating_sub(meta.past_len() * N);
         self.future_index -= excessive;
         self.values.drain(..excessive)
@@ -239,10 +236,10 @@ mod test {
     }
 
     impl MetaAndLogs {
-        fn new(present_value: usize, max_len: Option<NonZeroUsize>) -> Self {
+        fn new(present: usize, max_len: Option<NonZeroUsize>) -> Self {
             let meta = RevMeta::new(max_len, 0, false);
-            let with_timestamp = ValueLog::<WithTimestamp<usize>>::from(meta.with_timestamp(present_value));
-            let one_per_frame = OnePerFrame::<usize>::from(present_value);
+            let with_timestamp = ValueLog::<WithTimestamp<usize>>::from(meta.with_timestamp(present));
+            let one_per_frame = OnePerFrame::<usize>::from(present);
             let one_per_frame = ValueLog::<OnePerFrame<usize>>::from(one_per_frame);
             Self {
                 meta: RevMeta::new(max_len, 0, false),

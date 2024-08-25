@@ -1,6 +1,6 @@
 use core::fmt::Debug;
 use std::{
-    collections::{vec_deque::Drain, TryReserveError, VecDeque},
+    collections::{TryReserveError, VecDeque},
     usize,
 };
 
@@ -8,7 +8,7 @@ use bevy::ecs::{component::Component, system::Resource};
 
 use crate::meta::RevMeta;
 
-use super::{NPerFrame, OutOfLog, WithAmount, WithTimestamp, BACKWARD_EXPECT_MSG};
+use super::{NPerFrame, OutOfLog, LogIter, WithAmount, WithTimestamp, BACKWARD_EXPECT_MSG};
 
 #[derive(Debug, Component, Clone, Resource)]
 pub struct TransitionLog<T> {
@@ -77,7 +77,7 @@ impl<T> TransitionLog<T> {
         self.transitions.push_back(transition);
         self.index = self.transitions.len();
     }
-    pub fn drain_future(&mut self) -> Drain<T> {
+    pub fn drain_future(&mut self) -> impl LogIter<T> {
         self.transitions.drain(self.index..)
     }
     pub fn clear(&mut self) {
@@ -110,7 +110,7 @@ impl<T> TransitionLog<WithTimestamp<T>> {
             None
         }
     }
-    pub fn drain_past_by_timestamp(&mut self, meta: &RevMeta) -> Drain<WithTimestamp<T>> {
+    pub fn drain_past_by_timestamp(&mut self, meta: &RevMeta) -> impl LogIter<WithTimestamp<T>> {
         let partition_point = self
             .transitions
             .partition_point(|entry| entry.logged_at.0 <= meta.range().start);
@@ -136,7 +136,7 @@ impl<T, Amount: Copy> TransitionLog<WithAmount<WithTimestamp<T>, Amount>> {
     pub(crate) fn drain_past_by_timestamp(
         &mut self,
         meta: &RevMeta,
-    ) -> Drain<WithAmount<WithTimestamp<T>, Amount>> {
+    ) -> impl LogIter<WithAmount<WithTimestamp<T>, Amount>> {
         let partition_point = self
             .transitions
             .partition_point(|entry| entry.entry.logged_at.0 <= meta.range().start);
@@ -153,7 +153,7 @@ impl<const N: usize, T> TransitionLog<NPerFrame<N, T>> {
             None
         }
     }
-    pub fn drain_past_by_len(&mut self, meta: &RevMeta) -> Drain<NPerFrame<N, T>> {
+    pub fn drain_past_by_len(&mut self, meta: &RevMeta) -> impl LogIter<NPerFrame<N, T>> {
         let excessive = self.index.saturating_sub(meta.past_len() * N);
         self.index -= excessive;
         self.transitions.drain(..excessive)
@@ -174,7 +174,7 @@ impl<const N: usize, T, Amount: Copy> TransitionLog<WithAmount<NPerFrame<N, T>, 
     pub(crate) fn drain_past_by_len(
         &mut self,
         meta: &RevMeta,
-    ) -> Drain<WithAmount<NPerFrame<N, T>, Amount>> {
+    ) -> impl LogIter<WithAmount<NPerFrame<N, T>, Amount>> {
         let excessive = self.index.saturating_sub(meta.past_len() * N);
         self.index -= excessive;
         self.transitions.drain(..excessive)
@@ -222,7 +222,7 @@ mod test {
                 self.with_timestamp[0]
             );
 
-            self.with_timestamp[1].drain_past_by_timestamp(&self.meta);
+            let _ = self.with_timestamp[1].drain_past_by_timestamp(&self.meta);
             let middle = self.with_timestamp[1].clone();
             self.with_timestamp[1].push_present(self.meta.with_timestamp(transition));
             assert_eq!(
@@ -248,7 +248,7 @@ mod test {
 
             self.one_per_frame[1].push_present(transition.into());
             let middle = self.one_per_frame[1].clone();
-            self.one_per_frame[1].drain_past_by_len(&self.meta);
+            let _ = self.one_per_frame[1].drain_past_by_len(&self.meta);
             assert_eq!(
                 self.one_per_frame[1].len(),
                 expected_len,
