@@ -42,50 +42,8 @@
 //! has less logic overhead.
 
 use std::{
-    collections::{vec_deque::Drain, VecDeque},
-    fmt::Debug,
-    num::NonZeroUsize,
+    collections::VecDeque, fmt::Debug, iter::FusedIterator, num::NonZeroUsize
 };
-
-// Überlegungen für eigentliche value logs:
-// - machen für Values/RareValues auch Sinn wenn man zB damit einen Vec befüllen will
-// - brauchen einen initialen Wert, desswegen können sie kein Default implementieren
-// -- initialer Wert von Values/RareValues ist eine VecDeque, transitions_capacity bei with_capacity entfällt dann
-// - andere logik bei backward_log
-// - andere logik bei forward, <start anstatt <=start
-// - andere logik bei forward_log wenn mit indices anders umgegangen werden muss
-// - front_value methoden machen für diese Sinn
-// - typen hier drunter brauchen allgemeinere Namen
-// - ~~get methode um ohne update an das value zu kommen, erspart es das value gesondert zu halten~~
-
-// jetzt wo man mut transition erhält, lässt sich damit value nachbilden? via mem::swap
-/*
-val = 10;
----forward:
-log.push(value);
-value = 20;
----backward log:
-entry = log.backward();
-std::mem::swap(value, entry);
-value == 10
----forward log:
-entry = log.forward();
-std::mem::swap(value, entry);
-value == 20
-
-das klappt nicht bei Values weil die anzahl unterschiedlich ist
-
-alternative: es wird nur der index/range gespeichert wo im log das value ist, unnötig bei value log
-
-*/
-
-// Alternative zu WithTImestamp: forward limitiert anhand von meta log len, zu bevorzugen wenn jedes frame geupdated wird
-
-// todo: pop_front_by_... anstelle von forward methoden, impl reflect
-
-// für mehrere updates per frame: TransitionsLog, aber nicht der ganze range sondern einzelne darin
-
-// neue log art für mehrere updates pro entry wo U: PartialEq
 
 mod rare_transition;
 mod rare_transitions;
@@ -103,9 +61,13 @@ pub use transitions::TransitionsLog;
 
 use crate::meta::RevMeta;
 
+pub trait LogIter<'a, T>: Iterator<Item = T> + DoubleEndedIterator + ExactSizeIterator + FusedIterator {}
+
+impl<T, I: Iterator<Item = T> + DoubleEndedIterator + ExactSizeIterator + FusedIterator> LogIter<'_, T> for I {}
+
 // A `#[repr(packed)]` wrapper for `Copy` types that may be larger than single bytes but should not bloat parent
 // structs with other, smaller fields without having these struct to be packed themselves to prevent `T`'s padding.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 #[repr(packed)]
 pub struct Packed<T: Copy>(pub T);
 
@@ -119,16 +81,16 @@ impl<T: Copy> From<T> for Packed<T> {
 pub struct OutOfLog;
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct RareData<T> {
+struct RareData<T> {
     pub data: T,
-    pub skips_before_value: Packed<usize>,
+    pub skips: Packed<usize>,
 }
 
 impl<T> RareData<T> {
-    pub fn len(&self) -> NonZeroUsize {
+    fn len(&self) -> NonZeroUsize {
         unsafe {
             // SAFETY: +1 ensures to never be zero
-            NonZeroUsize::new_unchecked(self.skips_before_value.0 + 1) // self.data adds to the len
+            NonZeroUsize::new_unchecked(self.skips.0 + 1) // self.data adds to the len
         }
     }
 }
@@ -160,8 +122,8 @@ impl<'a, T> Extend<T> for LogMut<'a, T> {
 }
 
 #[derive(Debug)]
-pub struct AmountErr<'a, T, U, Amount: TryFrom<usize> = usize> {
-    pub data: Drain<'a, T>,
+pub struct AmountErr<I, U, Amount: TryFrom<usize> = usize> {
+    pub data: I,
     pub entry: U,
     pub err: Amount::Error,
 }
@@ -220,9 +182,9 @@ impl<const N: usize, T> From<T> for NPerFrame<N, T> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(packed)]
-pub struct WithAmount<U = (), Amount: Copy = usize> {
-    pub entry: U,
-    pub amount: Packed<Amount>,
+struct WithAmount<U = (), Amount: Copy = usize> {
+    entry: U,
+    amount: Packed<Amount>,
 }
 
 fn amount_to_usize<Amount: TryInto<usize, Error: Debug>>(amount: Amount) -> usize {

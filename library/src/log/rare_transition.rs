@@ -1,7 +1,7 @@
 use core::fmt::Debug;
 use std::{
     cmp::Ordering,
-    collections::{vec_deque::Drain, TryReserveError, VecDeque},
+    collections::{TryReserveError, VecDeque},
 };
 
 use bevy::ecs::{component::Component, system::Resource};
@@ -9,11 +9,12 @@ use bevy::ecs::{component::Component, system::Resource};
 use crate::meta::RevMeta;
 
 use super::{
-    NPerFrame, OutOfLog, Packed, RareData, WithAmount, WithTimestamp, BACKWARD_EXPECT_MSG,
+    NPerFrame, OutOfLog, Packed, RareData, LogIter, WithAmount, WithTimestamp, BACKWARD_EXPECT_MSG
 };
 
 #[derive(Debug, Clone, Component, Resource)]
 pub struct RareTransitionLog<T> {
+    /// RareData.skips represents the number of None pushes before the transition in the struct
     transitions: VecDeque<RareData<T>>,
     index: usize,
     skips: usize,
@@ -83,22 +84,26 @@ impl<T> RareTransitionLog<T> {
     pub fn transitions_shrink_to_fit(&mut self) {
         self.transitions.shrink_to_fit()
     }
-    pub fn past_end(&self) -> Option<&RareData<T>> {
+    fn past_end_rare(&self) -> Option<&RareData<T>> {
         self.transitions.front()
     }
-    pub fn pop_past(&mut self) -> Option<RareData<T>> {
+    pub fn past_end(&self) -> Option<&T> {
+        self.past_end_rare().map(|rare| &rare.data)
+    }
+    pub fn pop_past(&mut self) -> Option<T> {
         if self.index == 0 {
             // if the current log position is at the past end, transitions.front() is not a past value but a future value
             return None;
         }
-        self.transitions.pop_front().inspect(|entry| {
+        self.transitions.pop_front().map(|rare| {
             self.index -= 1;
-            self.len -= entry.len().get();
+            self.len -= rare.len().get();
+            rare.data
         })
     }
-    pub fn drain_future(&mut self) -> Drain<RareData<T>> {
+    pub fn drain_future(&mut self) -> impl LogIter<T> {
         self.skips_max = self.skips;
-        self.transitions.drain(self.index..)
+        self.transitions.drain(self.index..).map(|rare| rare.data)
     }
     pub fn clear(&mut self) {
         self.transitions.clear();
@@ -116,7 +121,7 @@ impl<T> RareTransitionLog<T> {
             Some(transition) => {
                 self.transitions.push_back(RareData {
                     data: transition,
-                    skips_before_value: Packed(self.skips),
+                    skips: Packed(self.skips),
                 });
                 self.skips = 0;
                 self.index += 1;
@@ -136,7 +141,7 @@ impl<T> RareTransitionLog<T> {
                 .transitions
                 .get_mut(self.index)
                 .expect(BACKWARD_EXPECT_MSG);
-            self.skips = entry.skips_before_value.0;
+            self.skips = entry.skips.0;
             self.len -= 1;
             Ok(Some(&mut entry.data))
         }
@@ -144,7 +149,7 @@ impl<T> RareTransitionLog<T> {
     pub fn forward_log(&mut self) -> Result<Option<&mut T>, OutOfLog> {
         if let Some(entry) = self.transitions.get_mut(self.index) {
             self.len += 1;
-            if self.skips < entry.skips_before_value.0 {
+            if self.skips < entry.skips.0 {
                 self.skips += 1;
                 Ok(None)
             } else {
@@ -163,17 +168,17 @@ impl<T> RareTransitionLog<T> {
 }
 
 impl<T: Debug> RareTransitionLog<WithTimestamp<T>> {
-    pub fn pop_past_by_timestamp(&mut self, meta: &RevMeta) -> Option<RareData<WithTimestamp<T>>> {
+    pub fn pop_past_by_timestamp(&mut self, meta: &RevMeta) -> Option<WithTimestamp<T>> {
         if self.past_end().map_or(false, |entry| {
             // include range().start because this entry instructs how to transition from range().start to range().start - 1
-            entry.data.logged_at.0 <= meta.range().start
+            entry.logged_at.0 <= meta.range().start
         }) {
             self.pop_past()
         } else {
             None
         }
     }
-    pub fn drain_past_by_timestamp(&mut self, meta: &RevMeta) -> Drain<RareData<WithTimestamp<T>>> {
+    pub fn drain_past_by_timestamp(&mut self, meta: &RevMeta) -> impl LogIter<WithTimestamp<T>> {
         let partition_point = self
             .transitions
             .partition_point(|entry| entry.data.logged_at.0 <= meta.range().start);
@@ -181,10 +186,10 @@ impl<T: Debug> RareTransitionLog<WithTimestamp<T>> {
             + self
                 .transitions
                 .range(..partition_point)
-                .map(|entry| entry.skips_before_value.0)
+                .map(|entry| entry.skips.0)
                 .sum::<usize>();
         self.index -= partition_point;
-        self.transitions.drain(..partition_point)
+        self.transitions.drain(..partition_point).map(|rare| rare.data)
     }
 }
 
@@ -192,10 +197,10 @@ impl<T, Amount: Copy> RareTransitionLog<WithAmount<WithTimestamp<T>, Amount>> {
     pub(crate) fn pop_past_by_timestamp(
         &mut self,
         meta: &RevMeta,
-    ) -> Option<RareData<WithAmount<WithTimestamp<T>, Amount>>> {
+    ) -> Option<WithAmount<WithTimestamp<T>, Amount>> {
         if self.past_end().map_or(false, |entry| {
             // include range().start because this entry instructs how to transition from range().start to range().start - 1
-            entry.data.entry.logged_at.0 <= meta.range().start
+            entry.entry.logged_at.0 <= meta.range().start
         }) {
             self.pop_past()
         } else {
@@ -205,7 +210,7 @@ impl<T, Amount: Copy> RareTransitionLog<WithAmount<WithTimestamp<T>, Amount>> {
     pub(crate) fn drain_past_by_timestamp(
         &mut self,
         meta: &RevMeta,
-    ) -> Drain<RareData<WithAmount<WithTimestamp<T>, Amount>>> {
+    ) -> impl LogIter<WithAmount<WithTimestamp<T>, Amount>> {
         let partition_point = self
             .transitions
             .partition_point(|entry| entry.data.entry.logged_at.0 <= meta.range().start);
@@ -213,16 +218,16 @@ impl<T, Amount: Copy> RareTransitionLog<WithAmount<WithTimestamp<T>, Amount>> {
             + self
                 .transitions
                 .range(..partition_point)
-                .map(|entry| entry.skips_before_value.0)
+                .map(|entry| entry.skips.0)
                 .sum::<usize>();
         self.index -= partition_point;
-        self.transitions.drain(..partition_point)
+        self.transitions.drain(..partition_point).map(|rare| rare.data)
     }
 }
 
 impl<const N: usize, T> RareTransitionLog<NPerFrame<N, T>> {
-    pub fn pop_past_by_len(&mut self, meta: &RevMeta) -> Option<RareData<NPerFrame<N, T>>> {
-        let past_end = self.past_end()?;
+    pub fn pop_past_by_len(&mut self, meta: &RevMeta) -> Option<NPerFrame<N, T>> {
+        let past_end = self.past_end_rare()?;
         let excessive_len = self
             .len
             .checked_sub(meta.past_len() * N)?;
@@ -232,7 +237,7 @@ impl<const N: usize, T> RareTransitionLog<NPerFrame<N, T>> {
             None
         }
     }
-    pub fn drain_past_by_len(&mut self, meta: &RevMeta) -> Drain<RareData<NPerFrame<N, T>>> {
+    pub fn drain_past_by_len(&mut self, meta: &RevMeta) -> impl LogIter<NPerFrame<N, T>> {
         let past_len = (meta.now() - meta.range().start) * N;
         let mut drain_amount = 0;
         for entry in self.transitions.iter() {
@@ -251,7 +256,7 @@ impl<const N: usize, T> RareTransitionLog<NPerFrame<N, T>> {
             }
         }
         self.index -= drain_amount;
-        self.transitions.drain(..drain_amount)
+        self.transitions.drain(..drain_amount).map(|rare| rare.data)
     }
 }
 
@@ -259,8 +264,8 @@ impl<const N: usize, T, Amount: Copy> RareTransitionLog<WithAmount<NPerFrame<N, 
     pub(crate) fn pop_past_by_len(
         &mut self,
         meta: &RevMeta,
-    ) -> Option<RareData<WithAmount<NPerFrame<N, T>, Amount>>> {
-        let past_end = self.past_end()?;
+    ) -> Option<WithAmount<NPerFrame<N, T>, Amount>> {
+        let past_end = self.past_end_rare()?;
         let excessive_len = self
             .len
             .checked_sub(meta.past_len() * N)?;
@@ -273,7 +278,7 @@ impl<const N: usize, T, Amount: Copy> RareTransitionLog<WithAmount<NPerFrame<N, 
     pub(crate) fn drain_past_by_len(
         &mut self,
         meta: &RevMeta,
-    ) -> Drain<RareData<WithAmount<NPerFrame<N, T>, Amount>>> {
+    ) -> impl LogIter<WithAmount<NPerFrame<N, T>, Amount>> {
         let past_len = (meta.now() - meta.range().start) * N;
         let mut drain_amount = 0;
         for entry in self.transitions.iter() {
@@ -292,7 +297,7 @@ impl<const N: usize, T, Amount: Copy> RareTransitionLog<WithAmount<NPerFrame<N, 
             }
         }
         self.index -= drain_amount;
-        self.transitions.drain(..drain_amount)
+        self.transitions.drain(..drain_amount).map(|rare| rare.data)
     }
 }
 
@@ -351,7 +356,7 @@ mod test {
                 self.with_timestamp[0]
             );
 
-            self.with_timestamp[1].drain_past_by_timestamp(&self.meta);
+            let _ = self.with_timestamp[1].drain_past_by_timestamp(&self.meta);
             let middle = self.with_timestamp[1].clone();
             self.with_timestamp[1].push_present(with_timestamp);
             assert!(
@@ -391,7 +396,7 @@ mod test {
 
             self.one_per_frame[1].push_present(transition.map(Into::into));
             let middle = self.one_per_frame[1].clone();
-            self.one_per_frame[1].drain_past_by_len(&self.meta);
+            let _ = self.one_per_frame[1].drain_past_by_len(&self.meta);
             assert!(
                 self.one_per_frame[1].log_len() >= minimum_log_len,
                 "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
