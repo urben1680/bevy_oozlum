@@ -41,9 +41,7 @@
 //! `log.backward_log()` must or must not be called. Then [`TransitionLog`] can be used instead which is less memory-consuming and
 //! has less logic overhead.
 
-use std::{
-    collections::VecDeque, fmt::Debug, iter::FusedIterator, num::NonZeroUsize
-};
+use std::{collections::VecDeque, fmt::Debug, iter::FusedIterator, num::NonZeroUsize};
 
 mod rare_transition;
 mod rare_transitions;
@@ -61,9 +59,15 @@ pub use transitions::TransitionsLog;
 
 use crate::meta::RevMeta;
 
-pub trait LogIter<'a, T>: Iterator<Item = T> + DoubleEndedIterator + ExactSizeIterator + FusedIterator {}
+pub trait LogIter<'a, T>:
+    Iterator<Item = T> + DoubleEndedIterator + ExactSizeIterator + FusedIterator
+{
+}
 
-impl<T, I: Iterator<Item = T> + DoubleEndedIterator + ExactSizeIterator + FusedIterator> LogIter<'_, T> for I {}
+impl<T, I: Iterator<Item = T> + DoubleEndedIterator + ExactSizeIterator + FusedIterator>
+    LogIter<'_, T> for I
+{
+}
 
 // A `#[repr(packed)]` wrapper for `Copy` types that may be larger than single bytes but should not bloat parent
 // structs with other, smaller fields without having these struct to be packed themselves to prevent `T`'s padding.

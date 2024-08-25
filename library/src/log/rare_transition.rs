@@ -9,7 +9,7 @@ use bevy::ecs::{component::Component, system::Resource};
 use crate::meta::RevMeta;
 
 use super::{
-    NPerFrame, OutOfLog, Packed, RareData, LogIter, WithAmount, WithTimestamp, BACKWARD_EXPECT_MSG
+    LogIter, NPerFrame, OutOfLog, Packed, RareData, WithAmount, WithTimestamp, BACKWARD_EXPECT_MSG,
 };
 
 #[derive(Debug, Clone, Component, Resource)]
@@ -189,7 +189,9 @@ impl<T: Debug> RareTransitionLog<WithTimestamp<T>> {
                 .map(|entry| entry.skips.0)
                 .sum::<usize>();
         self.index -= partition_point;
-        self.transitions.drain(..partition_point).map(|rare| rare.data)
+        self.transitions
+            .drain(..partition_point)
+            .map(|rare| rare.data)
     }
 }
 
@@ -221,16 +223,16 @@ impl<T, Amount: Copy> RareTransitionLog<WithAmount<WithTimestamp<T>, Amount>> {
                 .map(|entry| entry.skips.0)
                 .sum::<usize>();
         self.index -= partition_point;
-        self.transitions.drain(..partition_point).map(|rare| rare.data)
+        self.transitions
+            .drain(..partition_point)
+            .map(|rare| rare.data)
     }
 }
 
 impl<const N: usize, T> RareTransitionLog<NPerFrame<N, T>> {
     pub fn pop_past_by_len(&mut self, meta: &RevMeta) -> Option<NPerFrame<N, T>> {
         let past_end = self.past_end_rare()?;
-        let excessive_len = self
-            .len
-            .checked_sub(meta.past_len() * N)?;
+        let excessive_len = self.len.checked_sub(meta.past_len() * N)?;
         if excessive_len >= past_end.len().get() {
             self.pop_past()
         } else {
@@ -266,9 +268,7 @@ impl<const N: usize, T, Amount: Copy> RareTransitionLog<WithAmount<NPerFrame<N, 
         meta: &RevMeta,
     ) -> Option<WithAmount<NPerFrame<N, T>, Amount>> {
         let past_end = self.past_end_rare()?;
-        let excessive_len = self
-            .len
-            .checked_sub(meta.past_len() * N)?;
+        let excessive_len = self.len.checked_sub(meta.past_len() * N)?;
         if excessive_len >= past_end.len().get() {
             self.pop_past()
         } else {

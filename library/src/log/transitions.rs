@@ -1,8 +1,6 @@
 use std::{
-    collections::{
-        TryReserveError, VecDeque,
-    },
-    fmt::Debug
+    collections::{TryReserveError, VecDeque},
+    fmt::Debug,
 };
 
 use bevy::ecs::{component::Component, system::Resource};
@@ -10,7 +8,8 @@ use bevy::ecs::{component::Component, system::Resource};
 use crate::meta::RevMeta;
 
 use super::{
-    amount_to_usize, AmountErr, DataEntry, LogMut, NPerFrame, OutOfLog, Packed, LogIter, TransitionLog, WithAmount, WithTimestamp
+    amount_to_usize, AmountErr, DataEntry, LogIter, LogMut, NPerFrame, OutOfLog, Packed,
+    TransitionLog, WithAmount, WithTimestamp,
 };
 
 #[derive(Debug, Clone, Component, Resource)]
@@ -142,7 +141,9 @@ where
     pub fn drain_future(&mut self) -> (impl LogIter<T>, impl LogIter<U>) {
         (
             self.transitions.drain(self.index..),
-            self.amounts.drain_future().map(|with_amount| with_amount.entry)
+            self.amounts
+                .drain_future()
+                .map(|with_amount| with_amount.entry),
         )
     }
     pub fn clear(&mut self) {

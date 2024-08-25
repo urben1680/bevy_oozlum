@@ -1,14 +1,11 @@
 use core::fmt::Debug;
-use std::{
-    collections::{TryReserveError, VecDeque},
-    usize,
-};
+use std::collections::{TryReserveError, VecDeque};
 
 use bevy::ecs::{component::Component, system::Resource};
 
 use crate::meta::RevMeta;
 
-use super::{NPerFrame, OutOfLog, LogIter, WithAmount, WithTimestamp, BACKWARD_EXPECT_MSG};
+use super::{LogIter, NPerFrame, OutOfLog, WithAmount, WithTimestamp, BACKWARD_EXPECT_MSG};
 
 #[derive(Debug, Component, Clone, Resource)]
 pub struct TransitionLog<T> {
