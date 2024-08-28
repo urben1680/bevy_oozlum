@@ -97,7 +97,7 @@ impl<T> RareTransitionLog<T> {
         }
         self.transitions.pop_front().map(|rare| {
             self.index -= 1;
-            self.len -= rare.len().get();
+            self.len -= rare.len();
             rare.data
         })
     }
@@ -233,7 +233,7 @@ impl<const N: usize, T> RareTransitionLog<NPerFrame<N, T>> {
     pub fn pop_past_by_len(&mut self, meta: &RevMeta) -> Option<NPerFrame<N, T>> {
         let past_end = self.past_end_rare()?;
         let excessive_len = self.len.checked_sub(meta.past_len() * N)?;
-        if excessive_len >= past_end.len().get() {
+        if excessive_len >= past_end.len() {
             self.pop_past()
         } else {
             None
@@ -243,7 +243,7 @@ impl<const N: usize, T> RareTransitionLog<NPerFrame<N, T>> {
         let past_len = (meta.now() - meta.range().start) * N;
         let mut drain_amount = 0;
         for entry in self.transitions.iter() {
-            let less = self.len - entry.len().get();
+            let less = self.len - entry.len();
             match less.cmp(&past_len) {
                 Ordering::Greater => {
                     self.len = less;
@@ -269,7 +269,7 @@ impl<const N: usize, T, Amount: Copy> RareTransitionLog<WithAmount<NPerFrame<N, 
     ) -> Option<WithAmount<NPerFrame<N, T>, Amount>> {
         let past_end = self.past_end_rare()?;
         let excessive_len = self.len.checked_sub(meta.past_len() * N)?;
-        if excessive_len >= past_end.len().get() {
+        if excessive_len >= past_end.len() {
             self.pop_past()
         } else {
             None
@@ -282,7 +282,7 @@ impl<const N: usize, T, Amount: Copy> RareTransitionLog<WithAmount<NPerFrame<N, 
         let past_len = (meta.now() - meta.range().start) * N;
         let mut drain_amount = 0;
         for entry in self.transitions.iter() {
-            let less = self.len - entry.len().get();
+            let less = self.len - entry.len();
             match less.cmp(&past_len) {
                 Ordering::Greater => {
                     self.len = less;

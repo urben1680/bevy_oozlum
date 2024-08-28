@@ -41,7 +41,7 @@
 //! `log.backward_log()` must or must not be called. Then [`TransitionLog`] can be used instead which is less memory-consuming and
 //! has less logic overhead.
 
-use std::{collections::VecDeque, fmt::Debug, iter::FusedIterator, num::NonZeroUsize};
+use std::{collections::VecDeque, fmt::Debug, iter::FusedIterator};
 
 mod rare_transition;
 mod rare_transitions;
@@ -83,21 +83,6 @@ impl<T: Copy> From<T> for Packed<T> {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct OutOfLog;
-
-#[derive(Debug, Clone, PartialEq)]
-struct RareData<T> {
-    pub data: T,
-    pub skips: Packed<usize>,
-}
-
-impl<T> RareData<T> {
-    fn len(&self) -> NonZeroUsize {
-        unsafe {
-            // SAFETY: +1 ensures to never be zero
-            NonZeroUsize::new_unchecked(self.skips.0 + 1) // self.data adds to the len
-        }
-    }
-}
 
 pub struct LogMut<'a, T>(&'a mut VecDeque<T>);
 
@@ -181,6 +166,18 @@ pub struct NPerFrame<const N: usize, T = ()>(pub T);
 impl<const N: usize, T> From<T> for NPerFrame<N, T> {
     fn from(value: T) -> Self {
         Self(value)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct RareData<T> {
+    pub data: T,
+    pub skips: Packed<usize>,
+}
+
+impl<T> RareData<T> {
+    fn len(&self) -> usize {
+        self.skips.0 + 1
     }
 }
 
