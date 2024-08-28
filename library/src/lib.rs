@@ -4,10 +4,10 @@ TODO:
 - general todo!() und //todo
 - value logs
 - log tests
-- reversible hooks ?
-- reversible observer ?
+- reversible hooks ? or issue to link
+- reversible observer ? or issue to link
 - reversible Event reader/writer
-- standard rev commands
+- entity commands, standard rev commands
 - App Methoden auch für RevSchedule struct
 - tuple impl configs
 - impl Reflection für logs
@@ -20,7 +20,7 @@ use std::hash::Hash;
 
 use bevy::ecs::{intern::Interned, schedule::ScheduleLabel};
 
-pub mod app;
+pub mod app; // todo: rename, put app into a sub module and cfg gate it
 pub mod commands;
 pub mod log;
 pub mod meta;

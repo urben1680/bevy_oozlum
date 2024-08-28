@@ -89,8 +89,11 @@ impl<T> ValueLog<T> {
             self.values.pop_front()
         }
     }
-    pub fn present(&self) -> &T {
+    pub fn get(&self) -> &T {
         &self.present
+    }
+    pub fn unlogged_get_mut(&mut self) -> &mut T {
+        &mut self.present
     }
     pub fn push_present(&mut self, value: T) {
         self.values.truncate(self.future_index);
@@ -263,7 +266,7 @@ mod test {
                 self.with_timestamp[0]
             );
             assert_eq!(
-                self.with_timestamp[0].present().data,
+                self.with_timestamp[0].get().data,
                 value,
                 "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
                 self.meta,
@@ -283,7 +286,7 @@ mod test {
                 self.with_timestamp[1]
             );
             assert_eq!(
-                self.with_timestamp[1].present().data,
+                self.with_timestamp[1].get().data,
                 value,
                 "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
                 self.meta,
@@ -303,7 +306,7 @@ mod test {
                 self.one_per_frame[0]
             );
             assert_eq!(
-                self.one_per_frame[0].present().0,
+                self.one_per_frame[0].get().0,
                 value,
                 "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
                 self.meta,
@@ -323,7 +326,7 @@ mod test {
                 self.one_per_frame[1]
             );
             assert_eq!(
-                self.one_per_frame[1].present().0,
+                self.one_per_frame[1].get().0,
                 value,
                 "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
                 self.meta,
@@ -343,7 +346,7 @@ mod test {
                     self.meta.update_inner();
 
                     let is_ok = self.with_timestamp[0].backward_log().is_ok();
-                    let value = self.with_timestamp[0].present().data;
+                    let value = self.with_timestamp[0].get().data;
                     assert!(
                         is_ok,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
@@ -356,7 +359,7 @@ mod test {
                     );
 
                     let is_ok = self.with_timestamp[1].backward_log().is_ok();
-                    let value = self.with_timestamp[1].present().data;
+                    let value = self.with_timestamp[1].get().data;
                     assert!(
                         is_ok,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
@@ -369,7 +372,7 @@ mod test {
                     );
 
                     let is_ok = self.one_per_frame[0].backward_log().is_ok();
-                    let value = self.one_per_frame[0].present().0;
+                    let value = self.one_per_frame[0].get().0;
                     assert!(
                         is_ok,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
@@ -382,7 +385,7 @@ mod test {
                     );
 
                     let is_ok = self.one_per_frame[1].backward_log().is_ok();
-                    let value = self.one_per_frame[1].present().0;
+                    let value = self.one_per_frame[1].get().0;
                     assert!(
                         is_ok,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
@@ -441,7 +444,7 @@ mod test {
                     self.meta.update_inner();
 
                     let is_ok = self.with_timestamp[0].forward_log().is_ok();
-                    let value = self.with_timestamp[0].present().data;
+                    let value = self.with_timestamp[0].get().data;
                     assert!(
                         is_ok,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
@@ -454,7 +457,7 @@ mod test {
                     );
 
                     let is_ok = self.with_timestamp[1].forward_log().is_ok();
-                    let value = self.with_timestamp[1].present().data;
+                    let value = self.with_timestamp[1].get().data;
                     assert!(
                         is_ok,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
@@ -467,7 +470,7 @@ mod test {
                     );
 
                     let is_ok = self.one_per_frame[0].forward_log().is_ok();
-                    let value = self.one_per_frame[0].present().0;
+                    let value = self.one_per_frame[0].get().0;
                     assert!(
                         is_ok,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
@@ -480,7 +483,7 @@ mod test {
                     );
 
                     let is_ok = self.one_per_frame[1].forward_log().is_ok();
-                    let value = self.one_per_frame[1].present().0;
+                    let value = self.one_per_frame[1].get().0;
                     assert!(
                         is_ok,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
