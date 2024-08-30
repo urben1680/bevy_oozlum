@@ -10,8 +10,8 @@ use super::{LogIter, NPerFrame, OutOfLog, WithAmount, WithTimestamp};
 #[derive(Debug, Default, Clone, Component, Resource)]
 pub struct ValueLog<T> {
     /// The log of values, with two partitions:
-    /// - Past values in the indices `[0, self.future_index[`
-    /// - Future values in the indices `[self.future_index, self.values.len()[`
+    /// - Past values in the indices `[0, self.index[`
+    /// - Future values in the indices `[self.index, self.values.len()[`
     ///
     /// The present value is not part of this deque and traversing the log swaps
     /// the present value from before and now while keeping the above partitions.
@@ -19,7 +19,7 @@ pub struct ValueLog<T> {
     /// The present value, easily accessible to read.
     present: T,
     /// The index of the nearest future value in `self.values`, if there is any.
-    future_index: usize,
+    index: usize,
 }
 
 impl<T> From<T> for ValueLog<T> {
@@ -33,14 +33,14 @@ impl<T> ValueLog<T> {
         Self {
             values: VecDeque::new(),
             present,
-            future_index: 0,
+            index: 0,
         }
     }
     pub fn with_capacity(present: T, capacity: usize) -> Self {
         Self {
             values: VecDeque::with_capacity(capacity),
             present,
-            future_index: 0,
+            index: 0,
         }
     }
     pub fn into_inner(self) -> T {
@@ -73,73 +73,71 @@ impl<T> ValueLog<T> {
     pub fn shrink_to_fit(&mut self) {
         self.values.shrink_to_fit()
     }
-    /// Most past value or `None` if the oldest value is considered to be the present value
-    pub fn past_end(&self) -> Option<&T> {
-        if self.future_index == 0 {
-            None
-        } else {
-            self.values.front()
-        }
-    }
-    pub fn pop_past(&mut self) -> Option<T> {
-        if self.future_index == 0 {
-            None
-        } else {
-            self.future_index -= 1;
-            self.values.pop_front()
-        }
-    }
     pub fn get(&self) -> &T {
         &self.present
     }
     pub fn unlogged_get_mut(&mut self) -> &mut T {
         &mut self.present
     }
+    /// Most past value or `None` if the oldest value is considered to be the present value
+    pub fn past_end(&self) -> Option<&T> {
+        if self.index == 0 {
+            return None;
+        }
+        self.values.front()
+    }
+    pub fn pop_past(&mut self) -> Option<T> {
+        if self.index == 0 {
+            return None;
+        }
+        self.index -= 1;
+        self.values.pop_front()
+    }
     pub fn push_present(&mut self, value: T) {
-        self.values.truncate(self.future_index);
+        self.values.truncate(self.index);
         let previous = core::mem::replace(&mut self.present, value);
         self.values.push_back(previous);
-        self.future_index += 1;
+        self.index += 1;
     }
     pub fn drain_future(&mut self) -> impl LogIter<T> {
-        self.values.drain(self.future_index..)
+        self.values.drain(self.index..)
     }
     pub fn clear(&mut self, present: T) {
         self.values.clear();
         self.present = present;
-        self.future_index = 0;
+        self.index = 0;
     }
     pub fn backward_log(&mut self) -> Result<(), OutOfLog> {
         // from:
-        //  values:        [1, 2, 4]
-        //  present:       3
-        //  future_index:  2
+        //  values:  [1, 2, 4]
+        //  present: 3
+        //  index:   2
         // to:
-        //  values:        [1, 3, 4]
-        //  present:       2
-        //  future_index:  1
+        //  values:  [1, 3, 4]
+        //  present: 2
+        //  index:   1
 
-        self.future_index = self.future_index.checked_sub(1).ok_or(OutOfLog)?;
-        let now_future = self.values.get_mut(self.future_index).expect("todo");
+        self.index = self.index.checked_sub(1).ok_or(OutOfLog)?;
+        let now_future = self.values.get_mut(self.index).expect("todo");
         core::mem::swap(&mut self.present, now_future);
         Ok(())
     }
     pub fn forward_log(&mut self) -> Result<(), OutOfLog> {
         // from:
-        //  values:        [1, 3, 4]
-        //  present:       2
-        //  future_index:  1
+        //  values:  [1, 3, 4]
+        //  present: 2
+        //  index:   1
         // to:
-        //  values:        [1, 2, 4]
-        //  present:       3
-        //  future_index:  2
+        //  values:  [1, 2, 4]
+        //  present: 3
+        //  index:   2
 
-        if self.future_index == self.values.len() {
+        if self.index == self.values.len() {
             return Err(OutOfLog);
         }
-        let now_future = self.values.get_mut(self.future_index).expect("todo");
+        let now_future = self.values.get_mut(self.index).expect("todo");
         core::mem::swap(&mut self.present, now_future);
-        self.future_index += 1;
+        self.index += 1;
         Ok(())
     }
 }
@@ -156,7 +154,7 @@ impl<T> ValueLog<WithTimestamp<T>> {
         let partition_point = self
             .values
             .partition_point(|entry| entry.logged_at.0 < meta.range().start);
-        self.future_index -= partition_point;
+        self.index -= partition_point;
         self.values.drain(..partition_point)
     }
 }
@@ -179,22 +177,22 @@ impl<T, Amount: Copy> ValueLog<WithAmount<WithTimestamp<T>, Amount>> {
         let partition_point = self
             .values
             .partition_point(|entry| entry.entry.logged_at.0 < meta.range().start);
-        self.future_index -= partition_point;
+        self.index -= partition_point;
         self.values.drain(..partition_point)
     }
 }
 
 impl<const N: usize, T> ValueLog<NPerFrame<N, T>> {
     pub fn pop_past_by_len(&mut self, meta: &RevMeta) -> Option<NPerFrame<N, T>> {
-        if self.future_index > meta.past_len() * N {
+        if self.index > meta.past_len() * N {
             self.pop_past()
         } else {
             None
         }
     }
     pub fn drain_past_by_len(&mut self, meta: &RevMeta) -> impl LogIter<NPerFrame<N, T>> {
-        let excessive = self.future_index.saturating_sub(meta.past_len() * N);
-        self.future_index -= excessive;
+        let excessive = self.index.saturating_sub(meta.past_len() * N);
+        self.index -= excessive;
         self.values.drain(..excessive)
     }
 }
@@ -204,7 +202,7 @@ impl<const N: usize, T, Amount: Copy> ValueLog<WithAmount<NPerFrame<N, T>, Amoun
         &mut self,
         meta: &RevMeta,
     ) -> Option<WithAmount<NPerFrame<N, T>, Amount>> {
-        if self.future_index > meta.past_len() * N {
+        if self.index > meta.past_len() * N {
             self.pop_past()
         } else {
             None
@@ -214,8 +212,8 @@ impl<const N: usize, T, Amount: Copy> ValueLog<WithAmount<NPerFrame<N, T>, Amoun
         &mut self,
         meta: &RevMeta,
     ) -> impl LogIter<WithAmount<NPerFrame<N, T>, Amount>> {
-        let excessive = self.future_index.saturating_sub(meta.past_len() * N);
-        self.future_index -= excessive;
+        let excessive = self.index.saturating_sub(meta.past_len() * N);
+        self.index -= excessive;
         self.values.drain(..excessive)
     }
 }
