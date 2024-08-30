@@ -39,9 +39,9 @@ impl<T> RareTransitionLog<T> {
             len: 0,
         }
     }
-    pub fn with_capacity(values_capacity: usize) -> Self {
+    pub fn with_capacity(transitions_capacity: usize) -> Self {
         Self {
-            transitions: VecDeque::with_capacity(values_capacity),
+            transitions: VecDeque::with_capacity(transitions_capacity),
             index: 0,
             skips: 0,
             skips_max: 0,
@@ -498,7 +498,7 @@ mod test {
         fn forward_log(&mut self, expected_transition: Result<Option<usize>, OutOfLog>) {
             let previous = self.clone();
             match expected_transition {
-                Ok(expected_transition) => {
+                Ok(_) => {
                     assert!(
                         self.meta.queue_log(self.meta.now() + 1).is_ok(),
                         "\npreviously: {previous:?}\nnow: {self:?}"
@@ -507,8 +507,7 @@ mod test {
 
                     let transition = self.with_timestamp[0]
                         .forward_log()
-                        .unwrap()
-                        .map(|with_timestamp| with_timestamp.data);
+                        .map(|with_timestamp| with_timestamp.map(|transition| transition.data));
                     assert_eq!(
                         transition, expected_transition,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
@@ -517,8 +516,7 @@ mod test {
 
                     let transition = self.with_timestamp[1]
                         .forward_log()
-                        .unwrap()
-                        .map(|with_timestamp| with_timestamp.data);
+                        .map(|with_timestamp| with_timestamp.map(|transition| transition.data));
                     assert_eq!(
                         transition, expected_transition,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
@@ -527,8 +525,7 @@ mod test {
 
                     let transition = self.one_per_frame[0]
                         .forward_log()
-                        .unwrap()
-                        .map(|data| data.0);
+                        .map(|data| data.map(|transition| transition.0));
                     assert_eq!(
                         transition, expected_transition,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
@@ -537,8 +534,7 @@ mod test {
 
                     let transition = self.one_per_frame[1]
                         .forward_log()
-                        .unwrap()
-                        .map(|data| data.0);
+                        .map(|data| data.map(|transition| transition.0));
                     assert_eq!(
                         transition, expected_transition,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
