@@ -54,8 +54,10 @@ mod values;
 
 pub use rare_transition::RareTransitionLog;
 pub use rare_transitions::RareTransitionsLog;
+pub use rare_value::RareValueLog;
 pub use transition::TransitionLog;
 pub use transitions::TransitionsLog;
+pub use value::ValueLog;
 
 use crate::meta::RevMeta;
 
@@ -171,8 +173,11 @@ impl<const N: usize, T> From<T> for NPerFrame<N, T> {
 
 #[derive(Debug, Clone, PartialEq)]
 struct RareData<T> {
-    pub data: T,
-    pub skips: Packed<usize>,
+    data: T,
+    /// If `T` is a transiton, then this is the skips before the transition.
+    /// 
+    /// If `T` is a value, then this is the skips after the value
+    skips: Packed<usize>,
 }
 
 impl<T> RareData<T> {
