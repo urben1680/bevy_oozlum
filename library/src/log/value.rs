@@ -140,15 +140,21 @@ impl<T> ValueLog<T> {
         self.index += 1;
         Ok(())
     }
-    pub fn pop_past_by_len(&mut self, meta: &RevMeta, push_per_frame: usize) -> Option<T> {
-        if self.index > meta.past_len() * push_per_frame {
+    pub fn pop_past_by_len(&mut self, meta: &RevMeta, pushes_per_frame: usize) -> Option<T> {
+        if self.index > meta.past_len() * pushes_per_frame {
             self.pop_past()
         } else {
             None
         }
     }
-    pub fn drain_past_by_len(&mut self, meta: &RevMeta, push_per_frame: usize) -> impl LogIter<T> {
-        let excessive = self.index.saturating_sub(meta.past_len() * push_per_frame);
+    pub fn drain_past_by_len(
+        &mut self,
+        meta: &RevMeta,
+        pushes_per_frame: usize,
+    ) -> impl LogIter<T> {
+        let excessive = self
+            .index
+            .saturating_sub(meta.past_len() * pushes_per_frame);
         self.index -= excessive;
         self.values.drain(..excessive)
     }

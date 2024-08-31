@@ -12,17 +12,13 @@
 //!
 //! | data per push        | pushes per frame | suggested log struct |
 //! |----------------------|------------------|----------------------|
-//! | 1                    | 1                | [`TransitionLog<OnePerFrame<T>>`] |
-//! | 1                    | const `N`        | [`TransitionLog<NPerFrame<N, T>>`] |
+//! | 1                    | constant         | [`TransitionLog<T>`] |
 //! | 1                    | varying          | [`TransitionLog<WithTimestamp<T>>`] |
-//! | 0 or rarely 1        | 1                | [`RareTransitionLog<OnePerFrame<T>>`] |
-//! | 0 or rarely 1        | const `N`        | [`RareTransitionLog<NPerFrame<N, T>>`] |
+//! | 0 or rarely 1        | constant         | [`RareTransitionLog<T>`] |
 //! | 0 or rarely 1        | varying          | [`RareTransitionLog<WithTimestamp<T>>`] |
-//! | varying              | 1                | [`TransitionsLog<T, OnePerFrame<U>, Amount>`] |
-//! | varying              | const `N`        | [`TransitionsLog<T, NPerFrame<N, U>, Amount>`] |
+//! | varying              | constant         | [`TransitionsLog<T, U, Amount>`] |
 //! | varying              | varying          | [`TransitionsLog<T, WithTimestamp<U>, Amount>`] |
-//! | 0 or rarely varying  | 1                | [`RareTransitionsLog<T, OnePerFrame<U>>`] |
-//! | 0 or rarely varying  | const `N`        | [`RareTransitionsLog<T, NPerFrame<N, U>>`] |
+//! | 0 or rarely varying  | constant         | [`RareTransitionsLog<T,U>`] |
 //! | 0 or rarely varying  | varying          | [`RareTransitionsLog<T, WithTimestamp<U>>`] |
 //!
 //! - For constant `M` amounts of data per push, refer to "data per push": 1 and `[T; M]` as the logged type.
@@ -32,7 +28,7 @@
 //! # Considerations and alternatives
 //!
 //! When storing `bool` or other types that can represent two states and one state occurs much more frequently, it makes sense
-//! to use [`RareTransitionLog<OnePerFrame<()>>`] and map the `Option<()>` into the desired type where `None` is the more
+//! to use [`RareTransitionLog<()>`] and map the `Option<()>` into the desired type where `None` is the more
 //! frequent state of the type.
 //!
 //! If the goal is to just sometimes push into the log, it might be benefitial if the call of `log.push_presence(value)` itself
