@@ -18,20 +18,20 @@ use bevy::{
 
 use crate::{
     app::{check_tick, EMPTY_ARCHETYPE_COMPONENT_ACCESS, EMPTY_COMPONENT_ACCESS},
-    log::{OnePerFrame, RareTransitionLog},
+    log::RareTransitionLog,
     meta::{Direction, RevMeta},
 };
 
 struct RevConditionForward<T> {
     condition: T,
-    log: Arc<Mutex<RareTransitionLog<OnePerFrame>>>,
+    log: Arc<Mutex<RareTransitionLog<()>>>,
     name: String,
     component_access: Access<ComponentId>,
     archetype_component_access: Access<ArchetypeComponentId>,
 }
 
 struct RevConditionBackward<In: Send + Sync + 'static> {
-    log: Arc<Mutex<RareTransitionLog<OnePerFrame>>>,
+    log: Arc<Mutex<RareTransitionLog<()>>>,
     name: String,
     tick: Tick,
     _in: PhantomData<In>,
@@ -54,7 +54,7 @@ pub(crate) fn forward_backward_conditions<
     name_forward.push_str(" (forward condition)");
     name_backward.push_str(" (backward condition)");
 
-    let log: Arc<Mutex<RareTransitionLog<OnePerFrame>>> = Default::default();
+    let log: Arc<Mutex<RareTransitionLog<()>>> = Default::default();
 
     let forward = RevConditionForward {
         condition,
@@ -113,7 +113,7 @@ impl<T: System<Out = bool> + ReadOnlySystem> System for RevConditionForward<T> {
                 // - update_archetype_component_access was called by the caller of Self::run_unsafe
                 self.condition.run_unsafe(input, world)
             };
-            log.pop_past_by_len(meta);
+            log.pop_past_by_len(meta, 1);
             log.push_present(out.then_some(().into()));
             out
         } else {
@@ -170,7 +170,7 @@ unsafe impl<T: System<Out = bool> + ReadOnlySystem> ReadOnlySystem for RevCondit
         let mut log = self.log.try_lock().unwrap();
         if meta.direction() == Direction::Forward {
             let out = self.condition.run_readonly(input, world);
-            log.pop_past_by_len(meta);
+            log.pop_past_by_len(meta, 1);
             log.push_present(out.then_some(().into()));
             out
         } else {

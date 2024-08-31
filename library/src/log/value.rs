@@ -5,7 +5,7 @@ use bevy::ecs::{component::Component, system::Resource};
 
 use crate::meta::RevMeta;
 
-use super::{LogIter, NPerFrame, OutOfLog, WithAmount, WithTimestamp};
+use super::{LogIter, OutOfLog, WithAmount, WithTimestamp};
 
 #[derive(Debug, Default, Clone, Component, Resource)]
 pub struct ValueLog<T> {
@@ -140,6 +140,18 @@ impl<T> ValueLog<T> {
         self.index += 1;
         Ok(())
     }
+    pub fn pop_past_by_len(&mut self, meta: &RevMeta, push_per_frame: usize) -> Option<T> {
+        if self.index > meta.past_len() * push_per_frame {
+            self.pop_past()
+        } else {
+            None
+        }
+    }
+    pub fn drain_past_by_len(&mut self, meta: &RevMeta, push_per_frame: usize) -> impl LogIter<T> {
+        let excessive = self.index.saturating_sub(meta.past_len() * push_per_frame);
+        self.index -= excessive;
+        self.values.drain(..excessive)
+    }
 }
 
 impl<T> ValueLog<WithTimestamp<T>> {
@@ -182,47 +194,9 @@ impl<T, Amount: Copy> ValueLog<WithAmount<WithTimestamp<T>, Amount>> {
     }
 }
 
-impl<const N: usize, T> ValueLog<NPerFrame<N, T>> {
-    pub fn pop_past_by_len(&mut self, meta: &RevMeta) -> Option<NPerFrame<N, T>> {
-        if self.index > meta.past_len() * N {
-            self.pop_past()
-        } else {
-            None
-        }
-    }
-    pub fn drain_past_by_len(&mut self, meta: &RevMeta) -> impl LogIter<NPerFrame<N, T>> {
-        let excessive = self.index.saturating_sub(meta.past_len() * N);
-        self.index -= excessive;
-        self.values.drain(..excessive)
-    }
-}
-
-impl<const N: usize, T, Amount: Copy> ValueLog<WithAmount<NPerFrame<N, T>, Amount>> {
-    pub(crate) fn pop_past_by_len(
-        &mut self,
-        meta: &RevMeta,
-    ) -> Option<WithAmount<NPerFrame<N, T>, Amount>> {
-        if self.index > meta.past_len() * N {
-            self.pop_past()
-        } else {
-            None
-        }
-    }
-    pub(crate) fn drain_past_by_len(
-        &mut self,
-        meta: &RevMeta,
-    ) -> impl LogIter<WithAmount<NPerFrame<N, T>, Amount>> {
-        let excessive = self.index.saturating_sub(meta.past_len() * N);
-        self.index -= excessive;
-        self.values.drain(..excessive)
-    }
-}
-
 #[cfg(test)]
 mod test {
     use std::num::NonZeroUsize;
-
-    use crate::log::OnePerFrame;
 
     use super::*;
 
@@ -230,7 +204,7 @@ mod test {
     struct MetaAndLogs {
         meta: RevMeta,
         with_timestamp: [ValueLog<WithTimestamp<usize>>; 2],
-        one_per_frame: [ValueLog<OnePerFrame<usize>>; 2],
+        one_per_frame: [ValueLog<usize>; 2],
     }
 
     impl MetaAndLogs {
@@ -238,8 +212,7 @@ mod test {
             let meta = RevMeta::new(max_len, 0, false);
             let with_timestamp =
                 ValueLog::<WithTimestamp<usize>>::from(meta.with_timestamp(present));
-            let one_per_frame = OnePerFrame::<usize>::from(present);
-            let one_per_frame = ValueLog::<OnePerFrame<usize>>::from(one_per_frame);
+            let one_per_frame = ValueLog::from(present);
             Self {
                 meta: RevMeta::new(max_len, 0, false),
                 with_timestamp: [with_timestamp.clone(), with_timestamp],
@@ -294,7 +267,7 @@ mod test {
 
             self.one_per_frame[0].push_present(value.into());
             let middle = self.one_per_frame[0].clone();
-            self.one_per_frame[0].pop_past_by_len(&self.meta);
+            self.one_per_frame[0].pop_past_by_len(&self.meta, 1);
             assert_eq!(
                 self.one_per_frame[0].len(),
                 expected_log_len,
@@ -304,7 +277,7 @@ mod test {
                 self.one_per_frame[0]
             );
             assert_eq!(
-                self.one_per_frame[0].get().0,
+                *self.one_per_frame[0].get(),
                 value,
                 "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
                 self.meta,
@@ -314,7 +287,7 @@ mod test {
 
             self.one_per_frame[1].push_present(value.into());
             let middle = self.one_per_frame[1].clone();
-            let _ = self.one_per_frame[1].drain_past_by_len(&self.meta);
+            let _ = self.one_per_frame[1].drain_past_by_len(&self.meta, 1);
             assert_eq!(
                 self.one_per_frame[1].len(),
                 expected_log_len,
@@ -324,7 +297,7 @@ mod test {
                 self.one_per_frame[1]
             );
             assert_eq!(
-                self.one_per_frame[1].get().0,
+                *self.one_per_frame[1].get(),
                 value,
                 "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
                 self.meta,
@@ -370,7 +343,7 @@ mod test {
                     );
 
                     let is_ok = self.one_per_frame[0].backward_log().is_ok();
-                    let value = self.one_per_frame[0].get().0;
+                    let value = *self.one_per_frame[0].get();
                     assert!(
                         is_ok,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
@@ -383,7 +356,7 @@ mod test {
                     );
 
                     let is_ok = self.one_per_frame[1].backward_log().is_ok();
-                    let value = self.one_per_frame[1].get().0;
+                    let value = *self.one_per_frame[1].get();
                     assert!(
                         is_ok,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
@@ -468,7 +441,7 @@ mod test {
                     );
 
                     let is_ok = self.one_per_frame[0].forward_log().is_ok();
-                    let value = self.one_per_frame[0].get().0;
+                    let value = *self.one_per_frame[0].get();
                     assert!(
                         is_ok,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
@@ -481,7 +454,7 @@ mod test {
                     );
 
                     let is_ok = self.one_per_frame[1].forward_log().is_ok();
-                    let value = self.one_per_frame[1].get().0;
+                    let value = *self.one_per_frame[1].get();
                     assert!(
                         is_ok,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",

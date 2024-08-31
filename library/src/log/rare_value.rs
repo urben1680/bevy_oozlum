@@ -1,16 +1,14 @@
 use core::fmt::Debug;
 use std::{
     cmp::Ordering,
-    collections::{vec_deque::Drain, TryReserveError, VecDeque},
+    collections::{TryReserveError, VecDeque},
 };
 
 use bevy::ecs::{component::Component, system::Resource};
 
 use crate::meta::RevMeta;
 
-use super::{
-    LogIter, NPerFrame, OutOfLog, Packed, RareData, WithAmount, WithTimestamp, BACKWARD_EXPECT_MSG
-};
+use super::{LogIter, OutOfLog, Packed, RareData, WithAmount, WithTimestamp, BACKWARD_EXPECT_MSG};
 
 #[derive(Debug, Clone, Component, Resource)]
 pub struct RareValueLog<T> {
@@ -41,7 +39,7 @@ impl<T> RareValueLog<T> {
             len: 0,
         }
     }
-    
+
     pub fn with_capacity(present: T, values_capacity: usize) -> Self {
         Self {
             values: VecDeque::with_capacity(values_capacity),
@@ -78,10 +76,7 @@ impl<T> RareValueLog<T> {
     pub fn values_try_reserve(&mut self, additional: usize) -> Result<(), TryReserveError> {
         self.values.try_reserve(additional)
     }
-    pub fn values_try_reserve_exact(
-        &mut self,
-        additional: usize,
-    ) -> Result<(), TryReserveError> {
+    pub fn values_try_reserve_exact(&mut self, additional: usize) -> Result<(), TryReserveError> {
         self.values.try_reserve_exact(additional)
     }
     pub fn values_shrink_to(&mut self, min_capacity: usize) {
@@ -110,7 +105,7 @@ impl<T> RareValueLog<T> {
         if self.index == 0 {
             return None;
         }
-        self.values.pop_front().map(|rare|  {
+        self.values.pop_front().map(|rare| {
             self.index -= 1;
             self.len -= rare.len();
             rare.data
@@ -138,10 +133,13 @@ impl<T> RareValueLog<T> {
             }
             Some(value) => {
                 self.present.skips = Packed(self.skips);
-                let previous = core::mem::replace(&mut self.present, RareData {
-                    data: value,
-                    skips: Packed(0),
-                });
+                let previous = core::mem::replace(
+                    &mut self.present,
+                    RareData {
+                        data: value,
+                        skips: Packed(0),
+                    },
+                );
                 self.values.push_back(previous);
                 self.skips = 0;
                 self.index += 1;
@@ -156,10 +154,7 @@ impl<T> RareValueLog<T> {
             return Ok(());
         }
         self.index = self.index.checked_sub(1).ok_or(OutOfLog)?;
-        let entry = self
-            .values
-            .get_mut(self.index)
-            .expect(BACKWARD_EXPECT_MSG);
+        let entry = self.values.get_mut(self.index).expect(BACKWARD_EXPECT_MSG);
         core::mem::swap(&mut self.present, entry);
         self.skips = self.present.skips.0;
         self.len -= 1;
@@ -179,6 +174,36 @@ impl<T> RareValueLog<T> {
         } else {
             Err(OutOfLog)
         }
+    }
+    pub fn pop_past_by_len(&mut self, meta: &RevMeta, push_per_frame: usize) -> Option<T> {
+        let excessive_len = self.len.checked_sub(meta.past_len() * push_per_frame)?;
+        let past_end = self.past_end_rare()?;
+        if excessive_len >= past_end.len() {
+            self.pop_past()
+        } else {
+            None
+        }
+    }
+    pub fn drain_past_by_len(&mut self, meta: &RevMeta, push_per_frame: usize) -> impl LogIter<T> {
+        let past_len = (meta.now() - meta.range().start) * push_per_frame;
+        let mut drain_amount = 0;
+        for entry in self.values.iter() {
+            let less = self.len - entry.len();
+            match less.cmp(&past_len) {
+                Ordering::Greater => {
+                    self.len = less;
+                    drain_amount += 1;
+                }
+                Ordering::Less => break,
+                Ordering::Equal => {
+                    self.len = less;
+                    drain_amount += 1;
+                    break; // len of entries is never 0, so no further iterations are needed
+                }
+            }
+        }
+        self.index -= drain_amount;
+        self.values.drain(..drain_amount).map(|rare| rare.data)
     }
 }
 
@@ -203,9 +228,7 @@ impl<T: Debug> RareValueLog<WithTimestamp<T>> {
                 .map(|entry| entry.skips.0)
                 .sum::<usize>();
         self.index -= partition_point;
-        self.values
-            .drain(..partition_point)
-            .map(|rare| rare.data)
+        self.values.drain(..partition_point).map(|rare| rare.data)
     }
 }
 
@@ -226,9 +249,9 @@ impl<T, Amount: Copy> RareValueLog<WithAmount<WithTimestamp<T>, Amount>> {
         &mut self,
         meta: &RevMeta,
     ) -> impl LogIter<WithAmount<WithTimestamp<T>, Amount>> {
-        let partition_point = self
-            .values
-            .partition_point(|entry| entry.data.entry.logged_at.0 + entry.skips.0 < meta.range().start);
+        let partition_point = self.values.partition_point(|entry| {
+            entry.data.entry.logged_at.0 + entry.skips.0 < meta.range().start
+        });
         self.len -= partition_point
             + self
                 .values
@@ -236,81 +259,7 @@ impl<T, Amount: Copy> RareValueLog<WithAmount<WithTimestamp<T>, Amount>> {
                 .map(|entry| entry.skips.0)
                 .sum::<usize>();
         self.index -= partition_point;
-        self.values
-            .drain(..partition_point)
-            .map(|rare| rare.data)
-    }
-}
-
-impl<const N: usize, T> RareValueLog<NPerFrame<N, T>> {
-    pub fn pop_past_by_len(&mut self, meta: &RevMeta) -> Option<NPerFrame<N, T>> {
-        let past_end = self.past_end_rare()?;
-        let excessive_len = self.len.checked_sub(meta.past_len() * N)?;
-        if excessive_len >= past_end.len() {
-            self.pop_past()
-        } else {
-            None
-        }
-    }
-    pub fn drain_past_by_len(&mut self, meta: &RevMeta) -> impl LogIter<NPerFrame<N, T>> {
-        let past_len = (meta.now() - meta.range().start) * N;
-        let mut drain_amount = 0;
-        for entry in self.values.iter() {
-            let less = self.len - entry.len();
-            match less.cmp(&past_len) {
-                Ordering::Greater => {
-                    self.len = less;
-                    drain_amount += 1;
-                }
-                Ordering::Less => break,
-                Ordering::Equal => {
-                    self.len = less;
-                    drain_amount += 1;
-                    break; // len of entries is never 0, so no further iterations are needed
-                }
-            }
-        }
-        self.index -= drain_amount;
-        self.values.drain(..drain_amount).map(|rare| rare.data)
-    }
-}
-
-impl<const N: usize, T, Amount: Copy> RareValueLog<WithAmount<NPerFrame<N, T>, Amount>> {
-    pub(crate) fn pop_past_by_len(
-        &mut self,
-        meta: &RevMeta,
-    ) -> Option<WithAmount<NPerFrame<N, T>, Amount>> {
-        let past_end = self.past_end_rare()?;
-        let excessive_len = self.len.checked_sub(meta.past_len() * N)?;
-        if excessive_len >= past_end.len() {
-            self.pop_past()
-        } else {
-            None
-        }
-    }
-    pub(crate) fn drain_past_by_len(
-        &mut self,
-        meta: &RevMeta,
-    ) -> impl LogIter<WithAmount<NPerFrame<N, T>, Amount>> {
-        let past_len = (meta.now() - meta.range().start) * N;
-        let mut drain_amount = 0;
-        for entry in self.values.iter() {
-            let less = self.len - entry.len();
-            match less.cmp(&past_len) {
-                Ordering::Greater => {
-                    self.len = less;
-                    drain_amount += 1;
-                }
-                Ordering::Less => break,
-                Ordering::Equal => {
-                    self.len = less;
-                    drain_amount += 1;
-                    break; // len of entries is never 0, so no further iterations are needed
-                }
-            }
-        }
-        self.index -= drain_amount;
-        self.values.drain(..drain_amount).map(|rare| rare.data)
+        self.values.drain(..partition_point).map(|rare| rare.data)
     }
 }
 
@@ -318,24 +267,21 @@ impl<const N: usize, T, Amount: Copy> RareValueLog<WithAmount<NPerFrame<N, T>, A
 mod test {
     use std::num::NonZeroUsize;
 
-    use crate::log::OnePerFrame;
-
     use super::*;
 
     #[derive(Clone, Debug)]
     struct MetaAndLogs {
         meta: RevMeta,
         with_timestamp: [RareValueLog<WithTimestamp<usize>>; 2],
-        one_per_frame: [RareValueLog<OnePerFrame<usize>>; 2],
+        one_per_frame: [RareValueLog<usize>; 2],
     }
 
     impl MetaAndLogs {
         fn new(present: usize, max_len: Option<NonZeroUsize>) -> Self {
             let meta = RevMeta::new(max_len, 0, false);
             let with_timestamp =
-            RareValueLog::<WithTimestamp<usize>>::from(meta.with_timestamp(present));
-            let one_per_frame = OnePerFrame::<usize>::from(present);
-            let one_per_frame = RareValueLog::<OnePerFrame<usize>>::from(one_per_frame);
+                RareValueLog::<WithTimestamp<usize>>::from(meta.with_timestamp(present));
+            let one_per_frame = RareValueLog::from(present);
             Self {
                 meta: RevMeta::new(max_len, 0, false),
                 with_timestamp: [with_timestamp.clone(), with_timestamp],
@@ -375,7 +321,8 @@ mod test {
                 self.with_timestamp[0]
             );
             assert_eq!(
-                self.with_timestamp[0].get().data, value,
+                self.with_timestamp[0].get().data,
+                value,
                 "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
                 self.meta,
                 previous.with_timestamp[0],
@@ -401,7 +348,8 @@ mod test {
                 self.with_timestamp[1]
             );
             assert_eq!(
-                self.with_timestamp[1].get().data, value,
+                self.with_timestamp[1].get().data,
+                value,
                 "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
                 self.meta,
                 previous.with_timestamp[1],
@@ -410,7 +358,7 @@ mod test {
 
             self.one_per_frame[0].push_present(push.then_some(value.into()));
             let middle = self.one_per_frame[0].clone();
-            self.one_per_frame[0].pop_past_by_len(&self.meta);
+            self.one_per_frame[0].pop_past_by_len(&self.meta, 1);
             assert!(
                 self.one_per_frame[0].log_len() >= minimum_log_len,
                 "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
@@ -427,7 +375,8 @@ mod test {
                 self.one_per_frame[0]
             );
             assert_eq!(
-                self.one_per_frame[0].get().0, value,
+                *self.one_per_frame[0].get(),
+                value,
                 "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
                 self.meta,
                 previous.one_per_frame[0],
@@ -436,7 +385,7 @@ mod test {
 
             self.one_per_frame[1].push_present(push.then_some(value.into()));
             let middle = self.one_per_frame[1].clone();
-            let _ = self.one_per_frame[1].drain_past_by_len(&self.meta);
+            let _ = self.one_per_frame[1].drain_past_by_len(&self.meta, 1);
             assert!(
                 self.one_per_frame[1].log_len() >= minimum_log_len,
                 "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
@@ -453,7 +402,8 @@ mod test {
                 self.one_per_frame[1]
             );
             assert_eq!(
-                self.one_per_frame[1].get().0, value,
+                *self.one_per_frame[1].get(),
+                value,
                 "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
                 self.meta,
                 previous.one_per_frame[1],
@@ -470,9 +420,7 @@ mod test {
                     );
                     self.meta.update_inner();
 
-                    let is_ok = self.with_timestamp[0]
-                        .backward_log()
-                        .is_ok();
+                    let is_ok = self.with_timestamp[0].backward_log().is_ok();
                     let value = self.with_timestamp[0].get().data;
                     assert!(
                         is_ok,
@@ -485,9 +433,7 @@ mod test {
                         self.meta, previous.with_timestamp[0], self.with_timestamp[0]
                     );
 
-                    let is_ok = self.with_timestamp[1]
-                        .backward_log()
-                        .is_ok();
+                    let is_ok = self.with_timestamp[1].backward_log().is_ok();
                     let value = self.with_timestamp[1].get().data;
                     assert!(
                         is_ok,
@@ -500,10 +446,8 @@ mod test {
                         self.meta, previous.with_timestamp[1], self.with_timestamp[1]
                     );
 
-                    let is_ok = self.one_per_frame[0]
-                        .backward_log()
-                        .is_ok();
-                    let value = self.one_per_frame[0].get().0;
+                    let is_ok = self.one_per_frame[0].backward_log().is_ok();
+                    let value = *self.one_per_frame[0].get();
                     assert!(
                         is_ok,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
@@ -515,10 +459,8 @@ mod test {
                         self.meta, previous.one_per_frame[0], self.one_per_frame[0]
                     );
 
-                    let is_ok = self.one_per_frame[1]
-                        .backward_log()
-                        .is_ok();
-                    let value = self.one_per_frame[1].get().0;
+                    let is_ok = self.one_per_frame[1].backward_log().is_ok();
+                    let value = *self.one_per_frame[1].get();
                     assert!(
                         is_ok,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
@@ -576,9 +518,7 @@ mod test {
                     );
                     self.meta.update_inner();
 
-                    let is_ok = self.with_timestamp[0]
-                        .forward_log()
-                        .is_ok();
+                    let is_ok = self.with_timestamp[0].forward_log().is_ok();
                     let value = self.with_timestamp[0].get().data;
                     assert!(
                         is_ok,
@@ -591,9 +531,7 @@ mod test {
                         self.meta, previous.with_timestamp[0], self.with_timestamp[0]
                     );
 
-                    let is_ok = self.with_timestamp[1]
-                        .forward_log()
-                        .is_ok();
+                    let is_ok = self.with_timestamp[1].forward_log().is_ok();
                     let value = self.with_timestamp[1].get().data;
                     assert!(
                         is_ok,
@@ -606,10 +544,8 @@ mod test {
                         self.meta, previous.with_timestamp[1], self.with_timestamp[1]
                     );
 
-                    let is_ok = self.one_per_frame[0]
-                        .forward_log()
-                        .is_ok();
-                    let value = self.one_per_frame[0].get().0;
+                    let is_ok = self.one_per_frame[0].forward_log().is_ok();
+                    let value = *self.one_per_frame[0].get();
                     assert!(
                         is_ok,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
@@ -621,10 +557,8 @@ mod test {
                         self.meta, previous.one_per_frame[0], self.one_per_frame[0]
                     );
 
-                    let is_ok = self.one_per_frame[1]
-                        .forward_log()
-                        .is_ok();
-                    let value = self.one_per_frame[1].get().0;
+                    let is_ok = self.one_per_frame[1].forward_log().is_ok();
+                    let value = *self.one_per_frame[1].get();
                     assert!(
                         is_ok,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
@@ -679,7 +613,7 @@ mod test {
         meta_and_logs.forward(0, false, 1, 0);
         meta_and_logs.forward(0, false, 2, 0);
         meta_and_logs.forward(0, false, 2, 0);
-        
+
         // values_len is reduced by max_len
         meta_and_logs.forward(1, true, 2, 1);
         meta_and_logs.forward(1, false, 2, 1);
@@ -690,6 +624,17 @@ mod test {
 
         meta_and_logs.backward_log(Ok(2));
         meta_and_logs.backward_log(Ok(1));
-        meta_and_logs.backward_log(Err(OutOfLog)); // todo: panics because T from before log start is still in the log because the entry's skips is needed, so the log cannot determine the log end
+        //meta_and_logs.backward_log(Err(OutOfLog)); // todo:
+        // - panics because T from before log start is still in the log because the entry's skips is needed
+        // - the log cannot determine the log end
+        // - this is not an issue for usage as pop_front_by_... does not guarantee a minimal log len, just minimal values len
+
+        meta_and_logs.forward_log(Ok(2));
+        meta_and_logs.forward_log(Ok(2));
+        meta_and_logs.forward_log(Err(OutOfLog));
+
+        meta_and_logs.backward_log(Ok(2));
+        meta_and_logs.backward_log(Ok(1));
+        meta_and_logs.forward(1, false, 2, 0);
     }
 }

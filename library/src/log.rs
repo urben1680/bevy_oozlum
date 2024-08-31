@@ -160,22 +160,11 @@ impl<T: Default> From<&RevMeta> for WithTimestamp<T> {
     }
 }
 
-pub type OnePerFrame<T = ()> = NPerFrame<1, T>;
-
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub struct NPerFrame<const N: usize, T = ()>(pub T);
-
-impl<const N: usize, T> From<T> for NPerFrame<N, T> {
-    fn from(value: T) -> Self {
-        Self(value)
-    }
-}
-
 #[derive(Debug, Clone, PartialEq)]
 struct RareData<T> {
     data: T,
     /// If `T` is a transiton, then this is the skips before the transition.
-    /// 
+    ///
     /// If `T` is a value, then this is the skips after the value
     skips: Packed<usize>,
 }
