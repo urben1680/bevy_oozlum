@@ -8,9 +8,7 @@ use bevy::ecs::{component::Component, system::Resource};
 
 use crate::meta::RevMeta;
 
-use super::{
-    LogIter, NPerFrame, OutOfLog, Packed, RareData, WithAmount, WithTimestamp, BACKWARD_EXPECT_MSG,
-};
+use super::{LogIter, OutOfLog, Packed, RareData, WithAmount, WithTimestamp, BACKWARD_EXPECT_MSG};
 
 #[derive(Debug, Clone, Component, Resource)]
 pub struct RareTransitionLog<T> {
@@ -165,6 +163,36 @@ impl<T> RareTransitionLog<T> {
             Err(OutOfLog)
         }
     }
+    pub fn pop_past_by_len(&mut self, meta: &RevMeta, push_per_frame: usize) -> Option<T> {
+        let excessive_len = self.len.checked_sub(meta.past_len() * push_per_frame)?;
+        let past_end = self.past_end_rare()?;
+        if excessive_len >= past_end.len() {
+            self.pop_past()
+        } else {
+            None
+        }
+    }
+    pub fn drain_past_by_len(&mut self, meta: &RevMeta, push_per_frame: usize) -> impl LogIter<T> {
+        let past_len = (meta.now() - meta.range().start) * push_per_frame;
+        let mut drain_amount = 0;
+        for entry in self.transitions.iter() {
+            let less = self.len - entry.len();
+            match less.cmp(&past_len) {
+                Ordering::Greater => {
+                    self.len = less;
+                    drain_amount += 1;
+                }
+                Ordering::Less => break,
+                Ordering::Equal => {
+                    self.len = less;
+                    drain_amount += 1;
+                    break; // len of entries is never 0, so no further iterations are needed
+                }
+            }
+        }
+        self.index -= drain_amount;
+        self.transitions.drain(..drain_amount).map(|rare| rare.data)
+    }
 }
 
 impl<T: Debug> RareTransitionLog<WithTimestamp<T>> {
@@ -229,83 +257,9 @@ impl<T, Amount: Copy> RareTransitionLog<WithAmount<WithTimestamp<T>, Amount>> {
     }
 }
 
-impl<const N: usize, T> RareTransitionLog<NPerFrame<N, T>> {
-    pub fn pop_past_by_len(&mut self, meta: &RevMeta) -> Option<NPerFrame<N, T>> {
-        let past_end = self.past_end_rare()?;
-        let excessive_len = self.len.checked_sub(meta.past_len() * N)?;
-        if excessive_len >= past_end.len() {
-            self.pop_past()
-        } else {
-            None
-        }
-    }
-    pub fn drain_past_by_len(&mut self, meta: &RevMeta) -> impl LogIter<NPerFrame<N, T>> {
-        let past_len = (meta.now() - meta.range().start) * N;
-        let mut drain_amount = 0;
-        for entry in self.transitions.iter() {
-            let less = self.len - entry.len();
-            match less.cmp(&past_len) {
-                Ordering::Greater => {
-                    self.len = less;
-                    drain_amount += 1;
-                }
-                Ordering::Less => break,
-                Ordering::Equal => {
-                    self.len = less;
-                    drain_amount += 1;
-                    break; // len of entries is never 0, so no further iterations are needed
-                }
-            }
-        }
-        self.index -= drain_amount;
-        self.transitions.drain(..drain_amount).map(|rare| rare.data)
-    }
-}
-
-impl<const N: usize, T, Amount: Copy> RareTransitionLog<WithAmount<NPerFrame<N, T>, Amount>> {
-    pub(crate) fn pop_past_by_len(
-        &mut self,
-        meta: &RevMeta,
-    ) -> Option<WithAmount<NPerFrame<N, T>, Amount>> {
-        let past_end = self.past_end_rare()?;
-        let excessive_len = self.len.checked_sub(meta.past_len() * N)?;
-        if excessive_len >= past_end.len() {
-            self.pop_past()
-        } else {
-            None
-        }
-    }
-    pub(crate) fn drain_past_by_len(
-        &mut self,
-        meta: &RevMeta,
-    ) -> impl LogIter<WithAmount<NPerFrame<N, T>, Amount>> {
-        let past_len = (meta.now() - meta.range().start) * N;
-        let mut drain_amount = 0;
-        for entry in self.transitions.iter() {
-            let less = self.len - entry.len();
-            match less.cmp(&past_len) {
-                Ordering::Greater => {
-                    self.len = less;
-                    drain_amount += 1;
-                }
-                Ordering::Less => break,
-                Ordering::Equal => {
-                    self.len = less;
-                    drain_amount += 1;
-                    break; // len of entries is never 0, so no further iterations are needed
-                }
-            }
-        }
-        self.index -= drain_amount;
-        self.transitions.drain(..drain_amount).map(|rare| rare.data)
-    }
-}
-
 #[cfg(test)]
 mod test {
     use std::num::NonZeroUsize;
-
-    use crate::log::OnePerFrame;
 
     use super::*;
 
@@ -313,7 +267,7 @@ mod test {
     struct MetaAndLogs {
         meta: RevMeta,
         with_timestamp: [RareTransitionLog<WithTimestamp<usize>>; 2],
-        one_per_frame: [RareTransitionLog<OnePerFrame<usize>>; 2],
+        one_per_frame: [RareTransitionLog<usize>; 2],
     }
 
     impl MetaAndLogs {
@@ -377,7 +331,7 @@ mod test {
 
             self.one_per_frame[0].push_present(transition.map(Into::into));
             let middle = self.one_per_frame[0].clone();
-            self.one_per_frame[0].pop_past_by_len(&self.meta);
+            self.one_per_frame[0].pop_past_by_len(&self.meta, 1);
             assert!(
                 self.one_per_frame[0].log_len() >= minimum_log_len,
                 "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
@@ -396,7 +350,7 @@ mod test {
 
             self.one_per_frame[1].push_present(transition.map(Into::into));
             let middle = self.one_per_frame[1].clone();
-            let _ = self.one_per_frame[1].drain_past_by_len(&self.meta);
+            let _ = self.one_per_frame[1].drain_past_by_len(&self.meta, 1);
             assert!(
                 self.one_per_frame[1].log_len() >= minimum_log_len,
                 "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
@@ -441,18 +395,14 @@ mod test {
                         self.meta, previous.with_timestamp[1], self.with_timestamp[1]
                     );
 
-                    let transition = self.one_per_frame[0]
-                        .backward_log()
-                        .map(|ok| ok.map(|data| data.0));
+                    let transition = self.one_per_frame[0].backward_log().map(|ok| ok.cloned());
                     assert_eq!(
                         transition, expected_transition,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
                         self.meta, previous.one_per_frame[0], self.one_per_frame[0]
                     );
 
-                    let transition = self.one_per_frame[1]
-                        .backward_log()
-                        .map(|ok| ok.map(|data| data.0));
+                    let transition = self.one_per_frame[1].backward_log().map(|ok| ok.cloned());
                     assert_eq!(
                         transition, expected_transition,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
@@ -525,7 +475,7 @@ mod test {
 
                     let transition = self.one_per_frame[0]
                         .forward_log()
-                        .map(|data| data.map(|transition| transition.0));
+                        .map(|data| data.cloned());
                     assert_eq!(
                         transition, expected_transition,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
@@ -534,7 +484,7 @@ mod test {
 
                     let transition = self.one_per_frame[1]
                         .forward_log()
-                        .map(|data| data.map(|transition| transition.0));
+                        .map(|data| data.cloned());
                     assert_eq!(
                         transition, expected_transition,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",

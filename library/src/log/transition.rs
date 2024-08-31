@@ -5,7 +5,7 @@ use bevy::ecs::{component::Component, system::Resource};
 
 use crate::meta::RevMeta;
 
-use super::{LogIter, NPerFrame, OutOfLog, WithAmount, WithTimestamp, BACKWARD_EXPECT_MSG};
+use super::{LogIter, OutOfLog, WithAmount, WithTimestamp, BACKWARD_EXPECT_MSG};
 
 #[derive(Debug, Component, Clone, Resource)]
 pub struct TransitionLog<T> {
@@ -94,6 +94,18 @@ impl<T> TransitionLog<T> {
             .inspect(|_| self.index += 1)
             .ok_or(OutOfLog)
     }
+    pub fn pop_past_by_len(&mut self, meta: &RevMeta, push_per_frame: usize) -> Option<T> {
+        if self.index > meta.past_len() * push_per_frame {
+            self.pop_past()
+        } else {
+            None
+        }
+    }
+    pub fn drain_past_by_len(&mut self, meta: &RevMeta, push_per_frame: usize) -> impl LogIter<T> {
+        let excessive = self.index.saturating_sub(meta.past_len() * push_per_frame);
+        self.index -= excessive;
+        self.transitions.drain(..excessive)
+    }
 }
 
 impl<T> TransitionLog<WithTimestamp<T>> {
@@ -142,47 +154,9 @@ impl<T, Amount: Copy> TransitionLog<WithAmount<WithTimestamp<T>, Amount>> {
     }
 }
 
-impl<const N: usize, T> TransitionLog<NPerFrame<N, T>> {
-    pub fn pop_past_by_len(&mut self, meta: &RevMeta) -> Option<NPerFrame<N, T>> {
-        if self.index > meta.past_len() * N {
-            self.pop_past()
-        } else {
-            None
-        }
-    }
-    pub fn drain_past_by_len(&mut self, meta: &RevMeta) -> impl LogIter<NPerFrame<N, T>> {
-        let excessive = self.index.saturating_sub(meta.past_len() * N);
-        self.index -= excessive;
-        self.transitions.drain(..excessive)
-    }
-}
-
-impl<const N: usize, T, Amount: Copy> TransitionLog<WithAmount<NPerFrame<N, T>, Amount>> {
-    pub(crate) fn pop_past_by_len(
-        &mut self,
-        meta: &RevMeta,
-    ) -> Option<WithAmount<NPerFrame<N, T>, Amount>> {
-        if self.index > meta.past_len() {
-            self.pop_past()
-        } else {
-            None
-        }
-    }
-    pub(crate) fn drain_past_by_len(
-        &mut self,
-        meta: &RevMeta,
-    ) -> impl LogIter<WithAmount<NPerFrame<N, T>, Amount>> {
-        let excessive = self.index.saturating_sub(meta.past_len() * N);
-        self.index -= excessive;
-        self.transitions.drain(..excessive)
-    }
-}
-
 #[cfg(test)]
 mod test {
     use std::num::NonZeroUsize;
-
-    use crate::log::OnePerFrame;
 
     use super::*;
 
@@ -190,7 +164,7 @@ mod test {
     struct MetaAndLogs {
         meta: RevMeta,
         with_timestamp: [TransitionLog<WithTimestamp<usize>>; 2],
-        one_per_frame: [TransitionLog<OnePerFrame<usize>>; 2],
+        one_per_frame: [TransitionLog<usize>; 2],
     }
 
     impl MetaAndLogs {
@@ -233,7 +207,7 @@ mod test {
 
             self.one_per_frame[0].push_present(transition.into());
             let middle = self.one_per_frame[0].clone();
-            self.one_per_frame[0].pop_past_by_len(&self.meta);
+            self.one_per_frame[0].pop_past_by_len(&self.meta, 1);
             assert_eq!(
                 self.one_per_frame[0].len(),
                 expected_len,
@@ -245,7 +219,7 @@ mod test {
 
             self.one_per_frame[1].push_present(transition.into());
             let middle = self.one_per_frame[1].clone();
-            let _ = self.one_per_frame[1].drain_past_by_len(&self.meta);
+            let _ = self.one_per_frame[1].drain_past_by_len(&self.meta, 1);
             assert_eq!(
                 self.one_per_frame[1].len(),
                 expected_len,
@@ -258,35 +232,39 @@ mod test {
         fn backward_log(&mut self, expected_transition: Result<usize, OutOfLog>) {
             let previous = self.clone();
             match expected_transition {
-                Ok(expected_transition) => {
+                Ok(_) => {
                     assert!(
                         self.meta.queue_log(self.meta.now() - 1).is_ok(),
                         "\npreviously: {previous:?}\nnow: {self:?}"
                     );
                     self.meta.update_inner();
 
-                    let transition = self.with_timestamp[0].backward_log().unwrap().data;
+                    let transition = self.with_timestamp[0]
+                        .backward_log()
+                        .map(|entry| entry.data);
                     assert_eq!(
                         transition, expected_transition,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
                         self.meta, previous.with_timestamp[0], self.with_timestamp[0]
                     );
 
-                    let transition = self.with_timestamp[1].backward_log().unwrap().data;
+                    let transition = self.with_timestamp[1]
+                        .backward_log()
+                        .map(|entry| entry.data);
                     assert_eq!(
                         transition, expected_transition,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
                         self.meta, previous.with_timestamp[1], self.with_timestamp[1]
                     );
 
-                    let transition = self.one_per_frame[0].backward_log().unwrap().0;
+                    let transition = self.one_per_frame[0].backward_log().cloned();
                     assert_eq!(
                         transition, expected_transition,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
                         self.meta, previous.one_per_frame[0], self.one_per_frame[0]
                     );
 
-                    let transition = self.one_per_frame[1].backward_log().unwrap().0;
+                    let transition = self.one_per_frame[1].backward_log().cloned();
                     assert_eq!(
                         transition, expected_transition,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
@@ -332,35 +310,35 @@ mod test {
         fn forward_log(&mut self, expected_transition: Result<usize, OutOfLog>) {
             let previous = self.clone();
             match expected_transition {
-                Ok(expected_transition) => {
+                Ok(_) => {
                     assert!(
                         self.meta.queue_log(self.meta.now() + 1).is_ok(),
                         "\npreviously: {previous:?}\nnow: {self:?}"
                     );
                     self.meta.update_inner();
 
-                    let transition = self.with_timestamp[0].forward_log().unwrap().data;
+                    let transition = self.with_timestamp[0].forward_log().map(|entry| entry.data);
                     assert_eq!(
                         transition, expected_transition,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
                         self.meta, previous.with_timestamp[0], self.with_timestamp[0]
                     );
 
-                    let transition = self.with_timestamp[1].forward_log().unwrap().data;
+                    let transition = self.with_timestamp[1].forward_log().map(|entry| entry.data);
                     assert_eq!(
                         transition, expected_transition,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
                         self.meta, previous.with_timestamp[1], self.with_timestamp[1]
                     );
 
-                    let transition = self.one_per_frame[0].forward_log().unwrap().0;
+                    let transition = self.one_per_frame[0].forward_log().cloned();
                     assert_eq!(
                         transition, expected_transition,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
                         self.meta, previous.one_per_frame[0], self.one_per_frame[0]
                     );
 
-                    let transition = self.one_per_frame[1].forward_log().unwrap().0;
+                    let transition = self.one_per_frame[1].forward_log().cloned();
                     assert_eq!(
                         transition, expected_transition,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",

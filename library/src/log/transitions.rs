@@ -8,8 +8,8 @@ use bevy::ecs::{component::Component, system::Resource};
 use crate::meta::RevMeta;
 
 use super::{
-    amount_to_usize, AmountErr, DataEntry, LogIter, LogMut, NPerFrame, OutOfLog, Packed,
-    TransitionLog, WithAmount, WithTimestamp,
+    amount_to_usize, AmountErr, DataEntry, LogIter, LogMut, OutOfLog, Packed, TransitionLog,
+    WithAmount, WithTimestamp,
 };
 
 #[derive(Debug, Clone, Component, Resource)]
@@ -171,6 +171,24 @@ where
             entry: with_amount.entry,
         })
     }
+    pub fn pop_past_by_len(
+        &mut self,
+        meta: &RevMeta,
+        push_per_frame: usize,
+    ) -> Option<DataEntry<impl LogIter<T>, U>> {
+        self.amounts
+            .pop_past_by_len(meta, push_per_frame)
+            .map(|with_amount| self.drain_past_by_amount(with_amount))
+    }
+    pub fn drain_past_by_len(&mut self, meta: &RevMeta, push_per_frame: usize) -> impl LogIter<T> {
+        let amount: usize = self
+            .amounts
+            .drain_past_by_len(meta, push_per_frame)
+            .map(|entry| amount_to_usize(entry.amount.0))
+            .sum();
+        self.index -= amount;
+        self.transitions.drain(..amount)
+    }
     fn drain_past_by_amount(
         &mut self,
         with_amount: WithAmount<U, Amount>,
@@ -207,34 +225,9 @@ where
     }
 }
 
-impl<const N: usize, T, U: Copy, Amount> TransitionsLog<T, NPerFrame<N, U>, Amount>
-where
-    Amount: TryFrom<usize, Error: Debug> + TryInto<usize, Error: Debug> + Default + Copy,
-{
-    pub fn pop_past_by_len(
-        &mut self,
-        meta: &RevMeta,
-    ) -> Option<DataEntry<impl LogIter<T>, NPerFrame<N, U>>> {
-        self.amounts
-            .pop_past_by_len(meta)
-            .map(|with_amount| self.drain_past_by_amount(with_amount))
-    }
-    pub fn drain_past_by_len(&mut self, meta: &RevMeta) -> impl LogIter<T> {
-        let amount: usize = self
-            .amounts
-            .drain_past_by_len(meta)
-            .map(|entry| amount_to_usize(entry.amount.0))
-            .sum();
-        self.index -= amount;
-        self.transitions.drain(..amount)
-    }
-}
-
 #[cfg(test)]
 mod test {
     use std::{borrow::Borrow, num::NonZeroUsize};
-
-    use crate::log::OnePerFrame;
 
     use super::*;
 
@@ -242,7 +235,7 @@ mod test {
     struct MetaAndLogs {
         meta: RevMeta,
         with_timestamp: [TransitionsLog<usize, WithTimestamp, u8>; 2],
-        one_per_frame: [TransitionsLog<usize, OnePerFrame, u8>; 2],
+        one_per_frame: [TransitionsLog<usize, (), u8>; 2],
     }
 
     fn collect(iter: impl IntoIterator<Item: Borrow<usize>>) -> Vec<usize> {
@@ -322,7 +315,7 @@ mod test {
                 })
                 .is_ok();
             let middle = self.one_per_frame[0].clone();
-            self.one_per_frame[0].pop_past_by_len(&self.meta);
+            self.one_per_frame[0].pop_past_by_len(&self.meta, 1);
             assert_eq!(
                 is_ok, expected_ok,
                 "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
@@ -343,7 +336,7 @@ mod test {
                 })
                 .is_ok();
             let middle = self.one_per_frame[1].clone();
-            let _ = self.one_per_frame[1].drain_past_by_len(&self.meta);
+            let _ = self.one_per_frame[1].drain_past_by_len(&self.meta, 1);
             assert_eq!(
                 is_ok, expected_ok,
                 "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
