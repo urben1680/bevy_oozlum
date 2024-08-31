@@ -1,13 +1,11 @@
 use core::fmt::Debug;
 use std::collections::{TryReserveError, VecDeque};
 
-use bevy::ecs::{component::Component, system::Resource};
-
 use crate::meta::RevMeta;
 
 use super::{LogIter, OutOfLog, WithAmount, WithTimestamp};
 
-#[derive(Debug, Default, Clone, Component, Resource)]
+#[derive(Debug, Default, Clone)]
 pub struct ValueLog<T> {
     /// The log of values, with two partitions:
     /// - Past values in the indices `[0, self.index[`
