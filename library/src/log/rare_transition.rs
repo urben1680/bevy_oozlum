@@ -4,13 +4,11 @@ use std::{
     collections::{TryReserveError, VecDeque},
 };
 
-use bevy::ecs::{component::Component, system::Resource};
-
 use crate::meta::RevMeta;
 
 use super::{LogIter, OutOfLog, Packed, RareData, WithAmount, WithTimestamp, BACKWARD_EXPECT_MSG};
 
-#[derive(Debug, Clone, Component, Resource)]
+#[derive(Debug, Clone)]
 pub struct RareTransitionLog<T> {
     /// RareData.skips represents the number of None pushes before the transition in the struct
     transitions: VecDeque<RareData<T>>,

@@ -3,8 +3,6 @@ use std::{
     fmt::Debug,
 };
 
-use bevy::ecs::{component::Component, system::Resource};
-
 use crate::meta::RevMeta;
 
 use super::{
@@ -12,7 +10,7 @@ use super::{
     WithAmount, WithTimestamp,
 };
 
-#[derive(Debug, Clone, Component, Resource)]
+#[derive(Debug, Clone)]
 pub struct TransitionsLog<T, U: Copy = (), Amount = usize>
 where
     Amount: TryFrom<usize, Error: Debug> + TryInto<usize, Error: Debug> + Default + Copy,
