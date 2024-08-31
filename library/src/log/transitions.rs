@@ -174,16 +174,20 @@ where
     pub fn pop_past_by_len(
         &mut self,
         meta: &RevMeta,
-        push_per_frame: usize,
+        pushes_per_frame: usize,
     ) -> Option<DataEntry<impl LogIter<T>, U>> {
         self.amounts
-            .pop_past_by_len(meta, push_per_frame)
+            .pop_past_by_len(meta, pushes_per_frame)
             .map(|with_amount| self.drain_past_by_amount(with_amount))
     }
-    pub fn drain_past_by_len(&mut self, meta: &RevMeta, push_per_frame: usize) -> impl LogIter<T> {
+    pub fn drain_past_by_len(
+        &mut self,
+        meta: &RevMeta,
+        pushes_per_frame: usize,
+    ) -> impl LogIter<T> {
         let amount: usize = self
             .amounts
-            .drain_past_by_len(meta, push_per_frame)
+            .drain_past_by_len(meta, pushes_per_frame)
             .map(|entry| amount_to_usize(entry.amount.0))
             .sum();
         self.index -= amount;
