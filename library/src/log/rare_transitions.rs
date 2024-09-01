@@ -6,8 +6,8 @@ use std::{
 use crate::meta::RevMeta;
 
 use super::{
-    amount_to_usize, AmountErr, DataEntry, LogIter, LogMut, OutOfLog, Packed, RareTransitionLog,
-    WithAmount, WithTimestamp,
+    AmountErr, DataEntry, LogIter, LogMut, OutOfLog, Packed, RareTransitionLog, WithAmount,
+    WithTimestamp,
 };
 
 #[derive(Debug, Clone)]
@@ -155,7 +155,7 @@ where
     pub fn backward_log(&mut self) -> Result<Option<DataEntry<impl LogIter<&mut T>, U>>, OutOfLog> {
         Ok(self.amounts.backward_log()?.map(|with_amount| {
             let old_index = self.index;
-            self.index -= amount_to_usize(with_amount.amount.0);
+            self.index -= with_amount.amount();
             let data = self.transitions.range_mut(self.index..old_index);
             DataEntry {
                 data,
@@ -166,7 +166,7 @@ where
     pub fn forward_log(&mut self) -> Result<Option<DataEntry<impl LogIter<&mut T>, U>>, OutOfLog> {
         Ok(self.amounts.forward_log()?.map(|with_amount| {
             let old_index = self.index;
-            self.index += amount_to_usize(with_amount.amount.0);
+            self.index += with_amount.amount();
             let data = self.transitions.range_mut(old_index..self.index);
             DataEntry {
                 data,
@@ -186,7 +186,7 @@ where
         let amount: usize = self
             .amounts
             .drain_past_by_len(meta, pushes_per_len)
-            .map(|entry| amount_to_usize(entry.amount.0))
+            .map(WithAmount::amount)
             .sum();
         self.index -= amount;
         self.transitions.drain(..amount)
@@ -196,7 +196,7 @@ where
         with_amount: Option<WithAmount<U, Amount>>,
     ) -> Option<DataEntry<impl LogIter<T>, U>> {
         with_amount.map(|with_amount| {
-            let amount = amount_to_usize(with_amount.amount.0);
+            let amount = with_amount.amount();
             self.index -= amount;
             DataEntry {
                 data: self.transitions.drain(..amount),
@@ -221,7 +221,7 @@ where
         let amount: usize = self
             .amounts
             .drain_past_by_timestamp(meta)
-            .map(|entry| amount_to_usize(entry.amount.0))
+            .map(WithAmount::amount)
             .sum();
         self.index -= amount;
         self.transitions.drain(..amount)
@@ -262,7 +262,7 @@ mod test {
             let previous = self.clone();
 
             self.meta.queue_forward();
-            self.meta.update_inner();
+            self.meta.update();
 
             let (transitions, expected_ok) = match transitions {
                 Ok(transitions) => (transitions, true),
@@ -394,7 +394,7 @@ mod test {
                         self.meta.queue_log(self.meta.now() - 1).is_ok(),
                         "\npreviously: {previous:?}\nnow: {self:?}"
                     );
-                    self.meta.update_inner();
+                    self.meta.update();
 
                     let expected_transitions =
                         Ok(expected_transitions.map(|transitions| collect(transitions)));
@@ -482,7 +482,7 @@ mod test {
                         self.meta.queue_log(self.meta.now() + 1).is_ok(),
                         "\npreviously: {previous:?}\nnow: {self:?}"
                     );
-                    self.meta.update_inner();
+                    self.meta.update();
 
                     let expected_transitions =
                         Ok(expected_transitions.map(|transitions| collect(transitions)));

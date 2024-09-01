@@ -289,7 +289,7 @@ mod test {
             let previous = self.clone();
 
             self.meta.queue_forward();
-            self.meta.update_inner();
+            self.meta.update();
 
             let with_timestamp = transition.map(|transition| self.meta.with_timestamp(transition));
 
@@ -377,7 +377,7 @@ mod test {
                         self.meta.queue_log(self.meta.now() - 1).is_ok(),
                         "\npreviously: {previous:?}\nnow: {self:?}"
                     );
-                    self.meta.update_inner();
+                    self.meta.update();
 
                     let transition = self.with_timestamp[0]
                         .backward_log()
@@ -455,7 +455,7 @@ mod test {
                         self.meta.queue_log(self.meta.now() + 1).is_ok(),
                         "\npreviously: {previous:?}\nnow: {self:?}"
                     );
-                    self.meta.update_inner();
+                    self.meta.update();
 
                     let transition = self.with_timestamp[0]
                         .forward_log()
@@ -545,6 +545,7 @@ mod test {
         meta_and_logs.forward_log(Ok(Some(2)));
         meta_and_logs.forward_log(Ok(None));
         // nothing ever logged past 8, no mutations happend to both meta and log here
+        // todo: would this test fail if no value was pushed at the second forward? same situation as RareValueLog
         meta_and_logs.forward_log(Err(OutOfLog));
 
         meta_and_logs.backward_log(Ok(None));

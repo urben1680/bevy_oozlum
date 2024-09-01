@@ -95,6 +95,20 @@ impl RevMeta {
     pub fn range(&self) -> Range<usize> {
         self.range.clone()
     }
+    pub fn reduce_range(&mut self, range: Range<usize>) -> Result<(), ()> {
+        if range.start >= self.range.start
+            && range.end <= self.range.end
+            && range.contains(&self.now)
+        {
+            self.range = range;
+            Ok(())
+        } else {
+            Err(())
+        }
+    }
+    pub fn clear(&mut self) {
+        self.range = self.now..self.now + 1;
+    }
     /// Queue to go forward.
     ///
     /// Will cause logged future frames to be forgotten.
@@ -122,12 +136,12 @@ impl RevMeta {
     pub fn queue_pause(&mut self) {
         self.queue = Some(Direction::Pause);
     }
-    pub fn update(world: &mut World) {
+    pub fn update_world(world: &mut World) {
         let mut this = world.get_resource_mut::<Self>().expect(Self::EXIST_MSG);
         if this.range.end == usize::MAX {
             todo!("")
         }
-        this.update_inner();
+        this.update();
         let result = match this.direction {
             Direction::Forward | Direction::ForwardLog { .. } => {
                 world.try_run_schedule(ForwardSchedule(RevUpdate.intern()))
@@ -141,7 +155,7 @@ impl RevMeta {
             todo!("")
         }
     }
-    pub fn update_inner(&mut self) {
+    pub fn update(&mut self) {
         match self.queue.take() {
             Some(queue) => {
                 self.direction = queue;
@@ -243,7 +257,7 @@ mod test {
             },
         );
 
-        meta.update_inner();
+        meta.update();
         assert_eq!(
             meta.direction(),
             Direction::ForwardLog {
@@ -252,7 +266,7 @@ mod test {
         );
         assert_eq!(meta.now(), 1);
 
-        meta.update_inner();
+        meta.update();
         assert_eq!(meta.direction(), Direction::Pause);
         assert_eq!(meta.now(), 1);
     }
@@ -268,7 +282,7 @@ mod test {
             },
         );
 
-        meta.update_inner();
+        meta.update();
         assert_eq!(
             meta.direction(),
             Direction::BackwardLog {
@@ -277,7 +291,7 @@ mod test {
         );
         assert_eq!(meta.now(), 0);
 
-        meta.update_inner();
+        meta.update();
         assert_eq!(meta.direction(), Direction::Pause);
         assert_eq!(meta.now(), 0);
     }
@@ -286,11 +300,11 @@ mod test {
     fn start_grows_according_to_max_len() {
         let mut meta = RevMeta::new(Some(TWO), 0, false);
 
-        meta.update_inner();
+        meta.update();
         assert_eq!(meta.now(), 1);
         assert_eq!(meta.range(), 0..2);
 
-        meta.update_inner();
+        meta.update();
         assert_eq!(meta.now(), 2);
         assert_eq!(meta.range(), 1..3);
     }

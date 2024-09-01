@@ -183,7 +183,7 @@ mod test {
             let previous = self.clone();
 
             self.meta.queue_forward();
-            self.meta.update_inner();
+            self.meta.update();
 
             self.with_timestamp[0].pop_past_by_timestamp(&self.meta);
             let middle = self.with_timestamp[0].clone();
@@ -241,7 +241,7 @@ mod test {
                         self.meta.queue_log(self.meta.now() - 1).is_ok(),
                         "\npreviously: {previous:?}\nnow: {self:?}"
                     );
-                    self.meta.update_inner();
+                    self.meta.update();
 
                     let transition = self.with_timestamp[0]
                         .backward_log()
@@ -319,7 +319,7 @@ mod test {
                         self.meta.queue_log(self.meta.now() + 1).is_ok(),
                         "\npreviously: {previous:?}\nnow: {self:?}"
                     );
-                    self.meta.update_inner();
+                    self.meta.update();
 
                     let transition = self.with_timestamp[0].forward_log().map(|entry| entry.data);
                     assert_eq!(
