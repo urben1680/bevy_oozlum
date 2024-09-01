@@ -178,10 +178,25 @@ struct WithAmount<U = (), Amount: Copy = usize> {
     amount: Packed<Amount>,
 }
 
-fn amount_to_usize<Amount: TryInto<usize, Error: Debug>>(amount: Amount) -> usize {
-    amount
-        .try_into()
-        .expect("a logged Amount value was converted from usize, so it is expected to be convertible back into usize")
+impl<U, Amount> WithAmount<U, Amount>
+where
+    Amount: TryFrom<usize, Error: Debug> + TryInto<usize, Error: Debug> + Default + Copy,
+{
+    fn zero(entry: U) -> Self {
+        let amount = 0usize
+            .try_into()
+            .expect("expects 0 to be representable by Amount");
+        WithAmount {
+            entry,
+            amount: Packed(amount),
+        }
+    }
+    fn amount(self) -> usize {
+        self.amount
+        .0
+            .try_into()
+            .expect("a logged Amount value was converted from usize, so it is expected to be convertible back into usize")
+    }
 }
 
 const BACKWARD_EXPECT_MSG: &'static str = "self.index should always be <= the log len, so reducing it without underflow is expected to result in a valid index into the log";

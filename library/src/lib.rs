@@ -13,6 +13,7 @@ TODO:
 - impl Reflection für logs
 - dont impl Component/Resource for logs to prevent (cross app/crate) collisisons / verbose system types
 - pop_by... order in tests and doc suggestions
+- longer log tests, especially rare variants
 - cfg für ecs only (keine App), logging
 - examples
 - documentations, besonders mit informationen welche Methoden für deterministische Logik geeignet ist

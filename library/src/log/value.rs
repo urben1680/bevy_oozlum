@@ -227,7 +227,7 @@ mod test {
             let previous = self.clone();
 
             self.meta.queue_forward();
-            self.meta.update_inner();
+            self.meta.update();
 
             self.with_timestamp[0].push_present(self.meta.with_timestamp(value));
             let middle = self.with_timestamp[0].clone();
@@ -318,7 +318,7 @@ mod test {
                         self.meta.queue_log(self.meta.now() - 1).is_ok(),
                         "\npreviously: {previous:?}\nnow: {self:?}"
                     );
-                    self.meta.update_inner();
+                    self.meta.update();
 
                     let is_ok = self.with_timestamp[0].backward_log().is_ok();
                     let value = self.with_timestamp[0].get().data;
@@ -416,7 +416,7 @@ mod test {
                         self.meta.queue_log(self.meta.now() + 1).is_ok(),
                         "\npreviously: {previous:?}\nnow: {self:?}"
                     );
-                    self.meta.update_inner();
+                    self.meta.update();
 
                     let is_ok = self.with_timestamp[0].forward_log().is_ok();
                     let value = self.with_timestamp[0].get().data;

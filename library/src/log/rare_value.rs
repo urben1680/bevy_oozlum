@@ -1,8 +1,5 @@
 use core::fmt::Debug;
-use std::{
-    cmp::Ordering,
-    collections::{TryReserveError, VecDeque},
-};
+use std::collections::{TryReserveError, VecDeque};
 
 use crate::meta::RevMeta;
 
@@ -179,6 +176,7 @@ impl<T> RareValueLog<T> {
         if excessive_len >= past_end.len() {
             self.pop_past()
         } else {
+            self.len -= excessive_len;
             None
         }
     }
@@ -191,18 +189,12 @@ impl<T> RareValueLog<T> {
         let mut drain_amount = 0;
         for entry in self.values.iter() {
             let less = self.len - entry.len();
-            match less.cmp(&past_len) {
-                Ordering::Greater => {
-                    self.len = less;
-                    drain_amount += 1;
-                }
-                Ordering::Less => break,
-                Ordering::Equal => {
-                    self.len = less;
-                    drain_amount += 1;
-                    break; // len of entries is never 0, so no further iterations are needed
-                }
+            if less < past_len {
+                self.len = self.len.min(past_len);
+                break;
             }
+            self.len = less;
+            drain_amount += 1;
         }
         self.index -= drain_amount;
         self.values.drain(..drain_amount).map(|rare| rare.data)
@@ -300,7 +292,7 @@ mod test {
             let previous = self.clone();
 
             self.meta.queue_forward();
-            self.meta.update_inner();
+            self.meta.update();
 
             let with_timestamp = self.meta.with_timestamp(value);
 
@@ -420,7 +412,7 @@ mod test {
                         self.meta.queue_log(self.meta.now() - 1).is_ok(),
                         "\npreviously: {previous:#?}\nnow: {self:#?}"
                     );
-                    self.meta.update_inner();
+                    self.meta.update();
 
                     let is_ok = self.with_timestamp[0].backward_log().is_ok();
                     let value = self.with_timestamp[0].get().data;
@@ -518,7 +510,7 @@ mod test {
                         self.meta.queue_log(self.meta.now() + 1).is_ok(),
                         "\npreviously: {previous:?}\nnow: {self:?}"
                     );
-                    self.meta.update_inner();
+                    self.meta.update();
 
                     let is_ok = self.with_timestamp[0].forward_log().is_ok();
                     let value = self.with_timestamp[0].get().data;
