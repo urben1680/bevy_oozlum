@@ -54,6 +54,7 @@ pub use rare_value::RareValueLog;
 pub use transition::TransitionLog;
 pub use transitions::TransitionsLog;
 pub use value::ValueLog;
+pub use values::ValuesLog;
 
 use crate::meta::RevMeta;
 
