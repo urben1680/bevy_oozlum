@@ -354,7 +354,7 @@ mod test {
         }
         fn backward_log<const N: usize>(
             &mut self,
-            expected_transitions: Result<[usize; N], OutOfLog>,
+            expected_transitions: Result<[usize; N], [OutOfLog; N]>,
         ) {
             let previous = self.clone();
             match expected_transitions {
@@ -405,7 +405,7 @@ mod test {
                         self.one_per_frame[1]
                     );
                 }
-                Err(OutOfLog) => {
+                Err(_) => {
                     assert!(
                         self.meta.queue_log(self.meta.now() - 1).is_err(),
                         "\npreviously: {previous:?}\nnow: {self:?}"
@@ -443,7 +443,7 @@ mod test {
         }
         fn forward_log<const N: usize>(
             &mut self,
-            expected_transitions: Result<[usize; N], OutOfLog>,
+            expected_transitions: Result<[usize; N], [OutOfLog; N]>,
         ) {
             let previous = self.clone();
             match expected_transitions {
@@ -494,7 +494,7 @@ mod test {
                         self.one_per_frame[1]
                     );
                 }
-                Err(OutOfLog) => {
+                Err(_) => {
                     assert!(
                         self.with_timestamp[0].forward_log().is_err(),
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
@@ -532,27 +532,27 @@ mod test {
     fn test() {
         let mut meta_and_logs = MetaAndLogs::new(NonZeroUsize::new(3));
 
-        meta_and_logs.forward(Ok([1, 2]), 1);
-        meta_and_logs.forward(Ok([3, 4, 5]), 2);
+        meta_and_logs.forward(Ok([1; 1]), 1);
+        meta_and_logs.forward(Ok([2; 2]), 2);
         // pop_front called internally
-        meta_and_logs.forward(Ok([6, 7, 8, 9]), 2);
+        meta_and_logs.forward(Ok([3; 3]), 2);
 
-        meta_and_logs.backward_log(Ok([6, 7, 8, 9]));
-        meta_and_logs.backward_log(Ok([3, 4, 5]));
+        meta_and_logs.backward_log(Ok([3; 3]));
+        meta_and_logs.backward_log(Ok([2; 2]));
         // out of log, no mutations happend to both meta and log here
-        meta_and_logs.backward_log::<0>(Err(OutOfLog));
+        meta_and_logs.backward_log(Err([OutOfLog]));
 
-        meta_and_logs.forward_log(Ok([3, 4, 5]));
-        meta_and_logs.forward_log(Ok([6, 7, 8, 9]));
+        meta_and_logs.forward_log(Ok([2; 2]));
+        meta_and_logs.forward_log(Ok([3; 3]));
         // nothing ever logged past 8, no mutations happend to both meta and log here
-        meta_and_logs.forward_log::<0>(Err(OutOfLog));
+        meta_and_logs.forward_log(Err([OutOfLog]));
 
-        meta_and_logs.backward_log(Ok([6, 7, 8, 9]));
-        meta_and_logs.backward_log(Ok([3, 4, 5]));
+        meta_and_logs.backward_log(Ok([3; 3]));
+        meta_and_logs.backward_log(Ok([2; 2]));
         // all entries are truncated as they are in the future, the new logged entry increases len to 1
-        meta_and_logs.forward(Ok([10]), 1);
+        meta_and_logs.forward(Ok([4; 4]), 1);
 
         // amount of transitions is stored as u8, cannot store more than 255 transitions per push
-        meta_and_logs.forward(Err([11; 256]), 1);
+        meta_and_logs.forward(Err([256; 256]), 1);
     }
 }
