@@ -1,8 +1,5 @@
 use core::fmt::Debug;
-use std::{
-    cmp::Ordering,
-    collections::{TryReserveError, VecDeque},
-};
+use std::collections::{TryReserveError, VecDeque};
 
 use crate::meta::RevMeta;
 
@@ -179,18 +176,11 @@ impl<T> RareTransitionLog<T> {
         let mut drain_amount = 0;
         for entry in self.transitions.iter() {
             let less = self.len - entry.len();
-            match less.cmp(&past_len) {
-                Ordering::Greater => {
-                    self.len = less;
-                    drain_amount += 1;
-                }
-                Ordering::Less => break,
-                Ordering::Equal => {
-                    self.len = less;
-                    drain_amount += 1;
-                    break; // len of entries is never 0, so no further iterations are needed
-                }
+            if less < past_len {
+                break;
             }
+            self.len = less;
+            drain_amount += 1;
         }
         self.index -= drain_amount;
         self.transitions.drain(..drain_amount).map(|rare| rare.data)
