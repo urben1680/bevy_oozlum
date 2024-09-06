@@ -35,13 +35,13 @@ where
     pub fn new(
         iter: impl IntoIterator<Item = T>,
         entry: U,
-    ) -> Result<Self, AmountErr<impl LogIter<'static, T>, U, Amount>> {
+    ) -> Result<Self, AmountErr<VecDeque<T>, U, Amount>> {
         let values = VecDeque::from_iter(iter.into_iter());
         let amount = match values.len().try_into() {
             Ok(amount) => Packed(amount),
             Err(err) => {
                 return Err(AmountErr {
-                    data: values.into_iter(),
+                    data: values,
                     entry,
                     err,
                 })
@@ -65,14 +65,14 @@ where
         entry: U,
         values_capacity: usize,
         log_capacity: usize,
-    ) -> Result<Self, AmountErr<impl LogIter<'static, T>, U, Amount>> {
+    ) -> Result<Self, AmountErr<VecDeque<T>, U, Amount>> {
         let mut values = VecDeque::with_capacity(values_capacity);
         values.extend(iter.into_iter());
         let amount = match values.len().try_into() {
             Ok(amount) => Packed(amount),
             Err(err) => {
                 return Err(AmountErr {
-                    data: values.into_iter(),
+                    data: values,
                     entry,
                     err,
                 })
@@ -146,17 +146,17 @@ where
         self.values.shrink_to_fit()
     }
     pub fn get(&self) -> (impl LogIter<&T>, U) {
-        let entry = self.amounts.get();
-        let to = self.index + entry.amount();
-        let values = self.values.range(self.index..to);
-        (values, entry.entry)
+        let with_amount = self.amounts.get();
+        let from = self.index - with_amount.amount();
+        let values = self.values.range(from..self.index);
+        (values, with_amount.entry)
     }
     pub fn unlogged_get_mut(&mut self) -> (impl LogIter<&mut T>, U) {
         // todo: U is #[repr(packed)] so no mutable reference can be returned.
         // return a wrapper instead that contains a copied U and make it apply it's value to the entry on Drop.
         let with_amount = self.amounts.get();
-        let to = self.index + with_amount.amount();
-        let values = self.values.range_mut(self.index..to);
+        let from = self.index - with_amount.amount();
+        let values = self.values.range_mut(from..self.index);
         (values, with_amount.entry)
     }
     pub fn past_end(&self) -> Option<(impl LogIter<&T>, U)> {
@@ -229,15 +229,14 @@ where
         self.index = 0;
     }
     pub fn backward_log(&mut self) -> Result<(), OutOfLog> {
+        let amount = self.amounts.get().amount();
         self.amounts.backward_log()?;
-        let with_amount = self.amounts.get();
-        self.index -= with_amount.amount();
+        self.index -= amount;
         Ok(())
     }
     pub fn forward_log(&mut self) -> Result<(), OutOfLog> {
         self.amounts.forward_log()?;
-        let with_amount = self.amounts.get();
-        self.index += with_amount.amount();
+        self.index += self.amounts.get().amount();
         Ok(())
     }
     pub fn pop_past_by_len(
@@ -295,5 +294,398 @@ where
             .sum();
         self.index -= amount;
         self.values.drain(..amount)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use std::{borrow::Borrow, num::NonZeroUsize};
+
+    use super::*;
+
+    #[derive(Clone, Debug)]
+    struct MetaAndLogs {
+        meta: RevMeta,
+        with_timestamp: [ValuesLog<usize, WithTimestamp, u8>; 2],
+        one_per_frame: [ValuesLog<usize, (), u8>; 2],
+    }
+
+    fn collect(iter: impl IntoIterator<Item: Borrow<usize>>) -> Vec<usize> {
+        iter.into_iter().map(|val| val.borrow().clone()).collect()
+    }
+
+    impl MetaAndLogs {
+        fn new<const N: usize>(present: [usize; N], max_len: Option<NonZeroUsize>) -> Self {
+            let meta = RevMeta::new(max_len, 0, false);
+            let with_timestamp =
+                ValuesLog::<usize, WithTimestamp, u8>::new(present, meta.with_timestamp(()))
+                    .unwrap();
+            let one_per_frame = ValuesLog::new(present, ()).unwrap();
+            Self {
+                meta: RevMeta::new(max_len, 0, false),
+                with_timestamp: [with_timestamp.clone(), with_timestamp],
+                one_per_frame: [one_per_frame.clone(), one_per_frame],
+            }
+        }
+        fn forward<const N: usize>(
+            &mut self,
+            values: Result<[usize; N], [usize; N]>,
+            expected_log_len: usize,
+        ) {
+            let previous = self.clone();
+
+            self.meta.queue_forward();
+            self.meta.update();
+
+            let (values, expected_ok) = match values {
+                Ok(values) => (values, true),
+                Err(values) => (values, false),
+            };
+
+            let is_ok = self.with_timestamp[0]
+                .push_present(|mut log| {
+                    log.extend(values);
+                    self.meta.with_timestamp(())
+                })
+                .is_ok();
+            let middle = self.with_timestamp[0].clone();
+            self.with_timestamp[0].pop_past_by_timestamp(&self.meta);
+            assert_eq!(
+                is_ok, expected_ok,
+                "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
+                self.meta, previous.with_timestamp[0], self.with_timestamp[0]
+            );
+            assert_eq!(
+                self.with_timestamp[0].log_len(),
+                expected_log_len,
+                "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
+                self.meta,
+                previous.with_timestamp[0],
+                self.with_timestamp[0]
+            );
+            if expected_ok {
+                assert_eq!(
+                    collect(self.with_timestamp[0].get().0),
+                    collect(values),
+                    "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
+                    self.meta,
+                    previous.with_timestamp[0],
+                    self.with_timestamp[0]
+                );
+            }
+
+            let is_ok = self.with_timestamp[1]
+                .push_present(|mut log| {
+                    log.extend(values);
+                    self.meta.with_timestamp(())
+                })
+                .is_ok();
+            let middle = self.with_timestamp[1].clone();
+            let _ = self.with_timestamp[1].drain_past_by_timestamp(&self.meta);
+            assert_eq!(
+                is_ok, expected_ok,
+                "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
+                self.meta, previous.with_timestamp[1], self.with_timestamp[1]
+            );
+            assert_eq!(
+                self.with_timestamp[1].log_len(),
+                expected_log_len,
+                "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
+                self.meta,
+                previous.with_timestamp[1],
+                self.with_timestamp[1]
+            );
+            if expected_ok {
+                assert_eq!(
+                    collect(self.with_timestamp[1].get().0),
+                    collect(values),
+                    "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
+                    self.meta,
+                    previous.with_timestamp[1],
+                    self.with_timestamp[1]
+                );
+            }
+
+            let is_ok = self.one_per_frame[0]
+                .push_present(|mut log| log.extend(values))
+                .is_ok();
+            let middle = self.one_per_frame[0].clone();
+            self.one_per_frame[0].pop_past_by_len(&self.meta, 1);
+            assert_eq!(
+                is_ok, expected_ok,
+                "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
+                self.meta, previous.one_per_frame[0], self.one_per_frame[0]
+            );
+            assert_eq!(
+                self.one_per_frame[0].log_len(),
+                expected_log_len,
+                "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
+                self.meta,
+                previous.one_per_frame[0],
+                self.one_per_frame[0]
+            );
+            if expected_ok {
+                assert_eq!(
+                    collect(self.one_per_frame[0].get().0),
+                    collect(values),
+                    "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
+                    self.meta,
+                    previous.one_per_frame[0],
+                    self.one_per_frame[0]
+                );
+            }
+
+            let is_ok = self.one_per_frame[1]
+                .push_present(|mut log| log.extend(values))
+                .is_ok();
+            let middle = self.one_per_frame[1].clone();
+            let _ = self.one_per_frame[1].drain_past_by_len(&self.meta, 1);
+            assert_eq!(
+                is_ok, expected_ok,
+                "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
+                self.meta, previous.one_per_frame[1], self.one_per_frame[1]
+            );
+            assert_eq!(
+                self.one_per_frame[1].log_len(),
+                expected_log_len,
+                "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
+                self.meta,
+                previous.one_per_frame[1],
+                self.one_per_frame[1]
+            );
+            if expected_ok {
+                assert_eq!(
+                    collect(self.one_per_frame[1].get().0),
+                    collect(values),
+                    "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
+                    self.meta,
+                    previous.one_per_frame[1],
+                    self.one_per_frame[1]
+                );
+            }
+        }
+        fn backward_log<const N: usize>(&mut self, expected_values: Result<[usize; N], [OutOfLog; N]>) {
+            let previous = self.clone();
+
+            match expected_values {
+                Ok(expected_values) => {
+                    let expected_values = collect(expected_values);
+                    assert!(
+                        self.meta.queue_log(self.meta.now() - 1).is_ok(),
+                        "\npreviously: {previous:?}\nnow: {self:?}"
+                    );
+                    self.meta.update();
+
+                    let is_ok = self.with_timestamp[0].backward_log().is_ok();
+                    let values = collect(self.with_timestamp[0].get().0);
+                    assert!(
+                        is_ok,
+                        "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
+                        self.meta, previous.with_timestamp[0], self.with_timestamp[0]
+                    );
+                    assert_eq!(
+                        values, expected_values,
+                        "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
+                        self.meta, previous.with_timestamp[0], self.with_timestamp[0]
+                    );
+
+                    let is_ok = self.with_timestamp[1].backward_log().is_ok();
+                    let values = collect(self.with_timestamp[1].get().0);
+                    assert!(
+                        is_ok,
+                        "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
+                        self.meta, previous.with_timestamp[1], self.with_timestamp[1]
+                    );
+                    assert_eq!(
+                        values, expected_values,
+                        "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
+                        self.meta, previous.with_timestamp[1], self.with_timestamp[1]
+                    );
+
+                    let is_ok = self.one_per_frame[0].backward_log().is_ok();
+                    let values = collect(self.one_per_frame[0].get().0);
+                    assert!(
+                        is_ok,
+                        "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
+                        self.meta, previous.one_per_frame[0], self.one_per_frame[0]
+                    );
+                    assert_eq!(
+                        values, expected_values,
+                        "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
+                        self.meta, previous.one_per_frame[0], self.one_per_frame[0]
+                    );
+
+                    let is_ok = self.one_per_frame[1].backward_log().is_ok();
+                    let values = collect(self.one_per_frame[1].get().0);
+                    assert!(
+                        is_ok,
+                        "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
+                        self.meta, previous.one_per_frame[1], self.one_per_frame[1]
+                    );
+                    assert_eq!(
+                        values, expected_values,
+                        "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
+                        self.meta, previous.one_per_frame[1], self.one_per_frame[1]
+                    );
+                }
+                Err(_) => {
+                    assert!(
+                        self.meta.queue_log(self.meta.now() - 1).is_err(),
+                        "\npreviously: {previous:?}\nnow: {self:?}"
+                    );
+                    assert!(
+                        self.with_timestamp[0].backward_log().is_err(),
+                        "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
+                        self.meta,
+                        previous.with_timestamp[0],
+                        self.with_timestamp[0]
+                    );
+                    assert!(
+                        self.with_timestamp[1].backward_log().is_err(),
+                        "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
+                        self.meta,
+                        previous.with_timestamp[1],
+                        self.with_timestamp[1]
+                    );
+                    assert!(
+                        self.one_per_frame[0].backward_log().is_err(),
+                        "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
+                        self.meta,
+                        previous.one_per_frame[0],
+                        self.one_per_frame[0]
+                    );
+                    assert!(
+                        self.one_per_frame[1].backward_log().is_err(),
+                        "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
+                        self.meta,
+                        previous.one_per_frame[1],
+                        self.one_per_frame[1]
+                    );
+                }
+            }
+        }
+        fn forward_log<const N: usize>(&mut self, expected_values: Result<[usize; N], [OutOfLog; N]>) {
+            let previous = self.clone();
+            match expected_values {
+                Ok(expected_values) => {
+                    let expected_values = collect(expected_values);
+                    assert!(
+                        self.meta.queue_log(self.meta.now() + 1).is_ok(),
+                        "\npreviously: {previous:?}\nnow: {self:?}"
+                    );
+                    self.meta.update();
+
+                    let is_ok = self.with_timestamp[0].forward_log().is_ok();
+                    let values = collect(self.with_timestamp[0].get().0);
+                    assert!(
+                        is_ok,
+                        "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
+                        self.meta, previous.with_timestamp[0], self.with_timestamp[0]
+                    );
+                    assert_eq!(
+                        values, expected_values,
+                        "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
+                        self.meta, previous.with_timestamp[0], self.with_timestamp[0]
+                    );
+
+                    let is_ok = self.with_timestamp[1].forward_log().is_ok();
+                    let values = collect(self.with_timestamp[1].get().0);
+                    assert!(
+                        is_ok,
+                        "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
+                        self.meta, previous.with_timestamp[1], self.with_timestamp[1]
+                    );
+                    assert_eq!(
+                        values, expected_values,
+                        "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
+                        self.meta, previous.with_timestamp[1], self.with_timestamp[1]
+                    );
+
+                    let is_ok = self.one_per_frame[0].forward_log().is_ok();
+                    let values = collect(self.one_per_frame[0].get().0);
+                    assert!(
+                        is_ok,
+                        "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
+                        self.meta, previous.one_per_frame[0], self.one_per_frame[0]
+                    );
+                    assert_eq!(
+                        values, expected_values,
+                        "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
+                        self.meta, previous.one_per_frame[0], self.one_per_frame[0]
+                    );
+
+                    let is_ok = self.one_per_frame[1].forward_log().is_ok();
+                    let values = collect(self.one_per_frame[1].get().0);
+                    assert!(
+                        is_ok,
+                        "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
+                        self.meta, previous.one_per_frame[1], self.one_per_frame[1]
+                    );
+                    assert_eq!(
+                        values, expected_values,
+                        "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
+                        self.meta, previous.one_per_frame[1], self.one_per_frame[1]
+                    );
+                }
+                Err(_) => {
+                    assert!(
+                        self.with_timestamp[0].forward_log().is_err(),
+                        "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
+                        self.meta,
+                        previous.with_timestamp[0],
+                        self.with_timestamp[0]
+                    );
+                    assert!(
+                        self.with_timestamp[1].forward_log().is_err(),
+                        "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
+                        self.meta,
+                        previous.with_timestamp[1],
+                        self.with_timestamp[1]
+                    );
+                    assert!(
+                        self.one_per_frame[0].forward_log().is_err(),
+                        "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
+                        self.meta,
+                        previous.one_per_frame[0],
+                        self.one_per_frame[0]
+                    );
+                    assert!(
+                        self.one_per_frame[1].forward_log().is_err(),
+                        "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
+                        self.meta,
+                        previous.one_per_frame[1],
+                        self.one_per_frame[1]
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test() {
+        let mut meta_and_logs = MetaAndLogs::new([], NonZeroUsize::new(3));
+
+        meta_and_logs.forward(Ok([1; 1]), 1);
+        meta_and_logs.forward(Ok([2; 2]), 2);
+        // pop_front called internally
+        meta_and_logs.forward(Ok([3; 3]), 2);
+
+        meta_and_logs.backward_log(Ok([2; 2]));
+        meta_and_logs.backward_log(Ok([1; 1]));
+        // out of log, no mutations happend to both meta and log here
+        meta_and_logs.backward_log(Err([OutOfLog]));
+
+        meta_and_logs.forward_log(Ok([2; 2]));
+        meta_and_logs.forward_log(Ok([3; 3]));
+        // nothing ever logged past 8, no mutations happend to both meta and log here
+        meta_and_logs.forward_log(Err([OutOfLog]));
+
+        meta_and_logs.backward_log(Ok([2; 2]));
+        meta_and_logs.backward_log(Ok([1; 1]));
+        // all entries are truncated as they are in the future, the new logged entry increases len to 1
+        meta_and_logs.forward(Ok([4; 4]), 1);
+
+        // amount of values is stored as u8, cannot store more than 255 values per push
+        meta_and_logs.forward(Err([256; 256]), 1);
     }
 }
