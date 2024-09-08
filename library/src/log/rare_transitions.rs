@@ -8,13 +8,14 @@ use bevy::reflect::{std_traits::ReflectDefault, Reflect};
 use crate::meta::RevMeta;
 
 use super::{
-    AmountErr, DataEntry, LogIter, LogMut, OutOfLog, RareTransitionLog, WithAmount, WithTimestamp,
+    AmountErr, DataEntry, LogIter, LogMut, OutOfLog, PackedUSize, RareTransitionLog, WithAmount,
+    WithTimestamp,
 };
 
 #[derive(Debug, Clone, Reflect)]
 #[reflect(Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct RareTransitionsLog<T, U = (), Amount = usize>
+pub struct RareTransitionsLog<T, U = (), Amount = PackedUSize>
 where
     Amount: TryFrom<usize, Error: Debug> + Into<usize> + Default + Copy,
 {
