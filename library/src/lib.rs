@@ -11,6 +11,7 @@ TODO:
 - App Methoden auch für RevSchedule struct
 - tuple impl configs
 - derive Reflection + serde für logs
+-- register type data for non-pub structs (helper glued to log?)
 - longer log tests for RareTransition and RareValue
 - cfg für ecs only (keine App), logging
 - examples

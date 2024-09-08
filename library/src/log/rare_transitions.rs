@@ -3,13 +3,17 @@ use std::{
     fmt::Debug,
 };
 
+use bevy::reflect::{std_traits::ReflectDefault, Reflect};
+
 use crate::meta::RevMeta;
 
 use super::{
     AmountErr, DataEntry, LogIter, LogMut, OutOfLog, RareTransitionLog, WithAmount, WithTimestamp,
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Reflect)]
+#[reflect(Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct RareTransitionsLog<T, U = (), Amount = usize>
 where
     Amount: TryFrom<usize, Error: Debug> + Into<usize> + Default + Copy,
@@ -588,5 +592,11 @@ mod test {
 
         // amount of transitions is stored as u8, cannot store more than 255 transitions per push
         meta_and_logs.forward(Err([11; 256]), 1, 0);
+    }
+
+    #[allow(dead_code)]
+    fn impls_reflect() {
+        bevy::reflect::TypeRegistry::empty()
+            .register::<RareTransitionsLog<usize, WithTimestamp<u8>, u8>>();
     }
 }

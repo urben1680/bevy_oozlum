@@ -635,4 +635,9 @@ mod test {
         meta_and_logs.backward_log(Ok(1));
         meta_and_logs.forward(1, false, 2, 0);
     }
+
+    #[allow(dead_code)]
+    fn impls_reflect() {
+        bevy::reflect::TypeRegistry::empty().register::<RareValueLog<WithTimestamp<usize>>>();
+    }
 }

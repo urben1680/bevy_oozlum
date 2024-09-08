@@ -531,4 +531,9 @@ mod test {
         // all entries are truncated as they are in the future, the new logged entry increases len to 1
         meta_and_logs.forward(4, 1);
     }
+
+    #[allow(dead_code)]
+    fn impls_reflect() {
+        bevy::reflect::TypeRegistry::empty().register::<ValueLog<WithTimestamp<usize>>>();
+    }
 }
