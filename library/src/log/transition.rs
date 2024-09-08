@@ -1,7 +1,7 @@
 use core::fmt::Debug;
 use std::collections::{TryReserveError, VecDeque};
 
-use bevy::reflect::{Reflect, std_traits::ReflectDefault};
+use bevy::reflect::{std_traits::ReflectDefault, Reflect};
 
 use crate::meta::RevMeta;
 
@@ -9,10 +9,7 @@ use super::{LogIter, OutOfLog, WithAmount, WithTimestamp, BACKWARD_EXPECT_MSG};
 
 #[derive(Debug, Clone, Reflect)]
 #[reflect(Default)]
-#[cfg_attr(
-    feature = "serde",
-    derive(serde::Serialize, serde::Deserialize),
-)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TransitionLog<T> {
     transitions: VecDeque<T>,
     index: usize,

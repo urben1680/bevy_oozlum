@@ -7,15 +7,10 @@ use bevy::reflect::Reflect;
 
 use crate::meta::RevMeta;
 
-use super::{
-    AmountErr, DataEntry, LogIter, LogMut, OutOfLog, ValueLog, WithAmount, WithTimestamp,
-};
+use super::{AmountErr, DataEntry, LogIter, LogMut, OutOfLog, ValueLog, WithAmount, WithTimestamp};
 
 #[derive(Debug, Clone, Reflect)]
-#[cfg_attr(
-    feature = "serde",
-    derive(serde::Serialize, serde::Deserialize)
-)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ValuesLog<T, U = (), Amount = usize>
 where
     Amount: TryFrom<usize, Error: Debug> + Into<usize> + Default + Copy,
@@ -184,10 +179,7 @@ where
         match new_amount.try_into() {
             Ok(amount) => {
                 self.index = self.values.len();
-                self.amounts.push_present(WithAmount {
-                    entry,
-                    amount,
-                });
+                self.amounts.push_present(WithAmount { entry, amount });
                 Ok(())
             }
             Err(err) => Err(AmountErr {
@@ -468,7 +460,10 @@ mod test {
                 );
             }
         }
-        fn backward_log<const N: usize>(&mut self, expected_values: Result<[usize; N], [OutOfLog; N]>) {
+        fn backward_log<const N: usize>(
+            &mut self,
+            expected_values: Result<[usize; N], [OutOfLog; N]>,
+        ) {
             let previous = self.clone();
 
             match expected_values {
@@ -568,7 +563,10 @@ mod test {
                 }
             }
         }
-        fn forward_log<const N: usize>(&mut self, expected_values: Result<[usize; N], [OutOfLog; N]>) {
+        fn forward_log<const N: usize>(
+            &mut self,
+            expected_values: Result<[usize; N], [OutOfLog; N]>,
+        ) {
             let previous = self.clone();
             match expected_values {
                 Ok(expected_values) => {

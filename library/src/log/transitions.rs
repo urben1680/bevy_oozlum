@@ -3,21 +3,17 @@ use std::{
     fmt::Debug,
 };
 
-use bevy::reflect::{Reflect, std_traits::ReflectDefault};
+use bevy::reflect::{std_traits::ReflectDefault, Reflect};
 
 use crate::meta::RevMeta;
 
 use super::{
-    AmountErr, DataEntry, LogIter, LogMut, OutOfLog, TransitionLog, WithAmount,
-    WithTimestamp,
+    AmountErr, DataEntry, LogIter, LogMut, OutOfLog, TransitionLog, WithAmount, WithTimestamp,
 };
 
 #[derive(Debug, Clone, Reflect)]
 #[reflect(Default)]
-#[cfg_attr(
-    feature = "serde",
-    derive(serde::Serialize, serde::Deserialize)
-)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TransitionsLog<T, U = (), Amount = usize>
 where
     Amount: TryFrom<usize, Error: Debug> + Into<usize> + Default + Copy,
@@ -112,7 +108,9 @@ where
         self.transitions.shrink_to_fit()
     }
     pub fn past_end(&self) -> Option<&U> {
-        self.amounts.past_end().map(|with_amount| &with_amount.entry)
+        self.amounts
+            .past_end()
+            .map(|with_amount| &with_amount.entry)
     }
     pub fn pop_past(&mut self) -> Option<DataEntry<impl LogIter<T>, U>> {
         self.amounts
@@ -129,10 +127,7 @@ where
         match new_amount.try_into() {
             Ok(amount) => {
                 self.index = self.transitions.len();
-                self.amounts.push_present(WithAmount {
-                    entry,
-                    amount,
-                });
+                self.amounts.push_present(WithAmount { entry, amount });
                 Ok(())
             }
             Err(err) => Err(AmountErr {
