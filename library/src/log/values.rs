@@ -7,11 +7,14 @@ use bevy::reflect::Reflect;
 
 use crate::meta::RevMeta;
 
-use super::{AmountErr, DataEntry, LogIter, LogMut, OutOfLog, ValueLog, WithAmount, WithTimestamp};
+use super::{
+    AmountErr, DataEntry, LogIter, LogMut, OutOfLog, PackedUSize, ValueLog, WithAmount,
+    WithTimestamp,
+};
 
 #[derive(Debug, Clone, Reflect)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct ValuesLog<T, U = (), Amount = usize>
+pub struct ValuesLog<T, U = (), Amount = PackedUSize>
 where
     Amount: TryFrom<usize, Error: Debug> + Into<usize> + Default + Copy,
 {
