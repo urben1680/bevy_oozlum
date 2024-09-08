@@ -3,7 +3,7 @@ use std::collections::{TryReserveError, VecDeque};
 
 use crate::meta::RevMeta;
 
-use super::{LogIter, OutOfLog, Packed, RareData, WithAmount, WithTimestamp, BACKWARD_EXPECT_MSG};
+use super::{LogIter, OutOfLog, RareData, WithAmount, WithTimestamp, BACKWARD_EXPECT_MSG};
 
 #[derive(Debug, Clone)]
 pub struct RareTransitionLog<T> {
@@ -114,7 +114,7 @@ impl<T> RareTransitionLog<T> {
             Some(transition) => {
                 self.transitions.push_back(RareData {
                     data: transition,
-                    skips: Packed(self.skips),
+                    skips: self.skips.into(),
                 });
                 self.skips = 0;
                 self.index += 1;
@@ -134,7 +134,7 @@ impl<T> RareTransitionLog<T> {
                 .transitions
                 .get_mut(self.index)
                 .expect(BACKWARD_EXPECT_MSG);
-            self.skips = entry.skips.0;
+            self.skips = entry.skips.into();
             self.len -= 1;
             Ok(Some(&mut entry.data))
         }
@@ -142,7 +142,7 @@ impl<T> RareTransitionLog<T> {
     pub fn forward_log(&mut self) -> Result<Option<&mut T>, OutOfLog> {
         if let Some(entry) = self.transitions.get_mut(self.index) {
             self.len += 1;
-            if self.skips < entry.skips.0 {
+            if self.skips < entry.skips.into() {
                 self.skips += 1;
                 Ok(None)
             } else {
@@ -191,7 +191,7 @@ impl<T: Debug> RareTransitionLog<WithTimestamp<T>> {
     pub fn pop_past_by_timestamp(&mut self, meta: &RevMeta) -> Option<WithTimestamp<T>> {
         if self.past_end().map_or(false, |entry| {
             // include range().start because this entry instructs how to transition from range().start to range().start - 1
-            entry.logged_at.0 <= meta.range().start
+            entry.logged_at <= meta.range().start
         }) {
             self.pop_past()
         } else {
@@ -201,12 +201,12 @@ impl<T: Debug> RareTransitionLog<WithTimestamp<T>> {
     pub fn drain_past_by_timestamp(&mut self, meta: &RevMeta) -> impl LogIter<WithTimestamp<T>> {
         let partition_point = self
             .transitions
-            .partition_point(|entry| entry.data.logged_at.0 <= meta.range().start);
+            .partition_point(|entry| entry.data.logged_at <= meta.range().start);
         self.len -= partition_point // sum of to-be-drained transitions, because of this mapping RareData::len below is not needed, only skips_before_value
             + self
                 .transitions
                 .range(..partition_point)
-                .map(|entry| entry.skips.0)
+                .map(|entry| entry.skips)
                 .sum::<usize>();
         self.index -= partition_point;
         self.transitions
@@ -215,14 +215,14 @@ impl<T: Debug> RareTransitionLog<WithTimestamp<T>> {
     }
 }
 
-impl<T, Amount: Copy> RareTransitionLog<WithAmount<WithTimestamp<T>, Amount>> {
+impl<U, Amount: Copy> RareTransitionLog<WithAmount<WithTimestamp<U>, Amount>> {
     pub(crate) fn pop_past_by_timestamp(
         &mut self,
         meta: &RevMeta,
-    ) -> Option<WithAmount<WithTimestamp<T>, Amount>> {
+    ) -> Option<WithAmount<WithTimestamp<U>, Amount>> {
         if self.past_end().map_or(false, |entry| {
             // include range().start because this entry instructs how to transition from range().start to range().start - 1
-            entry.entry.logged_at.0 <= meta.range().start
+            entry.entry.logged_at <= meta.range().start
         }) {
             self.pop_past()
         } else {
@@ -232,15 +232,15 @@ impl<T, Amount: Copy> RareTransitionLog<WithAmount<WithTimestamp<T>, Amount>> {
     pub(crate) fn drain_past_by_timestamp(
         &mut self,
         meta: &RevMeta,
-    ) -> impl LogIter<WithAmount<WithTimestamp<T>, Amount>> {
+    ) -> impl LogIter<WithAmount<WithTimestamp<U>, Amount>> {
         let partition_point = self
             .transitions
-            .partition_point(|entry| entry.data.entry.logged_at.0 <= meta.range().start);
+            .partition_point(|entry| entry.data.entry.logged_at <= meta.range().start);
         self.len -= partition_point
             + self
                 .transitions
                 .range(..partition_point)
-                .map(|entry| entry.skips.0)
+                .map(|entry| entry.skips)
                 .sum::<usize>();
         self.index -= partition_point;
         self.transitions

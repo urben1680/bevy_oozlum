@@ -7,3 +7,8 @@ edition = "2021"
 
 [dependencies]
 bevy = "0.14"
+serde = { version = "1.0", features = ["derive"], optional = true }
+
+[features]
+default = ["serde"] # todo: remove line before release
+serde = ["dep:serde"]

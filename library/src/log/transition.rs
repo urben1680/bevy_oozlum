@@ -1,11 +1,18 @@
 use core::fmt::Debug;
 use std::collections::{TryReserveError, VecDeque};
 
+use bevy::reflect::{Reflect, std_traits::ReflectDefault};
+
 use crate::meta::RevMeta;
 
 use super::{LogIter, OutOfLog, WithAmount, WithTimestamp, BACKWARD_EXPECT_MSG};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Reflect)]
+#[reflect(Default)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+)]
 pub struct TransitionLog<T> {
     transitions: VecDeque<T>,
     index: usize,
@@ -116,7 +123,7 @@ impl<T> TransitionLog<WithTimestamp<T>> {
     pub fn pop_past_by_timestamp(&mut self, meta: &RevMeta) -> Option<WithTimestamp<T>> {
         if self.past_end().map_or(false, |with_timestamp| {
             // include range().start because this entry instructs how to transition from range().start to range().start - 1
-            with_timestamp.logged_at.0 <= meta.range().start
+            with_timestamp.logged_at <= meta.range().start
         }) {
             self.pop_past()
         } else {
@@ -126,20 +133,20 @@ impl<T> TransitionLog<WithTimestamp<T>> {
     pub fn drain_past_by_timestamp(&mut self, meta: &RevMeta) -> impl LogIter<WithTimestamp<T>> {
         let partition_point = self
             .transitions
-            .partition_point(|entry| entry.logged_at.0 <= meta.range().start);
+            .partition_point(|entry| entry.logged_at <= meta.range().start);
         self.index -= partition_point;
         self.transitions.drain(..partition_point)
     }
 }
 
-impl<T, Amount: Copy> TransitionLog<WithAmount<WithTimestamp<T>, Amount>> {
+impl<U, Amount: Copy> TransitionLog<WithAmount<WithTimestamp<U>, Amount>> {
     pub(crate) fn pop_past_by_timestamp(
         &mut self,
         meta: &RevMeta,
-    ) -> Option<WithAmount<WithTimestamp<T>, Amount>> {
+    ) -> Option<WithAmount<WithTimestamp<U>, Amount>> {
         if self.past_end().map_or(false, |with_timestamp| {
             // include range().start because this entry instructs how to transition from range().start to range().start - 1
-            with_timestamp.entry.logged_at.0 <= meta.range().start
+            with_timestamp.entry.logged_at <= meta.range().start
         }) {
             self.pop_past()
         } else {
@@ -149,10 +156,10 @@ impl<T, Amount: Copy> TransitionLog<WithAmount<WithTimestamp<T>, Amount>> {
     pub(crate) fn drain_past_by_timestamp(
         &mut self,
         meta: &RevMeta,
-    ) -> impl LogIter<WithAmount<WithTimestamp<T>, Amount>> {
+    ) -> impl LogIter<WithAmount<WithTimestamp<U>, Amount>> {
         let partition_point = self
             .transitions
-            .partition_point(|entry| entry.entry.logged_at.0 <= meta.range().start);
+            .partition_point(|entry| entry.entry.logged_at <= meta.range().start);
         self.index -= partition_point;
         self.transitions.drain(..partition_point)
     }

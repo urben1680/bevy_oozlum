@@ -1,11 +1,17 @@
 use core::fmt::Debug;
 use std::collections::{TryReserveError, VecDeque};
 
+use bevy::reflect::Reflect;
+
 use crate::meta::RevMeta;
 
-use super::{LogIter, OutOfLog, Packed, RareData, WithAmount, WithTimestamp, BACKWARD_EXPECT_MSG};
+use super::{LogIter, OutOfLog, PackedUSize, RareData, WithAmount, WithTimestamp, BACKWARD_EXPECT_MSG};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Reflect)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize)
+)]
 pub struct RareValueLog<T> {
     /// RareData.skips represents the number of None pushes after the value in the struct
     values: VecDeque<RareData<T>>,
@@ -27,7 +33,7 @@ impl<T> RareValueLog<T> {
             values: VecDeque::new(),
             present: RareData {
                 data: present,
-                skips: Packed(0),
+                skips: PackedUSize::MIN,
             },
             index: 0,
             skips: 0,
@@ -40,7 +46,7 @@ impl<T> RareValueLog<T> {
             values: VecDeque::with_capacity(values_capacity),
             present: RareData {
                 data: present,
-                skips: Packed(0),
+                skips: PackedUSize::MIN,
             },
             index: 0,
             skips: 0,
@@ -113,7 +119,7 @@ impl<T> RareValueLog<T> {
         self.values.clear();
         self.present = RareData {
             data: present,
-            skips: Packed(0),
+            skips: PackedUSize::MIN,
         };
         self.index = 0;
         self.len = 0;
@@ -124,15 +130,15 @@ impl<T> RareValueLog<T> {
         match value {
             None => {
                 self.skips += 1;
-                self.present.skips = Packed(self.skips);
+                self.present.skips = self.skips.into();
             }
             Some(value) => {
-                self.present.skips = Packed(self.skips);
+                self.present.skips = self.skips.into();
                 let previous = core::mem::replace(
                     &mut self.present,
                     RareData {
                         data: value,
-                        skips: Packed(0),
+                        skips: PackedUSize::MIN,
                     },
                 );
                 self.values.push_back(previous);
@@ -151,12 +157,12 @@ impl<T> RareValueLog<T> {
         self.index = self.index.checked_sub(1).ok_or(OutOfLog)?;
         let entry = self.values.get_mut(self.index).expect(BACKWARD_EXPECT_MSG);
         core::mem::swap(&mut self.present, entry);
-        self.skips = self.present.skips.0;
+        self.skips = self.present.skips.into();
         self.len -= 1;
         Ok(())
     }
     pub fn forward_log(&mut self) -> Result<(), OutOfLog> {
-        if self.skips < self.present.skips.0 {
+        if self.skips < self.present.skips.into() {
             self.len += 1;
             self.skips += 1;
             Ok(())
@@ -190,7 +196,6 @@ impl<T> RareValueLog<T> {
         for entry in self.values.iter() {
             let less = self.len - entry.len();
             if less < past_len {
-                self.len = self.len.min(past_len);
                 break;
             }
             self.len = less;
@@ -204,7 +209,7 @@ impl<T> RareValueLog<T> {
 impl<T: Debug> RareValueLog<WithTimestamp<T>> {
     pub fn pop_past_by_timestamp(&mut self, meta: &RevMeta) -> Option<WithTimestamp<T>> {
         if self.past_end_rare().map_or(false, |entry| {
-            entry.data.logged_at.0 + entry.skips.0 < meta.range().start
+            entry.data.logged_at + entry.skips < meta.range().start
         }) {
             self.pop_past()
         } else {
@@ -214,25 +219,25 @@ impl<T: Debug> RareValueLog<WithTimestamp<T>> {
     pub fn drain_past_by_timestamp(&mut self, meta: &RevMeta) -> impl LogIter<WithTimestamp<T>> {
         let partition_point = self
             .values
-            .partition_point(|entry| entry.data.logged_at.0 + entry.skips.0 < meta.range().start);
+            .partition_point(|entry| entry.data.logged_at + entry.skips < meta.range().start);
         self.len -= partition_point // sum of to-be-drained values, because of this mapping RareData::len below is not needed, only skips_before_value
             + self
                 .values
                 .range(..partition_point)
-                .map(|entry| entry.skips.0)
+                .map(|entry| entry.skips)
                 .sum::<usize>();
         self.index -= partition_point;
         self.values.drain(..partition_point).map(|rare| rare.data)
     }
 }
 
-impl<T, Amount: Copy> RareValueLog<WithAmount<WithTimestamp<T>, Amount>> {
+impl<U, Amount: Copy> RareValueLog<WithAmount<WithTimestamp<U>, Amount>> {
     pub(crate) fn pop_past_by_timestamp(
         &mut self,
         meta: &RevMeta,
-    ) -> Option<WithAmount<WithTimestamp<T>, Amount>> {
+    ) -> Option<WithAmount<WithTimestamp<U>, Amount>> {
         if self.past_end_rare().map_or(false, |entry| {
-            entry.data.entry.logged_at.0 + entry.skips.0 < meta.range().start
+            entry.data.entry.logged_at + entry.skips < meta.range().start
         }) {
             self.pop_past()
         } else {
@@ -242,15 +247,15 @@ impl<T, Amount: Copy> RareValueLog<WithAmount<WithTimestamp<T>, Amount>> {
     pub(crate) fn drain_past_by_timestamp(
         &mut self,
         meta: &RevMeta,
-    ) -> impl LogIter<WithAmount<WithTimestamp<T>, Amount>> {
+    ) -> impl LogIter<WithAmount<WithTimestamp<U>, Amount>> {
         let partition_point = self.values.partition_point(|entry| {
-            entry.data.entry.logged_at.0 + entry.skips.0 < meta.range().start
+            entry.data.entry.logged_at + entry.skips < meta.range().start
         });
         self.len -= partition_point
             + self
                 .values
                 .range(..partition_point)
-                .map(|entry| entry.skips.0)
+                .map(|entry| entry.skips)
                 .sum::<usize>();
         self.index -= partition_point;
         self.values.drain(..partition_point).map(|rare| rare.data)

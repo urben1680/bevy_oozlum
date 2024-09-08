@@ -3,7 +3,7 @@ use core::{num::NonZeroUsize, ops::Range};
 use bevy::ecs::schedule::ScheduleLabel;
 use bevy::ecs::{system::Resource, world::World};
 
-use crate::log::{Packed, WithTimestamp};
+use crate::log::WithTimestamp;
 use crate::{BackwardSchedule, ForwardSchedule, RevUpdate};
 
 // todo: updates in log directions einschließen?
@@ -88,7 +88,7 @@ impl RevMeta {
     pub fn with_timestamp<T>(&self, data: T) -> WithTimestamp<T> {
         WithTimestamp {
             data,
-            logged_at: Packed(self.now),
+            logged_at: self.now.into(),
         }
     }
     /// Returns the frame range that can be returned to using [`Self::queue_log`].
