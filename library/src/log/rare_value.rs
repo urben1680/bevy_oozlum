@@ -5,13 +5,12 @@ use bevy::reflect::Reflect;
 
 use crate::meta::RevMeta;
 
-use super::{LogIter, OutOfLog, PackedUSize, RareData, WithAmount, WithTimestamp, BACKWARD_EXPECT_MSG};
+use super::{
+    LogIter, OutOfLog, PackedUSize, RareData, WithAmount, WithTimestamp, BACKWARD_EXPECT_MSG,
+};
 
 #[derive(Debug, Clone, Reflect)]
-#[cfg_attr(
-    feature = "serde",
-    derive(serde::Serialize, serde::Deserialize)
-)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct RareValueLog<T> {
     /// RareData.skips represents the number of None pushes after the value in the struct
     values: VecDeque<RareData<T>>,
@@ -248,9 +247,9 @@ impl<U, Amount: Copy> RareValueLog<WithAmount<WithTimestamp<U>, Amount>> {
         &mut self,
         meta: &RevMeta,
     ) -> impl LogIter<WithAmount<WithTimestamp<U>, Amount>> {
-        let partition_point = self.values.partition_point(|entry| {
-            entry.data.entry.logged_at + entry.skips < meta.range().start
-        });
+        let partition_point = self
+            .values
+            .partition_point(|entry| entry.data.entry.logged_at + entry.skips < meta.range().start);
         self.len -= partition_point
             + self
                 .values

@@ -8,10 +8,7 @@ use crate::meta::RevMeta;
 use super::{LogIter, OutOfLog, WithAmount, WithTimestamp};
 
 #[derive(Debug, Default, Clone, Reflect)]
-#[cfg_attr(
-    feature = "serde",
-    derive(serde::Serialize, serde::Deserialize)
-)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ValueLog<T> {
     /// The log of values, with two partitions:
     /// - Past values in the indices `[0, self.index[`

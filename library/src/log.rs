@@ -37,7 +37,12 @@
 //! `log.backward_log()` must or must not be called. Then [`TransitionLog`] can be used instead which is less memory-consuming and
 //! has less logic overhead.
 
-use std::{collections::VecDeque, fmt::Debug, iter::{FusedIterator, Sum}, ops::Add};
+use std::{
+    collections::VecDeque,
+    fmt::Debug,
+    iter::{FusedIterator, Sum},
+    ops::Add,
+};
 
 mod rare_transition;
 mod rare_transitions;
@@ -62,7 +67,7 @@ use crate::meta::RevMeta;
 use bevy::reflect::std_traits::ReflectDefault;
 
 #[cfg(feature = "serde")]
-use bevy::reflect::prelude::{ReflectSerialize, ReflectDeserialize};
+use bevy::reflect::prelude::{ReflectDeserialize, ReflectSerialize};
 
 pub trait LogIter<'a, T>:
     Iterator<Item = T> + DoubleEndedIterator + ExactSizeIterator + FusedIterator
@@ -128,10 +133,7 @@ impl<'a, T: Iterator, U> IntoIterator for &'a mut DataEntry<T, U> {
 ///
 /// This will enable a cleanup strategy where entries are forgotten that are older than the global log start.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(
-    feature = "serde",
-    derive(serde::Serialize, serde::Deserialize)
-)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct WithTimestamp<T = ()> {
     pub data: T,
     pub logged_at: PackedUSize, // todo: type-alias [u8;?] depending on pointer width to deprecate Packed
@@ -156,10 +158,7 @@ impl<T: Default> From<&RevMeta> for WithTimestamp<T> {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(
-    feature = "serde",
-    derive(serde::Serialize, serde::Deserialize)
-)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 struct RareData<T> {
     data: T,
     /// If `T` is a transiton, then this is the skips before the transition.
@@ -176,10 +175,7 @@ impl<T> RareData<T> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(
-    feature = "serde",
-    derive(serde::Serialize, serde::Deserialize)
-)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 struct WithAmount<U = (), Amount = PackedUSize> {
     entry: U,
     amount: Amount,
@@ -193,10 +189,7 @@ where
         let amount = 0usize
             .try_into()
             .expect("expects 0 to be representable by Amount");
-        WithAmount {
-            entry,
-            amount,
-        }
+        WithAmount { entry, amount }
     }
     fn amount(&self) -> usize {
         self.amount.into()
@@ -212,12 +205,9 @@ const BACKWARD_EXPECT_MSG: &'static str = "self.index should always be <= the lo
     derive(serde::Serialize, serde::Deserialize),
     reflect(Serialize, Deserialize)
 )]
-pub struct PackedU8([u8;1]);
+pub struct PackedU8([u8; 1]);
 
-#[cfg(any(
-    target_pointer_width = "32",
-    target_pointer_width = "64"
-))]
+#[cfg(any(target_pointer_width = "32", target_pointer_width = "64"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Reflect)]
 #[reflect(Default)]
 #[cfg_attr(
@@ -225,12 +215,9 @@ pub struct PackedU8([u8;1]);
     derive(serde::Serialize, serde::Deserialize),
     reflect(Serialize, Deserialize)
 )]
-pub struct PackedU16([u8;2]);
+pub struct PackedU16([u8; 2]);
 
-#[cfg(any(
-    target_pointer_width = "32",
-    target_pointer_width = "64"
-))]
+#[cfg(any(target_pointer_width = "32", target_pointer_width = "64"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Reflect)]
 #[reflect(Default)]
 #[cfg_attr(
@@ -238,7 +225,7 @@ pub struct PackedU16([u8;2]);
     derive(serde::Serialize, serde::Deserialize),
     reflect(Serialize, Deserialize)
 )]
-pub struct PackedU24([u8;3]);
+pub struct PackedU24([u8; 3]);
 
 #[cfg(target_pointer_width = "64")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Reflect)]
@@ -248,7 +235,7 @@ pub struct PackedU24([u8;3]);
     derive(serde::Serialize, serde::Deserialize),
     reflect(Serialize, Deserialize)
 )]
-pub struct PackedU32([u8;4]);
+pub struct PackedU32([u8; 4]);
 
 #[cfg(target_pointer_width = "64")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Reflect)]
@@ -258,7 +245,7 @@ pub struct PackedU32([u8;4]);
     derive(serde::Serialize, serde::Deserialize),
     reflect(Serialize, Deserialize)
 )]
-pub struct PackedU40([u8;5]);
+pub struct PackedU40([u8; 5]);
 
 #[cfg(target_pointer_width = "64")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Reflect)]
@@ -268,7 +255,7 @@ pub struct PackedU40([u8;5]);
     derive(serde::Serialize, serde::Deserialize),
     reflect(Serialize, Deserialize)
 )]
-pub struct PackedU48([u8;6]);
+pub struct PackedU48([u8; 6]);
 
 #[cfg(target_pointer_width = "64")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Reflect)]
@@ -278,7 +265,7 @@ pub struct PackedU48([u8;6]);
     derive(serde::Serialize, serde::Deserialize),
     reflect(Serialize, Deserialize)
 )]
-pub struct PackedU56([u8;7]);
+pub struct PackedU56([u8; 7]);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Reflect)]
 #[reflect(Default)]
@@ -304,20 +291,14 @@ impl Into<usize> for PackedU8 {
     }
 }
 
-#[cfg(any(
-    target_pointer_width = "32",
-    target_pointer_width = "64"
-))]
+#[cfg(any(target_pointer_width = "32", target_pointer_width = "64"))]
 impl Into<usize> for PackedU16 {
     fn into(self) -> usize {
         le_bytes_to_usize(self.0)
     }
 }
 
-#[cfg(any(
-    target_pointer_width = "32",
-    target_pointer_width = "64"
-))]
+#[cfg(any(target_pointer_width = "32", target_pointer_width = "64"))]
 impl Into<usize> for PackedU24 {
     fn into(self) -> usize {
         le_bytes_to_usize(self.0)
@@ -358,7 +339,10 @@ impl Into<usize> for PackedUSize {
     }
 }
 
-fn try_usize_to_le_bytes<const N: usize, Out>(value: usize, map: impl FnOnce([u8; N]) -> Out) -> Result<Out, usize> {
+fn try_usize_to_le_bytes<const N: usize, Out>(
+    value: usize,
+    map: impl FnOnce([u8; N]) -> Out,
+) -> Result<Out, usize> {
     let limit = if N < std::mem::size_of::<usize>() {
         (1usize << (8 * N)) - 1
     } else {
@@ -381,10 +365,7 @@ impl TryFrom<usize> for PackedU8 {
     }
 }
 
-#[cfg(any(
-    target_pointer_width = "32",
-    target_pointer_width = "64"
-))]
+#[cfg(any(target_pointer_width = "32", target_pointer_width = "64"))]
 impl TryFrom<usize> for PackedU16 {
     type Error = usize;
     fn try_from(value: usize) -> Result<Self, Self::Error> {
@@ -392,10 +373,7 @@ impl TryFrom<usize> for PackedU16 {
     }
 }
 
-#[cfg(any(
-    target_pointer_width = "32",
-    target_pointer_width = "64"
-))]
+#[cfg(any(target_pointer_width = "32", target_pointer_width = "64"))]
 impl TryFrom<usize> for PackedU24 {
     type Error = usize;
     fn try_from(value: usize) -> Result<Self, Self::Error> {
@@ -479,19 +457,13 @@ impl PackedU8 {
     pub const MAX: Self = Self([u8::MAX; 1]);
 }
 
-#[cfg(any(
-    target_pointer_width = "32",
-    target_pointer_width = "64"
-))]
+#[cfg(any(target_pointer_width = "32", target_pointer_width = "64"))]
 impl PackedU16 {
     pub const MIN: Self = Self([u8::MIN; 2]);
     pub const MAX: Self = Self([u8::MAX; 2]);
 }
 
-#[cfg(any(
-    target_pointer_width = "32",
-    target_pointer_width = "64"
-))]
+#[cfg(any(target_pointer_width = "32", target_pointer_width = "64"))]
 impl PackedU24 {
     pub const MIN: Self = Self([u8::MIN; 3]);
     pub const MAX: Self = Self([u8::MAX; 3]);
@@ -526,8 +498,7 @@ impl PackedUSize {
     pub const MAX: Self = Self([u8::MAX; (usize::BITS as usize) / 8]);
 }
 
-
-/* 
+/*
 #[derive(Debug, Clone, Copy, Reflect)]
 #[reflect(Debug)]
 #[cfg_attr(
@@ -535,7 +506,7 @@ impl PackedUSize {
     derive(serde::Serialize, serde::Deserialize),
     reflect(Serialize, Deserialize)
 )]
-struct PackedUInt<const N: usize>([u8; N]) where Self: TryFrom<usize> + Serialize; 
+struct PackedUInt<const N: usize>([u8; N]) where Self: TryFrom<usize> + Serialize;
 
 impl<const N: usize> Default for PackedUInt<N> where Self: TryFrom<usize> {
     fn default() -> Self {
@@ -577,16 +548,12 @@ impl TryFrom<usize> for PackedUInt<2> {
         match value.to_be_bytes() {
             [b0, b1, 0, ..] => Ok(Self([b0, b1])),
             _ => Err(value)
-        }        
+        }
     }
 }
 */
 
-
-
-
-
-/* 
+/*
 pub trait PackedUInt: TryFrom<usize, Error: Debug> + TryInto<usize, Error: Debug> + Default + Copy {
     #[cfg(feature = "serde")]
     type Bytes: Reflect + serde::Serialize + for<'a> Deserialize<'a>; //correct bound?

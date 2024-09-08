@@ -6,8 +6,7 @@ use std::{
 use crate::meta::RevMeta;
 
 use super::{
-    AmountErr, DataEntry, LogIter, LogMut, OutOfLog, RareTransitionLog, WithAmount,
-    WithTimestamp,
+    AmountErr, DataEntry, LogIter, LogMut, OutOfLog, RareTransitionLog, WithAmount, WithTimestamp,
 };
 
 #[derive(Debug, Clone)]
@@ -105,7 +104,9 @@ where
         self.transitions.shrink_to_fit()
     }
     pub fn past_end(&self) -> Option<&U> {
-        self.amounts.past_end().map(|with_amount| &with_amount.entry)
+        self.amounts
+            .past_end()
+            .map(|with_amount| &with_amount.entry)
     }
     pub fn pop_past(&mut self) -> Option<DataEntry<impl LogIter<T>, U>> {
         let entry = self.amounts.pop_past();
@@ -138,10 +139,8 @@ where
         }
         match amount_usize.try_into() {
             Ok(amount) => {
-                self.amounts.push_present(Some(WithAmount {
-                    entry,
-                    amount,
-                }));
+                self.amounts
+                    .push_present(Some(WithAmount { entry, amount }));
                 self.index += amount_usize;
                 Ok(None)
             }
@@ -152,7 +151,9 @@ where
             }),
         }
     }
-    pub fn backward_log(&mut self) -> Result<Option<DataEntry<impl LogIter<&mut T>, &mut U>>, OutOfLog> {
+    pub fn backward_log(
+        &mut self,
+    ) -> Result<Option<DataEntry<impl LogIter<&mut T>, &mut U>>, OutOfLog> {
         Ok(self.amounts.backward_log()?.map(|with_amount| {
             let old_index = self.index;
             self.index -= with_amount.amount();
@@ -163,7 +164,9 @@ where
             }
         }))
     }
-    pub fn forward_log(&mut self) -> Result<Option<DataEntry<impl LogIter<&mut T>, &mut U>>, OutOfLog> {
+    pub fn forward_log(
+        &mut self,
+    ) -> Result<Option<DataEntry<impl LogIter<&mut T>, &mut U>>, OutOfLog> {
         Ok(self.amounts.forward_log()?.map(|with_amount| {
             let old_index = self.index;
             self.index += with_amount.amount();
