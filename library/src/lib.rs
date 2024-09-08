@@ -10,7 +10,7 @@ TODO:
 - entity commands, standard rev commands
 - App Methoden auch für RevSchedule struct
 - tuple impl configs
-- impl Reflection für logs
+- derive Reflection + serde für logs
 - longer log tests for RareTransition and RareValue
 - cfg für ecs only (keine App), logging
 - examples

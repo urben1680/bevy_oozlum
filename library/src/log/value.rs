@@ -1,11 +1,17 @@
 use core::fmt::Debug;
 use std::collections::{TryReserveError, VecDeque};
 
+use bevy::reflect::Reflect;
+
 use crate::meta::RevMeta;
 
 use super::{LogIter, OutOfLog, WithAmount, WithTimestamp};
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, Reflect)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize)
+)]
 pub struct ValueLog<T> {
     /// The log of values, with two partitions:
     /// - Past values in the indices `[0, self.index[`
@@ -160,7 +166,7 @@ impl<T> ValueLog<T> {
 
 impl<T> ValueLog<WithTimestamp<T>> {
     pub fn pop_past_by_timestamp(&mut self, meta: &RevMeta) -> Option<WithTimestamp<T>> {
-        if self.past_end()?.logged_at.0 < meta.range().start {
+        if self.past_end()?.logged_at < meta.range().start {
             self.pop_past()
         } else {
             None
@@ -169,18 +175,18 @@ impl<T> ValueLog<WithTimestamp<T>> {
     pub fn drain_past_by_timestamp(&mut self, meta: &RevMeta) -> impl LogIter<WithTimestamp<T>> {
         let partition_point = self
             .values
-            .partition_point(|entry| entry.logged_at.0 < meta.range().start);
+            .partition_point(|entry| entry.logged_at < meta.range().start);
         self.index -= partition_point;
         self.values.drain(..partition_point)
     }
 }
 
-impl<T, Amount: Copy> ValueLog<WithAmount<WithTimestamp<T>, Amount>> {
+impl<U, Amount> ValueLog<WithAmount<WithTimestamp<U>, Amount>> {
     pub(crate) fn pop_past_by_timestamp(
         &mut self,
         meta: &RevMeta,
-    ) -> Option<WithAmount<WithTimestamp<T>, Amount>> {
-        if self.past_end()?.entry.logged_at.0 < meta.range().start {
+    ) -> Option<WithAmount<WithTimestamp<U>, Amount>> {
+        if self.past_end()?.entry.logged_at < meta.range().start {
             self.pop_past()
         } else {
             None
@@ -189,10 +195,10 @@ impl<T, Amount: Copy> ValueLog<WithAmount<WithTimestamp<T>, Amount>> {
     pub(crate) fn drain_past_by_timestamp(
         &mut self,
         meta: &RevMeta,
-    ) -> impl LogIter<WithAmount<WithTimestamp<T>, Amount>> {
+    ) -> impl LogIter<WithAmount<WithTimestamp<U>, Amount>> {
         let partition_point = self
             .values
-            .partition_point(|entry| entry.entry.logged_at.0 < meta.range().start);
+            .partition_point(|entry| entry.entry.logged_at < meta.range().start);
         self.index -= partition_point;
         self.values.drain(..partition_point)
     }

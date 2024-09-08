@@ -3,34 +3,40 @@ use std::{
     fmt::Debug,
 };
 
+use bevy::reflect::Reflect;
+
 use crate::meta::RevMeta;
 
 use super::{
-    AmountErr, DataEntry, LogIter, LogMut, OutOfLog, Packed, ValueLog, WithAmount, WithTimestamp,
+    AmountErr, DataEntry, LogIter, LogMut, OutOfLog, ValueLog, WithAmount, WithTimestamp,
 };
 
-#[derive(Debug, Clone)]
-pub struct ValuesLog<T, U: Copy = (), Amount = usize>
+#[derive(Debug, Clone, Reflect)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+pub struct ValuesLog<T, U = (), Amount = usize>
 where
-    Amount: TryFrom<usize, Error: Debug> + TryInto<usize, Error: Debug> + Default + Copy,
+    Amount: TryFrom<usize, Error: Debug> + Into<usize> + Default + Copy,
 {
     amounts: ValueLog<WithAmount<U, Amount>>,
     values: VecDeque<T>,
     index: usize,
 }
 
-impl<T, U: Copy + Default, Amount> Default for ValuesLog<T, U, Amount>
+impl<T, U: Default, Amount> Default for ValuesLog<T, U, Amount>
 where
-    Amount: TryFrom<usize, Error: Debug> + TryInto<usize, Error: Debug> + Default + Copy,
+    Amount: TryFrom<usize, Error: Debug> + Into<usize> + Default + Copy,
 {
     fn default() -> Self {
         Self::new_empty(U::default())
     }
 }
 
-impl<T, U: Copy, Amount> ValuesLog<T, U, Amount>
+impl<T, U, Amount> ValuesLog<T, U, Amount>
 where
-    Amount: TryFrom<usize, Error: Debug> + TryInto<usize, Error: Debug> + Default + Copy,
+    Amount: TryFrom<usize, Error: Debug> + Into<usize> + Default + Copy,
 {
     pub fn new(
         iter: impl IntoIterator<Item = T>,
@@ -38,7 +44,7 @@ where
     ) -> Result<Self, AmountErr<VecDeque<T>, U, Amount>> {
         let values = VecDeque::from_iter(iter.into_iter());
         let amount = match values.len().try_into() {
-            Ok(amount) => Packed(amount),
+            Ok(amount) => amount,
             Err(err) => {
                 return Err(AmountErr {
                     data: values,
@@ -69,7 +75,7 @@ where
         let mut values = VecDeque::with_capacity(values_capacity);
         values.extend(iter.into_iter());
         let amount = match values.len().try_into() {
-            Ok(amount) => Packed(amount),
+            Ok(amount) => amount,
             Err(err) => {
                 return Err(AmountErr {
                     data: values,
@@ -145,25 +151,23 @@ where
     pub fn values_shrink_to_fit(&mut self) {
         self.values.shrink_to_fit()
     }
-    pub fn get(&self) -> (impl LogIter<&T>, U) {
+    pub fn get(&self) -> (impl LogIter<&T>, &U) {
         let with_amount = self.amounts.get();
         let from = self.index - with_amount.amount();
         let values = self.values.range(from..self.index);
-        (values, with_amount.entry)
+        (values, &with_amount.entry)
     }
-    pub fn unlogged_get_mut(&mut self) -> (impl LogIter<&mut T>, U) {
-        // todo: U is #[repr(packed)] so no mutable reference can be returned.
-        // return a wrapper instead that contains a copied U and make it apply it's value to the entry on Drop.
-        let with_amount = self.amounts.get();
+    pub fn unlogged_get_mut(&mut self) -> (impl LogIter<&mut T>, &mut U) {
+        let with_amount = self.amounts.unlogged_get_mut();
         let from = self.index - with_amount.amount();
         let values = self.values.range_mut(from..self.index);
-        (values, with_amount.entry)
+        (values, &mut with_amount.entry)
     }
-    pub fn past_end(&self) -> Option<(impl LogIter<&T>, U)> {
+    pub fn past_end(&self) -> Option<(impl LogIter<&T>, &U)> {
         let with_amount = self.amounts.past_end()?;
         let to = with_amount.amount();
         let values = self.values.range(..to);
-        Some((values, with_amount.entry))
+        Some((values, &with_amount.entry))
     }
     pub fn pop_past(&mut self) -> Option<DataEntry<impl LogIter<T>, U>> {
         self.amounts
@@ -182,7 +186,7 @@ where
                 self.index = self.values.len();
                 self.amounts.push_present(WithAmount {
                     entry,
-                    amount: Packed(amount),
+                    amount,
                 });
                 Ok(())
             }
@@ -208,7 +212,7 @@ where
     ) -> Result<(), AmountErr<impl LogIter<'static, T>, U, Amount>> {
         let mut values = VecDeque::from_iter(iter.into_iter());
         let amount = match values.len().try_into() {
-            Ok(amount) => Packed(amount),
+            Ok(amount) => amount,
             Err(err) => {
                 return Err(AmountErr {
                     data: values.into_iter(),
@@ -256,7 +260,7 @@ where
         let amount: usize = self
             .amounts
             .drain_past_by_len(meta, pushes_per_frame)
-            .map(WithAmount::amount)
+            .map(|with_amount| with_amount.amount())
             .sum();
         self.index -= amount;
         self.values.drain(..amount)
@@ -274,9 +278,9 @@ where
     }
 }
 
-impl<T, U: Copy, Amount> ValuesLog<T, WithTimestamp<U>, Amount>
+impl<T, U, Amount> ValuesLog<T, WithTimestamp<U>, Amount>
 where
-    Amount: TryFrom<usize, Error: Debug> + TryInto<usize, Error: Debug> + Default + Copy,
+    Amount: TryFrom<usize, Error: Debug> + Into<usize> + Default + Copy,
 {
     pub fn pop_past_by_timestamp(
         &mut self,
@@ -290,7 +294,7 @@ where
         let amount: usize = self
             .amounts
             .drain_past_by_timestamp(meta)
-            .map(WithAmount::amount)
+            .map(|with_amount| with_amount.amount())
             .sum();
         self.index -= amount;
         self.values.drain(..amount)

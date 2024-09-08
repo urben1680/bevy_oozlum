@@ -6,32 +6,32 @@ use std::{
 use crate::meta::RevMeta;
 
 use super::{
-    AmountErr, DataEntry, LogIter, LogMut, OutOfLog, Packed, RareTransitionLog, WithAmount,
+    AmountErr, DataEntry, LogIter, LogMut, OutOfLog, RareTransitionLog, WithAmount,
     WithTimestamp,
 };
 
 #[derive(Debug, Clone)]
-pub struct RareTransitionsLog<T, U: Copy = (), Amount = usize>
+pub struct RareTransitionsLog<T, U = (), Amount = usize>
 where
-    Amount: TryFrom<usize, Error: Debug> + TryInto<usize, Error: Debug> + Default + Copy,
+    Amount: TryFrom<usize, Error: Debug> + Into<usize> + Default + Copy,
 {
     amounts: RareTransitionLog<WithAmount<U, Amount>>,
     transitions: VecDeque<T>,
     index: usize,
 }
 
-impl<T, U: Copy, Amount> Default for RareTransitionsLog<T, U, Amount>
+impl<T, U, Amount> Default for RareTransitionsLog<T, U, Amount>
 where
-    Amount: TryFrom<usize, Error: Debug> + TryInto<usize, Error: Debug> + Default + Copy,
+    Amount: TryFrom<usize, Error: Debug> + Into<usize> + Default + Copy,
 {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<T, U: Copy, Amount> RareTransitionsLog<T, U, Amount>
+impl<T, U, Amount> RareTransitionsLog<T, U, Amount>
 where
-    Amount: TryFrom<usize, Error: Debug> + TryInto<usize, Error: Debug> + Default + Copy,
+    Amount: TryFrom<usize, Error: Debug> + Into<usize> + Default + Copy,
 {
     pub const fn new() -> Self {
         Self {
@@ -104,8 +104,8 @@ where
     pub fn transitions_shrink_to_fit(&mut self) {
         self.transitions.shrink_to_fit()
     }
-    pub fn past_end(&self) -> Option<U> {
-        self.amounts.past_end().map(|with_amount| with_amount.entry)
+    pub fn past_end(&self) -> Option<&U> {
+        self.amounts.past_end().map(|with_amount| &with_amount.entry)
     }
     pub fn pop_past(&mut self) -> Option<DataEntry<impl LogIter<T>, U>> {
         let entry = self.amounts.pop_past();
@@ -140,7 +140,7 @@ where
             Ok(amount) => {
                 self.amounts.push_present(Some(WithAmount {
                     entry,
-                    amount: Packed(amount),
+                    amount,
                 }));
                 self.index += amount_usize;
                 Ok(None)
@@ -152,25 +152,25 @@ where
             }),
         }
     }
-    pub fn backward_log(&mut self) -> Result<Option<DataEntry<impl LogIter<&mut T>, U>>, OutOfLog> {
+    pub fn backward_log(&mut self) -> Result<Option<DataEntry<impl LogIter<&mut T>, &mut U>>, OutOfLog> {
         Ok(self.amounts.backward_log()?.map(|with_amount| {
             let old_index = self.index;
             self.index -= with_amount.amount();
             let data = self.transitions.range_mut(self.index..old_index);
             DataEntry {
                 data,
-                entry: with_amount.entry,
+                entry: &mut with_amount.entry,
             }
         }))
     }
-    pub fn forward_log(&mut self) -> Result<Option<DataEntry<impl LogIter<&mut T>, U>>, OutOfLog> {
+    pub fn forward_log(&mut self) -> Result<Option<DataEntry<impl LogIter<&mut T>, &mut U>>, OutOfLog> {
         Ok(self.amounts.forward_log()?.map(|with_amount| {
             let old_index = self.index;
             self.index += with_amount.amount();
             let data = self.transitions.range_mut(old_index..self.index);
             DataEntry {
                 data,
-                entry: with_amount.entry,
+                entry: &mut with_amount.entry,
             }
         }))
     }
@@ -186,7 +186,7 @@ where
         let amount: usize = self
             .amounts
             .drain_past_by_len(meta, pushes_per_len)
-            .map(WithAmount::amount)
+            .map(|with_amount| with_amount.amount())
             .sum();
         self.index -= amount;
         self.transitions.drain(..amount)
@@ -206,9 +206,9 @@ where
     }
 }
 
-impl<T, U: Copy, Amount> RareTransitionsLog<T, WithTimestamp<U>, Amount>
+impl<T, U, Amount> RareTransitionsLog<T, WithTimestamp<U>, Amount>
 where
-    Amount: TryFrom<usize, Error: Debug> + TryInto<usize, Error: Debug> + Default + Copy,
+    Amount: TryFrom<usize, Error: Debug> + Into<usize> + Default + Copy,
 {
     pub fn pop_past_by_timestamp(
         &mut self,
@@ -221,7 +221,7 @@ where
         let amount: usize = self
             .amounts
             .drain_past_by_timestamp(meta)
-            .map(WithAmount::amount)
+            .map(|with_amount| with_amount.amount())
             .sum();
         self.index -= amount;
         self.transitions.drain(..amount)
