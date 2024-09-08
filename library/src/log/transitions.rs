@@ -557,4 +557,10 @@ mod test {
         // amount of transitions is stored as u8, cannot store more than 255 transitions per push
         meta_and_logs.forward(Err([256; 256]), 1);
     }
+
+    #[allow(dead_code)]
+    fn impls_reflect() {
+        bevy::reflect::TypeRegistry::empty()
+            .register::<TransitionsLog<usize, WithTimestamp<u8>, u8>>();
+    }
 }

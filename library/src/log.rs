@@ -132,7 +132,7 @@ impl<'a, T: Iterator, U> IntoIterator for &'a mut DataEntry<T, U> {
 /// Call `update` of a log with this struct up to one time per reversible frame.
 ///
 /// This will enable a cleanup strategy where entries are forgotten that are older than the global log start.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Reflect)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct WithTimestamp<T = ()> {
     pub data: T,
@@ -157,7 +157,7 @@ impl<T: Default> From<&RevMeta> for WithTimestamp<T> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Reflect)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 struct RareData<T> {
     data: T,
@@ -174,7 +174,7 @@ impl<T> RareData<T> {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Reflect)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 struct WithAmount<U = (), Amount = PackedUSize> {
     entry: U,
@@ -199,7 +199,7 @@ where
 const BACKWARD_EXPECT_MSG: &'static str = "self.index should always be <= the log len, so reducing it without underflow is expected to result in a valid index into the log";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Reflect)]
-#[reflect(Default)]
+#[reflect(Default, Debug)]
 #[cfg_attr(
     feature = "serde",
     derive(serde::Serialize, serde::Deserialize),
@@ -209,7 +209,7 @@ pub struct PackedU8([u8; 1]);
 
 #[cfg(any(target_pointer_width = "32", target_pointer_width = "64"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Reflect)]
-#[reflect(Default)]
+#[reflect(Default, Debug)]
 #[cfg_attr(
     feature = "serde",
     derive(serde::Serialize, serde::Deserialize),
@@ -219,7 +219,7 @@ pub struct PackedU16([u8; 2]);
 
 #[cfg(any(target_pointer_width = "32", target_pointer_width = "64"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Reflect)]
-#[reflect(Default)]
+#[reflect(Default, Debug)]
 #[cfg_attr(
     feature = "serde",
     derive(serde::Serialize, serde::Deserialize),
@@ -229,7 +229,7 @@ pub struct PackedU24([u8; 3]);
 
 #[cfg(target_pointer_width = "64")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Reflect)]
-#[reflect(Default)]
+#[reflect(Default, Debug)]
 #[cfg_attr(
     feature = "serde",
     derive(serde::Serialize, serde::Deserialize),
@@ -239,7 +239,7 @@ pub struct PackedU32([u8; 4]);
 
 #[cfg(target_pointer_width = "64")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Reflect)]
-#[reflect(Default)]
+#[reflect(Default, Debug)]
 #[cfg_attr(
     feature = "serde",
     derive(serde::Serialize, serde::Deserialize),
@@ -249,7 +249,7 @@ pub struct PackedU40([u8; 5]);
 
 #[cfg(target_pointer_width = "64")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Reflect)]
-#[reflect(Default)]
+#[reflect(Default, Debug)]
 #[cfg_attr(
     feature = "serde",
     derive(serde::Serialize, serde::Deserialize),
@@ -259,7 +259,7 @@ pub struct PackedU48([u8; 6]);
 
 #[cfg(target_pointer_width = "64")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Reflect)]
-#[reflect(Default)]
+#[reflect(Default, Debug)]
 #[cfg_attr(
     feature = "serde",
     derive(serde::Serialize, serde::Deserialize),
@@ -268,7 +268,7 @@ pub struct PackedU48([u8; 6]);
 pub struct PackedU56([u8; 7]);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Reflect)]
-#[reflect(Default)]
+#[reflect(Default, Debug)]
 #[cfg_attr(
     feature = "serde",
     derive(serde::Serialize, serde::Deserialize),

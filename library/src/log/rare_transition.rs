@@ -1,11 +1,15 @@
 use core::fmt::Debug;
 use std::collections::{TryReserveError, VecDeque};
 
+use bevy::reflect::{std_traits::ReflectDefault, Reflect};
+
 use crate::meta::RevMeta;
 
 use super::{LogIter, OutOfLog, RareData, WithAmount, WithTimestamp, BACKWARD_EXPECT_MSG};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Reflect)]
+#[reflect(Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct RareTransitionLog<T> {
     /// RareData.skips represents the number of None pushes before the transition in the struct
     transitions: VecDeque<RareData<T>>,
@@ -542,5 +546,10 @@ mod test {
         meta_and_logs.backward_log(Ok(Some(2)));
         // all entries are truncated as they are in the future, the new logged entry increases len to 1
         meta_and_logs.forward(Some(3), 1, 1);
+    }
+
+    #[allow(dead_code)]
+    fn impls_reflect() {
+        bevy::reflect::TypeRegistry::empty().register::<RareTransitionLog<WithTimestamp<usize>>>();
     }
 }
