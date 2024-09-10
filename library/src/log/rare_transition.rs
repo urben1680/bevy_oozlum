@@ -176,7 +176,7 @@ impl<T> RareTransitionLog<T> {
         meta: &RevMeta,
         pushes_per_frame: usize,
     ) -> impl LogIter<T> {
-        let past_len = (meta.now() - meta.range().start) * pushes_per_frame;
+        let past_len = meta.past_len() * pushes_per_frame;
         let mut drain_amount = 0;
         for entry in self.transitions.iter() {
             let less = self.len - entry.len();
