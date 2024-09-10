@@ -154,16 +154,16 @@ impl<T: Default> From<&RevMeta> for WithTimestamp<T> {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 struct RareData<T> {
     data: T,
-    /// If `T` is a transiton, then this is the skips before the transition.
+    /// If `T` is a transiton, then these are the skips before the transition.
     ///
-    /// If `T` is a value, then this is the skips after the value
+    /// If `T` is a value, then these are the skips after the value.
     skips: PackedUSize,
 }
 
 impl<T> RareData<T> {
     fn len(&self) -> usize {
         let skips: usize = self.skips.into();
-        skips + 1
+        skips + 1 // `self.data` adds to the len 
     }
 }
 
