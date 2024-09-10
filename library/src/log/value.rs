@@ -103,7 +103,11 @@ impl<T> ValueLog<T> {
     pub fn drain_future(&mut self) -> impl LogIter<T> {
         self.values.drain(self.index..)
     }
-    pub fn clear(&mut self, present: T) {
+    pub fn clear(&mut self) {
+        self.values.clear();
+        self.index = 0;
+    }
+    pub fn clear_with(&mut self, present: T) {
         self.values.clear();
         self.present = present;
         self.index = 0;
