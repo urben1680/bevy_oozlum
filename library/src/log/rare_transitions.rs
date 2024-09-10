@@ -17,7 +17,7 @@ use super::{
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct RareTransitionsLog<T, U = (), Amount = PackedUSize>
 where
-    Amount: TryFrom<usize, Error: Debug> + Into<usize> + Default + Copy,
+    Amount: TryFrom<usize, Error: Debug> + Into<usize> + Copy,
 {
     amounts: RareTransitionLog<WithAmount<U, Amount>>,
     transitions: VecDeque<T>,
@@ -26,7 +26,7 @@ where
 
 impl<T, U, Amount> Default for RareTransitionsLog<T, U, Amount>
 where
-    Amount: TryFrom<usize, Error: Debug> + Into<usize> + Default + Copy,
+    Amount: TryFrom<usize, Error: Debug> + Into<usize> + Copy,
 {
     fn default() -> Self {
         Self::new()
@@ -35,7 +35,7 @@ where
 
 impl<T, U, Amount> RareTransitionsLog<T, U, Amount>
 where
-    Amount: TryFrom<usize, Error: Debug> + Into<usize> + Default + Copy,
+    Amount: TryFrom<usize, Error: Debug> + Into<usize> + Copy,
 {
     pub const fn new() -> Self {
         Self {
@@ -216,7 +216,7 @@ where
 
 impl<T, U, Amount> RareTransitionsLog<T, WithTimestamp<U>, Amount>
 where
-    Amount: TryFrom<usize, Error: Debug> + Into<usize> + Default + Copy,
+    Amount: TryFrom<usize, Error: Debug> + Into<usize> + Copy,
 {
     pub fn pop_past_by_timestamp(
         &mut self,

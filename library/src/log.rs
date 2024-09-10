@@ -176,7 +176,7 @@ struct WithAmount<U, Amount> {
 
 impl<U, Amount> WithAmount<U, Amount>
 where
-    Amount: TryFrom<usize, Error: Debug> + Into<usize> + Default + Copy,
+    Amount: TryFrom<usize, Error: Debug> + Into<usize> + Copy,
 {
     fn zero(entry: U) -> Self {
         let amount = 0usize

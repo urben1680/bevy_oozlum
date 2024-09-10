@@ -16,7 +16,7 @@ use super::{
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ValuesLog<T, U = (), Amount = PackedUSize>
 where
-    Amount: TryFrom<usize, Error: Debug> + Into<usize> + Default + Copy,
+    Amount: TryFrom<usize, Error: Debug> + Into<usize> + Copy,
 {
     amounts: ValueLog<WithAmount<U, Amount>>,
     values: VecDeque<T>,
@@ -34,7 +34,7 @@ where
 
 impl<T, U, Amount> ValuesLog<T, U, Amount>
 where
-    Amount: TryFrom<usize, Error: Debug> + Into<usize> + Default + Copy,
+    Amount: TryFrom<usize, Error: Debug> + Into<usize> + Copy,
 {
     pub fn new(
         iter: impl IntoIterator<Item = T>,
@@ -211,13 +211,13 @@ where
         &mut self,
         iter: impl IntoIterator<Item = T>,
         entry: U,
-    ) -> Result<(), AmountErr<impl LogIter<'static, T>, U, Amount>> {
+    ) -> Result<(), AmountErr<VecDeque<T>, U, Amount>> {
         let mut values = VecDeque::from_iter(iter.into_iter());
         let amount = match values.len().try_into() {
             Ok(amount) => amount,
             Err(err) => {
                 return Err(AmountErr {
-                    data: values.into_iter(),
+                    data: values,
                     entry,
                     err,
                 })
@@ -282,7 +282,7 @@ where
 
 impl<T, U, Amount> ValuesLog<T, WithTimestamp<U>, Amount>
 where
-    Amount: TryFrom<usize, Error: Debug> + Into<usize> + Default + Copy,
+    Amount: TryFrom<usize, Error: Debug> + Into<usize> + Copy,
 {
     pub fn pop_past_by_timestamp(
         &mut self,

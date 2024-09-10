@@ -13,9 +13,11 @@ TODO:
 - derive Reflection + serde für logs
 -- register type data for non-pub structs (helper glued to log?)
 - longer log tests for RareTransition and RareValue
+- tests of other log methods like clear variants
 - cfg für ecs only (keine App), logging
 - examples
 - documentations, besonders mit informationen welche Methoden für deterministische Logik geeignet ist
+- consider renaming packed_uint to compressed_usize
 */
 
 use std::hash::Hash;
