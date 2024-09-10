@@ -200,7 +200,14 @@ where
                 .map(|with_amount| with_amount.entry),
         )
     }
-    pub fn clear(
+    pub fn clear(&mut self) {
+        self.amounts.clear();
+        let amount = self.amounts.get().amount;
+        self.values.drain(..self.index);
+        self.values.truncate(amount.into());
+        self.index = 0;
+    }
+    pub fn clear_with(
         &mut self,
         iter: impl IntoIterator<Item = T>,
         entry: U,
@@ -218,13 +225,13 @@ where
         };
         self.values.clear();
         self.values.append(&mut values);
-        self.amounts.clear(WithAmount { entry, amount });
+        self.amounts.clear_with(WithAmount { entry, amount });
         self.index = 0;
         Ok(())
     }
     pub fn clear_empty(&mut self, entry: U) {
         self.values.clear();
-        self.amounts.clear(WithAmount::zero(entry));
+        self.amounts.clear_with(WithAmount::zero(entry));
         self.index = 0;
     }
     pub fn backward_log(&mut self) -> Result<(), OutOfLog> {
