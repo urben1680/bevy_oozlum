@@ -114,7 +114,14 @@ impl<T> RareValueLog<T> {
     pub fn drain_future(&mut self) -> impl LogIter<T> {
         self.values.drain(self.index..).map(|rare| rare.data)
     }
-    pub fn clear(&mut self, present: T) {
+    pub fn clear(&mut self) {
+        self.values.clear();
+        self.present.skips = PackedUSize::MIN;
+        self.index = 0;
+        self.len = 0;
+        self.skips = 0;
+    }
+    pub fn clear_with(&mut self, present: T) {
         self.values.clear();
         self.present = RareData {
             data: present,
@@ -126,6 +133,7 @@ impl<T> RareValueLog<T> {
     }
     pub fn push_present(&mut self, value: Option<T>) {
         self.values.truncate(self.index);
+        self.len += 1;
         match value {
             None => {
                 self.skips += 1;
@@ -145,7 +153,6 @@ impl<T> RareValueLog<T> {
                 self.index += 1;
             }
         }
-        self.len += 1;
     }
     pub fn backward_log(&mut self) -> Result<(), OutOfLog> {
         if self.skips > 0 {
@@ -181,7 +188,6 @@ impl<T> RareValueLog<T> {
         if excessive_len >= past_end.len() {
             self.pop_past()
         } else {
-            self.len -= excessive_len;
             None
         }
     }
