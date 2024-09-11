@@ -59,6 +59,8 @@ pub type PackedU64 = PackedInt<u64, 8>;
 pub type PackedI64 = PackedInt<i64, 8>;
 pub type PackedU128 = PackedInt<u128, 16>;
 pub type PackedI128 = PackedInt<i128, 16>;
+
+// todo: new wrapper struct so actuall PackedInt<usize, _> keep only implementing TryFrom, BUT with infallible as error type
 pub type PackedUSize = PackedInt<usize, { usize::BITS as usize / 8 }>;
 pub type PackedISize = PackedInt<isize, { isize::BITS as usize / 8 }>;
 
@@ -182,7 +184,7 @@ where
 }
 
 macro_rules! packed_from_impl {
-    ($integer: ident, $size: expr, ToPackedErr) => {
+    ($integer: ident, $size: expr, TryFrom) => {
         impl TryFrom<$integer> for PackedInt<$integer, $size> {
             type Error = ToPackedErr<$integer>;
             fn try_from(value: $integer) -> Result<Self, Self::Error> {
@@ -204,7 +206,7 @@ macro_rules! packed_from_impl {
             }
         }
     };
-    ($integer: ident, $size: expr, Infallible) => {
+    ($integer: ident, $size: expr, From) => {
         impl From<$integer> for PackedInt<$integer, $size> {
             fn from(value: $integer) -> Self {
                 Self {
@@ -290,106 +292,106 @@ macro_rules! packed_impl {
     };
 }
 
-packed_impl!(u16, false, 1, ToPackedErr);
-packed_impl!(i16, true, 1, ToPackedErr);
-packed_impl!(u16, false, 2, Infallible);
-packed_impl!(i16, true, 2, Infallible);
+packed_impl!(u16, false, 1, TryFrom);
+packed_impl!(i16, true, 1, TryFrom);
+packed_impl!(u16, false, 2, From);
+packed_impl!(i16, true, 2, From);
 
-packed_impl!(u32, false, 1, ToPackedErr);
-packed_impl!(i32, true, 1, ToPackedErr);
-packed_impl!(u32, false, 2, ToPackedErr);
-packed_impl!(i32, true, 2, ToPackedErr);
-packed_impl!(u32, false, 3, ToPackedErr);
-packed_impl!(i32, true, 3, ToPackedErr);
-packed_impl!(u32, false, 4, Infallible);
-packed_impl!(i32, true, 4, Infallible);
+packed_impl!(u32, false, 1, TryFrom);
+packed_impl!(i32, true, 1, TryFrom);
+packed_impl!(u32, false, 2, TryFrom);
+packed_impl!(i32, true, 2, TryFrom);
+packed_impl!(u32, false, 3, TryFrom);
+packed_impl!(i32, true, 3, TryFrom);
+packed_impl!(u32, false, 4, From);
+packed_impl!(i32, true, 4, From);
 
-packed_impl!(u64, false, 1, ToPackedErr);
-packed_impl!(i64, true, 1, ToPackedErr);
-packed_impl!(u64, false, 2, ToPackedErr);
-packed_impl!(i64, true, 2, ToPackedErr);
-packed_impl!(u64, false, 3, ToPackedErr);
-packed_impl!(i64, true, 3, ToPackedErr);
-packed_impl!(u64, false, 4, ToPackedErr);
-packed_impl!(i64, true, 4, ToPackedErr);
-packed_impl!(u64, false, 5, ToPackedErr);
-packed_impl!(i64, true, 5, ToPackedErr);
-packed_impl!(u64, false, 6, ToPackedErr);
-packed_impl!(i64, true, 6, ToPackedErr);
-packed_impl!(u64, false, 7, ToPackedErr);
-packed_impl!(i64, true, 7, ToPackedErr);
-packed_impl!(u64, false, 8, Infallible);
-packed_impl!(i64, true, 8, Infallible);
+packed_impl!(u64, false, 1, TryFrom);
+packed_impl!(i64, true, 1, TryFrom);
+packed_impl!(u64, false, 2, TryFrom);
+packed_impl!(i64, true, 2, TryFrom);
+packed_impl!(u64, false, 3, TryFrom);
+packed_impl!(i64, true, 3, TryFrom);
+packed_impl!(u64, false, 4, TryFrom);
+packed_impl!(i64, true, 4, TryFrom);
+packed_impl!(u64, false, 5, TryFrom);
+packed_impl!(i64, true, 5, TryFrom);
+packed_impl!(u64, false, 6, TryFrom);
+packed_impl!(i64, true, 6, TryFrom);
+packed_impl!(u64, false, 7, TryFrom);
+packed_impl!(i64, true, 7, TryFrom);
+packed_impl!(u64, false, 8, From);
+packed_impl!(i64, true, 8, From);
 
-packed_impl!(usize, false, 1, ToPackedErr);
-packed_impl!(isize, true, 1, ToPackedErr);
-packed_impl!(usize, false, 3, ToPackedErr);
-packed_impl!(isize, true, 3, ToPackedErr);
-packed_impl!(usize, false, 5, ToPackedErr);
-packed_impl!(isize, true, 5, ToPackedErr);
-packed_impl!(usize, false, 6, ToPackedErr);
-packed_impl!(isize, true, 6, ToPackedErr);
-packed_impl!(usize, false, 7, ToPackedErr);
-packed_impl!(isize, true, 7, ToPackedErr);
-packed_impl!(usize, false, 8, Infallible);
-packed_impl!(isize, true, 8, Infallible);
+packed_impl!(usize, false, 1, TryFrom);
+packed_impl!(isize, true, 1, TryFrom);
+packed_impl!(usize, false, 3, TryFrom);
+packed_impl!(isize, true, 3, TryFrom);
+packed_impl!(usize, false, 5, TryFrom);
+packed_impl!(isize, true, 5, TryFrom);
+packed_impl!(usize, false, 6, TryFrom);
+packed_impl!(isize, true, 6, TryFrom);
+packed_impl!(usize, false, 7, TryFrom);
+packed_impl!(isize, true, 7, TryFrom);
+packed_impl!(usize, false, 8, From);
+packed_impl!(isize, true, 8, From);
 
 #[cfg(target_pointer_width = "16")]
 mod pointer_16 {
     use super::*;
-    packed_impl!(usize, false, 2, Infallible);
-    packed_impl!(isize, true, 2, Infallible);
-    packed_impl!(usize, false, 4, Infallible);
-    packed_impl!(isize, true, 4, Infallible);
+    packed_impl!(usize, false, 2, From);
+    packed_impl!(isize, true, 2, From);
+    packed_impl!(usize, false, 4, From);
+    packed_impl!(isize, true, 4, From);
 }
 
 #[cfg(target_pointer_width = "32")]
 mod pointer_32 {
     use super::*;
-    packed_impl!(usize, false, 2, ToPackedErr);
-    packed_impl!(isize, true, 2, ToPackedErr);
-    packed_impl!(usize, false, 4, Infallible);
-    packed_impl!(isize, true, 4, Infallible);
+    packed_impl!(usize, false, 2, TryFrom);
+    packed_impl!(isize, true, 2, TryFrom);
+    packed_impl!(usize, false, 4, From);
+    packed_impl!(isize, true, 4, From);
 }
 
 #[cfg(target_pointer_width = "64")]
 mod pointer_64 {
     use super::*;
-    packed_impl!(usize, false, 2, ToPackedErr);
-    packed_impl!(isize, true, 2, ToPackedErr);
-    packed_impl!(usize, false, 4, ToPackedErr);
-    packed_impl!(isize, true, 4, ToPackedErr);
+    packed_impl!(usize, false, 2, TryFrom);
+    packed_impl!(isize, true, 2, TryFrom);
+    packed_impl!(usize, false, 4, TryFrom);
+    packed_impl!(isize, true, 4, TryFrom);
 }
 
-packed_impl!(u128, false, 1, ToPackedErr);
-packed_impl!(i128, true, 1, ToPackedErr);
-packed_impl!(u128, false, 2, ToPackedErr);
-packed_impl!(i128, true, 2, ToPackedErr);
-packed_impl!(u128, false, 3, ToPackedErr);
-packed_impl!(i128, true, 3, ToPackedErr);
-packed_impl!(u128, false, 4, ToPackedErr);
-packed_impl!(i128, true, 4, ToPackedErr);
-packed_impl!(u128, false, 5, ToPackedErr);
-packed_impl!(i128, true, 5, ToPackedErr);
-packed_impl!(u128, false, 6, ToPackedErr);
-packed_impl!(i128, true, 6, ToPackedErr);
-packed_impl!(u128, false, 7, ToPackedErr);
-packed_impl!(i128, true, 7, ToPackedErr);
-packed_impl!(u128, false, 8, ToPackedErr);
-packed_impl!(i128, true, 8, ToPackedErr);
-packed_impl!(u128, false, 9, ToPackedErr);
-packed_impl!(i128, true, 9, ToPackedErr);
-packed_impl!(u128, false, 10, ToPackedErr);
-packed_impl!(i128, true, 10, ToPackedErr);
-packed_impl!(u128, false, 11, ToPackedErr);
-packed_impl!(i128, true, 11, ToPackedErr);
-packed_impl!(u128, false, 12, ToPackedErr);
-packed_impl!(i128, true, 12, ToPackedErr);
-packed_impl!(u128, false, 13, ToPackedErr);
-packed_impl!(i128, true, 13, ToPackedErr);
-packed_impl!(u128, false, 14, ToPackedErr);
-packed_impl!(i128, true, 14, ToPackedErr);
-packed_impl!(u128, false, 15, ToPackedErr);
-packed_impl!(i128, true, 15, ToPackedErr);
-packed_impl!(u128, false, 16, Infallible);
-packed_impl!(i128, true, 16, Infallible);
+packed_impl!(u128, false, 1, TryFrom);
+packed_impl!(i128, true, 1, TryFrom);
+packed_impl!(u128, false, 2, TryFrom);
+packed_impl!(i128, true, 2, TryFrom);
+packed_impl!(u128, false, 3, TryFrom);
+packed_impl!(i128, true, 3, TryFrom);
+packed_impl!(u128, false, 4, TryFrom);
+packed_impl!(i128, true, 4, TryFrom);
+packed_impl!(u128, false, 5, TryFrom);
+packed_impl!(i128, true, 5, TryFrom);
+packed_impl!(u128, false, 6, TryFrom);
+packed_impl!(i128, true, 6, TryFrom);
+packed_impl!(u128, false, 7, TryFrom);
+packed_impl!(i128, true, 7, TryFrom);
+packed_impl!(u128, false, 8, TryFrom);
+packed_impl!(i128, true, 8, TryFrom);
+packed_impl!(u128, false, 9, TryFrom);
+packed_impl!(i128, true, 9, TryFrom);
+packed_impl!(u128, false, 10, TryFrom);
+packed_impl!(i128, true, 10, TryFrom);
+packed_impl!(u128, false, 11, TryFrom);
+packed_impl!(i128, true, 11, TryFrom);
+packed_impl!(u128, false, 12, TryFrom);
+packed_impl!(i128, true, 12, TryFrom);
+packed_impl!(u128, false, 13, TryFrom);
+packed_impl!(i128, true, 13, TryFrom);
+packed_impl!(u128, false, 14, TryFrom);
+packed_impl!(i128, true, 14, TryFrom);
+packed_impl!(u128, false, 15, TryFrom);
+packed_impl!(i128, true, 15, TryFrom);
+packed_impl!(u128, false, 16, From);
+packed_impl!(i128, true, 16, From);
