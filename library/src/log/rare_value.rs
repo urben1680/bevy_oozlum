@@ -32,7 +32,7 @@ impl<T> RareValueLog<T> {
             values: VecDeque::new(),
             present: RareData {
                 data: present,
-                skips: PackedUSize::MIN,
+                skips: PackedUSize::ZERO,
             },
             index: 0,
             skips: 0,
@@ -45,7 +45,7 @@ impl<T> RareValueLog<T> {
             values: VecDeque::with_capacity(values_capacity),
             present: RareData {
                 data: present,
-                skips: PackedUSize::MIN,
+                skips: PackedUSize::ZERO,
             },
             index: 0,
             skips: 0,
@@ -116,7 +116,7 @@ impl<T> RareValueLog<T> {
     }
     pub fn clear(&mut self) {
         self.values.clear();
-        self.present.skips = PackedUSize::MIN;
+        self.present.skips = PackedUSize::ZERO;
         self.index = 0;
         self.len = 0;
         self.skips = 0;
@@ -125,7 +125,7 @@ impl<T> RareValueLog<T> {
         self.values.clear();
         self.present = RareData {
             data: present,
-            skips: PackedUSize::MIN,
+            skips: PackedUSize::ZERO,
         };
         self.index = 0;
         self.len = 0;
@@ -145,7 +145,7 @@ impl<T> RareValueLog<T> {
                     &mut self.present,
                     RareData {
                         data: value,
-                        skips: PackedUSize::MIN,
+                        skips: PackedUSize::ZERO,
                     },
                 );
                 self.values.push_back(previous);
