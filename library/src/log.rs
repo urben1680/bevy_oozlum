@@ -41,7 +41,7 @@ use std::{collections::VecDeque, fmt::Debug, iter::FusedIterator};
 
 use bevy::reflect::Reflect;
 
-pub mod packed_uint;
+pub mod packed_int;
 mod rare_transition;
 mod rare_transitions;
 mod rare_value;
@@ -51,10 +51,11 @@ mod transitions;
 mod value;
 mod values;
 
-use packed_uint::PackedUSize;
+use packed_int::PackedUSize;
 pub use rare_transition::RareTransitionLog;
 pub use rare_transitions::RareTransitionsLog;
 pub use rare_value::RareValueLog;
+pub use rare_values::RareValuesLog;
 pub use transition::TransitionLog;
 pub use transitions::TransitionsLog;
 pub use value::ValueLog;
@@ -102,7 +103,7 @@ impl<'a, T> Extend<T> for LogMut<'a, T> {
 }
 
 #[derive(Debug)]
-pub struct AmountErr<I, U, Amount: TryFrom<usize> = usize> {
+pub struct AmountErr<I, U, Amount: TryFrom<usize>> {
     pub data: I,
     pub entry: U,
     pub err: Amount::Error,
@@ -163,7 +164,7 @@ struct RareData<T> {
 impl<T> RareData<T> {
     fn len(&self) -> usize {
         let skips: usize = self.skips.into();
-        skips + 1 // `self.data` adds to the len 
+        skips + 1 // `self.data` adds to the len
     }
 }
 

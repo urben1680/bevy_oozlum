@@ -8,7 +8,8 @@ use bevy::reflect::Reflect;
 use crate::meta::RevMeta;
 
 use super::{
-    AmountErr, DataEntry, LogIter, LogMut, OutOfLog, PackedUSize, RareValueLog, WithAmount, WithTimestamp
+    AmountErr, DataEntry, LogIter, LogMut, OutOfLog, PackedUSize, RareValueLog, WithAmount,
+    WithTimestamp,
 };
 
 #[derive(Debug, Clone, Reflect)]
@@ -185,7 +186,8 @@ where
         match new_amount.try_into() {
             Ok(amount) => {
                 self.index = self.values.len();
-                self.amounts.push_present(Some(WithAmount { entry, amount }));
+                self.amounts
+                    .push_present(Some(WithAmount { entry, amount }));
                 Ok(())
             }
             Err(err) => Err(AmountErr {

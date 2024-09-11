@@ -17,7 +17,6 @@ TODO:
 - cfg für ecs only (keine App), logging
 - examples
 - documentations, besonders mit informationen welche Methoden für deterministische Logik geeignet ist
-- consider renaming packed_uint to compressed_usize
 */
 
 use std::hash::Hash;

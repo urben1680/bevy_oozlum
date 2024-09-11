@@ -1,0 +1,395 @@
+use std::{
+    fmt::Debug,
+    marker::PhantomData,
+    ops::{Add, AddAssign, RangeInclusive, Sub, SubAssign},
+};
+
+use bevy::reflect::{std_traits::ReflectDefault, Reflect};
+
+#[cfg(feature = "serde")]
+use bevy::reflect::{ReflectDeserialize, ReflectSerialize};
+
+/// Wraps a `[u8; N]` that contains the output of `T::to_le_bytes()` where `T` is an integer primitive
+/// and the wrapped value is small enough to fit into a potenitally smaller byte array than the type's
+/// size is usually.
+///
+/// This wrapper implements `TryFrom<T>` and `Into<T>` among other traits, though variants with the same
+/// size as their `T` also implement the infallible `From<T>`.
+///
+/// The value range of signed variants follow the pattern of primitive signed integers: `-2^((SIZE-1)*8)`
+/// to `2^((SIZE-1)*8)-1]` inclusively.
+///
+/// The benefit of this type is to safe memory if not the whole range of `T` is needed and also to pack
+/// values with less padding along other types in a collection as all variants have an alignment of 1.
+///
+/// The main use-case is to offer alternative types for the `Amount` generic of...
+/// - [`crate::log::ValuesLog`]
+/// - [`crate::log::RareValuesLog`]
+/// - [`crate::log::TransitionsLog`]
+/// - [`crate::log::RareTransitionsLog`]
+///
+/// ... where one can use [`PackedInt<usize, N>`] there if one knows that never more than `(2^N)-1`
+/// values/transitions are pushed. This can significantly reduce the memory usage of these logs if the
+/// value/transition type itself is small as well.
+///
+/// By default these logs use [`PackedUSize`] to reduce padding with a non-ZST type picked for the generic
+/// parameter `U` these logs have as well. To opt-out of all these memory optimizations, for example because
+/// `U` remains unused, one can set `Amount` to `usize`.
+#[derive(Copy, Eq, Reflect)]
+#[reflect(Default, PartialEq)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    reflect(Serialize, Deserialize)
+)]
+pub struct PackedInt<T, const SIZE: usize>
+where
+    for<'a> [u8; SIZE]: SerdeBound<'a>,
+{
+    bytes: [u8; SIZE],
+    #[reflect(ignore)]
+    _p: PhantomData<fn([u8; SIZE]) -> T>,
+}
+
+pub type PackedU16 = PackedInt<u16, 2>;
+pub type PackedI16 = PackedInt<i16, 2>;
+pub type PackedU32 = PackedInt<u32, 4>;
+pub type PackedI32 = PackedInt<i32, 4>;
+pub type PackedU64 = PackedInt<u64, 8>;
+pub type PackedI64 = PackedInt<i64, 8>;
+pub type PackedU128 = PackedInt<u128, 16>;
+pub type PackedI128 = PackedInt<i128, 16>;
+pub type PackedUSize = PackedInt<usize, { usize::BITS as usize / 8 }>;
+pub type PackedISize = PackedInt<isize, { isize::BITS as usize / 8 }>;
+
+#[doc(hidden)]
+#[cfg(feature = "serde")]
+pub trait SerdeBound<'de>: serde::Serialize + serde::Deserialize<'de> {}
+
+#[doc(hidden)]
+#[cfg(not(feature = "serde"))]
+pub trait LimitLen<'de> {}
+
+impl SerdeBound<'_> for [u8; 1] {}
+impl SerdeBound<'_> for [u8; 2] {}
+impl SerdeBound<'_> for [u8; 3] {}
+impl SerdeBound<'_> for [u8; 4] {}
+impl SerdeBound<'_> for [u8; 5] {}
+impl SerdeBound<'_> for [u8; 6] {}
+impl SerdeBound<'_> for [u8; 7] {}
+impl SerdeBound<'_> for [u8; 8] {}
+impl SerdeBound<'_> for [u8; 9] {}
+impl SerdeBound<'_> for [u8; 10] {}
+impl SerdeBound<'_> for [u8; 11] {}
+impl SerdeBound<'_> for [u8; 12] {}
+impl SerdeBound<'_> for [u8; 13] {}
+impl SerdeBound<'_> for [u8; 14] {}
+impl SerdeBound<'_> for [u8; 15] {}
+impl SerdeBound<'_> for [u8; 16] {}
+
+/// Error type of `PackedInt::<T, SIZE>::try_from` that is returned when the integer value does not fit into
+/// `SIZE` bytes.
+#[derive(Debug, PartialEq)]
+pub struct ToPackedErr<T> {
+    pub value_out_of_range: T,
+    pub range: RangeInclusive<T>,
+}
+
+impl<T, const SIZE: usize> PackedInt<T, SIZE>
+where
+    for<'a> [u8; SIZE]: SerdeBound<'a>,
+{
+    pub const ZERO: Self = Self {
+        bytes: [0; SIZE],
+        _p: PhantomData,
+    };
+}
+
+impl<T, const SIZE: usize> Default for PackedInt<T, SIZE>
+where
+    for<'a> [u8; SIZE]: SerdeBound<'a>,
+{
+    fn default() -> Self {
+        Self::ZERO
+    }
+}
+
+impl<T, const SIZE: usize> Clone for PackedInt<T, SIZE>
+where
+    for<'a> [u8; SIZE]: SerdeBound<'a>,
+{
+    fn clone(&self) -> Self {
+        Self {
+            bytes: self.bytes.clone(),
+            _p: PhantomData,
+        }
+    }
+}
+
+impl<T, const SIZE: usize> PartialEq for PackedInt<T, SIZE>
+where
+    for<'a> [u8; SIZE]: SerdeBound<'a>,
+{
+    fn eq(&self, rhs: &Self) -> bool {
+        self.bytes.eq(&rhs.bytes)
+    }
+}
+
+impl<T: Add + From<Self>, const SIZE: usize> Add<Self> for PackedInt<T, SIZE>
+where
+    for<'a> [u8; SIZE]: SerdeBound<'a>,
+{
+    type Output = <T as Add>::Output;
+    fn add(self, rhs: Self) -> Self::Output {
+        let this: T = self.into();
+        let rhs: T = rhs.into();
+        this + rhs
+    }
+}
+
+impl<T: Add + From<Self>, const SIZE: usize> Add<T> for PackedInt<T, SIZE>
+where
+    for<'a> [u8; SIZE]: SerdeBound<'a>,
+{
+    type Output = <T as Add>::Output;
+    fn add(self, rhs: T) -> Self::Output {
+        let this: T = self.into();
+        this + rhs
+    }
+}
+
+impl<T: Sub + From<Self>, const SIZE: usize> Sub<T> for PackedInt<T, SIZE>
+where
+    for<'a> [u8; SIZE]: SerdeBound<'a>,
+{
+    type Output = <T as Sub>::Output;
+    fn sub(self, rhs: T) -> Self::Output {
+        let this: T = self.into();
+        this - rhs
+    }
+}
+
+impl<T: Sub + From<Self>, const SIZE: usize> Sub<Self> for PackedInt<T, SIZE>
+where
+    for<'a> [u8; SIZE]: SerdeBound<'a>,
+{
+    type Output = <T as Sub>::Output;
+    fn sub(self, rhs: Self) -> Self::Output {
+        let this: T = self.into();
+        let rhs: T = rhs.into();
+        this - rhs
+    }
+}
+
+macro_rules! packed_from_impl {
+    ($integer: ident, $size: expr, ToPackedErr) => {
+        impl TryFrom<$integer> for PackedInt<$integer, $size> {
+            type Error = ToPackedErr<$integer>;
+            fn try_from(value: $integer) -> Result<Self, Self::Error> {
+                let shift = $integer::BITS.saturating_sub($size as u32 * 8);
+                let range = ($integer::MIN >> shift)..=($integer::MAX >> shift);
+                if range.contains(&value) {
+                    let mut i = value.to_le_bytes().into_iter();
+                    let bytes = std::array::from_fn(|_| i.next().unwrap_or(0));
+                    Ok(Self {
+                        bytes,
+                        _p: PhantomData,
+                    })
+                } else {
+                    Err(ToPackedErr {
+                        value_out_of_range: value,
+                        range,
+                    })
+                }
+            }
+        }
+    };
+    ($integer: ident, $size: expr, Infallible) => {
+        impl From<$integer> for PackedInt<$integer, $size> {
+            fn from(value: $integer) -> Self {
+                Self {
+                    bytes: value.to_le_bytes(),
+                    _p: PhantomData,
+                }
+            }
+        }
+    };
+}
+
+macro_rules! packed_impl {
+    ($integer: ident, $signed: tt, $size: expr, $fallible: ident) => {
+        packed_from_impl!($integer, $size, $fallible);
+
+        impl From<PackedInt<$integer, $size>> for $integer {
+            fn from(packed: PackedInt<$integer, $size>) -> Self {
+                let mut tail = 0;
+                if $signed && packed.bytes[$size - 1] > 127 {
+                    tail = 255;
+                }
+                let mut i = packed.bytes.into_iter();
+                Self::from_le_bytes(std::array::from_fn(|_| i.next().unwrap_or(tail)))
+            }
+        }
+
+        impl std::fmt::Debug for PackedInt<$integer, $size> {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                let value: $integer = (*self).into();
+                value.fmt(f)
+            }
+        }
+
+        impl PartialEq<$integer> for PackedInt<$integer, $size> {
+            fn eq(&self, other: &$integer) -> bool {
+                let value: $integer = (*self).into();
+                value.eq(other)
+            }
+        }
+
+        impl PartialOrd<$integer> for PackedInt<$integer, $size> {
+            fn partial_cmp(&self, other: &$integer) -> Option<std::cmp::Ordering> {
+                let value: $integer = (*self).into();
+                value.partial_cmp(&other)
+            }
+        }
+
+        impl std::iter::Sum<PackedInt<$integer, $size>> for $integer {
+            fn sum<I: Iterator<Item = PackedInt<$integer, $size>>>(iter: I) -> Self {
+                iter.map(Into::<$integer>::into).sum()
+            }
+        }
+
+        impl Add<PackedInt<$integer, $size>> for $integer {
+            type Output = $integer;
+            fn add(self, rhs: PackedInt<$integer, $size>) -> Self::Output {
+                let rhs: $integer = rhs.into();
+                self + rhs
+            }
+        }
+
+        impl AddAssign<PackedInt<$integer, $size>> for $integer {
+            fn add_assign(&mut self, rhs: PackedInt<$integer, $size>) {
+                let rhs: $integer = rhs.into();
+                *self += rhs;
+            }
+        }
+
+        impl Sub<PackedInt<$integer, $size>> for $integer {
+            type Output = $integer;
+            fn sub(self, rhs: PackedInt<$integer, $size>) -> Self::Output {
+                let rhs: $integer = rhs.into();
+                self - rhs
+            }
+        }
+
+        impl SubAssign<PackedInt<$integer, $size>> for $integer {
+            fn sub_assign(&mut self, rhs: PackedInt<$integer, $size>) {
+                let rhs: $integer = rhs.into();
+                *self -= rhs;
+            }
+        }
+    };
+}
+
+packed_impl!(u16, false, 1, ToPackedErr);
+packed_impl!(i16, true, 1, ToPackedErr);
+packed_impl!(u16, false, 2, Infallible);
+packed_impl!(i16, true, 2, Infallible);
+
+packed_impl!(u32, false, 1, ToPackedErr);
+packed_impl!(i32, true, 1, ToPackedErr);
+packed_impl!(u32, false, 2, ToPackedErr);
+packed_impl!(i32, true, 2, ToPackedErr);
+packed_impl!(u32, false, 3, ToPackedErr);
+packed_impl!(i32, true, 3, ToPackedErr);
+packed_impl!(u32, false, 4, Infallible);
+packed_impl!(i32, true, 4, Infallible);
+
+packed_impl!(u64, false, 1, ToPackedErr);
+packed_impl!(i64, true, 1, ToPackedErr);
+packed_impl!(u64, false, 2, ToPackedErr);
+packed_impl!(i64, true, 2, ToPackedErr);
+packed_impl!(u64, false, 3, ToPackedErr);
+packed_impl!(i64, true, 3, ToPackedErr);
+packed_impl!(u64, false, 4, ToPackedErr);
+packed_impl!(i64, true, 4, ToPackedErr);
+packed_impl!(u64, false, 5, ToPackedErr);
+packed_impl!(i64, true, 5, ToPackedErr);
+packed_impl!(u64, false, 6, ToPackedErr);
+packed_impl!(i64, true, 6, ToPackedErr);
+packed_impl!(u64, false, 7, ToPackedErr);
+packed_impl!(i64, true, 7, ToPackedErr);
+packed_impl!(u64, false, 8, Infallible);
+packed_impl!(i64, true, 8, Infallible);
+
+packed_impl!(usize, false, 1, ToPackedErr);
+packed_impl!(isize, true, 1, ToPackedErr);
+packed_impl!(usize, false, 3, ToPackedErr);
+packed_impl!(isize, true, 3, ToPackedErr);
+packed_impl!(usize, false, 5, ToPackedErr);
+packed_impl!(isize, true, 5, ToPackedErr);
+packed_impl!(usize, false, 6, ToPackedErr);
+packed_impl!(isize, true, 6, ToPackedErr);
+packed_impl!(usize, false, 7, ToPackedErr);
+packed_impl!(isize, true, 7, ToPackedErr);
+packed_impl!(usize, false, 8, Infallible);
+packed_impl!(isize, true, 8, Infallible);
+
+#[cfg(target_pointer_width = "16")]
+mod pointer_16 {
+    use super::*;
+    packed_impl!(usize, false, 2, Infallible);
+    packed_impl!(isize, true, 2, Infallible);
+    packed_impl!(usize, false, 4, Infallible);
+    packed_impl!(isize, true, 4, Infallible);
+}
+
+#[cfg(target_pointer_width = "32")]
+mod pointer_32 {
+    use super::*;
+    packed_impl!(usize, false, 2, ToPackedErr);
+    packed_impl!(isize, true, 2, ToPackedErr);
+    packed_impl!(usize, false, 4, Infallible);
+    packed_impl!(isize, true, 4, Infallible);
+}
+
+#[cfg(target_pointer_width = "64")]
+mod pointer_64 {
+    use super::*;
+    packed_impl!(usize, false, 2, ToPackedErr);
+    packed_impl!(isize, true, 2, ToPackedErr);
+    packed_impl!(usize, false, 4, ToPackedErr);
+    packed_impl!(isize, true, 4, ToPackedErr);
+}
+
+packed_impl!(u128, false, 1, ToPackedErr);
+packed_impl!(i128, true, 1, ToPackedErr);
+packed_impl!(u128, false, 2, ToPackedErr);
+packed_impl!(i128, true, 2, ToPackedErr);
+packed_impl!(u128, false, 3, ToPackedErr);
+packed_impl!(i128, true, 3, ToPackedErr);
+packed_impl!(u128, false, 4, ToPackedErr);
+packed_impl!(i128, true, 4, ToPackedErr);
+packed_impl!(u128, false, 5, ToPackedErr);
+packed_impl!(i128, true, 5, ToPackedErr);
+packed_impl!(u128, false, 6, ToPackedErr);
+packed_impl!(i128, true, 6, ToPackedErr);
+packed_impl!(u128, false, 7, ToPackedErr);
+packed_impl!(i128, true, 7, ToPackedErr);
+packed_impl!(u128, false, 8, ToPackedErr);
+packed_impl!(i128, true, 8, ToPackedErr);
+packed_impl!(u128, false, 9, ToPackedErr);
+packed_impl!(i128, true, 9, ToPackedErr);
+packed_impl!(u128, false, 10, ToPackedErr);
+packed_impl!(i128, true, 10, ToPackedErr);
+packed_impl!(u128, false, 11, ToPackedErr);
+packed_impl!(i128, true, 11, ToPackedErr);
+packed_impl!(u128, false, 12, ToPackedErr);
+packed_impl!(i128, true, 12, ToPackedErr);
+packed_impl!(u128, false, 13, ToPackedErr);
+packed_impl!(i128, true, 13, ToPackedErr);
+packed_impl!(u128, false, 14, ToPackedErr);
+packed_impl!(i128, true, 14, ToPackedErr);
+packed_impl!(u128, false, 15, ToPackedErr);
+packed_impl!(i128, true, 15, ToPackedErr);
+packed_impl!(u128, false, 16, Infallible);
+packed_impl!(i128, true, 16, Infallible);
