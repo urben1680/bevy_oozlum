@@ -1,20 +1,24 @@
 /*
 TODO:
 
-- general todo!() und //todo
-- value logs
-- log tests
+Features:
 - reversible hooks ? or issue to link
 - reversible observer ? or issue to link
 - reversible Event reader/writer
 - entity commands, standard rev commands
 - App Methoden auch für RevSchedule struct
 - tuple impl configs
-- derive Reflection + serde für logs
--- register type data for non-pub structs (helper glued to log?)
+
+Enhancements:
+- general todo!() und //todo
+- derive Reflection + serde 
+-- done for logs + inner structs
+- plugin registers types
 - longer log tests for RareTransition and RareValue
 - tests of other log methods like clear variants
 - cfg für ecs only (keine App), logging
+
+Docs
 - examples
 - documentations, besonders mit informationen welche Methoden für deterministische Logik geeignet ist
 */
