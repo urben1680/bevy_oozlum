@@ -7,6 +7,7 @@ Features:
 - reversible Event reader/writer
 - entity commands, standard rev commands
 - App Methoden auch für RevSchedule struct
+-- apply_final_deferred Option genauer betrachten
 - tuple impl configs
 
 Enhancements:
