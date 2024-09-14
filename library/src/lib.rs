@@ -5,15 +5,11 @@ Features:
 - reversible observer ? or issue to link
 - reversible Event reader/writer
 - entity commands, standard rev commands
-- App Methoden auch für RevSchedule struct
--- apply_final_deferred Option genauer betrachten
 - tuple impl configs
+- packed more ops
 
 Enhancements:
 - general todo!() und //todo, reduce unwrap/expect
-- derive Reflection + serde
--- done for logs + inner structs
-- plugin registers types
 - longer log tests for RareTransition and RareValue
 - tests of other log methods like clear variants
 
@@ -34,9 +30,13 @@ UNSUPPORTED:
 
 use std::hash::Hash;
 
-use bevy::ecs::{intern::Interned, schedule::ScheduleLabel};
+use bevy::{
+    app::Plugin,
+    ecs::{intern::Interned, schedule::ScheduleLabel},
+};
+use meta::RevMeta;
 
-pub mod app; // todo: rename, put app into a sub module and cfg gate it
+pub mod app;
 pub mod commands;
 pub mod log;
 pub mod meta;
@@ -49,3 +49,11 @@ struct BackwardSchedule(Interned<dyn ScheduleLabel>);
 
 #[derive(ScheduleLabel, Copy, Clone, Debug, Hash, PartialEq, Eq)]
 pub struct RevUpdate;
+
+pub struct RevSystemsPlugin;
+
+impl Plugin for RevSystemsPlugin {
+    fn build(&self, app: &mut bevy::prelude::App) {
+        app.register_type::<RevMeta>();
+    }
+}

@@ -1,19 +1,36 @@
 use core::{num::NonZeroUsize, ops::Range};
 
-use bevy::ecs::schedule::ScheduleLabel;
-use bevy::ecs::{system::Resource, world::World};
+use bevy::{
+    ecs::{schedule::ScheduleLabel, system::Resource, world:: World},
+    reflect::{std_traits::ReflectDefault, Reflect},
+};
 
-use crate::log::WithTimestamp;
+#[cfg(feature = "serde")]
+use bevy::reflect::{ReflectDeserialize, ReflectSerialize};
+
+use crate::{app::TryRunRevScheduleError, log::WithTimestamp};
 use crate::{BackwardSchedule, ForwardSchedule, RevUpdate};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Reflect)]
+#[reflect(PartialEq)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    reflect(Serialize, Deserialize)
+)]
 pub enum Direction {
     Forward,
     ForwardLog { updates_until_pause: NonZeroUsize },
     BackwardLog { updates_until_pause: NonZeroUsize },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Reflect)]
+#[reflect(PartialEq)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    reflect(Serialize, Deserialize)
+)]
 pub enum InternalDirection {
     RunningForward,
     RunningForwardLog { updates_until_pause: NonZeroUsize },
@@ -110,7 +127,13 @@ benötigt für steuerung:
 /// RevMeta is used to control the processing of reversible systems.
 ///
 /// It keepts track what the current frame is and to which frame one can go forward and backward in time.
-#[derive(Debug, Clone, Resource)]
+#[derive(Debug, Clone, Resource, Reflect)]
+#[reflect(Default)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    reflect(Serialize, Deserialize)
+)]
 pub struct RevMeta {
     /// The maximum amount of states of the world that is logged to be jumped in, or None if growth is unrestricted.
     ///
@@ -288,6 +311,24 @@ impl RevMeta {
                 .start
                 .max(self.range.end.saturating_sub(max_len.get()));
         }
+    }
+    pub fn run_rev_schedule(&self, world: &mut World, label: impl ScheduleLabel) {
+        let label = label.intern();
+        match self.direction() {
+            Direction::Forward | Direction::ForwardLog { .. } => world.run_schedule(ForwardSchedule(label)),
+            Direction::BackwardLog { .. } => world.run_schedule(BackwardSchedule(label))
+        }
+    }
+    pub fn try_run_rev_schedule(&self, world: &mut World, label: impl ScheduleLabel) -> Result<(), TryRunRevScheduleError> {
+        let label = label.intern();
+        let Some(direction) = self.get_direction() else {
+            return Err(TryRunRevScheduleError::MainRevScheduleNotRunning);
+        };
+        let result = match direction {
+            Direction::Forward | Direction::ForwardLog { .. } => world.try_run_schedule(ForwardSchedule(label)),
+            Direction::BackwardLog { .. } => world.try_run_schedule(BackwardSchedule(label))
+        };
+        result.map_err(|_| TryRunRevScheduleError::BevyTryRunScheduleError)
     }
 }
 
