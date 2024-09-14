@@ -34,7 +34,9 @@ struct RevConditionBackward<In: Send + Sync + 'static> {
     log: Arc<Mutex<RareTransitionLog<()>>>,
     name: String,
     tick: Tick,
-    _in: PhantomData<In>,
+    component_access: Access<ComponentId>,
+    archetype_component_access: Access<ArchetypeComponentId>,
+    _in: PhantomData<fn(In)>,
 }
 
 #[derive(SystemSet, Copy, Clone, Debug, Hash, PartialEq, Eq)]
@@ -68,6 +70,8 @@ pub(crate) fn forward_backward_conditions<
         log,
         name: name_backward,
         tick: Tick::new(0),
+        component_access: Default::default(),
+        archetype_component_access: Default::default(),
         _in: PhantomData,
     };
 
@@ -104,20 +108,24 @@ impl<T: System<Out = bool> + ReadOnlySystem> System for RevConditionForward<T> {
             world.get_resource::<RevMeta>()
         };
         // no clone needed because it is expected that condition as a ReadOnlySystem would not mutate RevMeta
-        let meta = meta.expect(RevMeta::EXIST_MSG);
-        let mut log = self.log.try_lock().unwrap();
-        if meta.direction() == Direction::Forward {
-            let out = unsafe {
-                // SAFETY:
-                // - condition registered it's own accesses that were used to update Self's accesses
-                // - update_archetype_component_access was called by the caller of Self::run_unsafe
-                self.condition.run_unsafe(input, world)
-            };
-            log.pop_past_by_len(meta, 1);
-            log.push_present(out.then_some(().into()));
-            out
-        } else {
-            log.forward_log().expect("todo").is_some()
+        let Some(meta) = meta else {
+            todo!();
+        };
+        let mut log = self.log.try_lock().expect("todo");
+        match meta.get_direction() {
+            Some(Direction::Forward) => {
+                let out = unsafe {
+                    // SAFETY:
+                    // - condition registered it's own accesses that were used to update Self's accesses
+                    // - update_archetype_component_access was called by the caller of Self::run_unsafe
+                    self.condition.run_unsafe(input, world)
+                };
+                log.pop_past_by_len(meta, 1);
+                log.push_present(out.then_some(().into()));
+                out
+            }
+            Some(Direction::ForwardLog { .. }) => log.forward_log().expect("todo").is_some(),
+            _ => todo!(),
         }
     }
     fn run(&mut self, input: Self::In, world: &mut World) -> Self::Out {
@@ -166,21 +174,31 @@ impl<T: System<Out = bool> + ReadOnlySystem> System for RevConditionForward<T> {
 // SAFETY: todo
 unsafe impl<T: System<Out = bool> + ReadOnlySystem> ReadOnlySystem for RevConditionForward<T> {
     fn run_readonly(&mut self, input: Self::In, world: &World) -> Self::Out {
-        let meta = world.get_resource::<RevMeta>().expect(RevMeta::EXIST_MSG);
+        let Some(meta) = world.get_resource::<RevMeta>() else {
+            todo!()
+        };
         let mut log = self.log.try_lock().unwrap();
-        if meta.direction() == Direction::Forward {
-            let out = self.condition.run_readonly(input, world);
-            log.pop_past_by_len(meta, 1);
-            log.push_present(out.then_some(().into()));
-            out
-        } else {
-            log.forward_log().expect("todo").is_some()
+        match meta.get_direction() {
+            Some(Direction::Forward) => {
+                let out = self.condition.run_readonly(input, world);
+                log.pop_past_by_len(meta, 1);
+                log.push_present(out.then_some(().into()));
+                out
+            }
+            Some(Direction::ForwardLog { .. }) => log.forward_log().expect("todo").is_some(),
+            _ => todo!(),
         }
     }
 }
 
 impl<In: Send + Sync + 'static> RevConditionBackward<In> {
-    fn run_inner(&mut self) -> bool {
+    fn run_inner(&mut self, meta: Option<&RevMeta>) -> bool {
+        if !matches!(
+            meta.and_then(RevMeta::get_direction),
+            Some(Direction::BackwardLog { .. })
+        ) {
+            todo!()
+        }
         self.log
             .try_lock()
             .unwrap()
@@ -214,16 +232,25 @@ impl<In: Send + Sync + 'static> System for RevConditionBackward<In> {
     fn has_deferred(&self) -> bool {
         false
     }
-    unsafe fn run_unsafe(&mut self, _input: Self::In, _world: UnsafeWorldCell) -> Self::Out {
-        self.run_inner()
+    unsafe fn run_unsafe(&mut self, _input: Self::In, world: UnsafeWorldCell) -> Self::Out {
+        let meta = unsafe {
+            // SAFETY: Registered read access to resource
+            world.get_resource::<RevMeta>()
+        };
+        self.run_inner(meta)
     }
-    fn run(&mut self, _input: Self::In, _world: &mut World) -> Self::Out {
-        self.run_inner()
+    fn run(&mut self, _input: Self::In, world: &mut World) -> Self::Out {
+        self.run_inner(world.get_resource::<RevMeta>())
     }
     fn apply_deferred(&mut self, _world: &mut World) {}
     fn queue_deferred(&mut self, _world: DeferredWorld) {}
     fn initialize(&mut self, world: &mut World) {
         self.tick = world.change_tick();
+        let mut reads_meta = IntoSystem::into_system(|_: Res<RevMeta>| {});
+        reads_meta.initialize(world);
+        self.component_access.extend(reads_meta.component_access());
+        self.archetype_component_access
+            .extend(reads_meta.archetype_component_access());
     }
     fn update_archetype_component_access(&mut self, _world: UnsafeWorldCell) {}
     fn check_change_tick(&mut self, change_tick: Tick) {
@@ -241,7 +268,7 @@ impl<In: Send + Sync + 'static> System for RevConditionBackward<In> {
 }
 
 unsafe impl<In: Send + Sync + 'static> ReadOnlySystem for RevConditionBackward<In> {
-    fn run_readonly(&mut self, _input: Self::In, _world: &World) -> Self::Out {
-        self.run_inner()
+    fn run_readonly(&mut self, _input: Self::In, world: &World) -> Self::Out {
+        self.run_inner(world.get_resource::<RevMeta>())
     }
 }

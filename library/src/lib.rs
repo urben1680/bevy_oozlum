@@ -2,7 +2,6 @@
 TODO:
 
 Features:
-- reversible hooks ? or issue to link
 - reversible observer ? or issue to link
 - reversible Event reader/writer
 - entity commands, standard rev commands
@@ -11,17 +10,26 @@ Features:
 - tuple impl configs
 
 Enhancements:
-- general todo!() und //todo
-- derive Reflection + serde 
+- general todo!() und //todo, reduce unwrap/expect
+- derive Reflection + serde
 -- done for logs + inner structs
 - plugin registers types
 - longer log tests for RareTransition and RareValue
 - tests of other log methods like clear variants
-- cfg für ecs only (keine App), logging
 
 Docs
 - examples
 - documentations, besonders mit informationen welche Methoden für deterministische Logik geeignet ist
+
+
+UNSUPPORTED:
+
+- Change Detection
+- Hooks
+- IntoSystemConfigs::rev_distributive_run_if
+- Schedule::set_apply_final_deferred
+- Schedule::graph_mut
+- ScheduleBuildSettings::auto_insert_apply_deferred
 */
 
 use std::hash::Hash;

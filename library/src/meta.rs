@@ -6,16 +6,95 @@ use bevy::ecs::{system::Resource, world::World};
 use crate::log::WithTimestamp;
 use crate::{BackwardSchedule, ForwardSchedule, RevUpdate};
 
-// todo: updates in log directions einschließen?
-
-// kein eager, das ist aufgabe von physik->render systemen die keine Rolel in der Kausalität splielen
-// wie mit direction wechsel umgehen wenn eine entity bis x geskipped wird? gar nicht mehr skippen? genau, oder eben reversible command nutzen
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Direction {
     Forward,
     ForwardLog { updates_until_pause: NonZeroUsize },
     BackwardLog { updates_until_pause: NonZeroUsize },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InternalDirection {
+    RunningForward,
+    RunningForwardLog { updates_until_pause: NonZeroUsize },
+    RunningBackwardLog { updates_until_pause: NonZeroUsize },
+    RanForward,
+    RanForwardLog { updates_until_pause: NonZeroUsize },
+    RanBackwardLog { updates_until_pause: NonZeroUsize },
     Pause,
+}
+
+impl InternalDirection {
+    fn running_from_queue(queue: Option<Direction>) -> Self {
+        match queue {
+            Some(Direction::Forward) => Self::RunningForward,
+            Some(Direction::ForwardLog {
+                updates_until_pause,
+            }) => Self::RunningForwardLog {
+                updates_until_pause,
+            },
+            Some(Direction::BackwardLog {
+                updates_until_pause,
+            }) => Self::RunningBackwardLog {
+                updates_until_pause,
+            },
+            None => Self::Pause,
+        }
+    }
+    fn set_running(&mut self) {
+        *self = match *self {
+            Self::RanForward => Self::RunningForward,
+            Self::RanForwardLog {
+                updates_until_pause,
+            } => Self::RunningForwardLog {
+                updates_until_pause,
+            },
+            Self::RanBackwardLog {
+                updates_until_pause,
+            } => Self::RunningBackwardLog {
+                updates_until_pause,
+            },
+            _ => *self,
+        }
+    }
+    fn set_ran(&mut self) {
+        *self = match *self {
+            Self::RunningForward => Self::RanForward,
+            Self::RunningForwardLog {
+                updates_until_pause,
+            } => Self::RanForwardLog {
+                updates_until_pause,
+            },
+            Self::RunningBackwardLog {
+                updates_until_pause,
+            } => Self::RanBackwardLog {
+                updates_until_pause,
+            },
+            _ => *self,
+        }
+    }
+    pub fn get_direction(self) -> Option<Direction> {
+        match self {
+            Self::RunningForward => Some(Direction::Forward),
+            Self::RunningForwardLog {
+                updates_until_pause,
+            } => Some(Direction::ForwardLog {
+                updates_until_pause,
+            }),
+            Self::RunningBackwardLog {
+                updates_until_pause,
+            } => Some(Direction::BackwardLog {
+                updates_until_pause,
+            }),
+            _ => None,
+        }
+    }
+    pub fn running_rev_schedule(self) -> bool {
+        matches!(
+            self,
+            Self::RunningForward | Self::RunningForwardLog { .. } | Self::RunningBackwardLog { .. }
+        )
+    }
 }
 
 /*
@@ -48,8 +127,8 @@ pub struct RevMeta {
     pub max_len: Option<NonZeroUsize>,
     now: usize,
     range: Range<usize>,
-    direction: Direction,
-    queue: Option<Direction>,
+    queue: Option<Option<Direction>>,
+    direction: InternalDirection,
 }
 
 impl Default for RevMeta {
@@ -70,14 +149,23 @@ impl RevMeta {
             now,
             range: now..now + 1,
             direction: match paused {
-                true => Direction::Pause,
-                false => Direction::Forward,
+                true => InternalDirection::Pause,
+                false => InternalDirection::RanForward,
             },
             queue: None,
         }
     }
     pub fn direction(&self) -> Direction {
+        self.get_direction().expect("todo")
+    }
+    pub fn get_direction(&self) -> Option<Direction> {
+        self.direction.get_direction()
+    }
+    pub fn internal_direction(&self) -> InternalDirection {
         self.direction
+    }
+    pub fn running_rev_schedule(&self) -> bool {
+        self.direction.running_rev_schedule()
     }
     pub fn now(&self) -> usize {
         self.now
@@ -113,15 +201,14 @@ impl RevMeta {
     ///
     /// Will cause logged future frames to be forgotten.
     pub fn queue_forward(&mut self) {
-        self.queue = Some(Direction::Forward);
+        self.queue = Some(Some(Direction::Forward));
     }
     pub fn queue_log(&mut self, to: usize) -> Result<usize, Range<usize>> {
         if !self.range().contains(&to) {
             return Err(self.range());
         }
         let updates_until_pause = to.abs_diff(self.now);
-        self.queue = Some(NonZeroUsize::new(updates_until_pause).map_or(
-            Direction::Pause,
+        self.queue = Some(NonZeroUsize::new(updates_until_pause).map(
             |updates_until_pause| match to > self.now {
                 true => Direction::ForwardLog {
                     updates_until_pause,
@@ -134,7 +221,7 @@ impl RevMeta {
         Ok(updates_until_pause)
     }
     pub fn queue_pause(&mut self) {
-        self.queue = Some(Direction::Pause);
+        self.queue = Some(None);
     }
     pub fn update_world(world: &mut World) {
         let mut this = world.get_resource_mut::<Self>().expect(Self::EXIST_MSG);
@@ -142,15 +229,20 @@ impl RevMeta {
             todo!("")
         }
         this.update();
-        let result = match this.direction {
-            Direction::Forward | Direction::ForwardLog { .. } => {
+        let result = match this.get_direction() {
+            Some(Direction::Forward) | Some(Direction::ForwardLog { .. }) => {
                 world.try_run_schedule(ForwardSchedule(RevUpdate.intern()))
             }
-            Direction::BackwardLog { .. } => {
+            Some(Direction::BackwardLog { .. }) => {
                 world.try_run_schedule(BackwardSchedule(RevUpdate.intern()))
             }
-            Direction::Pause => return,
+            None => return,
         };
+        world
+            .get_resource_mut::<Self>()
+            .expect(Self::EXIST_MSG)
+            .direction
+            .set_ran();
         if result.is_err() {
             todo!("")
         }
@@ -158,30 +250,33 @@ impl RevMeta {
     pub fn update(&mut self) {
         match self.queue.take() {
             Some(queue) => {
-                self.direction = queue;
-                match self.direction {
-                    Direction::Forward => self.update_forward(),
-                    Direction::ForwardLog { .. } => self.now += 1,
-                    Direction::BackwardLog { .. } => self.now -= 1,
-                    Direction::Pause => {}
+                self.direction = InternalDirection::running_from_queue(queue);
+                match self.get_direction() {
+                    Some(Direction::Forward) => self.update_forward(),
+                    Some(Direction::ForwardLog { .. }) => self.now += 1,
+                    Some(Direction::BackwardLog { .. }) => self.now -= 1,
+                    None => {}
                 }
             }
-            None => match &mut self.direction {
-                Direction::Forward => self.update_forward(),
-                Direction::ForwardLog {
-                    updates_until_pause,
-                } => match reduction_successful(updates_until_pause) {
-                    true => self.now += 1,
-                    false => self.direction = Direction::Pause,
-                },
-                Direction::BackwardLog {
-                    updates_until_pause,
-                } => match reduction_successful(updates_until_pause) {
-                    true => self.now -= 1,
-                    false => self.direction = Direction::Pause,
-                },
-                Direction::Pause => {}
-            },
+            None => {
+                self.direction.set_running();
+                match &mut self.direction {
+                    InternalDirection::RunningForward => self.update_forward(),
+                    InternalDirection::RunningForwardLog {
+                        updates_until_pause,
+                    } => match reduction_successful(updates_until_pause) {
+                        true => self.now += 1,
+                        false => self.direction = InternalDirection::Pause,
+                    },
+                    InternalDirection::RunningBackwardLog {
+                        updates_until_pause,
+                    } => match reduction_successful(updates_until_pause) {
+                        true => self.now -= 1,
+                        false => self.direction = InternalDirection::Pause,
+                    },
+                    _ => {}
+                }
+            }
         }
     }
     fn update_forward(&mut self) {
@@ -214,34 +309,34 @@ mod test {
         max_len: Option<NonZeroUsize>,
         now: usize,
         range: Range<usize>,
-        direction: Direction,
+        direction: Option<Direction>,
     ) -> RevMeta {
         let meta = RevMeta {
             max_len,
             now,
             range: range.clone(),
-            direction,
+            direction: InternalDirection::running_from_queue(direction),
             queue: None,
         };
         assert!(range.start <= now, "{meta:?}");
         match direction {
-            Direction::Forward => assert_eq!(now, range.end + 1, "{meta:?}"),
-            Direction::ForwardLog {
+            Some(Direction::Forward) => assert_eq!(now, range.end + 1, "{meta:?}"),
+            Some(Direction::ForwardLog {
                 updates_until_pause,
-            } => {
+            }) => {
                 assert!(now < range.end, "{meta:?}");
                 assert!(now + updates_until_pause.get() <= range.end, "{meta:?}");
             }
-            Direction::BackwardLog {
+            Some(Direction::BackwardLog {
                 updates_until_pause,
-            } => {
+            }) => {
                 assert!(now < range.end, "{meta:?}");
                 assert!(
                     range.start + updates_until_pause.get() - 1 <= now,
                     "{meta:?}"
                 );
             }
-            Direction::Pause => assert!(now < range.end, "{meta:?}"),
+            None => assert!(now < range.end, "{meta:?}"),
         }
         meta
     }
@@ -252,22 +347,22 @@ mod test {
             None,
             0,
             0..2,
-            Direction::ForwardLog {
+            Some(Direction::ForwardLog {
                 updates_until_pause: TWO,
-            },
+            }),
         );
 
         meta.update();
         assert_eq!(
-            meta.direction(),
-            Direction::ForwardLog {
+            meta.get_direction(),
+            Some(Direction::ForwardLog {
                 updates_until_pause: ONE
-            }
+            })
         );
         assert_eq!(meta.now(), 1);
 
         meta.update();
-        assert_eq!(meta.direction(), Direction::Pause);
+        assert_eq!(meta.get_direction(), None);
         assert_eq!(meta.now(), 1);
     }
 
@@ -277,22 +372,22 @@ mod test {
             None,
             1,
             0..2,
-            Direction::BackwardLog {
+            Some(Direction::BackwardLog {
                 updates_until_pause: TWO,
-            },
+            }),
         );
 
         meta.update();
         assert_eq!(
-            meta.direction(),
-            Direction::BackwardLog {
+            meta.get_direction(),
+            Some(Direction::BackwardLog {
                 updates_until_pause: ONE
-            }
+            })
         );
         assert_eq!(meta.now(), 0);
 
         meta.update();
-        assert_eq!(meta.direction(), Direction::Pause);
+        assert_eq!(meta.get_direction(), None);
         assert_eq!(meta.now(), 0);
     }
 
@@ -311,7 +406,7 @@ mod test {
 
     #[test]
     fn queue_log_to_out_of_range_fails() {
-        let mut meta = arrange(None, 2, 1..4, Direction::Pause);
+        let mut meta = arrange(None, 2, 1..4, None);
 
         assert_eq!(meta.queue_log(0), Err(1..4));
         assert_eq!(meta.queue_log(4), Err(1..4));
