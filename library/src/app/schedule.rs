@@ -14,8 +14,13 @@ use crate::{
 use super::{set_configs::IntoRevSystemSetConfigs, system_configs::IntoRevSystemConfigs};
 
 pub struct RevSchedule {
-    forward: Schedule,
-    backward: Schedule,
+    pub(crate) forward: Schedule,
+    pub(crate) backward: Schedule,
+}
+
+pub enum TryRunRevScheduleError {
+    MainRevScheduleNotRunning,
+    BevyTryRunScheduleError
 }
 
 pub struct RevScheduleBuildSettings {

@@ -47,10 +47,6 @@ where
         configs
     }
 
-    /* how to inject individual pairs of the log arcs into the clones?
-    fn rev_distributive_run_if<M>(self, condition: impl Condition<M> + Clone) -> RevSystemConfigs;
-    */
-
     fn rev_run_if<M>(self, condition: impl Condition<M>) -> RevSystemConfigs {
         let mut configs = self.into_rev_configs();
         configs.set_configs = configs.set_configs.rev_run_if(condition);
