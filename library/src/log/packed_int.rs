@@ -61,7 +61,7 @@ use bevy::reflect::{ReflectDeserialize, ReflectSerialize};
 )]
 pub struct PackedInt<T, const SIZE: usize>
 where
-    for<'a> [u8; SIZE]: SerdeBound<'a>,
+    [u8; SIZE]: SizeBound,
 {
     bytes: [u8; SIZE],
     #[reflect(ignore)]
@@ -87,28 +87,28 @@ pub type PackedI128 = PackedInt<i128, 16>;
 
 #[doc(hidden)]
 #[cfg(feature = "serde")]
-pub trait SerdeBound<'de>: serde::Serialize + serde::Deserialize<'de> {}
+pub trait SizeBound: serde::Serialize + for<'de> serde::Deserialize<'de> {}
 
 #[doc(hidden)]
 #[cfg(not(feature = "serde"))]
-pub trait LimitLen<'de> {}
+pub trait SizeBound<'de> {}
 
-impl SerdeBound<'_> for [u8; 1] {}
-impl SerdeBound<'_> for [u8; 2] {}
-impl SerdeBound<'_> for [u8; 3] {}
-impl SerdeBound<'_> for [u8; 4] {}
-impl SerdeBound<'_> for [u8; 5] {}
-impl SerdeBound<'_> for [u8; 6] {}
-impl SerdeBound<'_> for [u8; 7] {}
-impl SerdeBound<'_> for [u8; 8] {}
-impl SerdeBound<'_> for [u8; 9] {}
-impl SerdeBound<'_> for [u8; 10] {}
-impl SerdeBound<'_> for [u8; 11] {}
-impl SerdeBound<'_> for [u8; 12] {}
-impl SerdeBound<'_> for [u8; 13] {}
-impl SerdeBound<'_> for [u8; 14] {}
-impl SerdeBound<'_> for [u8; 15] {}
-impl SerdeBound<'_> for [u8; 16] {}
+impl SizeBound for [u8; 1] {}
+impl SizeBound for [u8; 2] {}
+impl SizeBound for [u8; 3] {}
+impl SizeBound for [u8; 4] {}
+impl SizeBound for [u8; 5] {}
+impl SizeBound for [u8; 6] {}
+impl SizeBound for [u8; 7] {}
+impl SizeBound for [u8; 8] {}
+impl SizeBound for [u8; 9] {}
+impl SizeBound for [u8; 10] {}
+impl SizeBound for [u8; 11] {}
+impl SizeBound for [u8; 12] {}
+impl SizeBound for [u8; 13] {}
+impl SizeBound for [u8; 14] {}
+impl SizeBound for [u8; 15] {}
+impl SizeBound for [u8; 16] {}
 
 /// Error type of `PackedInt::<T, SIZE>::try_from` that is returned when the integer value does not fit into
 /// `SIZE` bytes.
@@ -120,7 +120,7 @@ pub struct ToPackedErr<T> {
 
 impl<T, const SIZE: usize> PackedInt<T, SIZE>
 where
-    for<'a> [u8; SIZE]: SerdeBound<'a>,
+    [u8; SIZE]: SizeBound,
 {
     pub const ZERO: Self = Self {
         bytes: [0; SIZE],
@@ -130,7 +130,7 @@ where
 
 impl<T, const SIZE: usize> Default for PackedInt<T, SIZE>
 where
-    for<'a> [u8; SIZE]: SerdeBound<'a>,
+    [u8; SIZE]: SizeBound,
 {
     fn default() -> Self {
         Self::ZERO
@@ -139,7 +139,7 @@ where
 
 impl<T, const SIZE: usize> Clone for PackedInt<T, SIZE>
 where
-    for<'a> [u8; SIZE]: SerdeBound<'a>,
+    [u8; SIZE]: SizeBound,
 {
     fn clone(&self) -> Self {
         Self {
@@ -149,22 +149,22 @@ where
     }
 }
 
-impl<T, const SIZE: usize> Copy for PackedInt<T, SIZE> where for<'a> [u8; SIZE]: SerdeBound<'a> {}
+impl<T, const SIZE: usize> Copy for PackedInt<T, SIZE> where [u8; SIZE]: SizeBound {}
 
 impl<T, const SIZE: usize> PartialEq for PackedInt<T, SIZE>
 where
-    for<'a> [u8; SIZE]: SerdeBound<'a>,
+    [u8; SIZE]: SizeBound,
 {
     fn eq(&self, rhs: &Self) -> bool {
         self.bytes.eq(&rhs.bytes)
     }
 }
 
-impl<T, const SIZE: usize> Eq for PackedInt<T, SIZE> where for<'a> [u8; SIZE]: SerdeBound<'a> {}
+impl<T, const SIZE: usize> Eq for PackedInt<T, SIZE> where [u8; SIZE]: SizeBound {}
 
 impl<T: PartialOrd + From<Self>, const SIZE: usize> PartialOrd for PackedInt<T, SIZE>
 where
-    for<'a> [u8; SIZE]: SerdeBound<'a>,
+    [u8; SIZE]: SizeBound,
 {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         let this: T = (*self).into();
@@ -175,7 +175,7 @@ where
 
 impl<T: Ord + From<Self>, const SIZE: usize> Ord for PackedInt<T, SIZE>
 where
-    for<'a> [u8; SIZE]: SerdeBound<'a>,
+    [u8; SIZE]: SizeBound,
 {
     fn cmp(&self, other: &Self) -> Ordering {
         let this: T = (*self).into();
@@ -186,7 +186,7 @@ where
 
 impl<T: Add + From<Self>, const SIZE: usize> Add<Self> for PackedInt<T, SIZE>
 where
-    for<'a> [u8; SIZE]: SerdeBound<'a>,
+    [u8; SIZE]: SizeBound,
 {
     type Output = <T as Add>::Output;
     fn add(self, rhs: Self) -> Self::Output {
@@ -198,7 +198,7 @@ where
 
 impl<T: Add + From<Self>, const SIZE: usize> Add<T> for PackedInt<T, SIZE>
 where
-    for<'a> [u8; SIZE]: SerdeBound<'a>,
+    [u8; SIZE]: SizeBound,
 {
     type Output = <T as Add>::Output;
     fn add(self, rhs: T) -> Self::Output {
@@ -209,7 +209,7 @@ where
 
 impl<T: Sub + From<Self>, const SIZE: usize> Sub<T> for PackedInt<T, SIZE>
 where
-    for<'a> [u8; SIZE]: SerdeBound<'a>,
+    [u8; SIZE]: SizeBound,
 {
     type Output = <T as Sub>::Output;
     fn sub(self, rhs: T) -> Self::Output {
@@ -220,7 +220,7 @@ where
 
 impl<T: Sub + From<Self>, const SIZE: usize> Sub<Self> for PackedInt<T, SIZE>
 where
-    for<'a> [u8; SIZE]: SerdeBound<'a>,
+    [u8; SIZE]: SizeBound,
 {
     type Output = <T as Sub>::Output;
     fn sub(self, rhs: Self) -> Self::Output {

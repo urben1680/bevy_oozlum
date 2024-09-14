@@ -172,7 +172,7 @@ where
             .pop_past()
             .map(|with_amount| self.drain_past_by_amount(with_amount))
     }
-    pub fn push_present<Out: Into<U>>(
+    pub fn try_push_present<Out: Into<U>>(
         &mut self,
         c: impl FnOnce(LogMut<T>) -> Out,
     ) -> Result<(), AmountErr<impl LogIter<T>, U, Amount>> {
@@ -192,6 +192,17 @@ where
             }),
         }
     }
+    pub fn push_present<Out: Into<U>>(
+        &mut self,
+        c: impl FnOnce(LogMut<T>) -> Out,
+    ) {
+        use std::any::type_name;
+        self.try_push_present(c).unwrap_or_else(|err| {
+            panic!("Tried to push {} values into {} which does not fit into {}. If the pushed amount is uncertain, use `try_push_present` or a larger `Amount` type.",
+            err.data.len(), type_name::<Self>(), type_name::<Amount>()
+            )
+        })
+    }
     pub fn drain_future(&mut self) -> (impl LogIter<T>, impl LogIter<U>) {
         (
             self.values.drain(self.index..),
@@ -207,7 +218,7 @@ where
         self.values.truncate(amount.into());
         self.index = 0;
     }
-    pub fn clear_with(
+    pub fn try_clear_with(
         &mut self,
         iter: impl IntoIterator<Item = T>,
         entry: U,
@@ -349,7 +360,7 @@ mod test {
             };
 
             let is_ok = self.with_timestamp[0]
-                .push_present(|mut log| {
+                .try_push_present(|mut log| {
                     log.extend(values);
                     self.meta.with_timestamp(())
                 })
@@ -381,7 +392,7 @@ mod test {
             }
 
             let is_ok = self.with_timestamp[1]
-                .push_present(|mut log| {
+                .try_push_present(|mut log| {
                     log.extend(values);
                     self.meta.with_timestamp(())
                 })
@@ -413,7 +424,7 @@ mod test {
             }
 
             let is_ok = self.one_per_frame[0]
-                .push_present(|mut log| log.extend(values))
+                .try_push_present(|mut log| log.extend(values))
                 .is_ok();
             let middle = self.one_per_frame[0].clone();
             self.one_per_frame[0].pop_past_by_len(&self.meta, 1);
@@ -442,7 +453,7 @@ mod test {
             }
 
             let is_ok = self.one_per_frame[1]
-                .push_present(|mut log| log.extend(values))
+                .try_push_present(|mut log| log.extend(values))
                 .is_ok();
             let middle = self.one_per_frame[1].clone();
             let _ = self.one_per_frame[1].drain_past_by_len(&self.meta, 1);

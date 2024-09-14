@@ -172,23 +172,23 @@ where
             .pop_past()
             .map(|with_amount| self.drain_past_by_amount(with_amount))
     }
-    pub fn push_present<Out: Into<U>>(
+    pub fn try_push_present<Out: Into<U>>(
         &mut self,
         c: impl FnOnce(LogMut<T>) -> Out,
-    ) -> Result<(), AmountErr<impl LogIter<T>, U, Amount>> {
+    ) -> Result<Option<U>, AmountErr<impl LogIter<T>, U, Amount>> {
         self.values.truncate(self.index);
         let entry = c(LogMut(&mut self.values)).into();
         let new_amount = self.values.len() - self.index;
         if new_amount == 0 {
             self.amounts.push_present(None);
-            return Ok(());
+            return Ok(Some(entry));
         }
         match new_amount.try_into() {
             Ok(amount) => {
                 self.index = self.values.len();
                 self.amounts
                     .push_present(Some(WithAmount { entry, amount }));
-                Ok(())
+                Ok(None)
             }
             Err(err) => Err(AmountErr {
                 entry,
@@ -196,6 +196,17 @@ where
                 err,
             }),
         }
+    }
+    pub fn push_present<Out: Into<U>>(
+        &mut self,
+        c: impl FnOnce(LogMut<T>) -> Out,
+    ) -> Option<U> {
+        use std::any::type_name;
+        self.try_push_present(c).unwrap_or_else(|err| {
+            panic!("Tried to push {} values into {} which does not fit into {}. If the pushed amount is uncertain, use `try_push_present` or a larger `Amount` type.",
+            err.data.len(), type_name::<Self>(), type_name::<Amount>()
+            )
+        })
     }
     pub fn drain_future(&mut self) -> (impl LogIter<T>, impl LogIter<U>) {
         (

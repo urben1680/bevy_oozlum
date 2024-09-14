@@ -130,7 +130,7 @@ where
         self.transitions.clear();
         self.index = 0;
     }
-    pub fn push_present<Out: Into<U>>(
+    pub fn try_push_present<Out: Into<U>>(
         &mut self,
         c: impl FnOnce(LogMut<T>) -> Out,
     ) -> Result<Option<U>, AmountErr<impl LogIter<T>, U, Amount>> {
@@ -155,6 +155,17 @@ where
                 err,
             }),
         }
+    }
+    pub fn push_present<Out: Into<U>>(
+        &mut self,
+        c: impl FnOnce(LogMut<T>) -> Out,
+    ) -> Option<U> {
+        use std::any::type_name;
+        self.try_push_present(c).unwrap_or_else(|err| {
+            panic!("Tried to push {} transitions into {} which does not fit into {}. If the pushed amount is uncertain, use `try_push_present` or a larger `Amount` type.",
+            err.data.len(), type_name::<Self>(), type_name::<Amount>()
+            )
+        })
     }
     pub fn backward_log(
         &mut self,
@@ -280,7 +291,7 @@ mod test {
             self.with_timestamp[0].pop_past_by_timestamp(&self.meta);
             let middle = self.with_timestamp[0].clone();
             let is_ok = self.with_timestamp[0]
-                .push_present(|mut log| {
+                .try_push_present(|mut log| {
                     log.extend(transitions);
                     self.meta.with_timestamp(())
                 })
@@ -309,7 +320,7 @@ mod test {
             let _ = self.with_timestamp[1].drain_past_by_timestamp(&self.meta);
             let middle = self.with_timestamp[1].clone();
             let is_ok = self.with_timestamp[1]
-                .push_present(|mut log| {
+                .try_push_present(|mut log| {
                     log.extend(transitions);
                     self.meta.with_timestamp(())
                 })
@@ -336,7 +347,7 @@ mod test {
             );
 
             let is_ok = self.one_per_frame[0]
-                .push_present(|mut log| {
+                .try_push_present(|mut log| {
                     log.extend(transitions);
                 })
                 .is_ok();
@@ -364,7 +375,7 @@ mod test {
             );
 
             let is_ok = self.one_per_frame[1]
-                .push_present(|mut log| {
+                .try_push_present(|mut log| {
                     log.extend(transitions);
                 })
                 .is_ok();
