@@ -1,0 +1,122 @@
+use bevy::ecs::{
+    schedule::{
+        ExecutorKind, LogLevel, Schedule, ScheduleBuildError, ScheduleBuildSettings, ScheduleGraph,
+        ScheduleLabel,
+    },
+    world::World,
+};
+
+use crate::{
+    meta::{Direction, RevMeta},
+    BackwardSchedule, ForwardSchedule,
+};
+
+use super::{set_configs::IntoRevSystemSetConfigs, system_configs::IntoRevSystemConfigs};
+
+pub struct RevSchedule {
+    forward: Schedule,
+    backward: Schedule,
+}
+
+pub struct RevScheduleBuildSettings {
+    pub ambiguity_detection: LogLevel,
+    pub hierarchy_detection: LogLevel,
+    pub use_shortnames: bool,
+    pub report_sets: bool,
+}
+
+impl RevSchedule {
+    pub fn new(label: impl ScheduleLabel) -> Self {
+        let label = label.intern();
+        Self {
+            forward: Schedule::new(ForwardSchedule(label)),
+            backward: Schedule::new(BackwardSchedule(label)),
+        }
+    }
+    pub fn add_rev_systems<Marker>(
+        &mut self,
+        systems: impl IntoRevSystemConfigs<Marker>,
+    ) -> &mut Self {
+        let configs = systems.into_rev_configs();
+        self.forward.add_systems(configs.forward);
+        self.backward.add_systems(configs.backward);
+        self.configure_rev_sets(configs.set_configs);
+        self
+    }
+    pub fn configure_rev_sets(&mut self, sets: impl IntoRevSystemSetConfigs) -> &mut Self {
+        let configs = sets.into_rev_configs();
+        self.forward.configure_sets(configs.forward_sys);
+        self.backward
+            .configure_sets((configs.backward_cmds_sys, configs.backward_sys));
+        self
+    }
+    pub fn set_build_setting(&mut self, settings: RevScheduleBuildSettings) -> &mut Self {
+        let RevScheduleBuildSettings {
+            ambiguity_detection,
+            hierarchy_detection,
+            use_shortnames,
+            report_sets,
+        } = settings;
+        let settings = ScheduleBuildSettings {
+            ambiguity_detection,
+            hierarchy_detection,
+            auto_insert_apply_deferred: true,
+            use_shortnames,
+            report_sets,
+        };
+        self.forward.set_build_settings(settings.clone());
+        self.backward.set_build_settings(settings);
+        self
+    }
+    pub fn get_build_settings(&self) -> RevScheduleBuildSettings {
+        let ScheduleBuildSettings {
+            ambiguity_detection,
+            hierarchy_detection,
+            use_shortnames,
+            report_sets,
+            ..
+        } = self.forward.get_build_settings();
+        RevScheduleBuildSettings {
+            ambiguity_detection,
+            hierarchy_detection,
+            use_shortnames,
+            report_sets,
+        }
+    }
+    pub fn get_executor_kind(&self) -> ExecutorKind {
+        self.forward.get_executor_kind()
+    }
+    pub fn set_executor_kind(&mut self, executor: ExecutorKind) -> &mut Self {
+        self.forward.set_executor_kind(executor);
+        self.backward.set_executor_kind(executor);
+        self
+    }
+    pub fn run(&mut self, world: &mut World) {
+        let meta = world.get_resource::<RevMeta>().cloned();
+        match meta.as_ref().and_then(RevMeta::get_direction) {
+            Some(Direction::Forward) | Some(Direction::ForwardLog { .. }) => {
+                self.forward.run(world)
+            }
+            Some(Direction::BackwardLog { .. }) => self.backward.run(world),
+            None => panic!("todo"),
+        }
+    }
+    pub fn initialize(
+        &mut self,
+        world: &mut World,
+    ) -> (
+        Result<(), ScheduleBuildError>,
+        Result<(), ScheduleBuildError>,
+    ) {
+        (
+            self.forward.initialize(world),
+            self.backward.initialize(world),
+        )
+    }
+    pub fn graphs(&self) -> (&ScheduleGraph, &ScheduleGraph) {
+        (self.forward.graph(), self.backward.graph())
+    }
+    pub fn systems_len(&self) -> usize {
+        self.forward.systems_len()
+    }
+}

@@ -146,7 +146,7 @@ impl<T> RareTransitionLog<T> {
     pub fn forward_log(&mut self) -> Result<Option<&mut T>, OutOfLog> {
         if let Some(entry) = self.transitions.get_mut(self.index) {
             self.len += 1;
-            if self.skips < entry.skips.into() {
+            if self.skips < entry.skips {
                 self.skips += 1;
                 Ok(None)
             } else {

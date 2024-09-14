@@ -13,27 +13,27 @@ use bevy::reflect::{ReflectDeserialize, ReflectSerialize};
 /// Wraps a `[u8; N]` that contains the output of `T::to_le_bytes()` where `T` is an integer primitive
 /// and the wrapped value is small enough to fit into a potenitally smaller byte array than the type's
 /// size is usually.
-/// 
+///
 /// # Conversations
 ///
 /// This wrapper implements `TryFrom<T>` and `Into<T>` among other traits, though variants with the same
 /// size as their `T` also implement the infallible `From<T>`. Exceptions are the `PackedInt<usize, SIZE>`
 /// and `PackedInt<isize, SIZE>` types that always only implement `TryFrom<T>`. If the `From` implementation
 /// is desired, use the [`PackedUSize`] / [`PackedISize`] structs.
-/// 
+///
 /// These namings also exist for other integer types which, other than the two mentioned, are type aliases.
-/// 
+///
 /// # Value ranges
 ///
 /// The value range follow the pattern of the primitive integers:
 /// - signed: `-2^((SIZE-1)*8)` to `2^((SIZE-1)*8)` exclusively
 /// - unsigned: `0` to `2^(SIZE*8)` exclusively
-/// 
+///
 /// On machines with a pointer width less than 64 bit, `PackedInt<usize, SIZE>` / `PackedInt<isize, SIZE>`
 /// and `SIZE` larger than the integer's size, the range still is limited to the range of their respective
 /// integer types on these machines. The excessive internal bytes contain unspecified values that are not
 /// read.
-/// 
+///
 /// # Motivations
 ///
 /// The benefit of this type is to safe memory if not the whole range of `T` is needed and also to pack
@@ -149,9 +149,7 @@ where
     }
 }
 
-impl<T, const SIZE: usize> Copy for PackedInt<T, SIZE>
-where
-    for<'a> [u8; SIZE]: SerdeBound<'a> {}
+impl<T, const SIZE: usize> Copy for PackedInt<T, SIZE> where for<'a> [u8; SIZE]: SerdeBound<'a> {}
 
 impl<T, const SIZE: usize> PartialEq for PackedInt<T, SIZE>
 where
@@ -162,9 +160,7 @@ where
     }
 }
 
-impl<T, const SIZE: usize> Eq for PackedInt<T, SIZE>
-where
-    for<'a> [u8; SIZE]: SerdeBound<'a> {}
+impl<T, const SIZE: usize> Eq for PackedInt<T, SIZE> where for<'a> [u8; SIZE]: SerdeBound<'a> {}
 
 impl<T: PartialOrd + From<Self>, const SIZE: usize> PartialOrd for PackedInt<T, SIZE>
 where
@@ -179,7 +175,8 @@ where
 
 impl<T: Ord + From<Self>, const SIZE: usize> Ord for PackedInt<T, SIZE>
 where
-    for<'a> [u8; SIZE]: SerdeBound<'a> {
+    for<'a> [u8; SIZE]: SerdeBound<'a>,
+{
     fn cmp(&self, other: &Self) -> Ordering {
         let this: T = (*self).into();
         let other: T = (*other).into();
@@ -375,10 +372,10 @@ macro_rules! packed_impl {
 macro_rules! packed_size_impl {
     ($structname: ident, $integer: ident) => {
         /// Packed variant of the integer with the same range and size but an alignment of 1.
-        /// 
+        ///
         /// This type behaves like [`Packed`] variants with the integer's size, though this one specifies this
         /// size internally and supports the infallible `From<integer>` conversation for easier usage.
-        /// 
+        ///
         /// For more information see [`Packed`].
         #[derive(Clone, Copy, PartialEq, Eq, Reflect)]
         #[reflect(Default, PartialEq)]
@@ -389,20 +386,17 @@ macro_rules! packed_size_impl {
         )]
         pub struct $structname([u8; $integer::BITS as usize / 8]);
 
-        impl $structname
-        {
+        impl $structname {
             pub const ZERO: Self = Self([0; $integer::BITS as usize / 8]);
         }
 
-        impl Default for $structname
-        {
+        impl Default for $structname {
             fn default() -> Self {
                 Self::ZERO
             }
         }
 
-        impl Add<Self> for $structname
-        {
+        impl Add<Self> for $structname {
             type Output = $integer;
             fn add(self, rhs: Self) -> Self::Output {
                 let this: $integer = self.into();
@@ -411,8 +405,7 @@ macro_rules! packed_size_impl {
             }
         }
 
-        impl Add<$integer> for $structname
-        {
+        impl Add<$integer> for $structname {
             type Output = $integer;
             fn add(self, rhs: $integer) -> Self::Output {
                 let this: $integer = self.into();
@@ -420,8 +413,7 @@ macro_rules! packed_size_impl {
             }
         }
 
-        impl Sub<$integer> for $structname
-        {
+        impl Sub<$integer> for $structname {
             type Output = $integer;
             fn sub(self, rhs: $integer) -> Self::Output {
                 let this: $integer = self.into();
@@ -429,8 +421,7 @@ macro_rules! packed_size_impl {
             }
         }
 
-        impl Sub<$structname> for $structname
-        {
+        impl Sub<$structname> for $structname {
             type Output = $integer;
             fn sub(self, rhs: Self) -> Self::Output {
                 let this: $integer = self.into();
@@ -537,7 +528,7 @@ macro_rules! packed_size_impl {
                 *self -= rhs;
             }
         }
-    }
+    };
 }
 
 packed_impl!(u16, false, 1, TryFrom);

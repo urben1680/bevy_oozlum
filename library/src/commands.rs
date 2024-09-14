@@ -81,33 +81,43 @@ impl CommandsLog {
             .get_resource::<RevMeta>()
             .expect(RevMeta::EXIST_MSG)
             .clone();
-        if meta.direction() == Direction::Forward {
-            for command in self.0.drain_future().0.rev() {
-                SyncCell::to_inner(command).undone_finalize(world);
+        match meta.get_direction() {
+            Some(Direction::Forward) => {
+                for command in self.0.drain_future().0.rev() {
+                    SyncCell::to_inner(command).undone_finalize(world);
+                }
+                for command in self.0.drain_past_by_timestamp(&meta) {
+                    SyncCell::to_inner(command).redone_finalize(world);
+                }
+                let mut buffer = world.get_resource_or_insert_with(RevCommandBuffer::default);
+                if !buffer.0.is_empty() {
+                    let _infallibe = self.0.push_present(|mut log| {
+                        log.append(&mut buffer.0);
+                        meta.now()
+                    });
+                }
             }
-            for command in self.0.drain_past_by_timestamp(&meta) {
-                SyncCell::to_inner(command).redone_finalize(world);
+            Some(Direction::ForwardLog { .. }) => {
+                for command in self
+                    .0
+                    .forward_log()
+                    .expect("todo not out of log")
+                    .into_iter()
+                {
+                    command.get().redo(world);
+                }
             }
-            let mut buffer = world.get_resource_or_insert_with(RevCommandBuffer::default);
-            if !buffer.0.is_empty() {
-                let _infallibe = self.0.push_present(|mut log| {
-                    log.append(&mut buffer.0);
-                    meta.now()
-                });
-            }
-        } else {
-            // == Direction::ForwardLog
-            for command in self
-                .0
-                .forward_log()
-                .expect("todo not out of log")
-                .into_iter()
-            {
-                command.get().redo(world);
-            }
+            _ => todo!("todo"),
         }
     }
     pub fn backward(&mut self, world: &mut World) {
+        let meta = world.get_resource::<RevMeta>();
+        if !matches!(
+            meta.map(RevMeta::internal_direction),
+            Some(crate::meta::InternalDirection::RunningBackwardLog { .. })
+        ) {
+            todo!("")
+        }
         for command in self
             .0
             .backward_log()

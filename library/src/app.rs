@@ -13,6 +13,7 @@ use system_configs::IntoRevSystemConfigs;
 
 use crate::{BackwardSchedule, ForwardSchedule};
 
+mod schedule;
 mod set_configs;
 mod system_configs;
 
@@ -49,8 +50,10 @@ impl RevApp for App {
         let schedule = schedule.intern();
         let configs = sets.into_rev_configs();
         self.configure_sets(ForwardSchedule(schedule), configs.forward_sys)
-            .configure_sets(BackwardSchedule(schedule), configs.backward_cmds_sys)
-            .configure_sets(BackwardSchedule(schedule), configs.backward_sys)
+            .configure_sets(
+                BackwardSchedule(schedule),
+                (configs.backward_cmds_sys, configs.backward_sys),
+            )
     }
 }
 

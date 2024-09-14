@@ -168,7 +168,7 @@ impl<T> RareValueLog<T> {
         Ok(())
     }
     pub fn forward_log(&mut self) -> Result<(), OutOfLog> {
-        if self.skips < self.present.skips.into() {
+        if self.skips < self.present.skips {
             self.len += 1;
             self.skips += 1;
             Ok(())
