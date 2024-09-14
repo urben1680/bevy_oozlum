@@ -260,21 +260,16 @@ where
     }
     pub fn pop_past_by_len(
         &mut self,
-        meta: &RevMeta,
-        pushes_per_frame: usize,
+        max_past_len: usize,
     ) -> Option<DataEntry<impl LogIter<T>, U>> {
         self.amounts
-            .pop_past_by_len(meta, pushes_per_frame)
+            .pop_past_by_len(max_past_len)
             .map(|with_amount| self.drain_past_by_amount(with_amount))
     }
-    pub fn drain_past_by_len(
-        &mut self,
-        meta: &RevMeta,
-        pushes_per_frame: usize,
-    ) -> impl LogIter<T> {
+    pub fn drain_past_by_len(&mut self, max_past_len: usize) -> impl LogIter<T> {
         let amount: usize = self
             .amounts
-            .drain_past_by_len(meta, pushes_per_frame)
+            .drain_past_by_len(max_past_len)
             .map(|with_amount| with_amount.amount())
             .sum();
         self.index -= amount;

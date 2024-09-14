@@ -10,8 +10,14 @@ use super::{invert_tuple, BackwardCmdsSys, BackwardSys};
 mod condition;
 
 pub struct RevSystemSetConfigs {
+    /// Configuration(s) of sets or systems in the forward schedule.
     pub(crate) forward_sys: SystemSetConfigs,
+
+    /// Configuration(s) of CommandsBackward in the backward schedule
+    /// paired with systems configured with [`Self::backward_sys`].
     pub(crate) backward_cmds_sys: SystemSetConfigs,
+
+    /// Configuration(s) of sets or systems in the backward schedule.
     pub(crate) backward_sys: SystemSetConfigs,
 }
 

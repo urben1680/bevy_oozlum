@@ -6,6 +6,7 @@ Features:
 - reversible Event reader/writer
 - entity commands, standard rev commands
 - packed more ops
+- add license
 
 Enhancements:
 - general todo!() und //todo, reduce unwrap/expect

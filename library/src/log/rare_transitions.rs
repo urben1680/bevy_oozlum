@@ -192,16 +192,15 @@ where
     }
     pub fn pop_past_by_len(
         &mut self,
-        meta: &RevMeta,
-        pushes_per_len: usize,
+        max_past_len: usize,
     ) -> Option<DataEntry<impl LogIter<T>, U>> {
-        let entry = self.amounts.pop_past_by_len(meta, pushes_per_len);
+        let entry = self.amounts.pop_past_by_len(max_past_len);
         self.drain_past_by_amount(entry)
     }
-    pub fn drain_past_by_len(&mut self, meta: &RevMeta, pushes_per_len: usize) -> impl LogIter<T> {
+    pub fn drain_past_by_len(&mut self, max_past_len: usize) -> impl LogIter<T> {
         let amount: usize = self
             .amounts
-            .drain_past_by_len(meta, pushes_per_len)
+            .drain_past_by_len(max_past_len)
             .map(|with_amount| with_amount.amount())
             .sum();
         self.index -= amount;
@@ -349,7 +348,7 @@ mod test {
                 })
                 .is_ok();
             let middle = self.one_per_frame[0].clone();
-            self.one_per_frame[0].pop_past_by_len(&self.meta, 1);
+            self.one_per_frame[0].pop_past_by_len(self.meta.past_len());
             assert_eq!(
                 is_ok, expected_ok,
                 "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
@@ -377,7 +376,7 @@ mod test {
                 })
                 .is_ok();
             let middle = self.one_per_frame[1].clone();
-            let _ = self.one_per_frame[1].drain_past_by_len(&self.meta, 1);
+            let _ = self.one_per_frame[1].drain_past_by_len(self.meta.past_len());
             assert_eq!(
                 is_ok, expected_ok,
                 "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
