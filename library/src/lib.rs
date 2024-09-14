@@ -10,8 +10,10 @@ Features:
 
 Enhancements:
 - general todo!() und //todo, reduce unwrap/expect
+- RareValues tests
 - longer log tests for RareTransition and RareValue
 - tests of other log methods like clear variants
+- config tests
 
 Docs
 - examples
@@ -22,7 +24,7 @@ UNSUPPORTED:
 
 - Change Detection
 - Hooks
-- IntoSystemConfigs::rev_distributive_run_if
+- IntoSystemConfigs::distributive_run_if
 - Schedule::set_apply_final_deferred
 - Schedule::graph_mut
 - ScheduleBuildSettings::auto_insert_apply_deferred
@@ -34,6 +36,7 @@ use bevy::{
     app::Plugin,
     ecs::{intern::Interned, schedule::ScheduleLabel},
 };
+
 use meta::RevMeta;
 
 pub mod app;

@@ -91,7 +91,7 @@ impl CommandsLog {
                 }
                 let mut buffer = world.get_resource_or_insert_with(RevCommandBuffer::default);
                 if !buffer.0.is_empty() {
-                    let _infallibe = self.0.push_present(|mut log| {
+                    self.0.push_present(|mut log| {
                         log.append(&mut buffer.0);
                         meta.now()
                     });
