@@ -1,7 +1,7 @@
 use core::{num::NonZeroUsize, ops::Range};
 
 use bevy::{
-    ecs::{schedule::ScheduleLabel, system::Resource, world:: World},
+    ecs::{schedule::ScheduleLabel, system::Resource, world::World},
     reflect::{std_traits::ReflectDefault, Reflect},
 };
 
@@ -315,18 +315,26 @@ impl RevMeta {
     pub fn run_rev_schedule(&self, world: &mut World, label: impl ScheduleLabel) {
         let label = label.intern();
         match self.direction() {
-            Direction::Forward | Direction::ForwardLog { .. } => world.run_schedule(ForwardSchedule(label)),
-            Direction::BackwardLog { .. } => world.run_schedule(BackwardSchedule(label))
+            Direction::Forward | Direction::ForwardLog { .. } => {
+                world.run_schedule(ForwardSchedule(label))
+            }
+            Direction::BackwardLog { .. } => world.run_schedule(BackwardSchedule(label)),
         }
     }
-    pub fn try_run_rev_schedule(&self, world: &mut World, label: impl ScheduleLabel) -> Result<(), TryRunRevScheduleError> {
+    pub fn try_run_rev_schedule(
+        &self,
+        world: &mut World,
+        label: impl ScheduleLabel,
+    ) -> Result<(), TryRunRevScheduleError> {
         let label = label.intern();
         let Some(direction) = self.get_direction() else {
             return Err(TryRunRevScheduleError::MainRevScheduleNotRunning);
         };
         let result = match direction {
-            Direction::Forward | Direction::ForwardLog { .. } => world.try_run_schedule(ForwardSchedule(label)),
-            Direction::BackwardLog { .. } => world.try_run_schedule(BackwardSchedule(label))
+            Direction::Forward | Direction::ForwardLog { .. } => {
+                world.try_run_schedule(ForwardSchedule(label))
+            }
+            Direction::BackwardLog { .. } => world.try_run_schedule(BackwardSchedule(label)),
         };
         result.map_err(|_| TryRunRevScheduleError::BevyTryRunScheduleError)
     }

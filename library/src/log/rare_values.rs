@@ -197,10 +197,7 @@ where
             }),
         }
     }
-    pub fn push_present<Out: Into<U>>(
-        &mut self,
-        c: impl FnOnce(LogMut<T>) -> Out,
-    ) -> Option<U> {
+    pub fn push_present<Out: Into<U>>(&mut self, c: impl FnOnce(LogMut<T>) -> Out) -> Option<U> {
         use std::any::type_name;
         self.try_push_present(c).unwrap_or_else(|err| {
             panic!("Tried to push {} values into {} which does not fit into {}. If the pushed amount is uncertain, use `try_push_present` or a larger `Amount` type.",

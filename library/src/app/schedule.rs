@@ -20,7 +20,7 @@ pub struct RevSchedule {
 
 pub enum TryRunRevScheduleError {
     MainRevScheduleNotRunning,
-    BevyTryRunScheduleError
+    BevyTryRunScheduleError,
 }
 
 pub struct RevScheduleBuildSettings {
@@ -48,7 +48,10 @@ impl RevSchedule {
         self.configure_rev_sets(configs.set_configs);
         self
     }
-    pub fn configure_rev_sets(&mut self, sets: impl IntoRevSystemSetConfigs) -> &mut Self {
+    pub fn configure_rev_sets<Marker>(
+        &mut self,
+        sets: impl IntoRevSystemSetConfigs<Marker>,
+    ) -> &mut Self {
         let configs = sets.into_rev_configs();
         self.forward.configure_sets(configs.forward_sys);
         self.backward

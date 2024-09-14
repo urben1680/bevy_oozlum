@@ -95,41 +95,6 @@ where
     }
 }
 
-// todo: exemplary, replace with macros
-impl<S0, M0, S1, M1> IntoRevSystemConfigs<((S0, M0), (S1, M1))> for (S0, S1)
-where
-    S0: IntoRevSystemConfigs<M0>,
-    S1: IntoRevSystemConfigs<M1>,
-{
-    fn into_rev_configs(self) -> RevSystemConfigs {
-        let configs0 = self.0.into_rev_configs();
-        let configs1 = self.1.into_rev_configs();
-        RevSystemConfigs {
-            forward: (configs0.forward, configs1.forward).into_configs(),
-            backward: (configs1.backward, configs0.backward).into_configs(), // reverse order for consitency, not actually needed as it remains unconfigured
-            set_configs: RevSystemSetConfigs {
-                forward_sys: (
-                    configs0.set_configs.forward_sys,
-                    configs1.set_configs.forward_sys,
-                )
-                    .into_configs(),
-                backward_cmds_sys: (
-                    // reverse order!
-                    configs1.set_configs.backward_cmds_sys,
-                    configs0.set_configs.backward_cmds_sys,
-                )
-                    .into_configs(),
-                backward_sys: (
-                    // reverse order!
-                    configs1.set_configs.backward_sys,
-                    configs0.set_configs.backward_sys,
-                )
-                    .into_configs(),
-            },
-        }
-    }
-}
-
 struct ArcSystem<T> {
     system_and_initialized: Arc<RwLock<(T, bool)>>,
     name: String,
