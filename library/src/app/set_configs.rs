@@ -1,10 +1,11 @@
 use bevy::{
     ecs::schedule::SystemSetConfigs,
     prelude::{Condition, IntoSystemSet, IntoSystemSetConfigs, SystemSet},
+    utils::all_tuples,
 };
 use condition::forward_backward_conditions;
 
-use super::{BackwardCmdsSys, BackwardSys};
+use super::{invert_tuple, BackwardCmdsSys, BackwardSys};
 
 mod condition;
 
@@ -14,7 +15,7 @@ pub struct RevSystemSetConfigs {
     pub(crate) backward_sys: SystemSetConfigs,
 }
 
-pub trait IntoRevSystemSetConfigs: Sized {
+pub trait IntoRevSystemSetConfigs<Marker>: Sized {
     #[doc(hidden)]
     fn into_rev_configs(self) -> RevSystemSetConfigs;
     fn rev_in_set(self, set: impl SystemSet) -> RevSystemSetConfigs {
@@ -136,13 +137,37 @@ pub trait IntoRevSystemSetConfigs: Sized {
     }
 }
 
-impl IntoRevSystemSetConfigs for RevSystemSetConfigs {
+impl RevSystemSetConfigs {
+    /// Split configs to be more readable in macros and as partially movable as nested tuples.
+    pub(crate) fn split(self) -> (ForwardSetConfig, BackwardSetConfigs) {
+        (
+            ForwardSetConfig {
+                forward_sys: self.forward_sys,
+            },
+            BackwardSetConfigs {
+                backward_cmds_sys: self.backward_cmds_sys,
+                backward_sys: self.backward_sys,
+            },
+        )
+    }
+}
+
+pub(crate) struct ForwardSetConfig {
+    pub(crate) forward_sys: SystemSetConfigs,
+}
+
+pub(crate) struct BackwardSetConfigs {
+    pub(crate) backward_cmds_sys: SystemSetConfigs,
+    pub(crate) backward_sys: SystemSetConfigs,
+}
+
+impl IntoRevSystemSetConfigs<RevSystemSetConfigs> for RevSystemSetConfigs {
     fn into_rev_configs(self) -> RevSystemSetConfigs {
         self
     }
 }
 
-impl<S: SystemSet> IntoRevSystemSetConfigs for S {
+impl<S: SystemSet> IntoRevSystemSetConfigs<()> for S {
     fn into_rev_configs(self) -> RevSystemSetConfigs {
         let set = self.intern();
         RevSystemSetConfigs {
@@ -152,3 +177,43 @@ impl<S: SystemSet> IntoRevSystemSetConfigs for S {
         }
     }
 }
+
+macro_rules! impl_into_rev_set_configs {
+    ($(($T: ident, $M: ident, $var: ident)),*) => {
+        impl<$($T, $M),*> IntoRevSystemSetConfigs<($($M,)*)> for ($($T,)*)
+        where
+            $($T: IntoRevSystemSetConfigs<$M>,)*
+        {
+            fn into_rev_configs(self) -> RevSystemSetConfigs {
+                // let (var0, ..., var9)
+                //  : (impl IntoRevSystemSetConfigs, ..., impl IntoRevSystemSetConfigs)
+                //  = self;
+                let ($($var,)*) = self;
+
+                // let (var0, ..., var9)
+                //  : ((ForwardSetConfig, BackwardSetConfigs), ..., (ForwardSetConfig, BackwardSetConfigs)
+                //  = (var0.into_rev_configs().split(), ..., var9.into_rev_configs().split());
+                let ($($var,)*) = ($($var.into_rev_configs().split(),)*);
+
+                let forward_sys = ($($var.0.forward_sys,)*).into_configs();
+
+                // let (var0, ..., var9)
+                //  : (BackwardSetConfigs, ..., BackwardSetConfigs)
+                //  = (var9, ..., var0);
+                let ($($var,)*) = invert_tuple!($($var.1,)*);
+
+                let backward_cmds_sys = ($($var.backward_cmds_sys,)*).into_configs();
+
+                let backward_sys = ($($var.backward_sys,)*).into_configs();
+
+                RevSystemSetConfigs {
+                    forward_sys,
+                    backward_cmds_sys,
+                    backward_sys,
+                }
+            }
+        }
+    };
+}
+
+all_tuples!(impl_into_rev_set_configs, 1, 20, T, M, var);

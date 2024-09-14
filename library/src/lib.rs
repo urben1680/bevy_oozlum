@@ -5,7 +5,6 @@ Features:
 - reversible observer ? or issue to link
 - reversible Event reader/writer
 - entity commands, standard rev commands
-- tuple impl configs
 - packed more ops
 
 Enhancements:
