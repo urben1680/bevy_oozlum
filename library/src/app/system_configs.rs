@@ -1,11 +1,10 @@
 use bevy::{
-    ecs::schedule::{Condition, IntoSystemSet, IntoSystemSetConfigs, SystemConfigs, SystemSet},
+    ecs::schedule::{Condition, IntoSystemSet, SystemConfigs, SystemSet},
     prelude::IntoSystemConfigs,
     utils::all_tuples,
 };
 
 use super::{
-    invert_tuple,
     set_configs::{IntoRevSystemSetConfigs, RevSystemSetConfigs},
 };
 
@@ -123,30 +122,12 @@ macro_rules! impl_into_rev_system_configs {
                 // would need to be inverted if it was configured further, but that happens with set_configs instead
                 let backward = ($($var.backward,)*).into_configs();
 
-                // let (var0, ..., var9)
-                //  : ((ForwardSetConfig, BackwardSetConfigs), ..., (ForwardSetConfig, BackwardSetConfigs)
-                //  = (var0.set_configs.to_tuple(), ..., var9.set_configs.to_tuple());
-                let ($($var,)*) = ($($var.set_configs.split(),)*);
-
-                let forward_sys = ($($var.0.forward_sys,)*).into_configs();
-
-                // let (var0, ..., var9)
-                //  : (BackwardSetConfigs, ..., BackwardSetConfigs)
-                //  = (var9, ..., var0);
-                let ($($var,)*) = invert_tuple!($($var.1,)*);
-
-                let backward_cmds_sys = ($($var.backward_cmds_sys,)*).into_configs();
-
-                let backward_sys = ($($var.backward_sys,)*).into_configs();
+                let set_configs = ($($var.set_configs,)*).into_rev_configs();
 
                 RevSystemConfigs {
                     forward,
                     backward,
-                    set_configs: RevSystemSetConfigs {
-                        forward_sys,
-                        backward_cmds_sys,
-                        backward_sys,
-                    },
+                    set_configs,
                 }
             }
         }

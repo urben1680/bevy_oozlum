@@ -5,7 +5,7 @@ use bevy::{
 };
 use condition::forward_backward_conditions;
 
-use super::{invert_tuple, BackwardCmdsSys, BackwardSys};
+use super::{BackwardCmdsSys, BackwardSys};
 
 mod condition;
 
@@ -184,6 +184,29 @@ impl<S: SystemSet> IntoRevSystemSetConfigs<()> for S {
     }
 }
 
+/// Inverts tuples of expressions.
+///
+/// `invert_tuple!(a.foo(), b.bar())` extends to `(b.bar(), a.foo())`.
+///
+/// This is expensive as the steps grow quadratically with the number of arguments.
+///
+/// See https://veykril.github.io/tlborm/decl-macros/patterns/tt-muncher.html.
+macro_rules! invert_tuple {
+    // Initialize the empty accumulator so that callers don't have to pass that in.
+    ($($input:expr),* $(,)?) => {
+        invert_tuple!(@ACC [] [$($input,)*])
+    };
+    // Recursive step, each new identifier is prepended to the left of the
+    // previous tokens.
+    (@ACC [$($acc:tt)*] [$fst:expr , $($rest:tt)*]) => {
+        invert_tuple!(@ACC [$fst, $($acc)*] [$($rest)*])
+    };
+    // Final step, finalize the accumulator, producing an actual tuple.
+    (@ACC [$($acc:tt)*] []) => {
+        ($($acc)*)
+    };
+}
+
 macro_rules! impl_into_rev_set_configs {
     ($(($T: ident, $M: ident, $var: ident)),*) => {
         impl<$($T, $M),*> IntoRevSystemSetConfigs<($($M,)*)> for ($($T,)*)
@@ -197,7 +220,7 @@ macro_rules! impl_into_rev_set_configs {
                 let ($($var,)*) = self;
 
                 // let (var0, ..., var9)
-                //  : ((ForwardSetConfig, BackwardSetConfigs), ..., (ForwardSetConfig, BackwardSetConfigs)
+                //  : ((ForwardSetConfig, BackwardSetConfigs), ..., (ForwardSetConfig, BackwardSetConfigs))
                 //  = (var0.into_rev_configs().split(), ..., var9.into_rev_configs().split());
                 let ($($var,)*) = ($($var.into_rev_configs().split(),)*);
 

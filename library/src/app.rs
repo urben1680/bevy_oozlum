@@ -112,28 +112,3 @@ fn check_tick(own_tick: &mut Tick, change_tick: Tick) {
         *own_tick = Tick::new(change_tick.get().wrapping_sub(Tick::MAX.get()));
     }
 }
-
-/// Inverts tuples of expressions.
-///
-/// `invert_tuple!(a.foo(), b.bar())` extends to `(b.bar(), a.foo())`.
-///
-/// This is expensive as the steps grow quadratically with the number of arguments.
-///
-/// See https://veykril.github.io/tlborm/decl-macros/patterns/tt-muncher.html.
-macro_rules! invert_tuple {
-    // Initialize the empty accumulator so that callers don't have to pass that in.
-    ($($input:expr),* $(,)?) => {
-        invert_tuple!(@ACC [] [$($input,)*])
-    };
-    // Recursive step, each new identifier is prepended to the left of the
-    // previous tokens.
-    (@ACC [$($acc:tt)*] [$fst:expr , $($rest:tt)*]) => {
-        invert_tuple!(@ACC [$fst, $($acc)*] [$($rest)*])
-    };
-    // Final step, finalize the accumulator, producing an actual tuple.
-    (@ACC [$($acc:tt)*] []) => {
-        ($($acc)*)
-    };
-}
-
-use invert_tuple;
