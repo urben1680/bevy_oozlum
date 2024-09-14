@@ -296,7 +296,7 @@ macro_rules! packed_impl {
             }
         }
 
-        impl std::fmt::Debug for PackedInt<$integer, $size> {
+        impl Debug for PackedInt<$integer, $size> {
             fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                 let value: $integer = (*self).into();
                 value.fmt(f)
@@ -442,7 +442,7 @@ macro_rules! packed_size_impl {
             }
         }
 
-        impl std::fmt::Debug for $structname {
+        impl Debug for $structname {
             fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                 let value: $integer = (*self).into();
                 value.fmt(f)

@@ -12,8 +12,18 @@ use super::{
 mod system;
 
 pub struct RevSystemConfigs {
+    /// Unconfigured system(s) for the forward schedule.
+    ///
+    /// Configuration is done at [`Self::set_configs.forward_sys`](RevSystemSetConfigs::forward_sys) instead.
     pub(crate) forward: SystemConfigs,
+
+    /// Unconfigured system(s) for the backward schedule.
+    ///
+    /// Configuration is done at [`Self::set_configs.forward_sys`](RevSystemSetConfigs::backward_cmds_sys) and
+    /// [`Self::set_configs.forward_sys`](RevSystemSetConfigs::backward_sys) instead.
     pub(crate) backward: SystemConfigs,
+
+    /// Actual configuration of the systems.
     pub(crate) set_configs: RevSystemSetConfigs,
 }
 

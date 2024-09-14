@@ -182,8 +182,8 @@ impl<T> RareValueLog<T> {
             Err(OutOfLog)
         }
     }
-    pub fn pop_past_by_len(&mut self, meta: &RevMeta, pushes_per_frame: usize) -> Option<T> {
-        let excessive_len = self.len.checked_sub(meta.past_len() * pushes_per_frame)?;
+    pub fn pop_past_by_len(&mut self, max_past_len: usize) -> Option<T> {
+        let excessive_len = self.len.checked_sub(max_past_len)?;
         let past_end = self.past_end_rare()?;
         if excessive_len >= past_end.len() {
             self.pop_past()
@@ -191,16 +191,11 @@ impl<T> RareValueLog<T> {
             None
         }
     }
-    pub fn drain_past_by_len(
-        &mut self,
-        meta: &RevMeta,
-        pushes_per_frame: usize,
-    ) -> impl LogIter<T> {
-        let past_len = (meta.now() - meta.range().start) * pushes_per_frame;
+    pub fn drain_past_by_len(&mut self, max_past_len: usize) -> impl LogIter<T> {
         let mut drain_amount = 0;
         for entry in self.values.iter() {
             let less = self.len - entry.len();
-            if less < past_len {
+            if less < max_past_len {
                 break;
             }
             self.len = less;
@@ -362,7 +357,7 @@ mod test {
 
             self.one_per_frame[0].push_present(push.then_some(value.into()));
             let middle = self.one_per_frame[0].clone();
-            self.one_per_frame[0].pop_past_by_len(&self.meta, 1);
+            self.one_per_frame[0].pop_past_by_len(self.meta.past_len());
             assert!(
                 self.one_per_frame[0].log_len() >= minimum_log_len,
                 "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
@@ -389,7 +384,7 @@ mod test {
 
             self.one_per_frame[1].push_present(push.then_some(value.into()));
             let middle = self.one_per_frame[1].clone();
-            let _ = self.one_per_frame[1].drain_past_by_len(&self.meta, 1);
+            let _ = self.one_per_frame[1].drain_past_by_len(self.meta.past_len());
             assert!(
                 self.one_per_frame[1].log_len() >= minimum_log_len,
                 "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",

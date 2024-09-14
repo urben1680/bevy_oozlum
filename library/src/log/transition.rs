@@ -96,21 +96,15 @@ impl<T> TransitionLog<T> {
             .inspect(|_| self.index += 1)
             .ok_or(OutOfLog)
     }
-    pub fn pop_past_by_len(&mut self, meta: &RevMeta, pushes_per_frame: usize) -> Option<T> {
-        if self.index > meta.past_len() * pushes_per_frame {
+    pub fn pop_past_by_len(&mut self, max_past_len: usize) -> Option<T> {
+        if self.index > max_past_len {
             self.pop_past()
         } else {
             None
         }
     }
-    pub fn drain_past_by_len(
-        &mut self,
-        meta: &RevMeta,
-        pushes_per_frame: usize,
-    ) -> impl LogIter<T> {
-        let excessive = self
-            .index
-            .saturating_sub(meta.past_len() * pushes_per_frame);
+    pub fn drain_past_by_len(&mut self, max_past_len: usize) -> impl LogIter<T> {
+        let excessive = self.index.saturating_sub(max_past_len);
         self.index -= excessive;
         self.transitions.drain(..excessive)
     }
@@ -215,7 +209,7 @@ mod test {
 
             self.one_per_frame[0].push_present(transition.into());
             let middle = self.one_per_frame[0].clone();
-            self.one_per_frame[0].pop_past_by_len(&self.meta, 1);
+            self.one_per_frame[0].pop_past_by_len(self.meta.past_len());
             assert_eq!(
                 self.one_per_frame[0].len(),
                 expected_len,
@@ -227,7 +221,7 @@ mod test {
 
             self.one_per_frame[1].push_present(transition.into());
             let middle = self.one_per_frame[1].clone();
-            let _ = self.one_per_frame[1].drain_past_by_len(&self.meta, 1);
+            let _ = self.one_per_frame[1].drain_past_by_len(self.meta.past_len());
             assert_eq!(
                 self.one_per_frame[1].len(),
                 expected_len,

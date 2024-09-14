@@ -120,7 +120,7 @@ impl<T: System<Out = bool> + ReadOnlySystem> System for RevConditionForward<T> {
                     // - update_archetype_component_access was called by the caller of Self::run_unsafe
                     self.condition.run_unsafe(input, world)
                 };
-                log.pop_past_by_len(meta, 1);
+                log.pop_past_by_len(meta.past_len());
                 log.push_present(out.then_some(().into()));
                 out
             }
@@ -181,7 +181,7 @@ unsafe impl<T: System<Out = bool> + ReadOnlySystem> ReadOnlySystem for RevCondit
         match meta.get_direction() {
             Some(Direction::Forward) => {
                 let out = self.condition.run_readonly(input, world);
-                log.pop_past_by_len(meta, 1);
+                log.pop_past_by_len(meta.past_len());
                 log.push_present(out.then_some(().into()));
                 out
             }
