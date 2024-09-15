@@ -243,7 +243,7 @@ mod test {
 
                     let transition = self.with_timestamp[0]
                         .backward_log()
-                        .map(|entry| entry.data);
+                        .map(|entry| entry.value);
                     assert_eq!(
                         transition, expected_transition,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
@@ -252,7 +252,7 @@ mod test {
 
                     let transition = self.with_timestamp[1]
                         .backward_log()
-                        .map(|entry| entry.data);
+                        .map(|entry| entry.value);
                     assert_eq!(
                         transition, expected_transition,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
@@ -319,14 +319,14 @@ mod test {
                     );
                     self.meta.update();
 
-                    let transition = self.with_timestamp[0].forward_log().map(|entry| entry.data);
+                    let transition = self.with_timestamp[0].forward_log().map(|entry| entry.value);
                     assert_eq!(
                         transition, expected_transition,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
                         self.meta, previous.with_timestamp[0], self.with_timestamp[0]
                     );
 
-                    let transition = self.with_timestamp[1].forward_log().map(|entry| entry.data);
+                    let transition = self.with_timestamp[1].forward_log().map(|entry| entry.value);
                     assert_eq!(
                         transition, expected_transition,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",

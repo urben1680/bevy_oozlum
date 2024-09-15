@@ -81,6 +81,10 @@ where
             tick: Tick::new(0),
         };
 
+        // Note that System::has_deferred may return no correct value before initializing the system.
+        // Because of this (and that initializing the system here might be surprising for the user)
+        // the commands systems are always added. They become noop if the system ends up having no
+        // deferred buffers. CommandsBackward::has_deferred reads the value from the actual system.
         RevSystemConfigs {
             forward: fwd_sys.pipe(fwd_cmd).into_configs(),
             backward: (bwd_cmd, bwd_sys.in_set(bwd_sys_set))

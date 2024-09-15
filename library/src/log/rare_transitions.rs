@@ -8,7 +8,7 @@ use bevy::reflect::{std_traits::ReflectDefault, Reflect};
 use crate::meta::RevMeta;
 
 use super::{
-    AmountErr, DataEntry, LogIter, LogMut, OutOfLog, PackedUSize, RareTransitionLog, WithAmount,
+    AmountErr, ValueEntry, LogIter, LogMut, OutOfLog, PackedUSize, RareTransitionLog, WithAmount,
     WithTimestamp,
 };
 
@@ -113,7 +113,7 @@ where
             .past_end()
             .map(|with_amount| &with_amount.entry)
     }
-    pub fn pop_past(&mut self) -> Option<DataEntry<impl LogIter<T>, U>> {
+    pub fn pop_past(&mut self) -> Option<ValueEntry<impl LogIter<T>, U>> {
         let entry = self.amounts.pop_past();
         self.drain_past_by_amount(entry)
     }
@@ -150,7 +150,7 @@ where
                 Ok(None)
             }
             Err(err) => Err(AmountErr {
-                data: self.transitions.drain(previous_len..),
+                values: self.transitions.drain(previous_len..),
                 entry,
                 err,
             }),
@@ -160,32 +160,32 @@ where
         use std::any::type_name;
         self.try_push_present(c).unwrap_or_else(|err| {
             panic!("Tried to push {} transitions into {} which does not fit into {}. If the pushed amount is uncertain, use `try_push_present` or a larger `Amount` type.",
-            err.data.len(), type_name::<Self>(), type_name::<Amount>()
+            err.values.len(), type_name::<Self>(), type_name::<Amount>()
             )
         })
     }
     pub fn backward_log(
         &mut self,
-    ) -> Result<Option<DataEntry<impl LogIter<&mut T>, &mut U>>, OutOfLog> {
+    ) -> Result<Option<ValueEntry<impl LogIter<&mut T>, &mut U>>, OutOfLog> {
         Ok(self.amounts.backward_log()?.map(|with_amount| {
             let old_index = self.index;
             self.index -= with_amount.amount();
-            let data = self.transitions.range_mut(self.index..old_index);
-            DataEntry {
-                data,
+            let value = self.transitions.range_mut(self.index..old_index);
+            ValueEntry {
+                value,
                 entry: &mut with_amount.entry,
             }
         }))
     }
     pub fn forward_log(
         &mut self,
-    ) -> Result<Option<DataEntry<impl LogIter<&mut T>, &mut U>>, OutOfLog> {
+    ) -> Result<Option<ValueEntry<impl LogIter<&mut T>, &mut U>>, OutOfLog> {
         Ok(self.amounts.forward_log()?.map(|with_amount| {
             let old_index = self.index;
             self.index += with_amount.amount();
-            let data = self.transitions.range_mut(old_index..self.index);
-            DataEntry {
-                data,
+            let value = self.transitions.range_mut(old_index..self.index);
+            ValueEntry {
+                value,
                 entry: &mut with_amount.entry,
             }
         }))
@@ -193,7 +193,7 @@ where
     pub fn pop_past_by_len(
         &mut self,
         max_past_len: usize,
-    ) -> Option<DataEntry<impl LogIter<T>, U>> {
+    ) -> Option<ValueEntry<impl LogIter<T>, U>> {
         let entry = self.amounts.pop_past_by_len(max_past_len);
         self.drain_past_by_amount(entry)
     }
@@ -209,12 +209,12 @@ where
     fn drain_past_by_amount(
         &mut self,
         with_amount: Option<WithAmount<U, Amount>>,
-    ) -> Option<DataEntry<impl LogIter<T>, U>> {
+    ) -> Option<ValueEntry<impl LogIter<T>, U>> {
         with_amount.map(|with_amount| {
             let amount = with_amount.amount();
             self.index -= amount;
-            DataEntry {
-                data: self.transitions.drain(..amount),
+            ValueEntry {
+                value: self.transitions.drain(..amount),
                 entry: with_amount.entry,
             }
         })
@@ -228,7 +228,7 @@ where
     pub fn pop_past_by_timestamp(
         &mut self,
         meta: &RevMeta,
-    ) -> Option<DataEntry<impl LogIter<T>, WithTimestamp<U>>> {
+    ) -> Option<ValueEntry<impl LogIter<T>, WithTimestamp<U>>> {
         let entry = self.amounts.pop_past_by_timestamp(meta);
         self.drain_past_by_amount(entry)
     }
@@ -416,7 +416,7 @@ mod test {
 
                     let transitions = self.with_timestamp[0]
                         .backward_log()
-                        .map(|ok| ok.map(|with_timestamp| collect(with_timestamp.data)));
+                        .map(|ok| ok.map(|with_timestamp| collect(with_timestamp.value)));
                     assert_eq!(
                         transitions, expected_transitions,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
@@ -425,7 +425,7 @@ mod test {
 
                     let transitions = self.with_timestamp[1]
                         .backward_log()
-                        .map(|ok| ok.map(|with_timestamp| collect(with_timestamp.data)));
+                        .map(|ok| ok.map(|with_timestamp| collect(with_timestamp.value)));
                     assert_eq!(
                         transitions, expected_transitions,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
@@ -434,7 +434,7 @@ mod test {
 
                     let transitions = self.one_per_frame[0]
                         .backward_log()
-                        .map(|ok| ok.map(|data| collect(data.data)));
+                        .map(|ok| ok.map(|value| collect(value.value)));
                     assert_eq!(
                         transitions, expected_transitions,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
@@ -443,7 +443,7 @@ mod test {
 
                     let transitions = self.one_per_frame[1]
                         .backward_log()
-                        .map(|ok| ok.map(|data| collect(data.data)));
+                        .map(|ok| ok.map(|value| collect(value.value)));
                     assert_eq!(
                         transitions, expected_transitions,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
@@ -504,7 +504,7 @@ mod test {
 
                     let transitions = self.with_timestamp[0]
                         .forward_log()
-                        .map(|ok| ok.map(|with_timestamp| collect(with_timestamp.data)));
+                        .map(|ok| ok.map(|with_timestamp| collect(with_timestamp.value)));
                     assert_eq!(
                         transitions, expected_transitions,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
@@ -513,7 +513,7 @@ mod test {
 
                     let transitions = self.with_timestamp[1]
                         .forward_log()
-                        .map(|ok| ok.map(|with_timestamp| collect(with_timestamp.data)));
+                        .map(|ok| ok.map(|with_timestamp| collect(with_timestamp.value)));
                     assert_eq!(
                         transitions, expected_transitions,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
@@ -522,7 +522,7 @@ mod test {
 
                     let transitions = self.one_per_frame[0]
                         .forward_log()
-                        .map(|ok| ok.map(|data| collect(data.data)));
+                        .map(|ok| ok.map(|value| collect(value.value)));
                     assert_eq!(
                         transitions, expected_transitions,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
@@ -531,7 +531,7 @@ mod test {
 
                     let transitions = self.one_per_frame[1]
                         .forward_log()
-                        .map(|ok| ok.map(|data| collect(data.data)));
+                        .map(|ok| ok.map(|value| collect(value.value)));
                     assert_eq!(
                         transitions, expected_transitions,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",

@@ -44,22 +44,22 @@ use bevy::reflect::Reflect;
 pub mod packed_int;
 mod rare_transition;
 mod rare_transitions;
-mod rare_value;
-mod rare_values;
+mod rare_state;
+mod rare_states;
 mod transition;
 mod transitions;
-mod value;
-mod values;
+mod state;
+mod states;
 
 use packed_int::PackedUSize;
 pub use rare_transition::RareTransitionLog;
 pub use rare_transitions::RareTransitionsLog;
-pub use rare_value::RareValueLog;
-pub use rare_values::RareValuesLog;
+pub use rare_state::RareStateLog;
+pub use rare_states::RareStatesLog;
 pub use transition::TransitionLog;
 pub use transitions::TransitionsLog;
-pub use value::ValueLog;
-pub use values::ValuesLog;
+pub use state::StateLog;
+pub use states::StatesLog;
 
 use crate::meta::RevMeta;
 
@@ -82,8 +82,8 @@ impl<'a, T> LogMut<'a, T> {
     pub fn append(&mut self, other: &mut VecDeque<T>) {
         self.0.append(other);
     }
-    pub fn push_back(&mut self, data: T) {
-        self.0.push_back(data);
+    pub fn push_back(&mut self, value: T) {
+        self.0.push_back(value);
     }
 }
 
@@ -104,22 +104,22 @@ impl<'a, T> Extend<T> for LogMut<'a, T> {
 
 #[derive(Debug)]
 pub struct AmountErr<I, U, Amount: TryFrom<usize>> {
-    pub data: I,
+    pub values: I,
     pub entry: U,
     pub err: Amount::Error,
 }
 
 #[derive(Debug, Clone)]
-pub struct DataEntry<T, U> {
-    pub data: T,
+pub struct ValueEntry<T, U> {
+    pub value: T,
     pub entry: U,
 }
 
-impl<'a, T: Iterator, U> IntoIterator for &'a mut DataEntry<T, U> {
+impl<'a, T: Iterator, U> IntoIterator for &'a mut ValueEntry<T, U> {
     type IntoIter = &'a mut T;
     type Item = T::Item;
     fn into_iter(self) -> Self::IntoIter {
-        &mut self.data
+        &mut self.value
     }
 }
 
@@ -129,14 +129,14 @@ impl<'a, T: Iterator, U> IntoIterator for &'a mut DataEntry<T, U> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Reflect)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct WithTimestamp<T = ()> {
-    pub data: T,
+    pub value: T,
     pub logged_at: PackedUSize,
 }
 
 impl<T: Default> From<usize> for WithTimestamp<T> {
     fn from(logged_at: usize) -> Self {
         Self {
-            data: T::default(),
+            value: T::default(),
             logged_at: logged_at.into(),
         }
     }
@@ -145,7 +145,7 @@ impl<T: Default> From<usize> for WithTimestamp<T> {
 impl<T: Default> From<&RevMeta> for WithTimestamp<T> {
     fn from(meta: &RevMeta) -> Self {
         Self {
-            data: T::default(),
+            value: T::default(),
             logged_at: meta.now().into(),
         }
     }
@@ -153,15 +153,15 @@ impl<T: Default> From<&RevMeta> for WithTimestamp<T> {
 
 #[derive(Debug, Clone, PartialEq, Reflect)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-struct RareData<T> {
-    data: T,
+struct RareValue<T> {
+    value: T,
     /// If `T` is a transiton, then these are the skips before the transition.
     ///
     /// If `T` is a value, then these are the skips after the value.
     skips: PackedUSize,
 }
 
-impl<T> RareData<T> {
+impl<T> RareValue<T> {
     fn len(&self) -> usize {
         let skips: usize = self.skips.into();
         skips + 1 // `self.data` adds to the len

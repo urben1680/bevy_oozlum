@@ -10,8 +10,8 @@ Features:
 
 Enhancements:
 - general todo!() und //todo, reduce unwrap/expect
-- RareValues tests
-- longer log tests for RareTransition and RareValue
+- RareStates tests
+- longer log tests for RareTransition and RareState
 - tests of other log methods like clear variants
 - config tests
 
