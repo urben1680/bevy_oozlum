@@ -1,15 +1,11 @@
 use std::{
-    collections::{TryReserveError, VecDeque},
-    fmt::Debug,
+    collections::{TryReserveError, VecDeque}, fmt::Debug
 };
 
 use bevy::reflect::Reflect;
 
-use crate::meta::RevMeta;
-
 use super::{
-    AmountErr, ValueEntry, LogIter, LogMut, OutOfLog, PackedUSize, StateLog, WithAmount,
-    WithTimestamp,
+    AmountErr, LogIter, LogMut, OutOfLog, PackedUSize, StateLog, TraverseByTimestampErr, ValueEntry, WithAmount, WithTimestamp
 };
 
 #[derive(Debug, Clone, Reflect)]
@@ -287,18 +283,25 @@ impl<T, U, Amount> StatesLog<T, WithTimestamp<U>, Amount>
 where
     Amount: TryFrom<usize, Error: Debug> + Into<usize> + Copy,
 {
+    pub fn forward_log_by_timestamp(&mut self, now: usize) -> Result<(), TraverseByTimestampErr> {
+        self.amounts.forward_log_by_timestamp(now).map(|()| self.index += self.amounts.get().amount())
+    }
+    pub fn backward_log_by_timestamp(&mut self, now: usize) -> Result<(), TraverseByTimestampErr> {
+        let amount = self.amounts.get().amount();
+        self.amounts.backward_log_by_timestamp(now).map(|()| self.index -= amount)
+    }
     pub fn pop_past_by_timestamp(
         &mut self,
-        meta: &RevMeta,
+        log_start: usize,
     ) -> Option<ValueEntry<impl LogIter<T>, WithTimestamp<U>>> {
         self.amounts
-            .pop_past_by_timestamp(meta)
+            .pop_past_by_timestamp(log_start)
             .map(|with_amount| self.drain_past_by_amount(with_amount))
     }
-    pub fn drain_past_by_timestamp(&mut self, meta: &RevMeta) -> impl LogIter<T> {
+    pub fn drain_past_by_timestamp(&mut self, log_start: usize,) -> impl LogIter<T> {
         let amount: usize = self
             .amounts
-            .drain_past_by_timestamp(meta)
+            .drain_past_by_timestamp(log_start)
             .map(|with_amount| with_amount.amount())
             .sum();
         self.index -= amount;
@@ -311,6 +314,8 @@ mod test {
     use std::{borrow::Borrow, num::NonZeroUsize};
 
     use super::*;
+
+    use crate::meta::RevMeta;
 
     #[derive(Clone, Debug)]
     struct MetaAndLogs {
@@ -358,7 +363,7 @@ mod test {
                 })
                 .is_ok();
             let middle = self.with_timestamp[0].clone();
-            self.with_timestamp[0].pop_past_by_timestamp(&self.meta);
+            self.with_timestamp[0].pop_past_by_timestamp(self.meta.log_range().start);
             assert_eq!(
                 is_ok, expected_ok,
                 "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
@@ -390,7 +395,7 @@ mod test {
                 })
                 .is_ok();
             let middle = self.with_timestamp[1].clone();
-            let _ = self.with_timestamp[1].drain_past_by_timestamp(&self.meta);
+            let _ = self.with_timestamp[1].drain_past_by_timestamp(self.meta.log_range().start);
             assert_eq!(
                 is_ok, expected_ok,
                 "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",

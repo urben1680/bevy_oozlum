@@ -1,11 +1,9 @@
 use core::fmt::Debug;
-use std::collections::{TryReserveError, VecDeque};
+use std::{cmp::Ordering, collections::{TryReserveError, VecDeque}};
 
 use bevy::reflect::Reflect;
 
-use crate::meta::RevMeta;
-
-use super::{LogIter, OutOfLog, WithAmount, WithTimestamp};
+use super::{LogIter, OutOfLog, TraverseByTimestampErr, WithAmount, WithTimestamp};
 
 #[derive(Debug, Default, Clone, Reflect)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -160,40 +158,70 @@ impl<T> StateLog<T> {
 }
 
 impl<T> StateLog<WithTimestamp<T>> {
-    pub fn pop_past_by_timestamp(&mut self, meta: &RevMeta) -> Option<WithTimestamp<T>> {
-        if self.past_end()?.logged_at < meta.range().start {
+    pub fn forward_log_by_timestamp(&mut self, now: usize) -> Result<(), TraverseByTimestampErr> {
+        let logged_at: usize = self.get().logged_at.into();
+        match logged_at.cmp(&now) {
+            Ordering::Less => Ok(()),
+            Ordering::Equal => self.forward_log().map_err(|OutOfLog| TraverseByTimestampErr::OutOfLog),
+            Ordering::Greater => Err(TraverseByTimestampErr::MissedTimestamp)
+        }
+    }
+    pub fn backward_log_by_timestamp(&mut self, now: usize) -> Result<(), TraverseByTimestampErr> {
+        let logged_at: usize = self.get().logged_at.into();
+        match logged_at.cmp(&now) {
+            Ordering::Greater => Ok(()),
+            Ordering::Equal => self.backward_log().map_err(|OutOfLog| TraverseByTimestampErr::OutOfLog),
+            Ordering::Less => Err(TraverseByTimestampErr::MissedTimestamp)
+        }
+    }
+    pub fn pop_past_by_timestamp(&mut self, log_start: usize) -> Option<WithTimestamp<T>> {
+        if self.past_end()?.logged_at < log_start {
             self.pop_past()
         } else {
             None
         }
     }
-    pub fn drain_past_by_timestamp(&mut self, meta: &RevMeta) -> impl LogIter<WithTimestamp<T>> {
+    pub fn drain_past_by_timestamp(&mut self, log_start: usize) -> impl LogIter<WithTimestamp<T>> {
         let partition_point = self
             .states
-            .partition_point(|entry| entry.logged_at < meta.range().start);
+            .partition_point(|entry| entry.logged_at < log_start);
         self.index -= partition_point;
         self.states.drain(..partition_point)
     }
 }
 
 impl<U, Amount> StateLog<WithAmount<WithTimestamp<U>, Amount>> {
+    pub(crate) fn forward_log_by_timestamp(&mut self, now: usize) -> Result<(), TraverseByTimestampErr> {
+        let logged_at: usize = self.get().entry.logged_at.into();
+        match logged_at.cmp(&now) {
+            Ordering::Less => Ok(()),
+            Ordering::Equal => self.forward_log().map_err(|OutOfLog| TraverseByTimestampErr::OutOfLog),
+            Ordering::Greater => Err(TraverseByTimestampErr::MissedTimestamp)
+        }
+    }
+    pub(crate) fn backward_log_by_timestamp(&mut self, now: usize) -> Result<(), TraverseByTimestampErr> {
+        let logged_at: usize = self.get().entry.logged_at.into();
+        match logged_at.cmp(&now) {
+            Ordering::Greater => Ok(()),
+            Ordering::Equal => self.backward_log().map_err(|OutOfLog| TraverseByTimestampErr::OutOfLog),
+            Ordering::Less => Err(TraverseByTimestampErr::MissedTimestamp)
+        }
+    }
     pub(crate) fn pop_past_by_timestamp(
-        &mut self,
-        meta: &RevMeta,
+        &mut self, log_start: usize
     ) -> Option<WithAmount<WithTimestamp<U>, Amount>> {
-        if self.past_end()?.entry.logged_at < meta.range().start {
+        if self.past_end()?.entry.logged_at < log_start {
             self.pop_past()
         } else {
             None
         }
     }
     pub(crate) fn drain_past_by_timestamp(
-        &mut self,
-        meta: &RevMeta,
+        &mut self, log_start: usize
     ) -> impl LogIter<WithAmount<WithTimestamp<U>, Amount>> {
         let partition_point = self
             .states
-            .partition_point(|entry| entry.entry.logged_at < meta.range().start);
+            .partition_point(|entry| entry.entry.logged_at < log_start);
         self.index -= partition_point;
         self.states.drain(..partition_point)
     }
@@ -204,6 +232,8 @@ mod test {
     use std::num::NonZeroUsize;
 
     use super::*;
+
+    use crate::meta::RevMeta;
 
     #[derive(Clone, Debug)]
     struct MetaAndLogs {
@@ -232,7 +262,7 @@ mod test {
 
             self.with_timestamp[0].push_present(self.meta.with_timestamp(state));
             let middle = self.with_timestamp[0].clone();
-            self.with_timestamp[0].pop_past_by_timestamp(&self.meta);
+            self.with_timestamp[0].pop_past_by_timestamp(self.meta.log_range().start);
             assert_eq!(
                 self.with_timestamp[0].len(),
                 expected_log_len,
@@ -252,7 +282,7 @@ mod test {
 
             self.with_timestamp[1].push_present(self.meta.with_timestamp(state));
             let middle = self.with_timestamp[1].clone();
-            let _ = self.with_timestamp[1].drain_past_by_timestamp(&self.meta);
+            let _ = self.with_timestamp[1].drain_past_by_timestamp(self.meta.log_range().start);
             assert_eq!(
                 self.with_timestamp[1].len(),
                 expected_log_len,

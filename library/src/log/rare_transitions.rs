@@ -5,8 +5,6 @@ use std::{
 
 use bevy::reflect::{std_traits::ReflectDefault, Reflect};
 
-use crate::meta::RevMeta;
-
 use super::{
     AmountErr, ValueEntry, LogIter, LogMut, OutOfLog, PackedUSize, RareTransitionLog, WithAmount,
     WithTimestamp,
@@ -248,6 +246,8 @@ mod test {
     use std::{borrow::Borrow, num::NonZeroUsize};
 
     use super::*;
+
+    use crate::meta::RevMeta;
 
     #[derive(Clone, Debug)]
     struct MetaAndLogs {

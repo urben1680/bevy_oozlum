@@ -3,8 +3,6 @@ use std::collections::{TryReserveError, VecDeque};
 
 use bevy::reflect::{std_traits::ReflectDefault, Reflect};
 
-use crate::meta::RevMeta;
-
 use super::{LogIter, OutOfLog, WithAmount, WithTimestamp, BACKWARD_EXPECT_MSG};
 
 #[derive(Debug, Clone, Reflect)]
@@ -114,7 +112,7 @@ impl<T> TransitionLog<WithTimestamp<T>> {
     pub fn pop_past_by_timestamp(&mut self, meta: &RevMeta) -> Option<WithTimestamp<T>> {
         if self.past_end().map_or(false, |with_timestamp| {
             // include range().start because this entry instructs how to transition from range().start to range().start - 1
-            with_timestamp.logged_at <= meta.range().start
+            with_timestamp.logged_at <= meta.log_range().start
         }) {
             self.pop_past()
         } else {
@@ -124,7 +122,7 @@ impl<T> TransitionLog<WithTimestamp<T>> {
     pub fn drain_past_by_timestamp(&mut self, meta: &RevMeta) -> impl LogIter<WithTimestamp<T>> {
         let partition_point = self
             .transitions
-            .partition_point(|entry| entry.logged_at <= meta.range().start);
+            .partition_point(|entry| entry.logged_at <= meta.log_range().start);
         self.index -= partition_point;
         self.transitions.drain(..partition_point)
     }
@@ -137,7 +135,7 @@ impl<U, Amount: Copy> TransitionLog<WithAmount<WithTimestamp<U>, Amount>> {
     ) -> Option<WithAmount<WithTimestamp<U>, Amount>> {
         if self.past_end().map_or(false, |with_timestamp| {
             // include range().start because this entry instructs how to transition from range().start to range().start - 1
-            with_timestamp.entry.logged_at <= meta.range().start
+            with_timestamp.entry.logged_at <= meta.log_range().start
         }) {
             self.pop_past()
         } else {
@@ -150,7 +148,7 @@ impl<U, Amount: Copy> TransitionLog<WithAmount<WithTimestamp<U>, Amount>> {
     ) -> impl LogIter<WithAmount<WithTimestamp<U>, Amount>> {
         let partition_point = self
             .transitions
-            .partition_point(|entry| entry.entry.logged_at <= meta.range().start);
+            .partition_point(|entry| entry.entry.logged_at <= meta.log_range().start);
         self.index -= partition_point;
         self.transitions.drain(..partition_point)
     }
@@ -161,6 +159,8 @@ mod test {
     use std::num::NonZeroUsize;
 
     use super::*;
+
+    use crate::meta::RevMeta;
 
     #[derive(Clone, Debug)]
     struct MetaAndLogs {
