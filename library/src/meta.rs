@@ -198,7 +198,7 @@ impl RevMeta {
     }
     pub fn with_timestamp<T>(&self, data: T) -> WithTimestamp<T> {
         WithTimestamp {
-            data,
+            value: data,
             logged_at: self.now.into(),
         }
     }

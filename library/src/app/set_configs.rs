@@ -145,7 +145,7 @@ pub trait IntoRevSystemSetConfigs<Marker>: Sized {
 
 impl RevSystemSetConfigs {
     /// Split configs to be more readable in macros and as partially movable as nested tuples.
-    pub(crate) fn split(self) -> (ForwardSetConfig, BackwardSetConfigs) {
+    fn split(self) -> (ForwardSetConfig, BackwardSetConfigs) {
         (
             ForwardSetConfig {
                 forward_sys: self.forward_sys,
@@ -158,13 +158,13 @@ impl RevSystemSetConfigs {
     }
 }
 
-pub(crate) struct ForwardSetConfig {
-    pub(crate) forward_sys: SystemSetConfigs,
+struct ForwardSetConfig {
+    forward_sys: SystemSetConfigs,
 }
 
-pub(crate) struct BackwardSetConfigs {
-    pub(crate) backward_cmds_sys: SystemSetConfigs,
-    pub(crate) backward_sys: SystemSetConfigs,
+struct BackwardSetConfigs {
+    backward_cmds_sys: SystemSetConfigs,
+    backward_sys: SystemSetConfigs,
 }
 
 impl IntoRevSystemSetConfigs<RevSystemSetConfigs> for RevSystemSetConfigs {
@@ -228,7 +228,7 @@ macro_rules! impl_into_rev_set_configs {
 
                 // let (var0, ..., var9)
                 //  : (BackwardSetConfigs, ..., BackwardSetConfigs)
-                //  = (var9, ..., var0);
+                //  = (var9.1, ..., var0.1);
                 let ($($var,)*) = invert_tuple!($($var.1,)*);
 
                 let backward_cmds_sys = ($($var.backward_cmds_sys,)*).into_configs();

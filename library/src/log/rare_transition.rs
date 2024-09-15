@@ -5,14 +5,14 @@ use bevy::reflect::{std_traits::ReflectDefault, Reflect};
 
 use crate::meta::RevMeta;
 
-use super::{LogIter, OutOfLog, RareData, WithAmount, WithTimestamp, BACKWARD_EXPECT_MSG};
+use super::{LogIter, OutOfLog, RareValue, WithAmount, WithTimestamp, BACKWARD_EXPECT_MSG};
 
 #[derive(Debug, Clone, Reflect)]
 #[reflect(Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct RareTransitionLog<T> {
-    /// RareData.skips represents the number of None pushes before the transition in the struct
-    transitions: VecDeque<RareData<T>>,
+    /// RareValue.skips represents the number of None pushes before the transition in the struct
+    transitions: VecDeque<RareValue<T>>,
     index: usize,
     skips: usize,
     /// Used to check for OutOfLog error when calling `self.forward_log`
@@ -81,11 +81,11 @@ impl<T> RareTransitionLog<T> {
     pub fn transitions_shrink_to_fit(&mut self) {
         self.transitions.shrink_to_fit()
     }
-    fn past_end_rare(&self) -> Option<&RareData<T>> {
+    fn past_end_rare(&self) -> Option<&RareValue<T>> {
         self.transitions.front()
     }
     pub fn past_end(&self) -> Option<&T> {
-        self.past_end_rare().map(|rare| &rare.data)
+        self.past_end_rare().map(|rare| &rare.value)
     }
     pub fn pop_past(&mut self) -> Option<T> {
         if self.index == 0 {
@@ -95,12 +95,12 @@ impl<T> RareTransitionLog<T> {
         self.transitions.pop_front().map(|rare| {
             self.index -= 1;
             self.len -= rare.len();
-            rare.data
+            rare.value
         })
     }
     pub fn drain_future(&mut self) -> impl LogIter<T> {
         self.skips_max = self.skips;
-        self.transitions.drain(self.index..).map(|rare| rare.data)
+        self.transitions.drain(self.index..).map(|rare| rare.value)
     }
     pub fn clear(&mut self) {
         self.transitions.clear();
@@ -116,8 +116,8 @@ impl<T> RareTransitionLog<T> {
                 self.skips += 1;
             }
             Some(transition) => {
-                self.transitions.push_back(RareData {
-                    data: transition,
+                self.transitions.push_back(RareValue {
+                    value: transition,
                     skips: self.skips.into(),
                 });
                 self.skips = 0;
@@ -140,7 +140,7 @@ impl<T> RareTransitionLog<T> {
                 .expect(BACKWARD_EXPECT_MSG);
             self.skips = entry.skips.into();
             self.len -= 1;
-            Ok(Some(&mut entry.data))
+            Ok(Some(&mut entry.value))
         }
     }
     pub fn forward_log(&mut self) -> Result<Option<&mut T>, OutOfLog> {
@@ -152,7 +152,7 @@ impl<T> RareTransitionLog<T> {
             } else {
                 self.index += 1;
                 self.skips = 0;
-                Ok(Some(&mut entry.data))
+                Ok(Some(&mut entry.value))
             }
         } else if self.skips < self.skips_max {
             self.len += 1;
@@ -182,7 +182,7 @@ impl<T> RareTransitionLog<T> {
             drain_amount += 1;
         }
         self.index -= drain_amount;
-        self.transitions.drain(..drain_amount).map(|rare| rare.data)
+        self.transitions.drain(..drain_amount).map(|rare| rare.value)
     }
 }
 
@@ -200,8 +200,8 @@ impl<T: Debug> RareTransitionLog<WithTimestamp<T>> {
     pub fn drain_past_by_timestamp(&mut self, meta: &RevMeta) -> impl LogIter<WithTimestamp<T>> {
         let partition_point = self
             .transitions
-            .partition_point(|entry| entry.data.logged_at <= meta.range().start);
-        self.len -= partition_point // sum of to-be-drained transitions, because of this mapping RareData::len below is not needed, only skips_before_value
+            .partition_point(|entry| entry.value.logged_at <= meta.range().start);
+        self.len -= partition_point // sum of to-be-drained transitions, because of this mapping RareValue::len below is not needed, only skips_before_value
             + self
                 .transitions
                 .range(..partition_point)
@@ -210,7 +210,7 @@ impl<T: Debug> RareTransitionLog<WithTimestamp<T>> {
         self.index -= partition_point;
         self.transitions
             .drain(..partition_point)
-            .map(|rare| rare.data)
+            .map(|rare| rare.value)
     }
 }
 
@@ -234,7 +234,7 @@ impl<U, Amount: Copy> RareTransitionLog<WithAmount<WithTimestamp<U>, Amount>> {
     ) -> impl LogIter<WithAmount<WithTimestamp<U>, Amount>> {
         let partition_point = self
             .transitions
-            .partition_point(|entry| entry.data.entry.logged_at <= meta.range().start);
+            .partition_point(|entry| entry.value.entry.logged_at <= meta.range().start);
         self.len -= partition_point
             + self
                 .transitions
@@ -244,7 +244,7 @@ impl<U, Amount: Copy> RareTransitionLog<WithAmount<WithTimestamp<U>, Amount>> {
         self.index -= partition_point;
         self.transitions
             .drain(..partition_point)
-            .map(|rare| rare.data)
+            .map(|rare| rare.value)
     }
 }
 
@@ -370,7 +370,7 @@ mod test {
 
                     let transition = self.with_timestamp[0]
                         .backward_log()
-                        .map(|ok| ok.map(|with_timestamp| with_timestamp.data));
+                        .map(|ok| ok.map(|with_timestamp| with_timestamp.value));
                     assert_eq!(
                         transition, expected_transition,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
@@ -379,7 +379,7 @@ mod test {
 
                     let transition = self.with_timestamp[1]
                         .backward_log()
-                        .map(|ok| ok.map(|with_timestamp| with_timestamp.data));
+                        .map(|ok| ok.map(|with_timestamp| with_timestamp.value));
                     assert_eq!(
                         transition, expected_transition,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
@@ -448,7 +448,7 @@ mod test {
 
                     let transition = self.with_timestamp[0]
                         .forward_log()
-                        .map(|with_timestamp| with_timestamp.map(|transition| transition.data));
+                        .map(|with_timestamp| with_timestamp.map(|transition| transition.value));
                     assert_eq!(
                         transition, expected_transition,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
@@ -457,7 +457,7 @@ mod test {
 
                     let transition = self.with_timestamp[1]
                         .forward_log()
-                        .map(|with_timestamp| with_timestamp.map(|transition| transition.data));
+                        .map(|with_timestamp| with_timestamp.map(|transition| transition.value));
                     assert_eq!(
                         transition, expected_transition,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
@@ -466,7 +466,7 @@ mod test {
 
                     let transition = self.one_per_frame[0]
                         .forward_log()
-                        .map(|data| data.cloned());
+                        .map(|value| value.cloned());
                     assert_eq!(
                         transition, expected_transition,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
@@ -475,7 +475,7 @@ mod test {
 
                     let transition = self.one_per_frame[1]
                         .forward_log()
-                        .map(|data| data.cloned());
+                        .map(|value| value.cloned());
                     assert_eq!(
                         transition, expected_transition,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
