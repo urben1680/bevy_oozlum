@@ -16,7 +16,7 @@ Enhancements:
 - config tests
 - forward_log_by_timestamp / backward_log_by_timestamp for all logs and testing
 - meta-free methods of logs, meta offers fitting methods
-- explore timestamp as u64 after recent refactorings
+- explore timestamp as u64/u32/u16 (feature?) after recent refactorings
 
 Docs
 - examples
