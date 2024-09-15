@@ -124,7 +124,7 @@ impl<T: System<Out = bool> + ReadOnlySystem> System for RevConditionForward<T> {
                 log.push_present(out.then_some(().into()));
                 out
             }
-            Some(Direction::ForwardLog { .. }) => log.forward_log().expect("todo").is_some(),
+            Some(Direction::ForwardLog) => log.forward_log().expect("todo").is_some(),
             _ => todo!(),
         }
     }
@@ -185,7 +185,7 @@ unsafe impl<T: System<Out = bool> + ReadOnlySystem> ReadOnlySystem for RevCondit
                 log.push_present(out.then_some(().into()));
                 out
             }
-            Some(Direction::ForwardLog { .. }) => log.forward_log().expect("todo").is_some(),
+            Some(Direction::ForwardLog) => log.forward_log().expect("todo").is_some(),
             _ => todo!(),
         }
     }
@@ -195,7 +195,7 @@ impl<In: Send + Sync + 'static> RevConditionBackward<In> {
     fn run_inner(&mut self, meta: Option<&RevMeta>) -> bool {
         if !matches!(
             meta.and_then(RevMeta::get_direction),
-            Some(Direction::BackwardLog { .. })
+            Some(Direction::BackwardLog)
         ) {
             todo!()
         }

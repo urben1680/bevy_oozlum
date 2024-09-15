@@ -3,8 +3,6 @@ use std::collections::{TryReserveError, VecDeque};
 
 use bevy::reflect::{std_traits::ReflectDefault, Reflect};
 
-use crate::meta::RevMeta;
-
 use super::{LogIter, OutOfLog, RareValue, WithAmount, WithTimestamp, BACKWARD_EXPECT_MSG};
 
 #[derive(Debug, Clone, Reflect)]
@@ -187,20 +185,26 @@ impl<T> RareTransitionLog<T> {
 }
 
 impl<T: Debug> RareTransitionLog<WithTimestamp<T>> {
-    pub fn pop_past_by_timestamp(&mut self, meta: &RevMeta) -> Option<WithTimestamp<T>> {
+    pub fn forward_log_by_timestamp(&mut self, now: usize) -> Result<(), TraverseByTimestampErr> {
+        todo!()
+    }
+    pub fn backward_log_by_timestamp(&mut self, now: usize) -> Result<(), TraverseByTimestampErr> {
+        todo!()
+    }
+    pub fn pop_past_by_timestamp(&mut self, log_start: usize) -> Option<WithTimestamp<T>> {
         if self.past_end().map_or(false, |entry| {
             // include range().start because this entry instructs how to transition from range().start to range().start - 1
-            entry.logged_at <= meta.range().start
+            entry.logged_at <= log_start
         }) {
             self.pop_past()
         } else {
             None
         }
     }
-    pub fn drain_past_by_timestamp(&mut self, meta: &RevMeta) -> impl LogIter<WithTimestamp<T>> {
+    pub fn drain_past_by_timestamp(&mut self, log_start: usize) -> impl LogIter<WithTimestamp<T>> {
         let partition_point = self
             .transitions
-            .partition_point(|entry| entry.value.logged_at <= meta.range().start);
+            .partition_point(|entry| entry.value.logged_at <= log_start);
         self.len -= partition_point // sum of to-be-drained transitions, because of this mapping RareValue::len below is not needed, only skips_before_value
             + self
                 .transitions
@@ -217,11 +221,11 @@ impl<T: Debug> RareTransitionLog<WithTimestamp<T>> {
 impl<U, Amount: Copy> RareTransitionLog<WithAmount<WithTimestamp<U>, Amount>> {
     pub(crate) fn pop_past_by_timestamp(
         &mut self,
-        meta: &RevMeta,
+        log_start: usize,
     ) -> Option<WithAmount<WithTimestamp<U>, Amount>> {
         if self.past_end().map_or(false, |entry| {
             // include range().start because this entry instructs how to transition from range().start to range().start - 1
-            entry.entry.logged_at <= meta.range().start
+            entry.entry.logged_at <= log_start
         }) {
             self.pop_past()
         } else {
@@ -230,11 +234,11 @@ impl<U, Amount: Copy> RareTransitionLog<WithAmount<WithTimestamp<U>, Amount>> {
     }
     pub(crate) fn drain_past_by_timestamp(
         &mut self,
-        meta: &RevMeta,
+        log_start: usize,
     ) -> impl LogIter<WithAmount<WithTimestamp<U>, Amount>> {
         let partition_point = self
             .transitions
-            .partition_point(|entry| entry.value.entry.logged_at <= meta.range().start);
+            .partition_point(|entry| entry.value.entry.logged_at <= log_start);
         self.len -= partition_point
             + self
                 .transitions
@@ -253,6 +257,8 @@ mod test {
     use std::num::NonZeroUsize;
 
     use super::*;
+
+    use crate::meta::RevMeta;
 
     #[derive(Clone, Debug)]
     struct MetaAndLogs {
@@ -282,7 +288,7 @@ mod test {
 
             let with_timestamp = transition.map(|transition| self.meta.with_timestamp(transition));
 
-            self.with_timestamp[0].pop_past_by_timestamp(&self.meta);
+            self.with_timestamp[0].pop_past_by_timestamp(self.meta.log_range().start);
             let middle = self.with_timestamp[0].clone();
             self.with_timestamp[0].push_present(with_timestamp);
             assert!(
@@ -301,7 +307,7 @@ mod test {
                 self.with_timestamp[0]
             );
 
-            let _ = self.with_timestamp[1].drain_past_by_timestamp(&self.meta);
+            let _ = self.with_timestamp[1].drain_past_by_timestamp(self.meta.log_range().start);
             let middle = self.with_timestamp[1].clone();
             self.with_timestamp[1].push_present(with_timestamp);
             assert!(

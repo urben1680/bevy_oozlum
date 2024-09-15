@@ -97,7 +97,7 @@ impl CommandsLog {
                     });
                 }
             }
-            Some(Direction::ForwardLog { .. }) => {
+            Some(Direction::ForwardLog) => {
                 for command in self
                     .0
                     .forward_log()

@@ -1,41 +1,257 @@
-//! # Log structures
-//!
-//! The logs in this module can be used for custom standalone loggings but offer additional methods to keep their length at a
-//! minimum if they are combined with [`OnePerFrame`], [`NPerFrame`] and [`WithTimestamp`]. The following table shows the
-//! individual scenarios where each of the combinations are suggested if memory usage is a concern.
-//!
-//! If performance is more important, it might make more sense to use [`TransitionLog<WithTimestamp<Option<T>>>`] for example
-//! than [`RareTransitionLog<OnePerFrame<T>>`]. Both are updated with `Option<T>`, but the first stores them more compact,
-//! depending on how rarely a `Some` occurs. But this comes with a little overhead at accessing the logged data again.
-//!
-//! # Available logs and use cases
-//!
-//! | data per push        | pushes per frame | suggested log struct |
-//! |----------------------|------------------|----------------------|
-//! | 1                    | constant         | [`TransitionLog<T>`] |
-//! | 1                    | varying          | [`TransitionLog<WithTimestamp<T>>`] |
-//! | 0 or rarely 1        | constant         | [`RareTransitionLog<T>`] |
-//! | 0 or rarely 1        | varying          | [`RareTransitionLog<WithTimestamp<T>>`] |
-//! | varying              | constant         | [`TransitionsLog<T, U, Amount>`] |
-//! | varying              | varying          | [`TransitionsLog<T, WithTimestamp<U>, Amount>`] |
-//! | 0 or rarely varying  | constant         | [`RareTransitionsLog<T,U>`] |
-//! | 0 or rarely varying  | varying          | [`RareTransitionsLog<T, WithTimestamp<U>>`] |
-//!
-//! - For constant `M` amounts of data per push, refer to "data per push": 1 and `[T; M]` as the logged type.
-//! - `U` is an optional `Copy` type that can be stored with each push of multiple data. Default is `()`.
-//! - `Amount` is the integer type to store the amount of data in each push, allowing memory optimizations. Default is `usize`.
-//!
-//! # Considerations and alternatives
-//!
-//! When storing `bool` or other types that can represent two states and one state occurs much more frequently, it makes sense
-//! to use [`RareTransitionLog<()>`] and map the `Option<()>` into the desired type where `None` is the more
-//! frequent state of the type.
-//!
-//! If the goal is to just sometimes push into the log, it might be benefitial if the call of `log.push_presence(value)` itself
-//! is what happens not every frame instead of wrapping the value into an `Option` while using a [`RareTransitionLog`]. This
-//! becomes possible if the condition for this decision is also available during log logic where `log.forward_log()` or
-//! `log.backward_log()` must or must not be called. Then [`TransitionLog`] can be used instead which is less memory-consuming and
-//! has less logic overhead.
+//! todo: intro
+//! 
+//! # log or no log at all
+//! 
+//! A log is needed if the context during [`BackwardLog`] or [`ForwardLog`] is not enough to determine
+//! how and if a mutation has to be undone/redone. If all a system does is to increase or decrease the
+//! velocity of a thing in free fall, this does not need to log at all.
+//! 
+//! Other mutations to the components could happen in other systems, but then this system is not concerned
+//! as long these other systems are reversible as well.
+//! 
+//! ```
+//! use bevy::prelude::*;
+//! 
+//! #[derive(Component)]
+//! struct Velocity(i32);
+//! 
+//! #[derive(Component)]
+//! struct Acceleration(i32);
+//! 
+//! #[derive(Component)]
+//! struct FreeFall;
+//! 
+//! fn velocity_system(query: Query<(&mut Velocity, &mut Acceleration), With<FreeFall>>, meta: Res<RevMeta>) {
+//!     match meta.direction() {
+//!         Direction::Forward | Direction::ForwardLog => {
+//!             for (velocity, acceleration) in query.iter_mut() {
+//!                 velocity.0 += acceleration.0;
+//!                 acceleration.0 += 1;
+//!             }
+//!         },
+//!         Direction::BackwardLog => {
+//!             for (velocity, acceleration) in query.iter_mut() {
+//!                 acceleration.0 -= 1;
+//!                 velocity.0 -= acceleration.0;
+//!             }
+//!         }
+//!     }
+//! }
+//! ```
+//! 
+//! However, situations where information is lost with a mutation, reversible systems do not work without logs.
+//! 
+//! ```
+//! use bevy::prelude::*;
+//! 
+//! #[derive(Component)]
+//! struct Velocity(i32);
+//! 
+//! #[derive(Component)]
+//! struct VerticalPosition(i32);
+//! 
+//! fn position_system(query: Query<(&mut Velocity, &mut VerticalPosition)>, meta: Res<RevMeta>) {
+//!     match meta.direction() {
+//!         Direction::Forward => {
+//!             for (velocity, position) in query.iter_mut() {
+//!                 position.0 -= velocity.0;
+//!                 if position.0 <= 0 {
+//!                     // 0 is the height of the ground, stop falling
+//!                     position.0 = 0;
+//!                     velocity.0 = 0;
+//!                 }
+//!             }
+//!         },
+//!         _ => todo!("How to undo/redo changes? Which values did the components have?")
+//!     }
+//! }
+//! ```
+//! 
+//! # Variants
+//! 
+//! ## `Rare` / non-`Rare` logs
+//! 
+//! It is simple if entities are iterated that are always mutated when encountered. Then the mutation
+//! takes place and the log is updated. And during [`BackwardLog`] or [`ForwardLog`] the log is accessed
+//! to undo/redo the mutation.
+//! 
+//! If that is the scenario, non-`Rare` log variants can be used.
+//! 
+//! ```
+//! use bevy::prelude::*;
+//! use rand::prelude::*;
+//! 
+//! #[derive(Component)]
+//! struct MyVal(StateLog<i32>);
+//! 
+//! fn rand_system(query: Query<&mut MyVal>, meta: Res<RevMeta>) {
+//!     match meta.direction() {
+//!         Direction::Forward => {
+//!             for val in query.iter_mut() {
+//!                 val.0.push_present(rand::random());
+//!                 val.0.pop_past_by_len(meta.past_len());
+//!                 println!("{}", val.0.get());
+//!             }
+//!         },
+//!         Direction::ForwardLog => {
+//!             for val in query.iter_mut() {
+//!                 val.0.forward_log().expect("not past log end");
+//!                 println!("{}", val.0.get());
+//!             }
+//!         },
+//!         Direction::BackwardLog => {
+//!             for val in query.iter_mut() {
+//!                 val.0.backward_log().expect("not past log end");
+//!                 println!("{}", val.0.get());
+//!             }
+//!         }
+//!     }
+//! }
+//! ```
+//! 
+//! If however mutations do not always happen, constantly pushing the same data into the log is wasteful.
+//! 
+//! There are a few solutions for this situation.
+//! 
+//! ### `Rare` logs
+//! 
+//! Rare log variants take an `Option<T>` in their `push_present` or, if the logs take multiple values
+//! (see TODO), do have the following behavior if 0 values are pushed. 
+//! 
+//! Receiving no value in the `push_present` method increases an internal counter without actually increasing
+//! the number of entries in the internal collection. That way the less often values are pushed, the more
+//! space-efficient the log is.
+//! 
+//! ```
+//! use bevy::prelude::*;
+//! use rand::prelude::*;
+//! 
+//! #[derive(Component)]
+//! struct MyVal(RareStateLog<i32>);
+//! 
+//! fn rand_system(query: Query<&mut MyVal>, meta: Res<RevMeta>) {
+//!     match meta.direction() {
+//!         Direction::Forward => {
+//!             for val in query.iter_mut() {
+//!                 let optional_val = rand::random::<bool>().then(rand::random);
+//!                 val.0.push_present(optional_val);
+//!                 val.0.pop_past_by_len(meta.past_len());
+//!                 println!("{}", val.0.get());
+//!             }
+//!         },
+//!         Direction::ForwardLog => {
+//!             for val in query.iter_mut() {
+//!                 val.0.forward_log().expect("not past log end");
+//!                 println!("{}", val.0.get());
+//!             }
+//!         },
+//!         Direction::BackwardLog => {
+//!             for val in query.iter_mut() {
+//!                 val.0.backward_log().expect("not past log end");
+//!                 println!("{}", val.0.get());
+//!             }
+//!         }
+//!     }
+//! }
+//! ```
+//! 
+//! ### `WithTimeStamp` logs
+//! 
+//! Another way to handle this is to also store a timestamp in the log so this can be used to determine if
+//! the log needs to be updated.
+//! 
+//! ```
+//! use bevy::prelude::*;
+//! use rand::prelude::*;
+//! 
+//! #[derive(Component)]
+//! struct MyVal(StateLog<WithTimestamp<i32>>);
+//! 
+//! fn rand_system(query: Query<&mut MyVal>, meta: Res<RevMeta>) {
+//!     match meta.direction() {
+//!         Direction::Forward => {
+//!             for val in query.iter_mut() {
+//!                 if rand::random {
+//!                     val.0.push_present(meta.with_timestamp(rand::random));
+//!                     val.0.pop_past_by_timestamp(meta);
+//!                     println!("{}", val.0.get());
+//!                 }
+//!             }
+//!         },
+//!         Direction::ForwardLog => {
+//!             for val in query.iter_mut() {
+//!                 val.0
+//!                     .forward_log_by_timestamp(meta.now())
+//!                     .expect("not past log end");
+//!                 println!("{} (may be unchanged)", val.0.get());
+//!             }
+//!         },
+//!         Direction::BackwardLog => {
+//!             for val in query.iter_mut() {
+//!                 val.0
+//!                     .backward_log_by_timestamp(meta.now())
+//!                     .expect("not past log end");
+//!                 println!("{} (may be unchanged)", val.0.get());
+//!             }
+//!         }
+//!     }
+//! }
+//! ```
+//! 
+//! ### Updating by context
+//! 
+//! Ideally the context contains the information if mutations should be done. But this context must be
+//! available during [`BackwardLog`] and [`ForwardLog`] as well.
+//! 
+//! ```
+//! use bevy::prelude::*;
+//! use rand::prelude::*;
+//! 
+//! #[derive(Component)]
+//! struct MyVal(StateLog<i32>);
+//! 
+//! #[derive(Resource)]
+//! struct UpdateRand(Entity); // set in a different reversible system
+//! 
+//! fn rand_system(query: Query<&mut MyVal>, update_entity: Res<UpdateRand>, meta: Res<RevMeta>) {
+//!     let Some(val) = query.get_mut(update_entity.0) else {
+//!         return;
+//!     }
+//!     match meta.direction(update_entity.0) {
+//!         Direction::Forward => {
+//!             val.0.push_present(rand::random());
+//!             val.0.pop_past_by_len(meta.past_len());
+//!         },
+//!         Direction::ForwardLog => {
+//!             val.0.forward_log().expect("not past log end");
+//!         },
+//!         Direction::BackwardLog => {
+//!             val.0.backward_log().expect("not past log end");
+//!         }
+//!     }
+//!     println!("{}", val.0.get());
+//! }
+//! ```
+//! 
+//! ### Other memory advantages of `Rare` logs
+//! 
+//! Rare log variants are supposed to need less memory, but they fulfill this role in other situations
+//! as well. The `None` push might not be an absence of a value but be treated as a value as well.
+//! 
+//! For example, if one wants to log `bool` and `false` occurs much more often than `true`, one can use a
+//! [`RareStateLog<()>`] where `false` maps to `None` and `true` to `Some(())`.
+//! 
+//! ## Amount of values per push
+//! 
+//! todo
+//! 
+//! ## `State` or `Transition` logs 
+//! 
+//! todo        
+//! 
+//! [`Forward`]: crate::meta::Direction::Forward
+//! [`ForwardLog`]: crate::meta::Direction::ForwardLog
+//! [`BackwardLog`]: crate::meta::Direction::BackwardLog
 
 use std::{collections::VecDeque, fmt::Debug, iter::FusedIterator};
 
@@ -75,6 +291,12 @@ impl<T, I: Iterator<Item = T> + DoubleEndedIterator + ExactSizeIterator + FusedI
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct OutOfLog;
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum TraverseByTimestampErr {
+    OutOfLog,
+    MissedTimestamp
+}
 
 pub struct LogMut<'a, T>(&'a mut VecDeque<T>);
 

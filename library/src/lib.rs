@@ -14,6 +14,8 @@ Enhancements:
 - longer log tests for RareTransition and RareState
 - tests of other log methods like clear variants
 - config tests
+- forward_log_by_timestamp / backward_log_by_timestamp for all logs and testing
+- meta-free methods of logs, meta offers fitting methods
 
 Docs
 - examples
@@ -34,7 +36,7 @@ use std::hash::Hash;
 
 use bevy::{
     app::Plugin,
-    ecs::{intern::Interned, schedule::ScheduleLabel},
+    ecs::schedule::{InternedScheduleLabel, ScheduleLabel},
 };
 
 use meta::RevMeta;
@@ -45,10 +47,10 @@ pub mod log;
 pub mod meta;
 
 #[derive(ScheduleLabel, Copy, Clone, Debug, Hash, PartialEq, Eq)]
-struct ForwardSchedule(Interned<dyn ScheduleLabel>);
+struct ForwardSchedule(InternedScheduleLabel);
 
 #[derive(ScheduleLabel, Copy, Clone, Debug, Hash, PartialEq, Eq)]
-struct BackwardSchedule(Interned<dyn ScheduleLabel>);
+struct BackwardSchedule(InternedScheduleLabel);
 
 #[derive(ScheduleLabel, Copy, Clone, Debug, Hash, PartialEq, Eq)]
 pub struct RevUpdate;

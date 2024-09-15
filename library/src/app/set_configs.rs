@@ -184,13 +184,6 @@ impl<S: SystemSet> IntoRevSystemSetConfigs<()> for S {
     }
 }
 
-/// Inverts tuples of expressions.
-///
-/// `invert_tuple!(a.foo(), b.bar())` extends to `(b.bar(), a.foo())`.
-///
-/// This is expensive as the steps grow quadratically with the number of arguments.
-///
-/// See https://veykril.github.io/tlborm/decl-macros/patterns/tt-muncher.html.
 macro_rules! invert_tuple {
     // Initialize the empty accumulator so that callers don't have to pass that in.
     ($($input:expr),* $(,)?) => {
@@ -223,6 +216,11 @@ macro_rules! impl_into_rev_set_configs {
                 //  : ((ForwardSetConfig, BackwardSetConfigs), ..., (ForwardSetConfig, BackwardSetConfigs))
                 //  = (var0.into_rev_configs().split(), ..., var9.into_rev_configs().split());
                 let ($($var,)*) = ($($var.into_rev_configs().split(),)*);
+
+                // TODO: From this point on the tuple consists of N BackwardSetConfigs in a tuple.
+                // Because of this another macro could provide functions mapping this tuple to RevSystemSetConfigs.
+                // Calling this function here and forbidding inlining would reduce how often invert_tuple! gets
+                // evaluated by the compiler, reducing compile times.
 
                 let forward_sys = ($($var.0.forward_sys,)*).into_configs();
 
