@@ -15,6 +15,10 @@ Enhancements:
 - tests of other log methods like clear variants
 - config tests
 - forward_log_by_timestamp / backward_log_by_timestamp for all logs and testing
+-- not possible with rare variants because skips have no timestamp
+- fix non-rare tests
+-- yeet WithTimestamp?
+--- needed to shorten past if not by len
 - meta-free methods of logs, meta offers fitting methods
 - explore timestamp as u64/u32/u16 (feature?) after recent refactorings
 
