@@ -1,9 +1,9 @@
 use core::fmt::Debug;
-use std::{cmp::Ordering, collections::{TryReserveError, VecDeque}};
+use std::collections::{TryReserveError, VecDeque};
 
 use bevy::reflect::{std_traits::ReflectDefault, Reflect};
 
-use super::{LogIter, OutOfLog, TraverseByTimestampErr, WithAmount, WithTimestamp, BACKWARD_EXPECT_MSG};
+use super::{LogIter, OutOfLog, WithAmount, WithTimestamp, BACKWARD_EXPECT_MSG};
 
 #[derive(Debug, Clone, Reflect)]
 #[reflect(Default)]
@@ -109,31 +109,6 @@ impl<T> TransitionLog<T> {
 }
 
 impl<T> TransitionLog<WithTimestamp<T>> {
-    pub fn forward_log_by_timestamp(&mut self, now: usize) -> Result<Option<&mut T>, TraverseByTimestampErr> {
-        let entry = self.transitions.get_mut(self.index).ok_or(TraverseByTimestampErr::OutOfLog)?;
-        let logged_at: usize = entry.logged_at.into();
-        match logged_at.cmp(&now) {
-            Ordering::Less => Ok(None),
-            Ordering::Equal => {
-                self.index += 1;
-                Ok(Some(&mut entry.value))
-            },
-            Ordering::Greater => Err(TraverseByTimestampErr::MissedTimestamp)
-        }
-    }
-    pub fn backward_log_by_timestamp(&mut self, now: usize) -> Result<Option<&mut T>, TraverseByTimestampErr> {
-        let index = self.index.checked_sub(1).ok_or(TraverseByTimestampErr::OutOfLog)?;
-        let entry = self.transitions.get_mut(index).expect(BACKWARD_EXPECT_MSG);
-        let logged_at: usize = entry.logged_at.into();
-        match logged_at.cmp(&now) {
-            Ordering::Greater => Ok(None),
-            Ordering::Equal => {
-                self.index = index;
-                Ok(Some(&mut entry.value))
-            },
-            Ordering::Less => Err(TraverseByTimestampErr::MissedTimestamp)
-        }
-    }
     pub fn pop_past_by_timestamp(&mut self, log_start: usize) -> Option<WithTimestamp<T>> {
         if self.past_end().map_or(false, |with_timestamp| {
             // include range().start because this entry instructs how to transition from range().start to range().start - 1
@@ -154,34 +129,9 @@ impl<T> TransitionLog<WithTimestamp<T>> {
 }
 
 impl<U, Amount: Copy> TransitionLog<WithAmount<WithTimestamp<U>, Amount>> {
-    pub(crate) fn forward_log_by_timestamp(&mut self, now: usize) -> Result<Option<&mut WithAmount<WithTimestamp<U>, Amount>>, TraverseByTimestampErr> {
-        let entry = self.transitions.get_mut(self.index).ok_or(TraverseByTimestampErr::OutOfLog)?;
-        let logged_at: usize = entry.entry.logged_at.into();
-        match logged_at.cmp(&now) {
-            Ordering::Less => Ok(None),
-            Ordering::Equal => {
-                self.index += 1;
-                Ok(Some(entry))
-            },
-            Ordering::Greater => Err(TraverseByTimestampErr::MissedTimestamp)
-        }
-    }
-    pub(crate) fn backward_log_by_timestamp(&mut self, now: usize) -> Result<Option<&mut WithAmount<WithTimestamp<U>, Amount>>, TraverseByTimestampErr> {
-        let index = self.index.checked_sub(1).ok_or(TraverseByTimestampErr::OutOfLog)?;
-        let entry = self.transitions.get_mut(index).expect(BACKWARD_EXPECT_MSG);
-        let logged_at: usize = entry.entry.logged_at.into();
-        match logged_at.cmp(&now) {
-            Ordering::Greater => Ok(None),
-            Ordering::Equal => {
-                self.index = index;
-                Ok(Some(entry))
-            },
-            Ordering::Less => Err(TraverseByTimestampErr::MissedTimestamp)
-        }
-    }
     pub(crate) fn pop_past_by_timestamp(
         &mut self,
-        log_start: usize
+        log_start: usize,
     ) -> Option<WithAmount<WithTimestamp<U>, Amount>> {
         if self.past_end().map_or(false, |with_timestamp| {
             // include range().start because this entry instructs how to transition from range().start to range().start - 1
@@ -194,7 +144,7 @@ impl<U, Amount: Copy> TransitionLog<WithAmount<WithTimestamp<U>, Amount>> {
     }
     pub(crate) fn drain_past_by_timestamp(
         &mut self,
-        log_start: usize
+        log_start: usize,
     ) -> impl LogIter<WithAmount<WithTimestamp<U>, Amount>> {
         let partition_point = self
             .transitions
@@ -284,69 +234,77 @@ mod test {
         fn backward_log(&mut self, expected_transition: Result<usize, OutOfLog>) {
             let previous = self.clone();
             match expected_transition {
-                Ok(expected_ok) => {
+                Ok(_) => {
                     assert!(
                         self.meta.queue_log(self.meta.now() - 1).is_ok(),
                         "\npreviously: {previous:?}\nnow: {self:?}"
                     );
                     self.meta.update();
 
-                    let transition = self.with_timestamp[0]
-                        .backward_log_by_timestamp(self.meta.now())
-                        .map(|entry| entry.cloned());
                     assert_eq!(
-                        transition, Ok(Some(expected_ok)),
+                        self.with_timestamp[0].backward_log().map(|x| x.value),
+                        expected_transition,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                        self.meta, previous.with_timestamp[0], self.with_timestamp[0]
+                        self.meta,
+                        previous.with_timestamp[0],
+                        self.with_timestamp[0]
                     );
 
-                    let transition = self.with_timestamp[1]
-                        .backward_log_by_timestamp(self.meta.now())
-                        .map(|entry| entry.cloned());
                     assert_eq!(
-                        transition, Ok(Some(expected_ok)),
+                        self.with_timestamp[1].backward_log().map(|x| x.value),
+                        expected_transition,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                        self.meta, previous.with_timestamp[1], self.with_timestamp[1]
+                        self.meta,
+                        previous.with_timestamp[1],
+                        self.with_timestamp[1]
                     );
 
-                    let transition = self.one_per_frame[0].backward_log().cloned();
                     assert_eq!(
-                        transition, expected_transition,
+                        self.one_per_frame[0].backward_log().cloned(),
+                        expected_transition,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                        self.meta, previous.one_per_frame[0], self.one_per_frame[0]
+                        self.meta,
+                        previous.one_per_frame[0],
+                        self.one_per_frame[0]
                     );
 
-                    let transition = self.one_per_frame[1].backward_log().cloned();
                     assert_eq!(
-                        transition, expected_transition,
+                        self.one_per_frame[1].backward_log().cloned(),
+                        expected_transition,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                        self.meta, previous.one_per_frame[1], self.one_per_frame[1]
+                        self.meta,
+                        previous.one_per_frame[1],
+                        self.one_per_frame[1]
                     );
                 }
                 Err(OutOfLog) => {
                     assert_eq!(
-                        self.with_timestamp[0].backward_log_by_timestamp(self.meta.now() - 1).map(|o| o.cloned()), Err(TraverseByTimestampErr::OutOfLog),
+                        self.with_timestamp[0].backward_log().cloned(),
+                        Err(OutOfLog),
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
                         self.meta,
                         previous.with_timestamp[0],
                         self.with_timestamp[0]
                     );
                     assert_eq!(
-                        self.with_timestamp[1].backward_log_by_timestamp(self.meta.now() - 1).map(|o| o.cloned()), Err(TraverseByTimestampErr::OutOfLog),
+                        self.with_timestamp[1].backward_log().cloned(),
+                        Err(OutOfLog),
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
                         self.meta,
                         previous.with_timestamp[1],
                         self.with_timestamp[1]
                     );
                     assert_eq!(
-                        self.one_per_frame[0].backward_log().cloned(), Err(OutOfLog),
+                        self.one_per_frame[0].backward_log().cloned(),
+                        Err(OutOfLog),
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
                         self.meta,
                         previous.one_per_frame[0],
                         self.one_per_frame[0]
                     );
                     assert_eq!(
-                        self.one_per_frame[1].backward_log().cloned(), Err(OutOfLog),
+                        self.one_per_frame[1].backward_log().cloned(),
+                        Err(OutOfLog),
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
                         self.meta,
                         previous.one_per_frame[1],
@@ -358,7 +316,7 @@ mod test {
         fn forward_log(&mut self, expected_transition: Result<usize, OutOfLog>) {
             let previous = self.clone();
             match expected_transition {
-                Ok(expected_ok) => {
+                Ok(_) => {
                     assert!(
                         self.meta.queue_log(self.meta.now() + 1).is_ok(),
                         "\npreviously: {previous:?}\nnow: {self:?}"
@@ -366,55 +324,69 @@ mod test {
                     self.meta.update();
 
                     assert_eq!(
-                        self.with_timestamp[0].forward_log_by_timestamp(self.meta.now())
-                    .map(|entry| entry.cloned()), Ok(Some(expected_ok)),
+                        self.with_timestamp[0].forward_log().map(|x| x.value),
+                        expected_transition,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                        self.meta, previous.with_timestamp[0], self.with_timestamp[0]
+                        self.meta,
+                        previous.with_timestamp[0],
+                        self.with_timestamp[0]
                     );
 
                     assert_eq!(
-                        self.with_timestamp[1].forward_log_by_timestamp(self.meta.now())
-                    .map(|entry| entry.cloned()), Ok(Some(expected_ok)),
+                        self.with_timestamp[1].forward_log().map(|x| x.value),
+                        expected_transition,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                        self.meta, previous.with_timestamp[1], self.with_timestamp[1]
+                        self.meta,
+                        previous.with_timestamp[1],
+                        self.with_timestamp[1]
                     );
 
                     assert_eq!(
-                        self.one_per_frame[0].forward_log().cloned(), expected_transition,
+                        self.one_per_frame[0].forward_log().cloned(),
+                        expected_transition,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                        self.meta, previous.one_per_frame[0], self.one_per_frame[0]
+                        self.meta,
+                        previous.one_per_frame[0],
+                        self.one_per_frame[0]
                     );
 
                     assert_eq!(
-                        self.one_per_frame[1].forward_log().cloned(), expected_transition,
+                        self.one_per_frame[1].forward_log().cloned(),
+                        expected_transition,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                        self.meta, previous.one_per_frame[1], self.one_per_frame[1]
+                        self.meta,
+                        previous.one_per_frame[1],
+                        self.one_per_frame[1]
                     );
                 }
                 Err(OutOfLog) => {
                     assert_eq!(
-                        self.with_timestamp[0].forward_log_by_timestamp(self.meta.now() + 1).map(|o| o.cloned()), Err(TraverseByTimestampErr::OutOfLog),
+                        self.with_timestamp[0].forward_log().cloned(),
+                        Err(OutOfLog),
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
                         self.meta,
                         previous.with_timestamp[0],
                         self.with_timestamp[0]
                     );
                     assert_eq!(
-                        self.with_timestamp[1].forward_log_by_timestamp(self.meta.now() + 1).map(|o| o.cloned()), Err(TraverseByTimestampErr::OutOfLog),
+                        self.with_timestamp[1].forward_log().cloned(),
+                        Err(OutOfLog),
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
                         self.meta,
                         previous.with_timestamp[1],
                         self.with_timestamp[1]
                     );
                     assert_eq!(
-                        self.one_per_frame[0].forward_log().cloned(), Err(OutOfLog),
+                        self.one_per_frame[0].forward_log().cloned(),
+                        Err(OutOfLog),
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
                         self.meta,
                         previous.one_per_frame[0],
                         self.one_per_frame[0]
                     );
                     assert_eq!(
-                        self.one_per_frame[1].forward_log().cloned(), Err(OutOfLog),
+                        self.one_per_frame[1].forward_log().cloned(),
+                        Err(OutOfLog),
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
                         self.meta,
                         previous.one_per_frame[1],

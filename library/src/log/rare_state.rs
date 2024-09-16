@@ -1,10 +1,10 @@
 use core::fmt::Debug;
-use std::{cmp::Ordering, collections::{TryReserveError, VecDeque}};
+use std::collections::{TryReserveError, VecDeque};
 
 use bevy::reflect::Reflect;
 
 use super::{
-    LogIter, OutOfLog, PackedUSize, RareValue, TraverseByTimestampErr, WithAmount, WithTimestamp, BACKWARD_EXPECT_MSG
+    LogIter, OutOfLog, PackedUSize, RareValue, WithAmount, WithTimestamp, BACKWARD_EXPECT_MSG,
 };
 
 #[derive(Debug, Clone, Reflect)]
@@ -205,28 +205,6 @@ impl<T> RareStateLog<T> {
 }
 
 impl<T: Debug> RareStateLog<WithTimestamp<T>> {
-    pub fn forward_log_by_timestamp(&mut self, now: usize) -> Result<bool, TraverseByTimestampErr> {
-        let logged_at: usize = self.get().logged_at.into();
-        match logged_at.cmp(&now) {
-            Ordering::Less => Ok(false),
-            Ordering::Equal => match self.forward_log() {
-                Ok(()) => Ok(true),
-                Err(OutOfLog) => Err(TraverseByTimestampErr::OutOfLog)
-            },
-            Ordering::Greater => Err(TraverseByTimestampErr::MissedTimestamp)
-        }
-    }
-    pub fn backward_log_by_timestamp(&mut self, now: usize) -> Result<bool, TraverseByTimestampErr> {
-        let logged_at: usize = self.get().logged_at.into();
-        match logged_at.cmp(&now) {
-            Ordering::Greater => Ok(false),
-            Ordering::Equal => match self.backward_log() {
-                Ok(()) => Ok(true),
-                Err(OutOfLog) => Err(TraverseByTimestampErr::OutOfLog)
-            },
-            Ordering::Less => Err(TraverseByTimestampErr::MissedTimestamp)
-        }
-    }
     pub fn pop_past_by_timestamp(&mut self, log_start: usize) -> Option<WithTimestamp<T>> {
         if self.past_end_rare().map_or(false, |entry| {
             entry.value.logged_at + entry.skips < log_start
@@ -254,7 +232,7 @@ impl<T: Debug> RareStateLog<WithTimestamp<T>> {
 impl<U, Amount: Copy> RareStateLog<WithAmount<WithTimestamp<U>, Amount>> {
     pub(crate) fn pop_past_by_timestamp(
         &mut self,
-        log_start: usize
+        log_start: usize,
     ) -> Option<WithAmount<WithTimestamp<U>, Amount>> {
         if self.past_end_rare().map_or(false, |entry| {
             entry.value.entry.logged_at + entry.skips < log_start
@@ -266,7 +244,7 @@ impl<U, Amount: Copy> RareStateLog<WithAmount<WithTimestamp<U>, Amount>> {
     }
     pub(crate) fn drain_past_by_timestamp(
         &mut self,
-        log_start: usize
+        log_start: usize,
     ) -> impl LogIter<WithAmount<WithTimestamp<U>, Amount>> {
         let partition_point = self
             .states

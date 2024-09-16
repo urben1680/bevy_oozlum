@@ -6,7 +6,7 @@ use std::{
 use bevy::reflect::{std_traits::ReflectDefault, Reflect};
 
 use super::{
-    AmountErr, ValueEntry, LogIter, LogMut, OutOfLog, PackedUSize, RareTransitionLog, WithAmount,
+    AmountErr, LogIter, LogMut, OutOfLog, PackedUSize, RareTransitionLog, ValueEntry, WithAmount,
     WithTimestamp,
 };
 
