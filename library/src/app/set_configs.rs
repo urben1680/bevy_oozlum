@@ -144,7 +144,7 @@ pub trait IntoRevSystemSetConfigs<Marker>: Sized {
 }
 
 impl RevSystemSetConfigs {
-    /// Split configs to be more readable in macros and as partially movable as nested tuples.
+    /// Split configs to be more readable in impl_into_rev_set_configs! and as partially movable as nested tuples.
     fn split(self) -> (ForwardSetConfig, BackwardSetConfigs) {
         (
             ForwardSetConfig {
@@ -184,22 +184,6 @@ impl<S: SystemSet> IntoRevSystemSetConfigs<()> for S {
     }
 }
 
-macro_rules! invert_tuple {
-    // Initialize the empty accumulator so that callers don't have to pass that in.
-    ($($input:expr),* $(,)?) => {
-        invert_tuple!(@ACC [] [$($input,)*])
-    };
-    // Recursive step, each new identifier is prepended to the left of the
-    // previous tokens.
-    (@ACC [$($acc:tt)*] [$fst:expr , $($rest:tt)*]) => {
-        invert_tuple!(@ACC [$fst, $($acc)*] [$($rest)*])
-    };
-    // Final step, finalize the accumulator, producing an actual tuple.
-    (@ACC [$($acc:tt)*] []) => {
-        ($($acc)*)
-    };
-}
-
 macro_rules! impl_into_rev_set_configs {
     ($(($T: ident, $M: ident, $var: ident)),*) => {
         impl<$($T, $M),*> IntoRevSystemSetConfigs<($($M,)*)> for ($($T,)*)
@@ -217,17 +201,14 @@ macro_rules! impl_into_rev_set_configs {
                 //  = (var0.into_rev_configs().split(), ..., var9.into_rev_configs().split());
                 let ($($var,)*) = ($($var.into_rev_configs().split(),)*);
 
-                // TODO: From this point on the tuple consists of N BackwardSetConfigs in a tuple.
-                // Because of this another macro could provide functions mapping this tuple to RevSystemSetConfigs.
-                // Calling this function here and forbidding inlining would reduce how often invert_tuple! gets
-                // evaluated by the compiler, reducing compile times.
-
                 let forward_sys = ($($var.0.forward_sys,)*).into_configs();
 
-                // let (var0, ..., var9)
+                // let [var0, ..., var9]
                 //  : (BackwardSetConfigs, ..., BackwardSetConfigs)
-                //  = (var9.1, ..., var0.1);
-                let ($($var,)*) = invert_tuple!($($var.1,)*);
+                //  = [var9.1, ..., var0.1];
+                let mut arr = [$($var.1,)*];
+                arr.reverse(); // reversing tuple via a tt muncher macro instead can signifincantly increase compile time
+                let [$($var,)*] = arr;
 
                 let backward_cmds_sys = ($($var.backward_cmds_sys,)*).into_configs();
 
