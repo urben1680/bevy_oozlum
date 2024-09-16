@@ -1,11 +1,13 @@
 use std::{
-    collections::{TryReserveError, VecDeque}, fmt::Debug
+    collections::{TryReserveError, VecDeque},
+    fmt::Debug,
 };
 
 use bevy::reflect::{std_traits::ReflectDefault, Reflect};
 
 use super::{
-    AmountErr, LogIter, LogMut, OutOfLog, PackedUSize, TransitionLog, TraverseByTimestampErr, ValueEntry, WithAmount, WithTimestamp
+    AmountErr, LogIter, LogMut, OutOfLog, PackedUSize, TransitionLog, ValueEntry, WithAmount,
+    WithTimestamp,
 };
 
 #[derive(Debug, Clone, Reflect)]
@@ -209,30 +211,6 @@ impl<T, U, Amount> TransitionsLog<T, WithTimestamp<U>, Amount>
 where
     Amount: TryFrom<usize, Error: Debug> + Into<usize> + Copy,
 {
-    pub fn forward_log_by_timestamp(&mut self, now: usize) -> Result<Option<ValueEntry<impl LogIter<&mut T>, &mut WithTimestamp<U>>>, TraverseByTimestampErr> {
-        let old_index = self.index;
-        let Some(with_amount) = self.amounts.forward_log_by_timestamp(now)? else {
-            return Ok(None);
-        };
-        self.index += with_amount.amount();
-        let iter = self.transitions.range_mut(old_index..self.index);
-        Ok(Some(ValueEntry {
-            value: iter,
-            entry: &mut with_amount.entry,
-        }))
-    }
-    pub fn backward_log_by_timestamp(&mut self, now: usize) -> Result<Option<ValueEntry<impl LogIter<&mut T>, &mut WithTimestamp<U>>>, TraverseByTimestampErr> {
-        let old_index = self.index;
-        let Some(with_amount) = self.amounts.backward_log_by_timestamp(now)? else {
-            return Ok(None);
-        };
-        self.index -= with_amount.amount();
-        let iter = self.transitions.range_mut(self.index..old_index);
-        Ok(Some(ValueEntry {
-            value: iter,
-            entry: &mut with_amount.entry,
-        }))        
-    }
     pub fn pop_past_by_timestamp(
         &mut self,
         log_start: usize,
@@ -317,7 +295,7 @@ mod test {
             );
 
             let _ = self.with_timestamp[1].drain_past_by_timestamp(self.meta.log_range().start);
-            let middle = self.with_timestamp[0].clone();
+            let middle = self.with_timestamp[1].clone();
             let is_ok = self.with_timestamp[1]
                 .try_push_present(|mut log| {
                     log.extend(transitions);
@@ -327,7 +305,7 @@ mod test {
             assert_eq!(
                 is_ok, expected_ok,
                 "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
-                self.meta, previous.with_timestamp[0], self.with_timestamp[0]
+                self.meta, previous.with_timestamp[1], self.with_timestamp[1]
             );
             assert_eq!(
                 self.with_timestamp[1].log_len(),
@@ -348,7 +326,7 @@ mod test {
             assert_eq!(
                 is_ok, expected_ok,
                 "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
-                self.meta, previous.with_timestamp[0], self.with_timestamp[0]
+                self.meta, previous.one_per_frame[0], self.one_per_frame[0]
             );
             assert_eq!(
                 self.one_per_frame[0].log_len(),
@@ -369,7 +347,7 @@ mod test {
             assert_eq!(
                 is_ok, expected_ok,
                 "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
-                self.meta, previous.with_timestamp[0], self.with_timestamp[0]
+                self.meta, previous.one_per_frame[1], self.one_per_frame[1]
             );
             assert_eq!(
                 self.one_per_frame[1].log_len(),
@@ -393,27 +371,33 @@ mod test {
                     );
                     self.meta.update();
 
-                    let transitions = self.with_timestamp[0].backward_log_by_timestamp(self.meta.now()).map(|entry| entry.map(|entry| collect(entry.value)));
+                    let transitions = self.with_timestamp[0]
+                        .backward_log()
+                        .map(|entry| collect(entry.value));
                     assert_eq!(
                         transitions,
-                        Ok(Some(collect(expected_transitions))),
+                        Ok(collect(expected_transitions)),
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
                         self.meta,
                         previous.with_timestamp[0],
                         self.with_timestamp[0]
                     );
 
-                    let transitions = self.with_timestamp[1].backward_log_by_timestamp(self.meta.now()).map(|entry| entry.map(|entry| collect(entry.value)));
+                    let transitions = self.with_timestamp[1]
+                        .backward_log()
+                        .map(|entry| collect(entry.value));
                     assert_eq!(
                         transitions,
-                        Ok(Some(collect(expected_transitions))),
+                        Ok(collect(expected_transitions)),
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
                         self.meta,
                         previous.with_timestamp[1],
                         self.with_timestamp[1]
                     );
 
-                    let transitions = self.one_per_frame[0].backward_log().map(|entry| collect(entry.value));
+                    let transitions = self.one_per_frame[0]
+                        .backward_log()
+                        .map(|entry| collect(entry.value));
                     assert_eq!(
                         transitions,
                         Ok(collect(expected_transitions)),
@@ -423,7 +407,9 @@ mod test {
                         self.one_per_frame[0]
                     );
 
-                    let transitions = self.one_per_frame[1].backward_log().map(|entry| collect(entry.value));
+                    let transitions = self.one_per_frame[1]
+                        .backward_log()
+                        .map(|entry| collect(entry.value));
                     assert_eq!(
                         transitions,
                         Ok(collect(expected_transitions)),
@@ -435,28 +421,32 @@ mod test {
                 }
                 Err(_) => {
                     assert_eq!(
-                        self.with_timestamp[0].backward_log_by_timestamp(self.meta.now() - 1).err(), Some(TraverseByTimestampErr::OutOfLog),
+                        self.with_timestamp[0].backward_log().err(),
+                        Some(OutOfLog),
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
                         self.meta,
                         previous.with_timestamp[0],
                         self.with_timestamp[0]
                     );
                     assert_eq!(
-                        self.with_timestamp[1].backward_log_by_timestamp(self.meta.now() - 1).err(), Some(TraverseByTimestampErr::OutOfLog),
+                        self.with_timestamp[1].backward_log().err(),
+                        Some(OutOfLog),
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
                         self.meta,
                         previous.with_timestamp[1],
                         self.with_timestamp[1]
                     );
                     assert_eq!(
-                        self.one_per_frame[0].backward_log().err(), Some(OutOfLog),
+                        self.one_per_frame[0].backward_log().err(),
+                        Some(OutOfLog),
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
                         self.meta,
                         previous.one_per_frame[0],
                         self.one_per_frame[0]
                     );
                     assert_eq!(
-                        self.one_per_frame[1].backward_log().err(), Some(OutOfLog),
+                        self.one_per_frame[1].backward_log().err(),
+                        Some(OutOfLog),
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
                         self.meta,
                         previous.one_per_frame[1],
@@ -478,27 +468,33 @@ mod test {
                     );
                     self.meta.update();
 
-                    let transitions = self.with_timestamp[0].forward_log_by_timestamp(self.meta.now()).map(|entry| entry.map(|entry| collect(entry.value)));
+                    let transitions = self.with_timestamp[0]
+                        .forward_log()
+                        .map(|entry| collect(entry.value));
                     assert_eq!(
                         transitions,
-                        Ok(Some(collect(expected_transitions))),
+                        Ok(collect(expected_transitions)),
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
                         self.meta,
                         previous.with_timestamp[0],
                         self.with_timestamp[0]
                     );
 
-                    let transitions = self.with_timestamp[1].forward_log_by_timestamp(self.meta.now()).map(|entry| entry.map(|entry| collect(entry.value)));
+                    let transitions = self.with_timestamp[1]
+                        .forward_log()
+                        .map(|entry| collect(entry.value));
                     assert_eq!(
                         transitions,
-                        Ok(Some(collect(expected_transitions))),
+                        Ok(collect(expected_transitions)),
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
                         self.meta,
                         previous.with_timestamp[1],
                         self.with_timestamp[1]
                     );
 
-                    let transitions = self.one_per_frame[0].forward_log().map(|entry| collect(entry.value));
+                    let transitions = self.one_per_frame[0]
+                        .forward_log()
+                        .map(|entry| collect(entry.value));
                     assert_eq!(
                         transitions,
                         Ok(collect(expected_transitions)),
@@ -508,7 +504,9 @@ mod test {
                         self.one_per_frame[0]
                     );
 
-                    let transitions = self.one_per_frame[1].forward_log().map(|entry| collect(entry.value));
+                    let transitions = self.one_per_frame[1]
+                        .forward_log()
+                        .map(|entry| collect(entry.value));
                     assert_eq!(
                         transitions,
                         Ok(collect(expected_transitions)),
@@ -520,28 +518,32 @@ mod test {
                 }
                 Err(_) => {
                     assert_eq!(
-                        self.with_timestamp[0].forward_log_by_timestamp(self.meta.now() + 1).err(), Some(TraverseByTimestampErr::OutOfLog),
+                        self.with_timestamp[0].backward_log().err(),
+                        Some(OutOfLog),
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
                         self.meta,
                         previous.with_timestamp[0],
                         self.with_timestamp[0]
                     );
                     assert_eq!(
-                        self.with_timestamp[1].forward_log_by_timestamp(self.meta.now() + 1).err(), Some(TraverseByTimestampErr::OutOfLog),
+                        self.with_timestamp[1].backward_log().err(),
+                        Some(OutOfLog),
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
                         self.meta,
                         previous.with_timestamp[1],
                         self.with_timestamp[1]
                     );
                     assert_eq!(
-                        self.one_per_frame[0].forward_log().err(), Some(OutOfLog),
+                        self.one_per_frame[0].forward_log().err(),
+                        Some(OutOfLog),
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
                         self.meta,
                         previous.one_per_frame[0],
                         self.one_per_frame[0]
                     );
                     assert_eq!(
-                        self.one_per_frame[1].forward_log().err(), Some(OutOfLog),
+                        self.one_per_frame[1].forward_log().err(),
+                        Some(OutOfLog),
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
                         self.meta,
                         previous.one_per_frame[1],

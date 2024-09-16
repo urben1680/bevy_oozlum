@@ -61,7 +61,9 @@ impl InternalDirection {
     fn set_ran(&mut self) {
         *self = match *self {
             Self::RunningForward => Self::RanForward,
-            Self::RunningForwardLog { updates_until_pause } => Self::RanForwardLog {
+            Self::RunningForwardLog {
+                updates_until_pause,
+            } => Self::RanForwardLog {
                 updates_until_pause,
             },
             Self::RunningBackwardLog {
@@ -75,12 +77,8 @@ impl InternalDirection {
     pub fn get_direction(self) -> Option<Direction> {
         match self {
             Self::RunningForward => Some(Direction::Forward),
-            Self::RunningForwardLog {
-                ..
-            } => Some(Direction::ForwardLog),
-            Self::RunningBackwardLog {
-                ..
-            } => Some(Direction::BackwardLog),
+            Self::RunningForwardLog { .. } => Some(Direction::ForwardLog),
+            Self::RunningBackwardLog { .. } => Some(Direction::BackwardLog),
             _ => None,
         }
     }
@@ -365,7 +363,7 @@ mod test {
                 );
             }
             InternalDirection::Pause => assert!(now < range.end, "{meta:?}"),
-            _ => unimplemented!()
+            _ => unimplemented!(),
         }
         meta
     }

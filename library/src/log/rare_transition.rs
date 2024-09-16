@@ -180,7 +180,9 @@ impl<T> RareTransitionLog<T> {
             drain_amount += 1;
         }
         self.index -= drain_amount;
-        self.transitions.drain(..drain_amount).map(|rare| rare.value)
+        self.transitions
+            .drain(..drain_amount)
+            .map(|rare| rare.value)
     }
 }
 

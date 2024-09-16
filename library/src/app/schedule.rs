@@ -102,9 +102,7 @@ impl RevSchedule {
     pub fn run(&mut self, world: &mut World) {
         let meta = world.get_resource::<RevMeta>().cloned();
         match meta.as_ref().and_then(RevMeta::get_direction) {
-            Some(Direction::Forward) | Some(Direction::ForwardLog) => {
-                self.forward.run(world)
-            }
+            Some(Direction::Forward) | Some(Direction::ForwardLog) => self.forward.run(world),
             Some(Direction::BackwardLog) => self.backward.run(world),
             None => panic!("todo"),
         }

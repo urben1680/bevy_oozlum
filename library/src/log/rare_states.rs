@@ -1,11 +1,13 @@
 use std::{
-    collections::{TryReserveError, VecDeque}, fmt::Debug
+    collections::{TryReserveError, VecDeque},
+    fmt::Debug,
 };
 
 use bevy::reflect::Reflect;
 
 use super::{
-    AmountErr, LogIter, LogMut, OutOfLog, PackedUSize, RareStateLog, ValueEntry, WithAmount, WithTimestamp
+    AmountErr, LogIter, LogMut, OutOfLog, PackedUSize, RareStateLog, ValueEntry, WithAmount,
+    WithTimestamp,
 };
 
 #[derive(Debug, Clone, Reflect)]
@@ -290,7 +292,7 @@ where
 {
     pub fn pop_past_by_timestamp(
         &mut self,
-        log_start: usize
+        log_start: usize,
     ) -> Option<ValueEntry<impl LogIter<T>, WithTimestamp<U>>> {
         self.amounts
             .pop_past_by_timestamp(log_start)
