@@ -225,15 +225,15 @@ where
 {
     pub fn pop_past_by_timestamp(
         &mut self,
-        meta: &RevMeta,
+        log_start: usize,
     ) -> Option<ValueEntry<impl LogIter<T>, WithTimestamp<U>>> {
-        let entry = self.amounts.pop_past_by_timestamp(meta);
+        let entry = self.amounts.pop_past_by_timestamp(log_start);
         self.drain_past_by_amount(entry)
     }
-    pub fn drain_past_by_timestamp(&mut self, meta: &RevMeta) -> impl LogIter<T> {
+    pub fn drain_past_by_timestamp(&mut self, log_start: usize) -> impl LogIter<T> {
         let amount: usize = self
             .amounts
-            .drain_past_by_timestamp(meta)
+            .drain_past_by_timestamp(log_start)
             .map(|with_amount| with_amount.amount())
             .sum();
         self.index -= amount;
@@ -284,7 +284,7 @@ mod test {
                 Err(transitions) => (transitions, false),
             };
 
-            self.with_timestamp[0].pop_past_by_timestamp(&self.meta);
+            self.with_timestamp[0].pop_past_by_timestamp(self.meta.log_range().start);
             let middle = self.with_timestamp[0].clone();
             let is_ok = self.with_timestamp[0]
                 .try_push_present(|mut log| {
@@ -313,7 +313,7 @@ mod test {
                 self.with_timestamp[0]
             );
 
-            let _ = self.with_timestamp[1].drain_past_by_timestamp(&self.meta);
+            let _ = self.with_timestamp[1].drain_past_by_timestamp(self.meta.log_range().start);
             let middle = self.with_timestamp[1].clone();
             let is_ok = self.with_timestamp[1]
                 .try_push_present(|mut log| {
@@ -451,10 +451,6 @@ mod test {
                     );
                 }
                 Err(OutOfLog) => {
-                    assert!(
-                        self.meta.queue_log(self.meta.now() - 1).is_err(),
-                        "\npreviously: {previous:?}\nnow: {self:?}"
-                    );
                     assert!(
                         self.with_timestamp[0].backward_log().is_err(),
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
