@@ -86,7 +86,7 @@ impl CommandsLog {
                 for command in self.0.drain_future().0.rev() {
                     SyncCell::to_inner(command).undone_finalize(world);
                 }
-                for command in self.0.drain_past_by_timestamp(&meta) {
+                for command in self.0.drain_past_by_timestamp(meta.log_range().start) {
                     SyncCell::to_inner(command).redone_finalize(world);
                 }
                 let mut buffer = world.get_resource_or_insert_with(RevCommandBuffer::default);
