@@ -205,19 +205,25 @@ impl<T> RareStateLog<T> {
 }
 
 impl<T: Debug> RareStateLog<WithTimestamp<T>> {
-    pub fn forward_log_by_timestamp(&mut self, now: usize) -> Result<(), TraverseByTimestampErr> {
+    pub fn forward_log_by_timestamp(&mut self, now: usize) -> Result<bool, TraverseByTimestampErr> {
         let logged_at: usize = self.get().logged_at.into();
         match logged_at.cmp(&now) {
-            Ordering::Less => Ok(()),
-            Ordering::Equal => self.forward_log().map_err(|OutOfLog| TraverseByTimestampErr::OutOfLog),
+            Ordering::Less => Ok(false),
+            Ordering::Equal => match self.forward_log() {
+                Ok(()) => Ok(true),
+                Err(OutOfLog) => Err(TraverseByTimestampErr::OutOfLog)
+            },
             Ordering::Greater => Err(TraverseByTimestampErr::MissedTimestamp)
         }
     }
-    pub fn backward_log_by_timestamp(&mut self, now: usize) -> Result<(), TraverseByTimestampErr> {
+    pub fn backward_log_by_timestamp(&mut self, now: usize) -> Result<bool, TraverseByTimestampErr> {
         let logged_at: usize = self.get().logged_at.into();
         match logged_at.cmp(&now) {
-            Ordering::Greater => Ok(()),
-            Ordering::Equal => self.backward_log().map_err(|OutOfLog| TraverseByTimestampErr::OutOfLog),
+            Ordering::Greater => Ok(false),
+            Ordering::Equal => match self.backward_log() {
+                Ok(()) => Ok(true),
+                Err(OutOfLog) => Err(TraverseByTimestampErr::OutOfLog)
+            },
             Ordering::Less => Err(TraverseByTimestampErr::MissedTimestamp)
         }
     }
@@ -246,22 +252,6 @@ impl<T: Debug> RareStateLog<WithTimestamp<T>> {
 }
 
 impl<U, Amount: Copy> RareStateLog<WithAmount<WithTimestamp<U>, Amount>> {
-    pub(crate) fn forward_log_by_timestamp(&mut self, now: usize) -> Result<(), TraverseByTimestampErr> {
-        let logged_at: usize = self.get().entry.logged_at.into();
-        match logged_at.cmp(&now) {
-            Ordering::Less => Ok(()),
-            Ordering::Equal => self.forward_log().map_err(|OutOfLog| TraverseByTimestampErr::OutOfLog),
-            Ordering::Greater => Err(TraverseByTimestampErr::MissedTimestamp)
-        }
-    }
-    pub(crate) fn backward_log_by_timestamp(&mut self, now: usize) -> Result<(), TraverseByTimestampErr> {
-        let logged_at: usize = self.get().entry.logged_at.into();
-        match logged_at.cmp(&now) {
-            Ordering::Greater => Ok(()),
-            Ordering::Equal => self.backward_log().map_err(|OutOfLog| TraverseByTimestampErr::OutOfLog),
-            Ordering::Less => Err(TraverseByTimestampErr::MissedTimestamp)
-        }
-    }
     pub(crate) fn pop_past_by_timestamp(
         &mut self,
         log_start: usize
@@ -504,10 +494,6 @@ mod test {
                     );
                 }
                 Err(OutOfLog) => {
-                    assert!(
-                        self.meta.queue_log(self.meta.now() - 1).is_err(),
-                        "\npreviously: {previous:?}\nnow: {self:?}"
-                    );
                     assert!(
                         self.with_timestamp[0].backward_log().is_err(),
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
