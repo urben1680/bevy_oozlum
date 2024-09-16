@@ -283,12 +283,16 @@ impl<T, U, Amount> StatesLog<T, WithTimestamp<U>, Amount>
 where
     Amount: TryFrom<usize, Error: Debug> + Into<usize> + Copy,
 {
-    pub fn forward_log_by_timestamp(&mut self, now: usize) -> Result<(), TraverseByTimestampErr> {
-        self.amounts.forward_log_by_timestamp(now).map(|()| self.index += self.amounts.get().amount())
+    pub fn forward_log_by_timestamp(&mut self, now: usize) -> Result<bool, TraverseByTimestampErr> {
+        self.amounts.forward_log_by_timestamp(now).inspect(|&traversed| if traversed {
+            self.index += self.amounts.get().amount()
+        })
     }
-    pub fn backward_log_by_timestamp(&mut self, now: usize) -> Result<(), TraverseByTimestampErr> {
+    pub fn backward_log_by_timestamp(&mut self, now: usize) -> Result<bool, TraverseByTimestampErr> {
         let amount = self.amounts.get().amount();
-        self.amounts.backward_log_by_timestamp(now).map(|()| self.index -= amount)
+        self.amounts.backward_log_by_timestamp(now).inspect(|&traversed| if traversed {
+            self.index -= amount
+        })
     }
     pub fn pop_past_by_timestamp(
         &mut self,
@@ -493,86 +497,74 @@ mod test {
                     );
                     self.meta.update();
 
-                    let is_ok = self.with_timestamp[0].backward_log().is_ok();
-                    let states = collect(self.with_timestamp[0].get().0);
-                    assert!(
-                        is_ok,
+                    assert_eq!(
+                        self.with_timestamp[0].backward_log_by_timestamp(self.meta.now()), Ok(true),
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
                         self.meta, previous.with_timestamp[0], self.with_timestamp[0]
                     );
                     assert_eq!(
-                        states, expected_states,
+                        collect(self.with_timestamp[0].get().0), expected_states,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
                         self.meta, previous.with_timestamp[0], self.with_timestamp[0]
                     );
 
-                    let is_ok = self.with_timestamp[1].backward_log().is_ok();
-                    let states = collect(self.with_timestamp[1].get().0);
-                    assert!(
-                        is_ok,
+                    assert_eq!(
+                        self.with_timestamp[1].backward_log_by_timestamp(self.meta.now()), Ok(true),
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
                         self.meta, previous.with_timestamp[1], self.with_timestamp[1]
                     );
                     assert_eq!(
-                        states, expected_states,
+                        collect(self.with_timestamp[1].get().0), expected_states,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
                         self.meta, previous.with_timestamp[1], self.with_timestamp[1]
                     );
 
-                    let is_ok = self.one_per_frame[0].backward_log().is_ok();
-                    let states = collect(self.one_per_frame[0].get().0);
-                    assert!(
-                        is_ok,
+                    assert_eq!(
+                        self.one_per_frame[0].backward_log(), Ok(()),
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
                         self.meta, previous.one_per_frame[0], self.one_per_frame[0]
                     );
                     assert_eq!(
-                        states, expected_states,
+                        collect(self.one_per_frame[0].get().0), expected_states,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
                         self.meta, previous.one_per_frame[0], self.one_per_frame[0]
                     );
 
-                    let is_ok = self.one_per_frame[1].backward_log().is_ok();
-                    let states = collect(self.one_per_frame[1].get().0);
-                    assert!(
-                        is_ok,
+                    assert_eq!(
+                        self.one_per_frame[1].backward_log(), Ok(()),
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
                         self.meta, previous.one_per_frame[1], self.one_per_frame[1]
                     );
                     assert_eq!(
-                        states, expected_states,
+                        collect(self.one_per_frame[1].get().0), expected_states,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
                         self.meta, previous.one_per_frame[1], self.one_per_frame[1]
                     );
                 }
                 Err(_) => {
-                    assert!(
-                        self.meta.queue_log(self.meta.now() - 1).is_err(),
-                        "\npreviously: {previous:?}\nnow: {self:?}"
-                    );
-                    assert!(
-                        self.with_timestamp[0].backward_log().is_err(),
+                    assert_eq!(
+                        self.with_timestamp[0].backward_log_by_timestamp(self.meta.now() - 1), Err(TraverseByTimestampErr::OutOfLog),
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
                         self.meta,
                         previous.with_timestamp[0],
                         self.with_timestamp[0]
                     );
-                    assert!(
-                        self.with_timestamp[1].backward_log().is_err(),
+                    assert_eq!(
+                        self.with_timestamp[1].backward_log_by_timestamp(self.meta.now() - 1), Err(TraverseByTimestampErr::OutOfLog),
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
                         self.meta,
                         previous.with_timestamp[1],
                         self.with_timestamp[1]
                     );
-                    assert!(
-                        self.one_per_frame[0].backward_log().is_err(),
+                    assert_eq!(
+                        self.one_per_frame[0].backward_log(), Err(OutOfLog),
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
                         self.meta,
                         previous.one_per_frame[0],
                         self.one_per_frame[0]
                     );
-                    assert!(
-                        self.one_per_frame[1].backward_log().is_err(),
+                    assert_eq!(
+                        self.one_per_frame[1].backward_log(), Err(OutOfLog),
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
                         self.meta,
                         previous.one_per_frame[1],
@@ -595,82 +587,74 @@ mod test {
                     );
                     self.meta.update();
 
-                    let is_ok = self.with_timestamp[0].forward_log().is_ok();
-                    let states = collect(self.with_timestamp[0].get().0);
-                    assert!(
-                        is_ok,
+                    assert_eq!(
+                        self.with_timestamp[0].forward_log_by_timestamp(self.meta.now()), Ok(true),
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
                         self.meta, previous.with_timestamp[0], self.with_timestamp[0]
                     );
                     assert_eq!(
-                        states, expected_states,
+                        collect(self.with_timestamp[0].get().0), expected_states,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
                         self.meta, previous.with_timestamp[0], self.with_timestamp[0]
                     );
 
-                    let is_ok = self.with_timestamp[1].forward_log().is_ok();
-                    let states = collect(self.with_timestamp[1].get().0);
-                    assert!(
-                        is_ok,
+                    assert_eq!(
+                        self.with_timestamp[1].forward_log_by_timestamp(self.meta.now()), Ok(true),
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
                         self.meta, previous.with_timestamp[1], self.with_timestamp[1]
                     );
                     assert_eq!(
-                        states, expected_states,
+                        collect(self.with_timestamp[1].get().0), expected_states,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
                         self.meta, previous.with_timestamp[1], self.with_timestamp[1]
                     );
 
-                    let is_ok = self.one_per_frame[0].forward_log().is_ok();
-                    let states = collect(self.one_per_frame[0].get().0);
-                    assert!(
-                        is_ok,
+                    assert_eq!(
+                        self.one_per_frame[0].forward_log(), Ok(()),
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
                         self.meta, previous.one_per_frame[0], self.one_per_frame[0]
                     );
                     assert_eq!(
-                        states, expected_states,
+                        collect(self.one_per_frame[0].get().0), expected_states,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
                         self.meta, previous.one_per_frame[0], self.one_per_frame[0]
                     );
 
-                    let is_ok = self.one_per_frame[1].forward_log().is_ok();
-                    let states = collect(self.one_per_frame[1].get().0);
-                    assert!(
-                        is_ok,
+                    assert_eq!(
+                        self.one_per_frame[1].forward_log(), Ok(()),
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
                         self.meta, previous.one_per_frame[1], self.one_per_frame[1]
                     );
                     assert_eq!(
-                        states, expected_states,
+                        collect(self.one_per_frame[1].get().0), expected_states,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
                         self.meta, previous.one_per_frame[1], self.one_per_frame[1]
                     );
                 }
                 Err(_) => {
-                    assert!(
-                        self.with_timestamp[0].forward_log().is_err(),
+                    assert_eq!(
+                        self.with_timestamp[0].forward_log_by_timestamp(self.meta.now() + 1), Err(TraverseByTimestampErr::OutOfLog),
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
                         self.meta,
                         previous.with_timestamp[0],
                         self.with_timestamp[0]
                     );
-                    assert!(
-                        self.with_timestamp[1].forward_log().is_err(),
+                    assert_eq!(
+                        self.with_timestamp[1].forward_log_by_timestamp(self.meta.now() + 1), Err(TraverseByTimestampErr::OutOfLog),
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
                         self.meta,
                         previous.with_timestamp[1],
                         self.with_timestamp[1]
                     );
-                    assert!(
-                        self.one_per_frame[0].forward_log().is_err(),
+                    assert_eq!(
+                        self.one_per_frame[0].forward_log(), Err(OutOfLog),
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
                         self.meta,
                         previous.one_per_frame[0],
                         self.one_per_frame[0]
                     );
-                    assert!(
-                        self.one_per_frame[1].forward_log().is_err(),
+                    assert_eq!(
+                        self.one_per_frame[1].forward_log(), Err(OutOfLog),
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
                         self.meta,
                         previous.one_per_frame[1],
