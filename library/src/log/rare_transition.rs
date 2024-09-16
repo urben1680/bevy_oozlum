@@ -185,12 +185,6 @@ impl<T> RareTransitionLog<T> {
 }
 
 impl<T: Debug> RareTransitionLog<WithTimestamp<T>> {
-    pub fn forward_log_by_timestamp(&mut self, now: usize) -> Result<(), TraverseByTimestampErr> {
-        todo!()
-    }
-    pub fn backward_log_by_timestamp(&mut self, now: usize) -> Result<(), TraverseByTimestampErr> {
-        todo!()
-    }
     pub fn pop_past_by_timestamp(&mut self, log_start: usize) -> Option<WithTimestamp<T>> {
         if self.past_end().map_or(false, |entry| {
             // include range().start because this entry instructs how to transition from range().start to range().start - 1
@@ -407,10 +401,6 @@ mod test {
                     );
                 }
                 Err(OutOfLog) => {
-                    assert!(
-                        self.meta.queue_log(self.meta.now() - 1).is_err(),
-                        "\npreviously: {previous:?}\nnow: {self:?}"
-                    );
                     assert!(
                         self.with_timestamp[0].backward_log().is_err(),
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
