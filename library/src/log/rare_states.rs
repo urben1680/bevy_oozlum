@@ -5,7 +5,7 @@ use std::{
 use bevy::reflect::Reflect;
 
 use super::{
-    AmountErr, LogIter, LogMut, OutOfLog, PackedUSize, RareStateLog, TraverseByTimestampErr, ValueEntry, WithAmount, WithTimestamp
+    AmountErr, LogIter, LogMut, OutOfLog, PackedUSize, RareStateLog, ValueEntry, WithAmount, WithTimestamp
 };
 
 #[derive(Debug, Clone, Reflect)]
@@ -288,13 +288,6 @@ impl<T, U, Amount> RareStatesLog<T, WithTimestamp<U>, Amount>
 where
     Amount: TryFrom<usize, Error: Debug> + Into<usize> + Copy,
 {
-    pub fn forward_log_by_timestamp(&mut self, now: usize) -> Result<(), TraverseByTimestampErr> {
-        self.amounts.forward_log_by_timestamp(now).map(|()| self.index += self.amounts.get().amount())
-    }
-    pub fn backward_log_by_timestamp(&mut self, now: usize) -> Result<(), TraverseByTimestampErr> {
-        let amount = self.amounts.get().amount();
-        self.amounts.backward_log_by_timestamp(now).map(|()| self.index -= amount)
-    }
     pub fn pop_past_by_timestamp(
         &mut self,
         log_start: usize
