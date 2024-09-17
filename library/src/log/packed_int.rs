@@ -91,7 +91,7 @@ pub trait SizeBound: serde::Serialize + for<'de> serde::Deserialize<'de> {}
 
 #[doc(hidden)]
 #[cfg(not(feature = "serde"))]
-pub trait SizeBound<'de> {}
+pub trait SizeBound {}
 
 impl SizeBound for [u8; 1] {}
 impl SizeBound for [u8; 2] {}
