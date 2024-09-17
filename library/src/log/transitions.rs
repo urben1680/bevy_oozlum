@@ -137,12 +137,8 @@ where
         }
     }
     pub fn push_present<Out: Into<U>>(&mut self, c: impl FnOnce(LogMut<T>) -> Out) {
-        use std::any::type_name;
-        self.try_push_present(c).unwrap_or_else(|err| {
-            panic!("Tried to push {} transitions into {} which does not fit into {}. If the pushed amount is uncertain, use `try_push_present` or a larger `Amount` type.",
-            err.values.len(), type_name::<Self>(), type_name::<Amount>()
-            )
-        })
+        self.try_push_present(c)
+            .unwrap_or_else(AmountErr::warn::<Self, _>)
     }
     pub fn drain_future(&mut self) -> (impl LogIter<T>, impl LogIter<U>) {
         (
@@ -518,7 +514,7 @@ mod test {
                 }
                 Err(_) => {
                     assert_eq!(
-                        self.with_timestamp[0].backward_log().err(),
+                        self.with_timestamp[0].forward_log().err(),
                         Some(OutOfLog),
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
                         self.meta,
@@ -526,7 +522,7 @@ mod test {
                         self.with_timestamp[0]
                     );
                     assert_eq!(
-                        self.with_timestamp[1].backward_log().err(),
+                        self.with_timestamp[1].forward_log().err(),
                         Some(OutOfLog),
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
                         self.meta,
