@@ -1,15 +1,15 @@
 use core::{num::NonZeroUsize, ops::Range};
 
 use bevy::{
-    ecs::{schedule::ScheduleLabel, system::Resource, world::World},
+    ecs::{system::Resource, world::World},
+    prelude::Local,
     reflect::{std_traits::ReflectDefault, Reflect},
 };
 
 #[cfg(feature = "serde")]
 use bevy::reflect::{ReflectDeserialize, ReflectSerialize};
 
-use crate::{app::TryRunRevScheduleError, log::WithTimestamp};
-use crate::{BackwardSchedule, ForwardSchedule, RevUpdate};
+use crate::{log::WithTimestamp, BackwardSchedule, ForwardSchedule, RevUpdate};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Reflect)]
 #[reflect(PartialEq)]
@@ -223,28 +223,41 @@ impl RevMeta {
     pub fn queue_pause(&mut self) {
         self.queue = Some(InternalDirection::Pause);
     }
-    pub fn update_world(world: &mut World) {
-        let mut this = world.get_resource_mut::<Self>().expect(Self::EXIST_MSG);
+    pub fn update_world(world: &mut World, mut rev_meta_exists: Local<Option<bool>>) {
+        let mut this = match world.get_resource_mut::<Self>() {
+            None => {
+                match *rev_meta_exists {
+                    None => todo!("log: did not exist yet, waiting..."),
+                    Some(true) => todo!("log stopped existing, stopped..."),
+                    _ => {}
+                }
+                *rev_meta_exists = Some(false);
+                return;
+            }
+            Some(this) => {
+                if *rev_meta_exists != Some(true) {
+                    todo!("log: does exist, starting...");
+                }
+                *rev_meta_exists = Some(true);
+                this
+            }
+        };
         if this.range.end == usize::MAX {
             todo!("")
         }
         this.update();
         let result = match this.get_direction() {
             Some(Direction::Forward) | Some(Direction::ForwardLog) => {
-                world.try_run_schedule(ForwardSchedule(RevUpdate.intern()))
+                world.try_run_schedule(ForwardSchedule::of(RevUpdate))
             }
-            Some(Direction::BackwardLog) => {
-                world.try_run_schedule(BackwardSchedule(RevUpdate.intern()))
-            }
-            None => return,
+            Some(Direction::BackwardLog) => world.try_run_schedule(BackwardSchedule::of(RevUpdate)),
+            None => Ok(()),
         };
-        world
-            .get_resource_mut::<Self>()
-            .expect(Self::EXIST_MSG)
-            .direction
-            .set_ran();
         if result.is_err() {
             todo!("")
+        }
+        if let Some(mut this) = world.get_resource_mut::<Self>() {
+            this.direction.set_ran();
         }
     }
     pub fn update(&mut self) {
@@ -288,32 +301,6 @@ impl RevMeta {
                 .start
                 .max(self.range.end.saturating_sub(max_len.get()));
         }
-    }
-    pub fn run_rev_schedule(&self, world: &mut World, label: impl ScheduleLabel) {
-        let label = label.intern();
-        match self.direction() {
-            Direction::Forward | Direction::ForwardLog => {
-                world.run_schedule(ForwardSchedule(label))
-            }
-            Direction::BackwardLog => world.run_schedule(BackwardSchedule(label)),
-        }
-    }
-    pub fn try_run_rev_schedule(
-        &self,
-        world: &mut World,
-        label: impl ScheduleLabel,
-    ) -> Result<(), TryRunRevScheduleError> {
-        let label = label.intern();
-        let Some(direction) = self.get_direction() else {
-            return Err(TryRunRevScheduleError::MainRevScheduleNotRunning);
-        };
-        let result = match direction {
-            Direction::Forward | Direction::ForwardLog => {
-                world.try_run_schedule(ForwardSchedule(label))
-            }
-            Direction::BackwardLog => world.try_run_schedule(BackwardSchedule(label)),
-        };
-        result.map_err(|_| TryRunRevScheduleError::BevyTryRunScheduleError)
     }
 }
 
