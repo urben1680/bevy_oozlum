@@ -1,9 +1,12 @@
 use core::fmt::Debug;
 use std::collections::{TryReserveError, VecDeque};
 
-use bevy::reflect::{std_traits::ReflectDefault, Reflect};
+use bevy::{
+    reflect::{std_traits::ReflectDefault, Reflect},
+    utils::tracing::error,
+};
 
-use super::{LogIter, OutOfLog, RareValue, WithAmount, WithTimestamp, BACKWARD_EXPECT_MSG};
+use super::{LogIter, OutOfLog, RareValue, WithAmount, WithTimestamp, INDEX_OOB};
 
 #[derive(Debug, Clone, Reflect)]
 #[reflect(Default)]
@@ -14,6 +17,16 @@ pub struct RareTransitionLog<T> {
     index: usize,
     skips: usize,
     /// Used to check for OutOfLog error when calling `self.forward_log`
+    skips_max: usize,
+    len: usize,
+}
+
+#[derive(Debug)]
+#[allow(dead_code)]
+struct RareTransitionLogDebug {
+    transitions_len: usize,
+    index: usize,
+    skips: usize,
     skips_max: usize,
     len: usize,
 }
@@ -131,14 +144,25 @@ impl<T> RareTransitionLog<T> {
             self.len -= 1;
             Ok(None)
         } else {
-            self.index = self.index.checked_sub(1).ok_or(OutOfLog)?;
-            let entry = self
-                .transitions
-                .get_mut(self.index)
-                .expect(BACKWARD_EXPECT_MSG);
-            self.skips = entry.skips.into();
-            self.len -= 1;
-            Ok(Some(&mut entry.value))
+            let index = self.index.checked_sub(1).ok_or(OutOfLog)?;
+            let transitions_len = self.transitions.len();
+            if let Some(entry) = self.transitions.get_mut(index) {
+                self.index = index;
+                self.skips = entry.skips.into();
+                self.len -= 1;
+                return Ok(Some(&mut entry.value));
+            }
+
+            let debug_struct = RareTransitionLogDebug {
+                transitions_len,
+                index: self.index,
+                skips: self.skips,
+                skips_max: self.skips_max,
+                len: self.len,
+            };
+
+            error!("{INDEX_OOB}, {debug_struct:#?}");
+            Err(OutOfLog)
         }
     }
     pub fn forward_log(&mut self) -> Result<Option<&mut T>, OutOfLog> {
