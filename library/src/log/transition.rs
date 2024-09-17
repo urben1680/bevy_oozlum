@@ -1,15 +1,25 @@
 use core::fmt::Debug;
 use std::collections::{TryReserveError, VecDeque};
 
-use bevy::reflect::{std_traits::ReflectDefault, Reflect};
+use bevy::{
+    reflect::{std_traits::ReflectDefault, Reflect},
+    utils::tracing::error,
+};
 
-use super::{LogIter, OutOfLog, WithAmount, WithTimestamp, BACKWARD_EXPECT_MSG};
+use super::{LogIter, OutOfLog, WithAmount, WithTimestamp, INDEX_OOB};
 
 #[derive(Debug, Clone, Reflect)]
 #[reflect(Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TransitionLog<T> {
     transitions: VecDeque<T>,
+    index: usize,
+}
+
+#[derive(Debug)]
+#[allow(dead_code)]
+struct TransitionLogDebug {
+    transitions_len: usize,
     index: usize,
 }
 
@@ -82,11 +92,20 @@ impl<T> TransitionLog<T> {
         self.index = 0;
     }
     pub fn backward_log(&mut self) -> Result<&mut T, OutOfLog> {
-        self.index = self.index.checked_sub(1).ok_or(OutOfLog)?;
-        Ok(self
-            .transitions
-            .get_mut(self.index)
-            .expect(BACKWARD_EXPECT_MSG))
+        let index = self.index.checked_sub(1).ok_or(OutOfLog)?;
+        let transitions_len = self.transitions.len();
+        if let Some(transition) = self.transitions.get_mut(index) {
+            self.index = index;
+            return Ok(transition);
+        }
+
+        let debug_struct = TransitionLogDebug {
+            transitions_len,
+            index: self.index,
+        };
+
+        error!("{INDEX_OOB}, {debug_struct:#?}");
+        Err(OutOfLog)
     }
     pub fn forward_log(&mut self) -> Result<&mut T, OutOfLog> {
         self.transitions
