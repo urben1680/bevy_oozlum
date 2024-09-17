@@ -285,7 +285,7 @@ pub struct AmountErr<I, U, Amount: TryFrom<usize>> {
 impl<I: ExactSizeIterator, U, Amount: TryFrom<usize>> AmountErr<I, U, Amount> {
     fn warn<Log, Out: Default>(self) -> Out {
         warn!("Tried to push {} states/transitions into {} which does not fit into {}. If the pushed amount is uncertain, use `try_push_present` or a larger `Amount` type that is always large enough for the amount value, like PackedUSize.",
-            self.values.len(), type_name::<Log>(), type_name::<Self>()
+            self.values.len(), type_name::<Log>(), type_name::<Amount>()
         );
         Out::default()
     }
