@@ -167,7 +167,7 @@ struct BackwardSetConfigs {
     backward_sys: SystemSetConfigs,
 }
 
-impl IntoRevSystemSetConfigs<RevSystemSetConfigs> for RevSystemSetConfigs {
+impl IntoRevSystemSetConfigs<()> for RevSystemSetConfigs {
     fn into_rev_configs(self) -> RevSystemSetConfigs {
         self
     }
@@ -204,7 +204,7 @@ macro_rules! impl_into_rev_set_configs {
                 let forward_sys = ($($var.0.forward_sys,)*).into_configs();
 
                 // let [var0, ..., var9]
-                //  : (BackwardSetConfigs, ..., BackwardSetConfigs)
+                //  : [BackwardSetConfigs, ..., BackwardSetConfigs]
                 //  = [var9.1, ..., var0.1];
                 let mut arr = [$($var.1,)*];
                 arr.reverse(); // reversing tuple via a tt muncher macro instead can signifincantly increase compile time
