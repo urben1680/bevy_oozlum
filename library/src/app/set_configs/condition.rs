@@ -14,13 +14,24 @@ use bevy::{
         world::{unsafe_world_cell::UnsafeWorldCell, DeferredWorld},
     },
     prelude::{Condition, IntoSystem, ReadOnlySystem, Res, System, SystemSet, World},
+    utils::tracing::error
 };
 
 use crate::{
     app::{check_tick, EMPTY_ARCHETYPE_COMPONENT_ACCESS, EMPTY_COMPONENT_ACCESS},
-    log::RareTransitionLog,
+    log::{OutOfLog, RareTransitionLog},
     meta::{Direction, RevMeta},
 };
+
+macro_rules! error_once {
+    ($flag:expr, $($arg:tt)+) => ({
+        if !$flag {
+            error!($($arg)+);
+            $flag = true;
+        }
+        false
+    })
+}
 
 struct RevConditionForward<T> {
     condition: T,
@@ -28,6 +39,10 @@ struct RevConditionForward<T> {
     name: String,
     component_access: Access<ComponentId>,
     archetype_component_access: Access<ArchetypeComponentId>,
+    rev_meta_err: bool,
+    lock_err: bool,
+    out_of_log_err: bool,
+    direction_err: bool
 }
 
 struct RevConditionBackward<In: Send + Sync + 'static> {
@@ -64,6 +79,10 @@ pub(crate) fn forward_backward_conditions<
         name: name_forward,
         component_access: Default::default(),
         archetype_component_access: Default::default(),
+        rev_meta_err: false,
+        lock_err: false,
+        out_of_log_err: false,
+        direction_err: false
     };
 
     let backward = RevConditionBackward {
@@ -109,9 +128,12 @@ impl<T: System<Out = bool> + ReadOnlySystem> System for RevConditionForward<T> {
         };
         // no clone needed because it is expected that condition as a ReadOnlySystem would not mutate RevMeta
         let Some(meta) = meta else {
-            todo!();
+            return error_once!(self.rev_meta_err, "Reversible condition {} (forward) could not find RevMeta resource.", self.name);
         };
-        let mut log = self.log.try_lock().expect("todo");
+        let Ok(mut log) = self.log.try_lock() else {
+            return error_once!(self.lock_err, "Reversible condition {} (forward) could not lock internal log. \
+                This is likely an internal bug.", self.name);
+        };
         match meta.get_direction() {
             Some(Direction::Forward) => {
                 let out = unsafe {
@@ -124,8 +146,15 @@ impl<T: System<Out = bool> + ReadOnlySystem> System for RevConditionForward<T> {
                 log.push_present(out.then_some(().into()));
                 out
             }
-            Some(Direction::ForwardLog) => log.forward_log().expect("todo").is_some(),
-            _ => todo!(),
+            Some(Direction::ForwardLog) => match log.forward_log() {
+                Ok(option) => option.is_some(),
+                Err(OutOfLog) => error_once!(self.out_of_log_err, "Reversible condition {} (forward) got out of log. \
+                Make sure the reversible schedule this condition is in is correctly called in both the forward and backward direction. \
+                It seems that one or more backward schedule calls were missed. \
+                If this condition is in the RevUpdate schedule, this is likely an internal bug.", self.name)
+            }
+            _ => error_once!(self.direction_err, "Reversible condition {} (forward) did run while RevMeta was in a wrong direction ({:?}).\
+                If RevMeta was not manually overridden this is likely an internal bug.", self.name, meta.internal_direction()),
         }
     }
     fn run(&mut self, input: Self::In, world: &mut World) -> Self::Out {
@@ -218,9 +247,11 @@ impl<In: Send + Sync + 'static> System for RevConditionBackward<In> {
         TypeId::of::<Self>()
     }
     fn component_access(&self) -> &Access<ComponentId> {
+        // todo add RevMeta read access
         &EMPTY_COMPONENT_ACCESS
     }
     fn archetype_component_access(&self) -> &Access<ArchetypeComponentId> {
+        // todo add RevMeta read access
         &EMPTY_ARCHETYPE_COMPONENT_ACCESS
     }
     fn is_send(&self) -> bool {
