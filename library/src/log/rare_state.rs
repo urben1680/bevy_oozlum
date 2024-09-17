@@ -1,11 +1,9 @@
 use core::fmt::Debug;
 use std::collections::{TryReserveError, VecDeque};
 
-use bevy::reflect::Reflect;
+use bevy::{reflect::Reflect, utils::tracing::error};
 
-use super::{
-    LogIter, OutOfLog, PackedUSize, RareValue, WithAmount, WithTimestamp, BACKWARD_EXPECT_MSG,
-};
+use super::{LogIter, OutOfLog, PackedUSize, RareValue, WithAmount, WithTimestamp, INDEX_OOB};
 
 #[derive(Debug, Clone, Reflect)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -13,6 +11,16 @@ pub struct RareStateLog<T> {
     /// RareValue.skips represents the number of None pushes after the state in the struct
     states: VecDeque<RareValue<T>>,
     present: RareValue<T>,
+    index: usize,
+    skips: usize,
+    len: usize,
+}
+
+#[derive(Debug)]
+#[allow(dead_code)]
+struct RareStateLogDebug {
+    states_len: usize,
+    present_skips: usize,
     index: usize,
     skips: usize,
     len: usize,
@@ -158,12 +166,25 @@ impl<T> RareStateLog<T> {
             self.len -= 1;
             return Ok(());
         }
-        self.index = self.index.checked_sub(1).ok_or(OutOfLog)?;
-        let entry = self.states.get_mut(self.index).expect(BACKWARD_EXPECT_MSG);
-        core::mem::swap(&mut self.present, entry);
-        self.skips = self.present.skips.into();
-        self.len -= 1;
-        Ok(())
+        let index = self.index.checked_sub(1).ok_or(OutOfLog)?;
+        if let Some(entry) = self.states.get_mut(index) {
+            self.index = index;
+            core::mem::swap(&mut self.present, entry);
+            self.skips = self.present.skips.into();
+            self.len -= 1;
+            return Ok(());
+        }
+
+        let debug_struct = RareStateLogDebug {
+            states_len: self.states.len(),
+            present_skips: self.present.skips.into(),
+            index: self.index,
+            skips: self.skips,
+            len: self.len,
+        };
+
+        error!("{INDEX_OOB}, {debug_struct:#?}");
+        Err(OutOfLog)
     }
     pub fn forward_log(&mut self) -> Result<(), OutOfLog> {
         if self.skips < self.present.skips {
