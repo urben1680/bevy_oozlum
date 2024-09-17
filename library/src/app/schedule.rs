@@ -18,11 +18,6 @@ pub struct RevSchedule {
     pub(crate) backward: Schedule,
 }
 
-pub enum TryRunRevScheduleError {
-    MainRevScheduleNotRunning,
-    BevyTryRunScheduleError,
-}
-
 pub struct RevScheduleBuildSettings {
     pub ambiguity_detection: LogLevel,
     pub hierarchy_detection: LogLevel,
