@@ -1,7 +1,9 @@
 use core::fmt::Debug;
 use std::collections::{TryReserveError, VecDeque};
 
-use bevy::reflect::Reflect;
+use bevy::{reflect::Reflect, utils::tracing::error};
+
+use crate::log::INDEX_OOB;
 
 use super::{LogIter, OutOfLog, WithAmount, WithTimestamp};
 
@@ -18,6 +20,13 @@ pub struct StateLog<T> {
     /// The present state, easily accessible to read.
     present: T,
     /// The index of the nearest future state in `self.states`, if there is any.
+    index: usize,
+}
+
+#[derive(Debug)]
+#[allow(dead_code)]
+struct StateLogDebug {
+    states_len: usize,
     index: usize,
 }
 
@@ -120,10 +129,27 @@ impl<T> StateLog<T> {
         //  present: 2
         //  index:   1
 
-        self.index = self.index.checked_sub(1).ok_or(OutOfLog)?;
-        let now_future = self.states.get_mut(self.index).expect("todo");
-        core::mem::swap(&mut self.present, now_future);
-        Ok(())
+        let index = self.index.checked_sub(1).ok_or(OutOfLog)?;
+        if let Some(now_future) = self.states.get_mut(index) {
+            self.index = index;
+            core::mem::swap(&mut self.present, now_future);
+            return Ok(());
+        }
+
+        #[derive(Debug)]
+        #[allow(dead_code)]
+        struct StateLogDebug {
+            states_len: usize,
+            index: usize,
+        }
+
+        let debug_struct = StateLogDebug {
+            states_len: self.states.len(),
+            index: self.index,
+        };
+
+        error!("{INDEX_OOB}, {debug_struct:#?}");
+        Err(OutOfLog)
     }
     pub fn forward_log(&mut self) -> Result<(), OutOfLog> {
         // from:
@@ -135,13 +161,21 @@ impl<T> StateLog<T> {
         //  present: 3
         //  index:   2
 
-        if self.index == self.states.len() {
-            return Err(OutOfLog);
+        if let Some(now_future) = self.states.get_mut(self.index) {
+            core::mem::swap(&mut self.present, now_future);
+            self.index += 1;
+            return Ok(());
         }
-        let now_future = self.states.get_mut(self.index).expect("todo");
-        core::mem::swap(&mut self.present, now_future);
-        self.index += 1;
-        Ok(())
+
+        if self.index != self.states.len() {
+            let debug_struct = StateLogDebug {
+                states_len: self.states.len(),
+                index: self.index,
+            };
+            error!("{INDEX_OOB}, {debug_struct:#?}");
+        }
+
+        Err(OutOfLog)
     }
     pub fn pop_past_by_len(&mut self, max_past_len: usize) -> Option<T> {
         if self.index > max_past_len {
