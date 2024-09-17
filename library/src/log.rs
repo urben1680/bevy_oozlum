@@ -210,9 +210,9 @@
 //! [`ForwardLog`]: crate::meta::Direction::ForwardLog
 //! [`BackwardLog`]: crate::meta::Direction::BackwardLog
 
-use std::{collections::VecDeque, fmt::Debug, iter::FusedIterator};
+use std::{any::type_name, collections::VecDeque, fmt::Debug, iter::FusedIterator};
 
-use bevy::reflect::Reflect;
+use bevy::{reflect::Reflect, utils::tracing::warn};
 
 pub mod packed_int;
 mod rare_state;
@@ -280,6 +280,15 @@ pub struct AmountErr<I, U, Amount: TryFrom<usize>> {
     pub values: I,
     pub entry: U,
     pub err: Amount::Error,
+}
+
+impl<I: ExactSizeIterator, U, Amount: TryFrom<usize>> AmountErr<I, U, Amount> {
+    fn warn<Log, Out: Default>(self) -> Out {
+        warn!("Tried to push {} states/transitions into {} which does not fit into {}. If the pushed amount is uncertain, use `try_push_present` or a larger `Amount` type that is always large enough for the amount value, like PackedUSize.",
+            self.values.len(), type_name::<Log>(), type_name::<Self>()
+        );
+        Out::default()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -363,4 +372,4 @@ where
     }
 }
 
-const BACKWARD_EXPECT_MSG: &'static str = "self.index should always be <= the log len, so reducing it without underflow is expected to result in a valid index into the log";
+const INDEX_OOB: &'static str = "self.index should always be <= the deque len, so successfully reducing it without underflow is expected to result in a valid index into the log which is not the case here";
