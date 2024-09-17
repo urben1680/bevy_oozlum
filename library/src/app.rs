@@ -9,7 +9,7 @@ use bevy::{
     },
     prelude::{Schedule, Schedules},
 };
-pub(crate) use schedule::{RevSchedule, TryRunRevScheduleError};
+pub(crate) use schedule::RevSchedule;
 use set_configs::IntoRevSystemSetConfigs;
 use system_configs::IntoRevSystemConfigs;
 
