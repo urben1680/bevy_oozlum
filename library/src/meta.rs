@@ -1,9 +1,13 @@
 use core::{num::NonZeroUsize, ops::Range};
 
 use bevy::{
-    ecs::{system::Resource, world::World},
-    prelude::Local,
+    ecs::{
+        system::{Local, Resource},
+        world::World,
+    },
+    log::warn_once,
     reflect::{std_traits::ReflectDefault, Reflect},
+    utils::tracing::info,
 };
 
 #[cfg(feature = "serde")]
@@ -224,27 +228,16 @@ impl RevMeta {
         self.queue = Some(InternalDirection::Pause);
     }
     pub fn update_world(world: &mut World, mut rev_meta_exists: Local<Option<bool>>) {
-        let mut this = match world.get_resource_mut::<Self>() {
-            None => {
-                match *rev_meta_exists {
-                    None => todo!("log: did not exist yet, waiting..."),
-                    Some(true) => todo!("log stopped existing, stopped..."),
-                    _ => {}
-                }
-                *rev_meta_exists = Some(false);
-                return;
+        let Some(mut this) = world.get_resource_mut::<Self>() else {
+            match *rev_meta_exists {
+                None => info!("RevMeta does not exist yet, reversible schedule RevUpdate will not be called until it is inserted."),
+                Some(true) => info!("RevMeta was removed, reversible schedule RevUpdate will not be called until it is inserted again."),
+                _ => {}
             }
-            Some(this) => {
-                if *rev_meta_exists != Some(true) {
-                    todo!("log: does exist, starting...");
-                }
-                *rev_meta_exists = Some(true);
-                this
-            }
+            *rev_meta_exists = Some(false);
+            return;
         };
-        if this.range.end == usize::MAX {
-            todo!("")
-        }
+        *rev_meta_exists = Some(true);
         this.update();
         let result = match this.get_direction() {
             Some(Direction::Forward) | Some(Direction::ForwardLog) => {
@@ -254,7 +247,7 @@ impl RevMeta {
             None => Ok(()),
         };
         if result.is_err() {
-            todo!("")
+            warn_once!("RevMeta cannot find reversible schedule RevUpdate, make sure to not call RevMeta::update_world recursively.");
         }
         if let Some(mut this) = world.get_resource_mut::<Self>() {
             this.direction.set_ran();
