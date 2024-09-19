@@ -24,6 +24,7 @@ Enhancements:
 - make doctests work
 - explore timestamp as u64/u32/u16 (feature?) after recent refactorings
 - yeet packed int (in this crate) and replace Amount generic with const generic BYTES
+-- GAT für Result<T, AmountErr>/T
 
 Docs
 - examples

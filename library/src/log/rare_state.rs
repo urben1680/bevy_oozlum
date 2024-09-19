@@ -3,7 +3,7 @@ use std::collections::{TryReserveError, VecDeque};
 
 use bevy::{reflect::Reflect, utils::tracing::error};
 
-use super::{LogIter, OutOfLog, PackedUSize, RareValue, WithAmount, WithTimestamp, INDEX_OOB};
+use super::{EntryAmount, LogIter, OutOfLog, PackedUSize, RareValue, WithTimestamp, INDEX_OOB};
 
 #[derive(Debug, Clone, Reflect)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -250,11 +250,11 @@ impl<T: Debug> RareStateLog<WithTimestamp<T>> {
     }
 }
 
-impl<U, Amount: Copy> RareStateLog<WithAmount<WithTimestamp<U>, Amount>> {
+impl<U, Amount: Copy> RareStateLog<EntryAmount<WithTimestamp<U>, Amount>> {
     pub(crate) fn pop_past_by_timestamp(
         &mut self,
         log_start: usize,
-    ) -> Option<WithAmount<WithTimestamp<U>, Amount>> {
+    ) -> Option<EntryAmount<WithTimestamp<U>, Amount>> {
         if self.past_end_rare().map_or(false, |entry| {
             entry.value.entry.logged_at + entry.skips < log_start
         }) {
@@ -266,7 +266,7 @@ impl<U, Amount: Copy> RareStateLog<WithAmount<WithTimestamp<U>, Amount>> {
     pub(crate) fn drain_past_by_timestamp(
         &mut self,
         log_start: usize,
-    ) -> impl LogIter<WithAmount<WithTimestamp<U>, Amount>> {
+    ) -> impl LogIter<EntryAmount<WithTimestamp<U>, Amount>> {
         let partition_point = self
             .states
             .partition_point(|entry| entry.value.entry.logged_at + entry.skips < log_start);

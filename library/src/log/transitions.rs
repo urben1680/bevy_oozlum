@@ -1,39 +1,42 @@
 use std::{
     collections::{TryReserveError, VecDeque},
+    convert::Infallible,
     fmt::Debug,
 };
 
 use bevy::reflect::{std_traits::ReflectDefault, Reflect};
 
 use super::{
-    AmountErr, LogIter, LogMut, OutOfLog, PackedUSize, TransitionLog, ValueEntry, WithAmount,
-    WithTimestamp,
+    impl_with_amount, AmountErr, EntryAmount, LogIter, LogMut, OutOfLog, TransitionLog, ValueEntry,
+    WithAmount, WithTimestamp,
 };
 
 #[derive(Debug, Clone, Reflect)]
 #[reflect(Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct TransitionsLog<T, U = (), Amount = PackedUSize>
+pub struct TransitionsLog<T, U = (), const AMOUNT_BYTES: usize = 0>
 where
-    Amount: TryFrom<usize, Error: Debug> + Into<usize> + Copy,
+    Self: WithAmount,
 {
-    amounts: TransitionLog<WithAmount<U, Amount>>,
+    amounts: TransitionLog<EntryAmount<U, <Self as WithAmount>::Amount>>,
     transitions: VecDeque<T>,
     index: usize,
 }
 
-impl<T, U, Amount> Default for TransitionsLog<T, U, Amount>
+impl_with_amount!(TransitionsLog);
+
+impl<T, U, const AMOUNT_BYTES: usize> Default for TransitionsLog<T, U, AMOUNT_BYTES>
 where
-    Amount: TryFrom<usize, Error: Debug> + Into<usize> + Copy,
+    Self: WithAmount,
 {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<T, U, Amount> TransitionsLog<T, U, Amount>
+impl<T, U, const AMOUNT_BYTES: usize> TransitionsLog<T, U, AMOUNT_BYTES>
 where
-    Amount: TryFrom<usize, Error: Debug> + Into<usize> + Copy,
+    Self: WithAmount,
 {
     pub const fn new() -> Self {
         Self {
@@ -109,43 +112,54 @@ where
     pub fn past_end(&self) -> Option<&U> {
         self.amounts
             .past_end()
-            .map(|with_amount| &with_amount.entry)
+            .map(|entry_amount| &entry_amount.entry)
     }
     pub fn pop_past(&mut self) -> Option<ValueEntry<impl LogIter<T>, U>> {
         self.amounts
             .pop_past()
-            .map(|with_amount| self.drain_past_by_amount(with_amount))
+            .map(|entry_amount| self.drain_past_by_amount(entry_amount))
     }
     pub fn try_push_present<Out: Into<U>>(
         &mut self,
         c: impl FnOnce(LogMut<T>) -> Out,
-    ) -> Result<(), AmountErr<impl LogIter<T>, U, Amount>> {
+    ) -> Result<(), AmountErr<impl LogIter<T>, U>>
+    where
+        Self: WithAmount<Err = usize>,
+    {
         self.transitions.truncate(self.index);
         let entry = c(LogMut(&mut self.transitions)).into();
-        let new_amount = self.transitions.len() - self.index;
-        match new_amount.try_into() {
+        let pushed_amount = self.transitions.len() - self.index;
+        match <Self as WithAmount>::usize_to_amount(pushed_amount) {
             Ok(amount) => {
                 self.index = self.transitions.len();
-                self.amounts.push_present(WithAmount { entry, amount });
+                self.amounts.push_present(EntryAmount { entry, amount });
                 Ok(())
             }
-            Err(err) => Err(AmountErr {
+            Err(max_amount) => Err(AmountErr {
                 entry,
                 values: self.transitions.drain(self.index..),
-                err,
+                pushed_amount,
+                max_amount,
             }),
         }
     }
-    pub fn push_present<Out: Into<U>>(&mut self, c: impl FnOnce(LogMut<T>) -> Out) {
-        self.try_push_present(c)
-            .unwrap_or_else(AmountErr::warn::<Self, _>)
+    pub fn push_present<Out: Into<U>>(&mut self, c: impl FnOnce(LogMut<T>) -> Out)
+    where
+        Self: WithAmount<Err = Infallible>,
+    {
+        self.transitions.truncate(self.index);
+        let entry = c(LogMut(&mut self.transitions)).into();
+        let amount = self.transitions.len() - self.index;
+        let amount = <Self as WithAmount>::usize_to_amount(amount).unwrap();
+        self.index = self.transitions.len();
+        self.amounts.push_present(EntryAmount { entry, amount });
     }
     pub fn drain_future(&mut self) -> (impl LogIter<T>, impl LogIter<U>) {
         (
             self.transitions.drain(self.index..),
             self.amounts
                 .drain_future()
-                .map(|with_amount| with_amount.entry),
+                .map(|entry_amount| entry_amount.entry),
         )
     }
     pub fn clear(&mut self) {
@@ -155,22 +169,22 @@ where
     }
     pub fn backward_log(&mut self) -> Result<ValueEntry<impl LogIter<&mut T>, &mut U>, OutOfLog> {
         let old_index = self.index;
-        let with_amount = self.amounts.backward_log()?;
-        self.index -= with_amount.amount();
+        let entry_amount = self.amounts.backward_log()?;
+        self.index -= entry_amount.amount::<Self>();
         let iter = self.transitions.range_mut(self.index..old_index);
         Ok(ValueEntry {
             value: iter,
-            entry: &mut with_amount.entry,
+            entry: &mut entry_amount.entry,
         })
     }
     pub fn forward_log(&mut self) -> Result<ValueEntry<impl LogIter<&mut T>, &mut U>, OutOfLog> {
         let old_index = self.index;
-        let with_amount = self.amounts.forward_log()?;
-        self.index += with_amount.amount();
+        let entry_amount = self.amounts.forward_log()?;
+        self.index += entry_amount.amount::<Self>();
         let iter = self.transitions.range_mut(old_index..self.index);
         Ok(ValueEntry {
             value: iter,
-            entry: &mut with_amount.entry,
+            entry: &mut entry_amount.entry,
         })
     }
     pub fn pop_past_by_len(
@@ -179,33 +193,33 @@ where
     ) -> Option<ValueEntry<impl LogIter<T>, U>> {
         self.amounts
             .pop_past_by_len(max_past_len)
-            .map(|with_amount| self.drain_past_by_amount(with_amount))
+            .map(|entry_amount| self.drain_past_by_amount(entry_amount))
     }
     pub fn drain_past_by_len(&mut self, max_past_len: usize) -> impl LogIter<T> {
         let amount: usize = self
             .amounts
             .drain_past_by_len(max_past_len)
-            .map(|with_amount| with_amount.amount())
+            .map(|entry_amount| entry_amount.amount::<Self>())
             .sum();
         self.index -= amount;
         self.transitions.drain(..amount)
     }
     fn drain_past_by_amount(
         &mut self,
-        with_amount: WithAmount<U, Amount>,
+        entry_amount: EntryAmount<U, <Self as WithAmount>::Amount>,
     ) -> ValueEntry<impl LogIter<T>, U> {
-        let amount = with_amount.amount();
+        let amount = entry_amount.amount::<Self>();
         self.index -= amount;
         ValueEntry {
             value: self.transitions.drain(..amount),
-            entry: with_amount.entry,
+            entry: entry_amount.entry,
         }
     }
 }
 
-impl<T, U, Amount> TransitionsLog<T, WithTimestamp<U>, Amount>
+impl<T, U, const AMOUNT_BYTES: usize> TransitionsLog<T, WithTimestamp<U>, AMOUNT_BYTES>
 where
-    Amount: TryFrom<usize, Error: Debug> + Into<usize> + Copy,
+    Self: WithAmount,
 {
     pub fn pop_past_by_timestamp(
         &mut self,
@@ -213,13 +227,13 @@ where
     ) -> Option<ValueEntry<impl LogIter<T>, WithTimestamp<U>>> {
         self.amounts
             .pop_past_by_timestamp(log_start)
-            .map(|with_amount| self.drain_past_by_amount(with_amount))
+            .map(|entry_amount| self.drain_past_by_amount(entry_amount))
     }
     pub fn drain_past_by_timestamp(&mut self, log_start: usize) -> impl LogIter<T> {
         let amount: usize = self
             .amounts
             .drain_past_by_timestamp(log_start)
-            .map(|with_amount| with_amount.amount())
+            .map(|entry_amount| entry_amount.amount::<Self>())
             .sum();
         self.index -= amount;
         self.transitions.drain(..amount)
@@ -237,8 +251,8 @@ mod test {
     #[derive(Clone, Debug)]
     struct MetaAndLogs {
         meta: RevMeta,
-        with_timestamp: [TransitionsLog<usize, WithTimestamp, u8>; 2],
-        one_per_frame: [TransitionsLog<usize, (), u8>; 2],
+        with_timestamp: [TransitionsLog<usize, WithTimestamp, 1>; 2],
+        one_per_frame: [TransitionsLog<usize, (), 1>; 2],
     }
 
     fn collect(iter: impl IntoIterator<Item: Borrow<usize>>) -> Vec<usize> {
@@ -581,6 +595,6 @@ mod test {
     #[allow(dead_code)]
     fn impls_reflect() {
         bevy::reflect::TypeRegistry::empty()
-            .register::<TransitionsLog<usize, WithTimestamp<u8>, u8>>();
+            .register::<TransitionsLog<usize, WithTimestamp<u8>, 1>>();
     }
 }

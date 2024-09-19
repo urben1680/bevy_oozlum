@@ -169,11 +169,8 @@ impl RevMeta {
     pub fn past_len(&self) -> usize {
         self.now - self.range.start
     }
-    pub fn with_timestamp<T>(&self, data: T) -> WithTimestamp<T> {
-        WithTimestamp {
-            value: data,
-            logged_at: self.now.into(),
-        }
+    pub fn with_timestamp<T>(&self, value: T) -> WithTimestamp<T> {
+        WithTimestamp::new(value, self.now)
     }
     /// Returns the frame range that can be returned to using [`Self::queue_log`].
     pub fn log_range(&self) -> Range<usize> {
