@@ -6,7 +6,7 @@ use bevy::{
 };
 
 use crate::{
-    log::{TransitionsLog, WithTimestamp},
+    log::{OutOfLog, TransitionsLog, WithTimestamp},
     meta::{Direction, RevMeta},
 };
 
@@ -75,11 +75,18 @@ struct RevCommandBuffer(VecDeque<SyncCell<Box<dyn InitializedRevCommand>>>);
 #[derive(Default)]
 pub struct CommandsLog(TransitionsLog<SyncCell<Box<dyn InitializedRevCommand>>, WithTimestamp>);
 
+#[derive(Clone, Debug)]
+pub enum CommandsLogErr {
+    RevMetaMissing,
+    RevMetaWrongDirection(RevMeta),
+    OutOfLog(RevMeta),
+}
+
 impl CommandsLog {
-    pub fn forward(&mut self, world: &mut World) {
+    pub fn forward(&mut self, world: &mut World) -> Result<(), CommandsLogErr> {
         let meta = world
             .get_resource::<RevMeta>()
-            .expect(RevMeta::EXIST_MSG)
+            .ok_or(CommandsLogErr::RevMetaMissing)?
             .clone();
         match meta.get_direction() {
             Some(Direction::Forward) => {
@@ -96,35 +103,37 @@ impl CommandsLog {
                         meta.now()
                     });
                 }
+                Ok(())
             }
             Some(Direction::ForwardLog) => {
                 for command in self
                     .0
                     .forward_log()
-                    .expect("todo not out of log")
+                    .map_err(|OutOfLog| CommandsLogErr::OutOfLog(meta))?
                     .into_iter()
                 {
                     command.get().redo(world);
                 }
+                Ok(())
             }
-            _ => todo!("todo"),
+            _ => Err(CommandsLogErr::RevMetaWrongDirection(meta)),
         }
     }
-    pub fn backward(&mut self, world: &mut World) {
-        let meta = world.get_resource::<RevMeta>();
-        if !matches!(
-            meta.map(RevMeta::internal_direction),
-            Some(crate::meta::InternalDirection::RunningBackwardLog { .. })
-        ) {
-            todo!("")
+    pub fn backward(&mut self, world: &mut World) -> Result<(), CommandsLogErr> {
+        let meta = world
+            .get_resource::<RevMeta>()
+            .ok_or(CommandsLogErr::RevMetaMissing)?;
+        if meta.get_direction() != Some(Direction::BackwardLog) {
+            return Err(CommandsLogErr::RevMetaWrongDirection(meta.clone()));
         }
         for command in self
             .0
             .backward_log()
-            .expect("todo not out of log")
+            .map_err(|OutOfLog| CommandsLogErr::OutOfLog(meta.clone()))?
             .into_iter()
         {
             command.get().undo(world);
         }
+        Ok(())
     }
 }
