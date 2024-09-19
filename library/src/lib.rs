@@ -16,21 +16,18 @@ Features:
 -- try_tun_backward_schedule
 
 Enhancements:
-- general todo!() und //todo, reduce unwrap/expect, use logging
+- general todo!() und //todo
 - RareStates tests
 - longer log tests for RareTransition and RareState
 - tests of other log methods like clear variants
 - config tests
-- forward_log_by_timestamp / backward_log_by_timestamp for all logs and testing
--- not possible with rare variants because skips have no timestamp
 - make doctests work
-- meta-free methods of logs, meta offers fitting methods
 - explore timestamp as u64/u32/u16 (feature?) after recent refactorings
+- yeet packed int (in this crate) and replace Amount generic with const generic BYTES
 
 Docs
 - examples
 - documentations, besonders mit informationen welche Methoden für deterministische Logik geeignet ist
-
 
 UNSUPPORTED:
 
@@ -114,3 +111,15 @@ impl Plugin for RevSystemsPlugin {
         };
     }
 }
+
+macro_rules! error_per_flag {
+    ($flag:expr, $($arg:tt)+) => ({
+        if !*$flag {
+            bevy::utils::tracing::error!($($arg)+);
+            *$flag = true;
+        }
+        core::default::Default::default()
+    });
+}
+
+pub(crate) use error_per_flag;
