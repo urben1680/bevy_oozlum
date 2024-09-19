@@ -2,10 +2,14 @@ use core::{num::NonZeroUsize, ops::Range};
 
 use bevy::{
     ecs::{
+        archetype::ArchetypeComponentId,
+        component::ComponentId,
+        query::Access,
         system::{Local, Resource},
         world::World,
     },
     log::warn_once,
+    prelude::{IntoSystem, Res, System},
     reflect::{std_traits::ReflectDefault, Reflect},
     utils::tracing::info,
 };
@@ -46,7 +50,7 @@ pub enum InternalDirection {
 }
 
 impl InternalDirection {
-    fn set_running(&mut self) {
+    fn start_running(&mut self) {
         *self = match *self {
             Self::RanForward => Self::RunningForward,
             Self::RanForwardLog {
@@ -62,7 +66,7 @@ impl InternalDirection {
             _ => *self,
         }
     }
-    fn set_ran(&mut self) {
+    fn end_running(&mut self) {
         *self = match *self {
             Self::RunningForward => Self::RanForward,
             Self::RunningForwardLog {
@@ -93,16 +97,6 @@ impl InternalDirection {
         )
     }
 }
-
-/*
-benötigte Werte in hot code:
-- now
-- log_start
-- max_updates (über Direction Eager, user geben ein impl TryInto<usize>, kein usize oder NonZeroUsize)
-
-benötigt für steuerung:
-- log end
-*/
 
 /// RevMeta is used to control the processing of reversible systems.
 ///
@@ -142,7 +136,6 @@ impl Default for RevMeta {
 
 impl RevMeta {
     const END_MAX_MSG: &'static str = "Maximum reversible timestamp reached: `usize::MAX`";
-    pub(crate) const EXIST_MSG: &'static str = "The RevMeta resource should never be removed";
     pub const fn new(max_len: Option<NonZeroUsize>, now: usize, paused: bool) -> Self {
         if now == usize::MAX {
             panic!("{}", Self::END_MAX_MSG);
@@ -227,6 +220,9 @@ impl RevMeta {
     pub fn queue_pause(&mut self) {
         self.queue = Some(InternalDirection::Pause);
     }
+    pub fn end_running(&mut self) {
+        self.direction.end_running();
+    }
     pub fn update_world(world: &mut World, mut rev_meta_exists: Local<Option<bool>>) {
         let Some(mut this) = world.get_resource_mut::<Self>() else {
             match *rev_meta_exists {
@@ -239,6 +235,7 @@ impl RevMeta {
         };
         *rev_meta_exists = Some(true);
         this.update();
+        let this = this.clone();
         let result = match this.get_direction() {
             Some(Direction::Forward) | Some(Direction::ForwardLog) => {
                 world.try_run_schedule(ForwardSchedule::of(RevUpdate))
@@ -247,10 +244,10 @@ impl RevMeta {
             None => Ok(()),
         };
         if result.is_err() {
-            warn_once!("RevMeta cannot find reversible schedule RevUpdate, make sure to not call RevMeta::update_world recursively.");
+            warn_once!("RevMeta cannot find reversible schedule RevUpdate, make sure to not call it or RevMeta::update_world recursively.\n{this:?}");
         }
         if let Some(mut this) = world.get_resource_mut::<Self>() {
-            this.direction.set_ran();
+            this.direction.end_running();
         }
     }
     pub fn update(&mut self) {
@@ -265,7 +262,7 @@ impl RevMeta {
                 }
             }
             None => {
-                self.direction.set_running();
+                self.direction.start_running();
                 match &mut self.direction {
                     InternalDirection::RunningForward => self.update_forward(),
                     InternalDirection::RunningForwardLog {
@@ -293,6 +290,43 @@ impl RevMeta {
                 .range
                 .start
                 .max(self.range.end.saturating_sub(max_len.get()));
+        }
+    }
+    pub(crate) fn add_read_if_no_write(
+        world: &mut World,
+        component_access: &mut Access<ComponentId>,
+        archetype_component_access: &mut Access<ArchetypeComponentId>,
+    ) {
+        /// Not everything of the bevy API that is needed here to update archetype_component_access is public,
+        /// so this is a rather complicated way to do it while trying to make it cheap after the first call.
+        /// The benefit is that this is agnostic to implementation details of how impl SystemParam for Res works.
+        #[derive(Resource)]
+        struct RevMetaAccesses {
+            component_access: Access<ComponentId>,
+            archarchetype_component_access: Access<ArchetypeComponentId>,
+        }
+
+        let access = match world.get_resource::<RevMetaAccesses>() {
+            Some(access) => access,
+            None => {
+                let mut system = IntoSystem::into_system(|_: Res<Self>| {});
+                system.initialize(world);
+                world.insert_resource(RevMetaAccesses {
+                    component_access: system.component_access().clone(),
+                    archarchetype_component_access: system.archetype_component_access().clone(),
+                });
+                world.resource::<RevMetaAccesses>()
+            }
+        };
+
+        if access.component_access.is_compatible(&component_access) {
+            component_access.extend(&access.component_access);
+        }
+        if access
+            .archarchetype_component_access
+            .is_compatible(&archetype_component_access)
+        {
+            archetype_component_access.extend(&access.archarchetype_component_access);
         }
     }
 }
