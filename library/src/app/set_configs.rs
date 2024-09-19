@@ -1,5 +1,5 @@
 use bevy::{
-    ecs::schedule::SystemSetConfigs,
+    ecs::schedule::{InternedSystemSet, SystemSetConfigs},
     prelude::{Condition, IntoSystemSet, IntoSystemSetConfigs, SystemSet},
     utils::all_tuples,
 };
@@ -128,7 +128,7 @@ pub trait IntoRevSystemSetConfigs<Marker>: Sized {
         // todo: uncomment when https://github.com/bevyengine/bevy/pull/13919 is landed
         RevSystemSetConfigs {
             forward_sys: configs.forward_sys.chain(),
-            backward_cmds_sys: configs.backward_cmds_sys.chain/*.chain_ignore_deferred*/(),
+            backward_cmds_sys: configs.backward_cmds_sys.chain/*_ignore_deferred*/(),
             backward_sys: configs.backward_sys,
         }
     }
@@ -136,14 +136,31 @@ pub trait IntoRevSystemSetConfigs<Marker>: Sized {
         let configs = self.into_rev_configs();
         // todo: uncomment when https://github.com/bevyengine/bevy/pull/13919 landed
         RevSystemSetConfigs {
-            forward_sys: configs.forward_sys.chain/*.chain_ignore_deferred*/(),
+            forward_sys: configs.forward_sys.chain/*_ignore_deferred*/(),
             backward_cmds_sys: configs.backward_cmds_sys,
-            backward_sys: configs.backward_sys.chain/*.chain_ignore_deferred*/(),
+            backward_sys: configs.backward_sys.chain/*_ignore_deferred*/(),
         }
     }
 }
 
 impl RevSystemSetConfigs {
+    pub(crate) fn from_sets(sets: Vec<InternedSystemSet>) -> Option<Self> {
+        let mut iter = sets.into_iter();
+        let set = iter.next()?;
+        let mut forward_sys = set.into_configs();
+        let mut backward_cmds_sys = BackwardCmdsSys(set).into_configs();
+        let mut backward_sys = BackwardSys(set).into_configs();
+        for set in iter {
+            forward_sys = (forward_sys, set).into_configs();
+            backward_cmds_sys = (backward_cmds_sys, BackwardCmdsSys(set)).into_configs();
+            backward_sys = (backward_sys, BackwardSys(set)).into_configs();
+        }
+        Some(Self {
+            forward_sys,
+            backward_cmds_sys,
+            backward_sys,
+        })
+    }
     /// Split configs to be more readable in impl_into_rev_set_configs! and as partially movable as nested tuples.
     fn split(self) -> (ForwardSetConfig, BackwardSetConfigs) {
         (
