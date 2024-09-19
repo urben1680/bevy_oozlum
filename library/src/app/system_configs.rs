@@ -57,7 +57,7 @@ where
 
     fn rev_after_ignore_deferred<M>(self, set: impl IntoSystemSet<M>) -> RevSystemConfigs {
         let mut configs = self.into_rev_configs();
-        configs.set_configs = configs.set_configs.rev_before_ignore_deferred(set);
+        configs.set_configs = configs.set_configs.rev_after_ignore_deferred(set);
         configs
     }
 
