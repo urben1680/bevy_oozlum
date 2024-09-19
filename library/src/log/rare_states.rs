@@ -6,7 +6,7 @@ use std::{
 use bevy::reflect::Reflect;
 
 use super::{
-    AmountErr, LogIter, LogMut, OutOfLog, PackedUSize, RareStateLog, ValueEntry, WithAmount,
+    AmountErr, EntryAmount, LogIter, LogMut, OutOfLog, PackedUSize, RareStateLog, ValueEntry,
     WithTimestamp,
 };
 
@@ -16,7 +16,7 @@ pub struct RareStatesLog<T, U = (), Amount = PackedUSize>
 where
     Amount: TryFrom<usize, Error: Debug> + Into<usize> + Copy,
 {
-    amounts: RareStateLog<WithAmount<U, Amount>>,
+    amounts: RareStateLog<EntryAmount<U, Amount>>,
     states: VecDeque<T>,
     index: usize,
 }
@@ -50,14 +50,14 @@ where
             }
         };
         Ok(Self {
-            amounts: RareStateLog::new(WithAmount { entry, amount }),
+            amounts: RareStateLog::new(EntryAmount { entry, amount }),
             states,
             index: 0,
         })
     }
     pub fn new_empty(entry: U) -> Self {
         Self {
-            amounts: RareStateLog::new(WithAmount::zero(entry)),
+            amounts: RareStateLog::new(EntryAmount::zero(entry)),
             states: VecDeque::new(),
             index: 0,
         }
@@ -81,14 +81,14 @@ where
             }
         };
         Ok(Self {
-            amounts: RareStateLog::with_capacity(WithAmount { entry, amount }, log_capacity),
+            amounts: RareStateLog::with_capacity(EntryAmount { entry, amount }, log_capacity),
             states,
             index: 0,
         })
     }
     pub fn with_capacities_empty(entry: U, states_capacity: usize, log_capacity: usize) -> Self {
         Self {
-            amounts: RareStateLog::with_capacity(WithAmount::zero(entry), log_capacity),
+            amounts: RareStateLog::with_capacity(EntryAmount::zero(entry), log_capacity),
             states: VecDeque::with_capacity(states_capacity),
             index: 0,
         }
@@ -185,7 +185,7 @@ where
             Ok(amount) => {
                 self.index = self.states.len();
                 self.amounts
-                    .push_present(Some(WithAmount { entry, amount }));
+                    .push_present(Some(EntryAmount { entry, amount }));
                 Ok(None)
             }
             Err(err) => Err(AmountErr {
@@ -232,13 +232,13 @@ where
         };
         self.states.clear();
         self.states.append(&mut states);
-        self.amounts.clear_with(WithAmount { entry, amount });
+        self.amounts.clear_with(EntryAmount { entry, amount });
         self.index = 0;
         Ok(())
     }
     pub fn clear_empty(&mut self, entry: U) {
         self.states.clear();
-        self.amounts.clear_with(WithAmount::zero(entry));
+        self.amounts.clear_with(EntryAmount::zero(entry));
         self.index = 0;
     }
     pub fn backward_log(&mut self) -> Result<(), OutOfLog> {
@@ -271,7 +271,7 @@ where
     }
     fn drain_past_by_amount(
         &mut self,
-        with_amount: WithAmount<U, Amount>,
+        with_amount: EntryAmount<U, Amount>,
     ) -> ValueEntry<impl LogIter<T>, U> {
         let amount = with_amount.amount();
         self.index -= amount;

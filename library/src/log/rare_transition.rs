@@ -6,7 +6,7 @@ use bevy::{
     utils::tracing::error,
 };
 
-use super::{LogIter, OutOfLog, RareValue, WithAmount, WithTimestamp, INDEX_OOB};
+use super::{EntryAmount, LogIter, OutOfLog, RareValue, WithTimestamp, INDEX_OOB};
 
 #[derive(Debug, Clone, Reflect)]
 #[reflect(Default)]
@@ -238,11 +238,11 @@ impl<T: Debug> RareTransitionLog<WithTimestamp<T>> {
     }
 }
 
-impl<U, Amount: Copy> RareTransitionLog<WithAmount<WithTimestamp<U>, Amount>> {
+impl<U, Amount: Copy> RareTransitionLog<EntryAmount<WithTimestamp<U>, Amount>> {
     pub(crate) fn pop_past_by_timestamp(
         &mut self,
         log_start: usize,
-    ) -> Option<WithAmount<WithTimestamp<U>, Amount>> {
+    ) -> Option<EntryAmount<WithTimestamp<U>, Amount>> {
         if self.past_end().map_or(false, |entry| {
             // include range().start because this entry instructs how to transition from range().start to range().start - 1
             entry.entry.logged_at <= log_start
@@ -255,7 +255,7 @@ impl<U, Amount: Copy> RareTransitionLog<WithAmount<WithTimestamp<U>, Amount>> {
     pub(crate) fn drain_past_by_timestamp(
         &mut self,
         log_start: usize,
-    ) -> impl LogIter<WithAmount<WithTimestamp<U>, Amount>> {
+    ) -> impl LogIter<EntryAmount<WithTimestamp<U>, Amount>> {
         let partition_point = self
             .transitions
             .partition_point(|entry| entry.value.entry.logged_at <= log_start);

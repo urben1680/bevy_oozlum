@@ -6,7 +6,7 @@ use std::{
 use bevy::reflect::{std_traits::ReflectDefault, Reflect};
 
 use super::{
-    AmountErr, LogIter, LogMut, OutOfLog, PackedUSize, RareTransitionLog, ValueEntry, WithAmount,
+    AmountErr, EntryAmount, LogIter, LogMut, OutOfLog, PackedUSize, RareTransitionLog, ValueEntry,
     WithTimestamp,
 };
 
@@ -17,7 +17,7 @@ pub struct RareTransitionsLog<T, U = (), Amount = PackedUSize>
 where
     Amount: TryFrom<usize, Error: Debug> + Into<usize> + Copy,
 {
-    amounts: RareTransitionLog<WithAmount<U, Amount>>,
+    amounts: RareTransitionLog<EntryAmount<U, Amount>>,
     transitions: VecDeque<T>,
     index: usize,
 }
@@ -143,7 +143,7 @@ where
         match amount_usize.try_into() {
             Ok(amount) => {
                 self.amounts
-                    .push_present(Some(WithAmount { entry, amount }));
+                    .push_present(Some(EntryAmount { entry, amount }));
                 self.index += amount_usize;
                 Ok(None)
             }
@@ -202,7 +202,7 @@ where
     }
     fn drain_past_by_amount(
         &mut self,
-        with_amount: Option<WithAmount<U, Amount>>,
+        with_amount: Option<EntryAmount<U, Amount>>,
     ) -> Option<ValueEntry<impl LogIter<T>, U>> {
         with_amount.map(|with_amount| {
             let amount = with_amount.amount();

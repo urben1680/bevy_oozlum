@@ -6,7 +6,7 @@ use bevy::{
     utils::tracing::error,
 };
 
-use super::{LogIter, OutOfLog, WithAmount, WithTimestamp, INDEX_OOB};
+use super::{EntryAmount, LogIter, OutOfLog, WithTimestamp, INDEX_OOB};
 
 #[derive(Debug, Clone, Reflect)]
 #[reflect(Default)]
@@ -131,7 +131,7 @@ impl<T> TransitionLog<WithTimestamp<T>> {
     pub fn pop_past_by_timestamp(&mut self, log_start: usize) -> Option<WithTimestamp<T>> {
         if self.past_end().map_or(false, |with_timestamp| {
             // include range().start because this entry instructs how to transition from range().start to range().start - 1
-            with_timestamp.logged_at <= log_start
+            with_timestamp.logged_at() <= log_start
         }) {
             self.pop_past()
         } else {
@@ -141,20 +141,20 @@ impl<T> TransitionLog<WithTimestamp<T>> {
     pub fn drain_past_by_timestamp(&mut self, log_start: usize) -> impl LogIter<WithTimestamp<T>> {
         let partition_point = self
             .transitions
-            .partition_point(|entry| entry.logged_at <= log_start);
+            .partition_point(|entry| entry.logged_at() <= log_start);
         self.index -= partition_point;
         self.transitions.drain(..partition_point)
     }
 }
 
-impl<U, Amount: Copy> TransitionLog<WithAmount<WithTimestamp<U>, Amount>> {
+impl<U, Amount: Copy> TransitionLog<EntryAmount<WithTimestamp<U>, Amount>> {
     pub(crate) fn pop_past_by_timestamp(
         &mut self,
         log_start: usize,
-    ) -> Option<WithAmount<WithTimestamp<U>, Amount>> {
+    ) -> Option<EntryAmount<WithTimestamp<U>, Amount>> {
         if self.past_end().map_or(false, |with_timestamp| {
             // include range().start because this entry instructs how to transition from range().start to range().start - 1
-            with_timestamp.entry.logged_at <= log_start
+            with_timestamp.entry.logged_at() <= log_start
         }) {
             self.pop_past()
         } else {
@@ -164,10 +164,10 @@ impl<U, Amount: Copy> TransitionLog<WithAmount<WithTimestamp<U>, Amount>> {
     pub(crate) fn drain_past_by_timestamp(
         &mut self,
         log_start: usize,
-    ) -> impl LogIter<WithAmount<WithTimestamp<U>, Amount>> {
+    ) -> impl LogIter<EntryAmount<WithTimestamp<U>, Amount>> {
         let partition_point = self
             .transitions
-            .partition_point(|entry| entry.entry.logged_at <= log_start);
+            .partition_point(|entry| entry.entry.logged_at() <= log_start);
         self.index -= partition_point;
         self.transitions.drain(..partition_point)
     }

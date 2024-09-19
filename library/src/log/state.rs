@@ -5,7 +5,7 @@ use bevy::{reflect::Reflect, utils::tracing::error};
 
 use crate::log::INDEX_OOB;
 
-use super::{LogIter, OutOfLog, WithAmount, WithTimestamp};
+use super::{EntryAmount, LogIter, OutOfLog, WithTimestamp};
 
 #[derive(Debug, Default, Clone, Reflect)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -193,7 +193,7 @@ impl<T> StateLog<T> {
 
 impl<T> StateLog<WithTimestamp<T>> {
     pub fn pop_past_by_timestamp(&mut self, log_start: usize) -> Option<WithTimestamp<T>> {
-        if self.past_end()?.logged_at < log_start {
+        if self.past_end()?.logged_at() < log_start {
             self.pop_past()
         } else {
             None
@@ -202,18 +202,18 @@ impl<T> StateLog<WithTimestamp<T>> {
     pub fn drain_past_by_timestamp(&mut self, log_start: usize) -> impl LogIter<WithTimestamp<T>> {
         let partition_point = self
             .states
-            .partition_point(|entry| entry.logged_at < log_start);
+            .partition_point(|entry| entry.logged_at() < log_start);
         self.index -= partition_point;
         self.states.drain(..partition_point)
     }
 }
 
-impl<U, Amount> StateLog<WithAmount<WithTimestamp<U>, Amount>> {
+impl<U, Amount> StateLog<EntryAmount<WithTimestamp<U>, Amount>> {
     pub(crate) fn pop_past_by_timestamp(
         &mut self,
         log_start: usize,
-    ) -> Option<WithAmount<WithTimestamp<U>, Amount>> {
-        if self.past_end()?.entry.logged_at < log_start {
+    ) -> Option<EntryAmount<WithTimestamp<U>, Amount>> {
+        if self.past_end()?.entry.logged_at() < log_start {
             self.pop_past()
         } else {
             None
@@ -222,10 +222,10 @@ impl<U, Amount> StateLog<WithAmount<WithTimestamp<U>, Amount>> {
     pub(crate) fn drain_past_by_timestamp(
         &mut self,
         log_start: usize,
-    ) -> impl LogIter<WithAmount<WithTimestamp<U>, Amount>> {
+    ) -> impl LogIter<EntryAmount<WithTimestamp<U>, Amount>> {
         let partition_point = self
             .states
-            .partition_point(|entry| entry.entry.logged_at < log_start);
+            .partition_point(|entry| entry.entry.logged_at() < log_start);
         self.index -= partition_point;
         self.states.drain(..partition_point)
     }

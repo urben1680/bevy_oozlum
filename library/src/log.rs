@@ -210,11 +210,10 @@
 //! [`ForwardLog`]: crate::meta::Direction::ForwardLog
 //! [`BackwardLog`]: crate::meta::Direction::BackwardLog
 
-use std::{any::type_name, collections::VecDeque, fmt::Debug, iter::FusedIterator};
+use std::{collections::VecDeque, fmt::Debug, iter::FusedIterator};
 
-use bevy::{reflect::Reflect, utils::tracing::warn};
+use bevy::reflect::Reflect;
 
-pub mod packed_int;
 mod rare_state;
 mod rare_states;
 mod rare_transition;
@@ -224,7 +223,6 @@ mod states;
 mod transition;
 mod transitions;
 
-use packed_int::PackedUSize;
 pub use rare_state::RareStateLog;
 pub use rare_states::RareStatesLog;
 pub use rare_transition::RareTransitionLog;
@@ -235,6 +233,8 @@ pub use transition::TransitionLog;
 pub use transitions::TransitionsLog;
 
 use crate::meta::RevMeta;
+
+type PackedUSize = [u8; usize::BITS as usize / 8];
 
 pub trait LogIter<'a, T>:
     Iterator<Item = T> + DoubleEndedIterator + ExactSizeIterator + FusedIterator
@@ -276,19 +276,11 @@ impl<'a, T> Extend<T> for LogMut<'a, T> {
 }
 
 #[derive(Debug)]
-pub struct AmountErr<I, U, Amount: TryFrom<usize>> {
+pub struct AmountErr<I, U> {
     pub values: I,
     pub entry: U,
-    pub err: Amount::Error,
-}
-
-impl<I: ExactSizeIterator, U, Amount: TryFrom<usize>> AmountErr<I, U, Amount> {
-    fn warn<Log, Out: Default>(self) -> Out {
-        warn!("Tried to push {} states/transitions into {} which does not fit into {}. If the pushed amount is uncertain, use `try_push_present` or a larger `Amount` type that is always large enough for the amount value, like PackedUSize.",
-            self.values.len(), type_name::<Log>(), type_name::<Amount>()
-        );
-        Out::default()
-    }
+    pub pushed_amount: usize,
+    pub max_amount: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -308,18 +300,39 @@ impl<'a, T: Iterator, U> IntoIterator for &'a mut ValueEntry<T, U> {
 /// Call `update` of a log with this struct up to one time per reversible frame.
 ///
 /// This will enable a cleanup strategy where entries are forgotten that are older than the global log start.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Reflect)]
+#[derive(Clone, Copy, PartialEq, Eq, Reflect)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct WithTimestamp<T = ()> {
     pub value: T,
-    pub logged_at: PackedUSize,
+    logged_at: PackedUSize,
+}
+
+impl<T: Debug> Debug for WithTimestamp<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct(std::any::type_name::<Self>())
+            .field("value", &self.value)
+            .field("logged_at", &usize::from_ne_bytes(self.logged_at))
+            .finish()
+    }
+}
+
+impl<T> WithTimestamp<T> {
+    pub fn new(value: T, logged_at: usize) -> Self {
+        Self {
+            value,
+            logged_at: logged_at.to_ne_bytes(),
+        }
+    }
+    pub fn logged_at(&self) -> usize {
+        usize::from_ne_bytes(self.logged_at)
+    }
 }
 
 impl<T: Default> From<usize> for WithTimestamp<T> {
     fn from(logged_at: usize) -> Self {
         Self {
             value: T::default(),
-            logged_at: logged_at.into(),
+            logged_at: logged_at.to_ne_bytes(),
         }
     }
 }
@@ -328,12 +341,12 @@ impl<T: Default> From<&RevMeta> for WithTimestamp<T> {
     fn from(meta: &RevMeta) -> Self {
         Self {
             value: T::default(),
-            logged_at: meta.now().into(),
+            logged_at: meta.now().to_ne_bytes(),
         }
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Reflect)]
+#[derive(Clone, PartialEq, Reflect)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 struct RareValue<T> {
     value: T,
@@ -343,33 +356,142 @@ struct RareValue<T> {
     skips: PackedUSize,
 }
 
+impl<T: Debug> Debug for RareValue<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct(std::any::type_name::<Self>())
+            .field("value", &self.value)
+            .field("skips", &usize::from_ne_bytes(self.skips))
+            .finish()
+    }
+}
+
 impl<T> RareValue<T> {
     fn len(&self) -> usize {
-        let skips: usize = self.skips.into();
-        skips + 1 // `self.data` adds to the len
+        usize::from_ne_bytes(self.skips) + 1 // `self.data` adds to the len
+    }
+    fn skips(&self) -> usize {
+        usize::from_ne_bytes(self.skips)
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Reflect)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-struct WithAmount<U, Amount> {
+struct EntryAmount<U, A> {
     entry: U,
-    amount: Amount,
+    amount: A,
 }
 
-impl<U, Amount> WithAmount<U, Amount>
-where
-    Amount: TryFrom<usize, Error: Debug> + Into<usize> + Copy,
-{
-    fn zero(entry: U) -> Self {
-        let amount = 0usize
-            .try_into()
-            .expect("expects 0 to be representable by Amount");
-        WithAmount { entry, amount }
-    }
-    fn amount(&self) -> usize {
-        self.amount.into()
+impl<U, A: Copy> EntryAmount<U, A> {
+    fn amount<T: WithAmount<Amount = A>>(&self) -> usize {
+        <T as WithAmount>::amount_to_usize(self.amount)
     }
 }
 
 const INDEX_OOB: &'static str = "self.index should always be <= the deque len, so successfully reducing it without underflow is expected to result in a valid index into the log which is not the case here";
+
+pub trait WithAmount {
+    #[cfg(feature = "serde")]
+    type Amount: Debug
+        + Copy
+        + Clone
+        + Send
+        + Sync
+        + 'static
+        + serde::Serialize
+        + for<'de> serde::Deserialize<'de>;
+    #[cfg(not(feature = "serde"))]
+    type Amount: Debug + Copy + Clone + Send + Sync + 'static;
+    type Err;
+    const ZERO: Self::Amount;
+    fn amount_to_usize(value: Self::Amount) -> usize;
+    fn usize_to_amount(value: usize) -> Result<Self::Amount, Self::Err>;
+}
+
+macro_rules! impl_with_amount {
+    ($Log: ident) => {
+        impl_with_amount!($Log, 0);
+
+        #[cfg(target_pointer_width = "16")]
+        mod target_16 {
+            use super::{impl_with_amount, $Log, WithAmount};
+
+            impl_with_amount!($Log, 1);
+            impl_with_amount!($Log, 2, Infallible);
+        }
+
+        #[cfg(target_pointer_width = "32")]
+        mod target_32 {
+            use super::{impl_with_amount, $Log, WithAmount};
+
+            impl_with_amount!($Log, 1);
+            impl_with_amount!($Log, 2);
+            impl_with_amount!($Log, 3);
+            impl_with_amount!($Log, 4, Infallible);
+        }
+
+        #[cfg(target_pointer_width = "64")]
+        mod target_64 {
+            use super::{impl_with_amount, $Log, WithAmount};
+            
+            impl_with_amount!($Log, 1);
+            impl_with_amount!($Log, 2);
+            impl_with_amount!($Log, 3);
+            impl_with_amount!($Log, 4);
+            impl_with_amount!($Log, 5);
+            impl_with_amount!($Log, 6);
+            impl_with_amount!($Log, 7);
+            impl_with_amount!($Log, 8, Infallible);
+        }
+    };
+    ($Log: ident, 0) => {
+        impl<T, U> WithAmount for $Log<T, U, 0> {
+            type Amount = usize;
+            type Err = std::convert::Infallible;
+            const ZERO: Self::Amount = 0;
+            fn amount_to_usize(value: Self::Amount) -> usize {
+                value
+            }
+            fn usize_to_amount(value: usize) -> Result<Self::Amount, Self::Err> {
+                Ok(value)
+            }
+        }
+    };
+    ($Log: ident, $AMOUNT_BYTES: literal) => {
+        impl<T, U> WithAmount for $Log<T, U, $AMOUNT_BYTES> {
+            type Amount = [u8; $AMOUNT_BYTES];
+            type Err = usize;
+            const ZERO: Self::Amount = [0; $AMOUNT_BYTES];
+            fn amount_to_usize(value: Self::Amount) -> usize {
+                let mut i = value.into_iter();
+                usize::from_le_bytes(std::array::from_fn(|_| i.next().unwrap_or(0)))
+            }
+            fn usize_to_amount(value: usize) -> Result<Self::Amount, Self::Err> {
+                let shift = usize::BITS.saturating_sub($AMOUNT_BYTES as u32 * 8);
+                let max = usize::MAX >> shift;
+                if value <= max {
+                    let mut i = value.to_le_bytes().into_iter();
+                    Ok(std::array::from_fn(|_| i.next().unwrap_or(0)))
+                } else {
+                    Err(Self::amount_to_usize([u8::MAX; $AMOUNT_BYTES]))
+                }
+            }
+        }
+    };
+    ($Log: ident, $AMOUNT_BYTES: literal, Infallible) => {
+        impl<T, U> WithAmount for $Log<T, U, $AMOUNT_BYTES> {
+            type Amount = [u8; $AMOUNT_BYTES];
+            type Err = std::convert::Infallible;
+            const ZERO: Self::Amount = [0; $AMOUNT_BYTES];
+            fn amount_to_usize(value: Self::Amount) -> usize {
+                let mut i = value.into_iter();
+                usize::from_ne_bytes(std::array::from_fn(|_| i.next().unwrap_or(0)))
+            }
+            fn usize_to_amount(value: usize) -> Result<Self::Amount, Self::Err> {
+                let mut i = value.to_ne_bytes().into_iter();
+                Ok(std::array::from_fn(|_| i.next().unwrap_or(0)))
+            }
+        }
+    };
+}
+
+use impl_with_amount;
