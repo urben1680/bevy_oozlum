@@ -7,8 +7,8 @@ use std::{
 use bevy::reflect::Reflect;
 
 use super::{
-    impl_with_amount, AmountErr, EntryAmount, LogIter, LogMut, OutOfLog, StateLog, ValueEntry,
-    WithAmount, WithTimestamp,
+    impl_with_amount, into_ok, AmountErr, EntryAmount, LogIter, LogMut, NotUSize, OutOfLog,
+    StateLog, ValueEntry, WithAmount, WithTimestamp,
 };
 
 #[derive(Debug, Clone, Reflect)]
@@ -37,105 +37,16 @@ impl<T, U, const AMOUNT_BYTES: usize> StatesLog<T, U, AMOUNT_BYTES>
 where
     Self: WithAmount,
 {
-    pub fn try_new(
-        iter: impl IntoIterator<Item = T>,
-        entry: U,
-    ) -> Result<Self, AmountErr<VecDeque<T>, U>>
-    where
-        Self: WithAmount<Err = usize>,
-    {
-        let states = VecDeque::from_iter(iter);
-        let pushed_amount = states.len();
-        match <Self as WithAmount>::usize_to_amount(pushed_amount) {
-            Ok(amount) => Ok(Self {
-                amounts: StateLog::new(EntryAmount { entry, amount }),
-                states,
-                index: 0,
-            }),
-            Err(max_amount) => Err(AmountErr {
-                values: states,
-                entry,
-                pushed_amount,
-                max_amount,
-            }),
-        }
-    }
-    pub fn new(iter: impl IntoIterator<Item = T>, entry: U) -> Self
-    where
-        Self: WithAmount<Err = Infallible>,
-    {
-        let states = VecDeque::from_iter(iter);
-        let pushed_amount = states.len();
-        let amount = <Self as WithAmount>::usize_to_amount(pushed_amount).unwrap();
-        Self {
-            amounts: StateLog::new(EntryAmount { entry, amount }),
-            states,
-            index: 0,
-        }
-    }
     pub fn new_empty(entry: U) -> Self {
         Self {
-            amounts: StateLog::new(EntryAmount {
-                entry,
-                amount: <Self as WithAmount>::ZERO,
-            }),
+            amounts: StateLog::new(EntryAmount::zero::<Self>(entry)),
             states: VecDeque::new(),
             index: 0,
         }
     }
-    pub fn try_with_capacities(
-        iter: impl IntoIterator<Item = T>,
-        entry: U,
-        states_capacity: usize,
-        log_capacity: usize,
-    ) -> Result<Self, AmountErr<VecDeque<T>, U>>
-    where
-        Self: WithAmount<Err = usize>,
-    {
-        let mut states = VecDeque::with_capacity(states_capacity);
-        states.extend(iter);
-        let pushed_amount = states.len();
-        match <Self as WithAmount>::usize_to_amount(pushed_amount) {
-            Ok(amount) => Ok(Self {
-                amounts: StateLog::with_capacity(EntryAmount { entry, amount }, log_capacity),
-                states,
-                index: 0,
-            }),
-            Err(max_amount) => Err(AmountErr {
-                values: states,
-                entry,
-                pushed_amount,
-                max_amount,
-            }),
-        }
-    }
-    pub fn with_capacities(
-        iter: impl IntoIterator<Item = T>,
-        entry: U,
-        states_capacity: usize,
-        log_capacity: usize,
-    ) -> Self
-    where
-        Self: WithAmount<Err = Infallible>,
-    {
-        let mut states = VecDeque::with_capacity(states_capacity);
-        states.extend(iter);
-        let pushed_amount = states.len();
-        let amount = <Self as WithAmount>::usize_to_amount(pushed_amount).unwrap();
-        let entry_amount = EntryAmount { entry, amount };
-        Self {
-            amounts: StateLog::with_capacity(entry_amount, log_capacity),
-            states,
-            index: 0,
-        }
-    }
     pub fn with_capacities_empty(entry: U, states_capacity: usize, log_capacity: usize) -> Self {
-        let entry_amount = EntryAmount {
-            entry,
-            amount: <Self as WithAmount>::ZERO,
-        };
         Self {
-            amounts: StateLog::with_capacity(entry_amount, log_capacity),
+            amounts: StateLog::with_capacity(EntryAmount::zero::<Self>(entry), log_capacity),
             states: VecDeque::with_capacity(states_capacity),
             index: 0,
         }
@@ -219,41 +130,6 @@ where
             .pop_past()
             .map(|entry_amount| self.drain_past_by_amount(entry_amount))
     }
-    pub fn try_push_present<Out: Into<U>>(
-        &mut self,
-        c: impl FnOnce(LogMut<T>) -> Out,
-    ) -> Result<(), AmountErr<impl LogIter<T>, U>>
-    where
-        Self: WithAmount<Err = usize>,
-    {
-        self.states.truncate(self.index);
-        let entry = c(LogMut(&mut self.states)).into();
-        let pushed_amount = self.states.len() - self.index;
-        match <Self as WithAmount>::usize_to_amount(pushed_amount) {
-            Ok(amount) => {
-                self.index = self.states.len();
-                self.amounts.push_present(EntryAmount { entry, amount });
-                Ok(())
-            }
-            Err(max_amount) => Err(AmountErr {
-                values: self.states.drain(self.index..),
-                entry,
-                pushed_amount,
-                max_amount,
-            }),
-        }
-    }
-    pub fn push_present<Out: Into<U>>(&mut self, c: impl FnOnce(LogMut<T>) -> Out)
-    where
-        Self: WithAmount<Err = Infallible>,
-    {
-        self.states.truncate(self.index);
-        let entry = c(LogMut(&mut self.states)).into();
-        let pushed_amount = self.states.len() - self.index;
-        let amount = <Self as WithAmount>::usize_to_amount(pushed_amount).unwrap();
-        self.index = self.states.len();
-        self.amounts.push_present(EntryAmount { entry, amount });
-    }
     pub fn drain_future(&mut self) -> (impl LogIter<T>, impl LogIter<U>) {
         (
             self.states.drain(self.index..),
@@ -269,49 +145,11 @@ where
         self.states.truncate(amount);
         self.index = 0;
     }
-    pub fn try_clear_with(
-        &mut self,
-        iter: impl IntoIterator<Item = T>,
-        entry: U,
-    ) -> Result<(), AmountErr<VecDeque<T>, U>>
-    where
-        Self: WithAmount<Err = usize>,
-    {
-        let mut states = VecDeque::from_iter(iter);
-        let pushed_amount = states.len();
-        match <Self as WithAmount>::usize_to_amount(pushed_amount) {
-            Ok(amount) => {
-                self.states.clear();
-                self.states.append(&mut states);
-                self.amounts.clear_with(EntryAmount { entry, amount });
-                self.index = 0;
-                Ok(())
-            }
-            Err(max_amount) => Err(AmountErr {
-                values: states,
-                entry,
-                pushed_amount,
-                max_amount,
-            }),
-        }
-    }
-    pub fn clear_with(&mut self, iter: impl IntoIterator<Item = T>, entry: U)
-    where
-        Self: WithAmount<Err = Infallible>,
-    {
-        let mut states = VecDeque::from_iter(iter);
-        let pushed_amount = states.len();
-        let amount = <Self as WithAmount>::usize_to_amount(pushed_amount).unwrap();
-        self.states.clear();
-        self.states.append(&mut states);
-        self.amounts.clear_with(EntryAmount { entry, amount });
-        self.index = 0;
-    }
     pub fn clear_empty(&mut self, entry: U) {
         self.states.clear();
         let entry_amount = EntryAmount {
             entry,
-            amount: <Self as WithAmount>::ZERO,
+            amount: <Self as WithAmount>::MIN,
         };
         self.amounts.clear_with(entry_amount);
         self.index = 0;
@@ -354,6 +192,132 @@ where
         ValueEntry {
             value: self.states.drain(..amount),
             entry: entry_amount.entry,
+        }
+    }
+}
+
+impl<T, U, const AMOUNT_BYTES: usize> StatesLog<T, U, AMOUNT_BYTES>
+where
+    Self: WithAmount<Err = Infallible>,
+{
+    pub fn new(iter: impl IntoIterator<Item = T>, entry: U) -> Self {
+        let states = VecDeque::from_iter(iter);
+        let pushed_amount = states.len();
+        let amount = into_ok(<Self as WithAmount>::usize_to_amount(pushed_amount));
+        Self {
+            amounts: StateLog::new(EntryAmount { entry, amount }),
+            states,
+            index: 0,
+        }
+    }
+    pub fn with_capacities(
+        iter: impl IntoIterator<Item = T>,
+        entry: U,
+        states_capacity: usize,
+        log_capacity: usize,
+    ) -> Self {
+        let mut states = VecDeque::with_capacity(states_capacity);
+        states.extend(iter);
+        let pushed_amount = states.len();
+        let amount = into_ok(<Self as WithAmount>::usize_to_amount(pushed_amount));
+        let entry_amount = EntryAmount { entry, amount };
+        Self {
+            amounts: StateLog::with_capacity(entry_amount, log_capacity),
+            states,
+            index: 0,
+        }
+    }
+    pub fn push_present<Out: Into<U>>(&mut self, c: impl FnOnce(LogMut<T>) -> Out) {
+        self.states.truncate(self.index);
+        let entry = c(LogMut(&mut self.states)).into();
+        let pushed_amount = self.states.len() - self.index;
+        let amount = into_ok(<Self as WithAmount>::usize_to_amount(pushed_amount));
+        self.index = self.states.len();
+        self.amounts.push_present(EntryAmount { entry, amount });
+    }
+    pub fn clear_with(&mut self, iter: impl IntoIterator<Item = T>, entry: U) {
+        let mut states = VecDeque::from_iter(iter);
+        let pushed_amount = states.len();
+        let amount = into_ok(<Self as WithAmount>::usize_to_amount(pushed_amount));
+        self.states.clear();
+        self.states.append(&mut states);
+        self.amounts.clear_with(EntryAmount { entry, amount });
+        self.index = 0;
+    }
+}
+
+impl<T, U, const AMOUNT_BYTES: usize> StatesLog<T, U, AMOUNT_BYTES>
+where
+    Self: WithAmount<Amount: NotUSize>,
+{
+    pub fn try_new(
+        iter: impl IntoIterator<Item = T>,
+        entry: U,
+    ) -> Result<Self, AmountErr<VecDeque<T>, U>> {
+        let states = VecDeque::from_iter(iter);
+        let pushed_amount = states.len();
+        match <Self as WithAmount>::usize_to_amount(pushed_amount) {
+            Ok(amount) => Ok(Self {
+                amounts: StateLog::new(EntryAmount { entry, amount }),
+                states,
+                index: 0,
+            }),
+            Err(_) => Err(AmountErr::new::<Self>(states, entry, pushed_amount)),
+        }
+    }
+    pub fn try_with_capacities(
+        iter: impl IntoIterator<Item = T>,
+        entry: U,
+        states_capacity: usize,
+        log_capacity: usize,
+    ) -> Result<Self, AmountErr<VecDeque<T>, U>> {
+        let mut states = VecDeque::with_capacity(states_capacity);
+        states.extend(iter);
+        let pushed_amount = states.len();
+        match <Self as WithAmount>::usize_to_amount(pushed_amount) {
+            Ok(amount) => Ok(Self {
+                amounts: StateLog::with_capacity(EntryAmount { entry, amount }, log_capacity),
+                states,
+                index: 0,
+            }),
+            Err(_) => Err(AmountErr::new::<Self>(states, entry, pushed_amount)),
+        }
+    }
+    pub fn try_push_present<Out: Into<U>>(
+        &mut self,
+        c: impl FnOnce(LogMut<T>) -> Out,
+    ) -> Result<(), AmountErr<impl LogIter<T>, U>> {
+        self.states.truncate(self.index);
+        let entry = c(LogMut(&mut self.states)).into();
+        let pushed_amount = self.states.len() - self.index;
+        match <Self as WithAmount>::usize_to_amount(pushed_amount) {
+            Ok(amount) => {
+                self.index = self.states.len();
+                self.amounts.push_present(EntryAmount { entry, amount });
+                Ok(())
+            }
+            Err(_) => {
+                let states = self.states.drain(self.index..);
+                Err(AmountErr::new::<Self>(states, entry, pushed_amount))
+            }
+        }
+    }
+    pub fn try_clear_with(
+        &mut self,
+        iter: impl IntoIterator<Item = T>,
+        entry: U,
+    ) -> Result<(), AmountErr<VecDeque<T>, U>> {
+        let mut states = VecDeque::from_iter(iter);
+        let pushed_amount = states.len();
+        match <Self as WithAmount>::usize_to_amount(pushed_amount) {
+            Ok(amount) => {
+                self.states.clear();
+                self.states.append(&mut states);
+                self.amounts.clear_with(EntryAmount { entry, amount });
+                self.index = 0;
+                Ok(())
+            }
+            Err(_) => Err(AmountErr::new::<Self>(states, entry, pushed_amount)),
         }
     }
 }
