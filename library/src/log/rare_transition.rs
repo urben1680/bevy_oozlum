@@ -6,7 +6,7 @@ use bevy::{
     utils::tracing::error,
 };
 
-use super::{EntryAmount, LogIter, OutOfLog, RareValue, WithTimestamp, INDEX_OOB};
+use super::{EntryAmount, LogIter, OutOfLog, PackedTime, RareValue, WithTimestamp, INDEX_OOB};
 
 #[derive(Debug, Clone, Reflect)]
 #[reflect(Default)]
@@ -127,9 +127,10 @@ impl<T> RareTransitionLog<T> {
                 self.skips += 1;
             }
             Some(transition) => {
+                let skips = PackedTime::from_internal(self.skips);
                 self.transitions.push_back(RareValue {
                     value: transition,
-                    skips: self.skips.into(),
+                    skips,
                 });
                 self.skips = 0;
                 self.index += 1;
@@ -168,7 +169,7 @@ impl<T> RareTransitionLog<T> {
     pub fn forward_log(&mut self) -> Result<Option<&mut T>, OutOfLog> {
         if let Some(entry) = self.transitions.get_mut(self.index) {
             self.len += 1;
-            if self.skips < entry.skips {
+            if self.skips < entry.skips.into() {
                 self.skips += 1;
                 Ok(None)
             } else {
@@ -214,7 +215,8 @@ impl<T: Debug> RareTransitionLog<WithTimestamp<T>> {
     pub fn pop_past_by_timestamp(&mut self, log_start: usize) -> Option<WithTimestamp<T>> {
         if self.past_end().map_or(false, |entry| {
             // include range().start because this entry instructs how to transition from range().start to range().start - 1
-            entry.logged_at <= log_start
+            let logged_at: usize = entry.logged_at.into();
+            logged_at <= log_start
         }) {
             self.pop_past()
         } else {
@@ -222,14 +224,15 @@ impl<T: Debug> RareTransitionLog<WithTimestamp<T>> {
         }
     }
     pub fn drain_past_by_timestamp(&mut self, log_start: usize) -> impl LogIter<WithTimestamp<T>> {
-        let partition_point = self
-            .transitions
-            .partition_point(|entry| entry.value.logged_at <= log_start);
+        let partition_point = self.transitions.partition_point(|entry| {
+            let logged_at: usize = entry.value.logged_at.into();
+            logged_at <= log_start
+        });
         self.len -= partition_point // sum of to-be-drained transitions, because of this mapping RareValue::len below is not needed, only skips_before_value
             + self
                 .transitions
                 .range(..partition_point)
-                .map(|entry| entry.skips)
+                .map(|entry| usize::from(entry.skips))
                 .sum::<usize>();
         self.index -= partition_point;
         self.transitions
@@ -245,7 +248,8 @@ impl<U, Amount: Copy> RareTransitionLog<EntryAmount<WithTimestamp<U>, Amount>> {
     ) -> Option<EntryAmount<WithTimestamp<U>, Amount>> {
         if self.past_end().map_or(false, |entry| {
             // include range().start because this entry instructs how to transition from range().start to range().start - 1
-            entry.entry.logged_at <= log_start
+            let logged_at: usize = entry.entry.logged_at.into();
+            logged_at <= log_start
         }) {
             self.pop_past()
         } else {
@@ -256,14 +260,15 @@ impl<U, Amount: Copy> RareTransitionLog<EntryAmount<WithTimestamp<U>, Amount>> {
         &mut self,
         log_start: usize,
     ) -> impl LogIter<EntryAmount<WithTimestamp<U>, Amount>> {
-        let partition_point = self
-            .transitions
-            .partition_point(|entry| entry.value.entry.logged_at <= log_start);
+        let partition_point = self.transitions.partition_point(|entry| {
+            let logged_at: usize = entry.value.entry.logged_at.into();
+            logged_at <= log_start
+        });
         self.len -= partition_point
             + self
                 .transitions
                 .range(..partition_point)
-                .map(|entry| entry.skips)
+                .map(|entry| usize::from(entry.skips))
                 .sum::<usize>();
         self.index -= partition_point;
         self.transitions
