@@ -5,8 +5,8 @@ Features:
 - reversible observer ? or issue to link
 - reversible Event reader/writer
 - entity commands, standard rev commands
-- packed more ops
 - add license
+- reduce_timestamps for all WithTimestamp logs
 - world trait
 -- run_rev_schedule
 -- try_run_rev_schedule
@@ -14,17 +14,16 @@ Features:
 -- run_backward_schedule
 -- try_run_forward_schedule
 -- try_tun_backward_schedule
+-- rev_schedule_scope
+-- try_rev_schedule_scope
 
 Enhancements:
-- general todo!() und //todo
+- reduce todo!() and //todo
 - RareStates tests
 - longer log tests for RareTransition and RareState
 - tests of other log methods like clear variants
 - config tests
 - make doctests work
-- explore timestamp as u64/u32/u16 (feature?) after recent refactorings
-- yeet packed int (in this crate) and replace Amount generic with const generic BYTES
--- GAT für Result<T, AmountErr>/T
 
 Docs
 - examples
