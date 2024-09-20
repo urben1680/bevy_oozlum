@@ -7,8 +7,8 @@ use std::{
 use bevy::reflect::{std_traits::ReflectDefault, Reflect};
 
 use super::{
-    impl_with_amount, AmountErr, EntryAmount, LogIter, LogMut, OutOfLog, TransitionLog, ValueEntry,
-    WithAmount, WithTimestamp,
+    impl_with_amount, into_ok, AmountErr, EntryAmount, LogIter, LogMut, NotUSize, OutOfLog,
+    TransitionLog, ValueEntry, WithAmount, WithTimestamp,
 };
 
 #[derive(Debug, Clone, Reflect)]
@@ -119,41 +119,6 @@ where
             .pop_past()
             .map(|entry_amount| self.drain_past_by_amount(entry_amount))
     }
-    pub fn try_push_present<Out: Into<U>>(
-        &mut self,
-        c: impl FnOnce(LogMut<T>) -> Out,
-    ) -> Result<(), AmountErr<impl LogIter<T>, U>>
-    where
-        Self: WithAmount<Err = usize>,
-    {
-        self.transitions.truncate(self.index);
-        let entry = c(LogMut(&mut self.transitions)).into();
-        let pushed_amount = self.transitions.len() - self.index;
-        match <Self as WithAmount>::usize_to_amount(pushed_amount) {
-            Ok(amount) => {
-                self.index = self.transitions.len();
-                self.amounts.push_present(EntryAmount { entry, amount });
-                Ok(())
-            }
-            Err(max_amount) => Err(AmountErr {
-                entry,
-                values: self.transitions.drain(self.index..),
-                pushed_amount,
-                max_amount,
-            }),
-        }
-    }
-    pub fn push_present<Out: Into<U>>(&mut self, c: impl FnOnce(LogMut<T>) -> Out)
-    where
-        Self: WithAmount<Err = Infallible>,
-    {
-        self.transitions.truncate(self.index);
-        let entry = c(LogMut(&mut self.transitions)).into();
-        let amount = self.transitions.len() - self.index;
-        let amount = <Self as WithAmount>::usize_to_amount(amount).unwrap();
-        self.index = self.transitions.len();
-        self.amounts.push_present(EntryAmount { entry, amount });
-    }
     pub fn drain_future(&mut self) -> (impl LogIter<T>, impl LogIter<U>) {
         (
             self.transitions.drain(self.index..),
@@ -213,6 +178,45 @@ where
         ValueEntry {
             value: self.transitions.drain(..amount),
             entry: entry_amount.entry,
+        }
+    }
+}
+
+impl<T, U, const AMOUNT_BYTES: usize> TransitionsLog<T, U, AMOUNT_BYTES>
+where
+    Self: WithAmount<Err = Infallible>,
+{
+    pub fn push_present<Out: Into<U>>(&mut self, c: impl FnOnce(LogMut<T>) -> Out) {
+        self.transitions.truncate(self.index);
+        let entry = c(LogMut(&mut self.transitions)).into();
+        let amount = self.transitions.len() - self.index;
+        let amount = into_ok(<Self as WithAmount>::usize_to_amount(amount));
+        self.index = self.transitions.len();
+        self.amounts.push_present(EntryAmount { entry, amount });
+    }
+}
+
+impl<T, U, const AMOUNT_BYTES: usize> TransitionsLog<T, U, AMOUNT_BYTES>
+where
+    Self: WithAmount<Amount: NotUSize>,
+{
+    pub fn try_push_present<Out: Into<U>>(
+        &mut self,
+        c: impl FnOnce(LogMut<T>) -> Out,
+    ) -> Result<(), AmountErr<impl LogIter<T>, U>> {
+        self.transitions.truncate(self.index);
+        let entry = c(LogMut(&mut self.transitions)).into();
+        let pushed_amount = self.transitions.len() - self.index;
+        match <Self as WithAmount>::usize_to_amount(pushed_amount) {
+            Ok(amount) => {
+                self.index = self.transitions.len();
+                self.amounts.push_present(EntryAmount { entry, amount });
+                Ok(())
+            }
+            Err(_) => {
+                let transitions = self.transitions.drain(self.index..);
+                Err(AmountErr::new::<Self>(transitions, entry, pushed_amount))
+            }
         }
     }
 }
