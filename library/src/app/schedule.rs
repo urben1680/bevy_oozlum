@@ -25,6 +25,11 @@ pub struct RevScheduleBuildSettings {
     pub report_sets: bool,
 }
 
+pub enum TryRunError {
+    RevMetaMissing,
+    RevMetaWrongDirection(RevMeta),
+}
+
 impl RevSchedule {
     pub fn new(label: impl ScheduleLabel) -> Self {
         let label = label.intern();
@@ -94,13 +99,22 @@ impl RevSchedule {
         self.backward.set_executor_kind(executor);
         self
     }
-    pub fn run(&mut self, world: &mut World) {
-        let meta = world.get_resource::<RevMeta>().cloned();
-        match meta.as_ref().and_then(RevMeta::get_direction) {
-            Some(Direction::Forward) | Some(Direction::ForwardLog) => self.forward.run(world),
-            Some(Direction::BackwardLog) => self.backward.run(world),
-            None => panic!("todo"),
+    pub fn try_run(&mut self, world: &mut World) -> Result<(), TryRunError> {
+        let meta = world
+            .get_resource::<RevMeta>()
+            .ok_or(TryRunError::RevMetaMissing)?
+            .clone();
+        match meta.get_direction() {
+            Some(Direction::Forward) | Some(Direction::ForwardLog) => Ok(self.forward.run(world)),
+            Some(Direction::BackwardLog) => Ok(self.backward.run(world)),
+            None => Err(TryRunError::RevMetaWrongDirection(meta)),
         }
+    }
+    pub fn run_forward(&mut self, world: &mut World) {
+        self.forward.run(world)
+    }
+    pub fn run_backward(&mut self, world: &mut World) {
+        self.backward.run(world)
     }
     pub fn initialize(
         &mut self,
