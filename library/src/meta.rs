@@ -17,7 +17,10 @@ use bevy::{
 #[cfg(feature = "serde")]
 use bevy::reflect::{ReflectDeserialize, ReflectSerialize};
 
-use crate::{log::WithTimestamp, BackwardSchedule, ForwardSchedule, RevUpdate};
+use crate::{
+    log::{PackedTime, WithTimestamp},
+    BackwardSchedule, ForwardSchedule, RevUpdate,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Reflect)]
 #[reflect(PartialEq)]
@@ -137,7 +140,7 @@ impl Default for RevMeta {
 impl RevMeta {
     const END_MAX_MSG: &'static str = "Maximum reversible timestamp reached: `usize::MAX`";
     pub const fn new(max_len: Option<NonZeroUsize>, now: usize, paused: bool) -> Self {
-        if now == usize::MAX {
+        if now >= PackedTime::MAX_USIZE {
             panic!("{}", Self::END_MAX_MSG);
         }
         Self {
@@ -170,7 +173,10 @@ impl RevMeta {
         self.now - self.range.start
     }
     pub fn with_timestamp<T>(&self, value: T) -> WithTimestamp<T> {
-        WithTimestamp::new(value, self.now)
+        WithTimestamp {
+            value,
+            logged_at: PackedTime::from_internal(self.now)
+        }
     }
     /// Returns the frame range that can be returned to using [`Self::queue_log`].
     pub fn log_range(&self) -> Range<usize> {
@@ -281,7 +287,10 @@ impl RevMeta {
     }
     fn update_forward(&mut self) {
         self.now += 1;
-        self.range.end = self.now.checked_add(1).expect(Self::END_MAX_MSG);
+        if self.range.end >= PackedTime::MAX_USIZE {
+            panic!("{}", Self::END_MAX_MSG);
+        }
+        self.range.end += 1;
         if let Some(max_len) = self.max_len {
             self.range.start = self
                 .range
