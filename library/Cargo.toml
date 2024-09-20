@@ -15,3 +15,11 @@ rand = "0.8.5"
 [features]
 default = ["serde"] # todo: remove line before release
 serde = ["dep:serde"]
+time_bytes_1 = []
+time_bytes_2 = []
+time_bytes_3 = []
+time_bytes_4 = []
+time_bytes_5 = []
+time_bytes_6 = []
+time_bytes_7 = []
+time_bytes_8 = []
