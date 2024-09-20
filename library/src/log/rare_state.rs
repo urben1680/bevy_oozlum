@@ -3,7 +3,7 @@ use std::collections::{TryReserveError, VecDeque};
 
 use bevy::{reflect::Reflect, utils::tracing::error};
 
-use super::{EntryAmount, LogIter, OutOfLog, PackedUSize, RareValue, WithTimestamp, INDEX_OOB};
+use super::{EntryAmount, LogIter, OutOfLog, PackedTime, RareValue, WithTimestamp, INDEX_OOB};
 
 #[derive(Debug, Clone, Reflect)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -38,7 +38,7 @@ impl<T> RareStateLog<T> {
             states: VecDeque::new(),
             present: RareValue {
                 value: present,
-                skips: PackedUSize::ZERO,
+                skips: PackedTime::MIN,
             },
             index: 0,
             skips: 0,
@@ -51,7 +51,7 @@ impl<T> RareStateLog<T> {
             states: VecDeque::with_capacity(states_capacity),
             present: RareValue {
                 value: present,
-                skips: PackedUSize::ZERO,
+                skips: PackedTime::MIN,
             },
             index: 0,
             skips: 0,
@@ -122,7 +122,7 @@ impl<T> RareStateLog<T> {
     }
     pub fn clear(&mut self) {
         self.states.clear();
-        self.present.skips = PackedUSize::ZERO;
+        self.present.skips = PackedTime::MIN;
         self.index = 0;
         self.len = 0;
         self.skips = 0;
@@ -131,7 +131,7 @@ impl<T> RareStateLog<T> {
         self.states.clear();
         self.present = RareValue {
             value: present,
-            skips: PackedUSize::ZERO,
+            skips: PackedTime::MIN,
         };
         self.index = 0;
         self.len = 0;
@@ -143,15 +143,15 @@ impl<T> RareStateLog<T> {
         match state {
             None => {
                 self.skips += 1;
-                self.present.skips = self.skips.into();
+                self.present.skips = PackedTime::from_internal(self.skips);
             }
             Some(state) => {
-                self.present.skips = self.skips.into();
+                self.present.skips = PackedTime::from_internal(self.skips);
                 let previous = core::mem::replace(
                     &mut self.present,
                     RareValue {
                         value: state,
-                        skips: PackedUSize::ZERO,
+                        skips: PackedTime::MIN,
                     },
                 );
                 self.states.push_back(previous);
@@ -187,7 +187,7 @@ impl<T> RareStateLog<T> {
         Err(OutOfLog)
     }
     pub fn forward_log(&mut self) -> Result<(), OutOfLog> {
-        if self.skips < self.present.skips {
+        if self.skips < self.present.skips.into() {
             self.len += 1;
             self.skips += 1;
             Ok(())
@@ -228,7 +228,9 @@ impl<T> RareStateLog<T> {
 impl<T: Debug> RareStateLog<WithTimestamp<T>> {
     pub fn pop_past_by_timestamp(&mut self, log_start: usize) -> Option<WithTimestamp<T>> {
         if self.past_end_rare().map_or(false, |entry| {
-            entry.value.logged_at + entry.skips < log_start
+            let logged_at: usize = entry.value.logged_at.into();
+            let skips: usize = entry.skips.into();
+            logged_at + skips < log_start
         }) {
             self.pop_past()
         } else {
@@ -236,14 +238,16 @@ impl<T: Debug> RareStateLog<WithTimestamp<T>> {
         }
     }
     pub fn drain_past_by_timestamp(&mut self, log_start: usize) -> impl LogIter<WithTimestamp<T>> {
-        let partition_point = self
-            .states
-            .partition_point(|entry| entry.value.logged_at + entry.skips < log_start);
+        let partition_point = self.states.partition_point(|entry| {
+            let logged_at: usize = entry.value.logged_at.into();
+            let skips: usize = entry.skips.into();
+            logged_at + skips < log_start
+        });
         self.len -= partition_point // sum of to-be-drained states, because of this mapping RareValue::len below is not needed, only skips_before_state
             + self
                 .states
                 .range(..partition_point)
-                .map(|entry| entry.skips)
+                .map(|entry| usize::from(entry.skips))
                 .sum::<usize>();
         self.index -= partition_point;
         self.states.drain(..partition_point).map(|rare| rare.value)
@@ -256,7 +260,9 @@ impl<U, Amount: Copy> RareStateLog<EntryAmount<WithTimestamp<U>, Amount>> {
         log_start: usize,
     ) -> Option<EntryAmount<WithTimestamp<U>, Amount>> {
         if self.past_end_rare().map_or(false, |entry| {
-            entry.value.entry.logged_at + entry.skips < log_start
+            let logged_at: usize = entry.value.entry.logged_at.into();
+            let skips: usize = entry.skips.into();
+            logged_at + skips < log_start
         }) {
             self.pop_past()
         } else {
@@ -267,14 +273,16 @@ impl<U, Amount: Copy> RareStateLog<EntryAmount<WithTimestamp<U>, Amount>> {
         &mut self,
         log_start: usize,
     ) -> impl LogIter<EntryAmount<WithTimestamp<U>, Amount>> {
-        let partition_point = self
-            .states
-            .partition_point(|entry| entry.value.entry.logged_at + entry.skips < log_start);
+        let partition_point = self.states.partition_point(|entry| {
+            let logged_at: usize = entry.value.entry.logged_at.into();
+            let skips: usize = entry.skips.into();
+            logged_at + skips < log_start
+        });
         self.len -= partition_point
             + self
                 .states
                 .range(..partition_point)
-                .map(|entry| entry.skips)
+                .map(|entry| usize::from(entry.skips))
                 .sum::<usize>();
         self.index -= partition_point;
         self.states.drain(..partition_point).map(|rare| rare.value)
