@@ -1,39 +1,42 @@
 use std::{
     collections::{TryReserveError, VecDeque},
+    convert::Infallible,
     fmt::Debug,
 };
 
 use bevy::reflect::{std_traits::ReflectDefault, Reflect};
 
 use super::{
-    AmountErr, EntryAmount, LogIter, LogMut, OutOfLog, PackedUSize, RareTransitionLog, ValueEntry,
-    WithTimestamp,
+    impl_with_amount, into_ok, AmountErr, EntryAmount, LogIter, LogMut, NotUSize, OutOfLog,
+    RareTransitionLog, ValueEntry, WithAmount, WithTimestamp,
 };
 
 #[derive(Debug, Clone, Reflect)]
 #[reflect(Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct RareTransitionsLog<T, U = (), Amount = PackedUSize>
+pub struct RareTransitionsLog<T, U = (), const AMOUNT_BYTES: usize = 0>
 where
-    Amount: TryFrom<usize, Error: Debug> + Into<usize> + Copy,
+    Self: WithAmount,
 {
-    amounts: RareTransitionLog<EntryAmount<U, Amount>>,
+    amounts: RareTransitionLog<EntryAmount<U, <Self as WithAmount>::Amount>>,
     transitions: VecDeque<T>,
     index: usize,
 }
 
-impl<T, U, Amount> Default for RareTransitionsLog<T, U, Amount>
+impl_with_amount!(RareTransitionsLog);
+
+impl<T, U, const AMOUNT_BYTES: usize> Default for RareTransitionsLog<T, U, AMOUNT_BYTES>
 where
-    Amount: TryFrom<usize, Error: Debug> + Into<usize> + Copy,
+    Self: WithAmount,
 {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<T, U, Amount> RareTransitionsLog<T, U, Amount>
+impl<T, U, const AMOUNT_BYTES: usize> RareTransitionsLog<T, U, AMOUNT_BYTES>
 where
-    Amount: TryFrom<usize, Error: Debug> + Into<usize> + Copy,
+    Self: WithAmount,
 {
     pub const fn new() -> Self {
         Self {
@@ -128,42 +131,12 @@ where
         self.transitions.clear();
         self.index = 0;
     }
-    pub fn try_push_present<Out: Into<U>>(
-        &mut self,
-        c: impl FnOnce(LogMut<T>) -> Out,
-    ) -> Result<Option<U>, AmountErr<impl LogIter<T>, U, Amount>> {
-        self.transitions.truncate(self.index);
-        let previous_len = self.transitions.len();
-        let entry = c(LogMut(&mut self.transitions)).into();
-        let amount_usize = self.transitions.len() - previous_len;
-        if amount_usize == 0 {
-            self.amounts.push_present(None);
-            return Ok(Some(entry));
-        }
-        match amount_usize.try_into() {
-            Ok(amount) => {
-                self.amounts
-                    .push_present(Some(EntryAmount { entry, amount }));
-                self.index += amount_usize;
-                Ok(None)
-            }
-            Err(err) => Err(AmountErr {
-                values: self.transitions.drain(previous_len..),
-                entry,
-                err,
-            }),
-        }
-    }
-    pub fn push_present<Out: Into<U>>(&mut self, c: impl FnOnce(LogMut<T>) -> Out) -> Option<U> {
-        self.try_push_present(c)
-            .unwrap_or_else(AmountErr::warn::<Self, _>)
-    }
     pub fn backward_log(
         &mut self,
     ) -> Result<Option<ValueEntry<impl LogIter<&mut T>, &mut U>>, OutOfLog> {
         Ok(self.amounts.backward_log()?.map(|with_amount| {
             let old_index = self.index;
-            self.index -= with_amount.amount();
+            self.index -= with_amount.amount::<Self>();
             let value = self.transitions.range_mut(self.index..old_index);
             ValueEntry {
                 value,
@@ -176,7 +149,7 @@ where
     ) -> Result<Option<ValueEntry<impl LogIter<&mut T>, &mut U>>, OutOfLog> {
         Ok(self.amounts.forward_log()?.map(|with_amount| {
             let old_index = self.index;
-            self.index += with_amount.amount();
+            self.index += with_amount.amount::<Self>();
             let value = self.transitions.range_mut(old_index..self.index);
             ValueEntry {
                 value,
@@ -195,17 +168,17 @@ where
         let amount: usize = self
             .amounts
             .drain_past_by_len(max_past_len)
-            .map(|with_amount| with_amount.amount())
+            .map(|with_amount| with_amount.amount::<Self>())
             .sum();
         self.index -= amount;
         self.transitions.drain(..amount)
     }
     fn drain_past_by_amount(
         &mut self,
-        with_amount: Option<EntryAmount<U, Amount>>,
+        with_amount: Option<EntryAmount<U, <Self as WithAmount>::Amount>>,
     ) -> Option<ValueEntry<impl LogIter<T>, U>> {
         with_amount.map(|with_amount| {
-            let amount = with_amount.amount();
+            let amount = with_amount.amount::<Self>();
             self.index -= amount;
             ValueEntry {
                 value: self.transitions.drain(..amount),
@@ -215,9 +188,61 @@ where
     }
 }
 
-impl<T, U, Amount> RareTransitionsLog<T, WithTimestamp<U>, Amount>
+impl<T, U, const AMOUNT_BYTES: usize> RareTransitionsLog<T, U, AMOUNT_BYTES>
 where
-    Amount: TryFrom<usize, Error: Debug> + Into<usize> + Copy,
+    Self: WithAmount<Err = Infallible>,
+{
+    pub fn push_present<Out: Into<U>>(&mut self, c: impl FnOnce(LogMut<T>) -> Out) -> Option<U> {
+        self.transitions.truncate(self.index);
+        let previous_len = self.transitions.len();
+        let entry = c(LogMut(&mut self.transitions)).into();
+        let pushed_amount = self.transitions.len() - previous_len;
+        if pushed_amount == 0 {
+            self.amounts.push_present(None);
+            return Some(entry);
+        }
+        let amount = into_ok(<Self as WithAmount>::usize_to_amount(pushed_amount));
+        self.amounts
+            .push_present(Some(EntryAmount { entry, amount }));
+        self.index += pushed_amount;
+        None
+    }
+}
+
+impl<T, U, const AMOUNT_BYTES: usize> RareTransitionsLog<T, U, AMOUNT_BYTES>
+where
+    Self: WithAmount<Amount: NotUSize>,
+{
+    pub fn try_push_present<Out: Into<U>>(
+        &mut self,
+        c: impl FnOnce(LogMut<T>) -> Out,
+    ) -> Result<Option<U>, AmountErr<impl LogIter<T>, U>> {
+        self.transitions.truncate(self.index);
+        let previous_len = self.transitions.len();
+        let entry = c(LogMut(&mut self.transitions)).into();
+        let pushed_amount = self.transitions.len() - previous_len;
+        if pushed_amount == 0 {
+            self.amounts.push_present(None);
+            return Ok(Some(entry));
+        }
+        match <Self as WithAmount>::usize_to_amount(pushed_amount) {
+            Ok(amount) => {
+                self.amounts
+                    .push_present(Some(EntryAmount { entry, amount }));
+                self.index += pushed_amount;
+                Ok(None)
+            }
+            Err(_) => {
+                let transitions = self.transitions.drain(previous_len..);
+                Err(AmountErr::new::<Self>(transitions, entry, pushed_amount))
+            }
+        }
+    }
+}
+
+impl<T, U, const AMOUNT_BYTES: usize> RareTransitionsLog<T, WithTimestamp<U>, AMOUNT_BYTES>
+where
+    Self: WithAmount,
 {
     pub fn pop_past_by_timestamp(
         &mut self,
@@ -230,7 +255,7 @@ where
         let amount: usize = self
             .amounts
             .drain_past_by_timestamp(log_start)
-            .map(|with_amount| with_amount.amount())
+            .map(|with_amount| with_amount.amount::<Self>())
             .sum();
         self.index -= amount;
         self.transitions.drain(..amount)
@@ -248,8 +273,8 @@ mod test {
     #[derive(Clone, Debug)]
     struct MetaAndLogs {
         meta: RevMeta,
-        with_timestamp: [RareTransitionsLog<usize, WithTimestamp, u8>; 2],
-        one_per_frame: [RareTransitionsLog<usize, (), u8>; 2],
+        with_timestamp: [RareTransitionsLog<usize, WithTimestamp, 1>; 2],
+        one_per_frame: [RareTransitionsLog<usize, (), 1>; 2],
     }
 
     fn collect(iter: impl IntoIterator<Item: Borrow<usize>>) -> Vec<usize> {
@@ -597,6 +622,6 @@ mod test {
     #[allow(dead_code)]
     fn impls_reflect() {
         bevy::reflect::TypeRegistry::empty()
-            .register::<RareTransitionsLog<usize, WithTimestamp<u8>, u8>>();
+            .register::<RareTransitionsLog<usize, WithTimestamp<u8>, 1>>();
     }
 }
