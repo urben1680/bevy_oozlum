@@ -290,7 +290,7 @@ impl RevMeta {
         if self.range.end >= PackedTime::MAX_USIZE {
             panic!("{}", Self::END_MAX_MSG);
         }
-        self.range.end += 1;
+        self.range.end = self.now + 1;
         if let Some(max_len) = self.max_len {
             self.range.start = self
                 .range
@@ -349,6 +349,7 @@ mod test {
 
     const ONE: NonZeroUsize = NonZeroUsize::MIN;
     const TWO: NonZeroUsize = unsafe { NonZeroUsize::new_unchecked(2) };
+    const THREE: NonZeroUsize = unsafe { NonZeroUsize::new_unchecked(3) };
 
     /// Constructs [`RevMeta`] and asserts the values are valid
     fn arrange(
@@ -457,5 +458,30 @@ mod test {
 
         assert_eq!(meta.queue_log(0), Err(1..4));
         assert_eq!(meta.queue_log(4), Err(1..4));
+    }
+
+    #[test]
+    fn non_log_forward_truncates_future() {
+        let mut meta = arrange(
+            None,
+            2,
+            0..3,
+            InternalDirection::RunningBackwardLog {
+                updates_until_pause: THREE,
+            },
+        );
+
+        meta.update();
+        assert_eq!(meta.now(), 1);
+        assert_eq!(meta.log_range(), 0..3);
+
+        meta.update();
+        assert_eq!(meta.now(), 0);
+        assert_eq!(meta.log_range(), 0..3);
+
+        meta.queue_forward();
+        meta.update();
+        assert_eq!(meta.now(), 1);
+        assert_eq!(meta.log_range(), 0..2);
     }
 }

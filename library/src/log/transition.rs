@@ -142,7 +142,6 @@ impl<B: BorrowTimestamp> TransitionLog<B> {
         let partition_point = self
             .transitions
             .partition_point(|entry| entry.borrow_timestamp().logged_at() <= log_start);
-        println!("partition_point: {partition_point}, log_start: {partition_point}");
         self.index -= partition_point;
         self.transitions.drain(..partition_point)
     }
@@ -224,7 +223,7 @@ mod test {
                 previous.with_timestamp[0],
                 self.with_timestamp[0]
             );
-println!("{self:#?}");
+
             let _ = self.with_timestamp[1].drain_past_by_timestamp(self.meta.log_range().start);
             let middle = self.with_timestamp[1].clone();
             self.with_timestamp[1].push_present(self.meta.with_timestamp(transition));
