@@ -618,6 +618,7 @@ impl<U, A: Copy> EntryAmount<U, A> {
 }
 
 pub trait BorrowTimestamp {
+    //todo: returns PackedTime
     type Value;
     fn borrow_timestamp(&self) -> &WithTimestamp<Self::Value>;
     fn borrow_timestamp_mut(&mut self) -> &mut WithTimestamp<Self::Value>;

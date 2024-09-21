@@ -213,11 +213,7 @@ impl<T> RareTransitionLog<T> {
 
 impl<B: BorrowTimestamp> RareTransitionLog<B> {
     pub fn pop_past_by_timestamp(&mut self, log_start: usize) -> Option<B> {
-        if self.past_end().map_or(false, |entry| {
-            // include range().start because this entry instructs how to transition from range().start to range().start - 1
-            let logged_at: usize = entry.borrow_timestamp().logged_at.into();
-            logged_at <= log_start
-        }) {
+        if self.past_end()?.borrow_timestamp().logged_at() <= log_start {
             self.pop_past()
         } else {
             None
