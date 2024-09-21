@@ -1,23 +1,15 @@
 use bevy::{
     app::App,
-    ecs::{
-        archetype::ArchetypeComponentId,
-        component::{ComponentId, Tick},
-        intern::Interned,
-        query::Access,
-        schedule::{ScheduleLabel, SystemSet},
-    },
+    ecs::schedule::ScheduleLabel,
     prelude::{Schedule, Schedules},
 };
-pub(crate) use schedule::RevSchedule;
-use set_configs::IntoRevSystemSetConfigs;
-use system_configs::IntoRevSystemConfigs;
+
+pub use crate::{
+    schedule::RevSchedule, set_configs::IntoRevSystemSetConfigs,
+    system_configs::IntoRevSystemConfigs,
+};
 
 use crate::{BackwardSchedule, ForwardSchedule};
-
-mod schedule;
-mod set_configs;
-mod system_configs;
 
 pub trait RevApp {
     fn add_rev_systems<Marker>(
@@ -93,22 +85,5 @@ impl RevApp for App {
         schedules.insert(rev_schedule.forward);
         schedules.insert(rev_schedule.backward);
         self
-    }
-}
-
-#[derive(SystemSet, Copy, Clone, Debug, Hash, PartialEq, Eq)]
-struct BackwardCmdsSys(Interned<dyn SystemSet>);
-
-#[derive(SystemSet, Copy, Clone, Debug, Hash, PartialEq, Eq)]
-struct BackwardSys(Interned<dyn SystemSet>);
-
-static EMPTY_COMPONENT_ACCESS: Access<ComponentId> = Access::new();
-static EMPTY_ARCHETYPE_COMPONENT_ACCESS: Access<ArchetypeComponentId> = Access::new();
-
-fn check_tick(own_tick: &mut Tick, change_tick: Tick) {
-    // reference: Tick::check_tick
-    let age = change_tick.get().wrapping_sub(own_tick.get());
-    if age > Tick::MAX.get() {
-        *own_tick = Tick::new(change_tick.get().wrapping_sub(Tick::MAX.get()));
     }
 }
