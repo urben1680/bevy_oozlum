@@ -6,7 +6,7 @@ use bevy::{
     utils::tracing::error,
 };
 
-use super::{EntryAmount, LogIter, OutOfLog, PackedTime, RareValue, WithTimestamp, INDEX_OOB};
+use super::{BorrowTimestamp, LogIter, OutOfLog, PackedTime, RareValue, INDEX_OOB};
 
 #[derive(Debug, Clone, Reflect)]
 #[reflect(Default)]
@@ -211,11 +211,11 @@ impl<T> RareTransitionLog<T> {
     }
 }
 
-impl<T: Debug> RareTransitionLog<WithTimestamp<T>> {
-    pub fn pop_past_by_timestamp(&mut self, log_start: usize) -> Option<WithTimestamp<T>> {
+impl<B: BorrowTimestamp> RareTransitionLog<B> {
+    pub fn pop_past_by_timestamp(&mut self, log_start: usize) -> Option<B> {
         if self.past_end().map_or(false, |entry| {
             // include range().start because this entry instructs how to transition from range().start to range().start - 1
-            let logged_at: usize = entry.logged_at.into();
+            let logged_at: usize = entry.borrow_timestamp().logged_at.into();
             logged_at <= log_start
         }) {
             self.pop_past()
@@ -223,9 +223,9 @@ impl<T: Debug> RareTransitionLog<WithTimestamp<T>> {
             None
         }
     }
-    pub fn drain_past_by_timestamp(&mut self, log_start: usize) -> impl LogIter<WithTimestamp<T>> {
+    pub fn drain_past_by_timestamp(&mut self, log_start: usize) -> impl LogIter<B> {
         let partition_point = self.transitions.partition_point(|entry| {
-            let logged_at: usize = entry.value.logged_at.into();
+            let logged_at: usize = entry.value.borrow_timestamp().logged_at.into();
             logged_at <= log_start
         });
         self.len -= partition_point // sum of to-be-drained transitions, because of this mapping RareValue::len below is not needed, only skips_before_value
@@ -239,41 +239,42 @@ impl<T: Debug> RareTransitionLog<WithTimestamp<T>> {
             .drain(..partition_point)
             .map(|rare| rare.value)
     }
-}
-
-impl<U, Amount: Copy> RareTransitionLog<EntryAmount<WithTimestamp<U>, Amount>> {
-    pub(crate) fn pop_past_by_timestamp(
-        &mut self,
-        log_start: usize,
-    ) -> Option<EntryAmount<WithTimestamp<U>, Amount>> {
-        if self.past_end().map_or(false, |entry| {
-            // include range().start because this entry instructs how to transition from range().start to range().start - 1
-            let logged_at: usize = entry.entry.logged_at.into();
-            logged_at <= log_start
-        }) {
-            self.pop_past()
-        } else {
-            None
+    pub fn reduce_timestamps(&mut self, by: usize) -> impl LogIter<B> {
+        let reduced_at = self
+            .transitions
+            .range_mut(..self.index)
+            .position(|with_timestamp| {
+                with_timestamp
+                    .value
+                    .borrow_timestamp()
+                    .logged_at()
+                    .checked_sub(by)
+                    .inspect(|reduced| {
+                        with_timestamp.value.borrow_timestamp_mut().logged_at =
+                            PackedTime::from_internal(*reduced)
+                    })
+                    .is_some()
+            })
+            .unwrap_or(self.index);
+        let mut iter = self.transitions.range_mut(reduced_at..);
+        if reduced_at == self.index {
+            if let Some(with_timestamp) = iter.next() {
+                let logged_at = with_timestamp.value.borrow_timestamp().logged_at();
+                with_timestamp.value.borrow_timestamp_mut().logged_at = match logged_at.checked_sub(by) {
+                    Some(reduced) => PackedTime::from_internal(reduced),
+                    None => panic!(
+                        "future transition was logged at {logged_at} which cannot be reduced by {by}"
+                    ),
+                }
+            }
         }
-    }
-    pub(crate) fn drain_past_by_timestamp(
-        &mut self,
-        log_start: usize,
-    ) -> impl LogIter<EntryAmount<WithTimestamp<U>, Amount>> {
-        let partition_point = self.transitions.partition_point(|entry| {
-            let logged_at: usize = entry.value.entry.logged_at.into();
-            logged_at <= log_start
-        });
-        self.len -= partition_point
-            + self
-                .transitions
-                .range(..partition_point)
-                .map(|entry| usize::from(entry.skips))
-                .sum::<usize>();
-        self.index -= partition_point;
-        self.transitions
-            .drain(..partition_point)
-            .map(|rare| rare.value)
+        for with_timestamp in iter {
+            let logged_at = with_timestamp.value.borrow_timestamp().logged_at();
+            with_timestamp.value.borrow_timestamp_mut().logged_at =
+                PackedTime::from_internal(logged_at - by);
+        }
+        self.index -= reduced_at;
+        self.transitions.drain(..reduced_at).map(|rare| rare.value)
     }
 }
 
@@ -283,7 +284,7 @@ mod test {
 
     use super::*;
 
-    use crate::meta::RevMeta;
+    use crate::{log::WithTimestamp, meta::RevMeta};
 
     #[derive(Clone, Debug)]
     struct MetaAndLogs {

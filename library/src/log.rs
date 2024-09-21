@@ -241,18 +241,6 @@ pub use transitions::TransitionsLog;
 
 use crate::meta::RevMeta;
 
-#[cfg(not(any(
-    feature = "time_bytes_1",
-    feature = "time_bytes_2",
-    feature = "time_bytes_3",
-    feature = "time_bytes_4",
-    feature = "time_bytes_5",
-    feature = "time_bytes_6",
-    feature = "time_bytes_7",
-    feature = "time_bytes_8",
-)))]
-const TIME_BYTES: usize = PackedUSize::BYTES;
-
 #[cfg(feature = "time_bytes_1")]
 const TIME_BYTES: usize = 1;
 
@@ -274,7 +262,15 @@ const TIME_BYTES: usize = 6;
 #[cfg(feature = "time_bytes_7")]
 const TIME_BYTES: usize = 7;
 
-#[cfg(feature = "time_bytes_8")]
+#[cfg(not(any(
+    feature = "time_bytes_1",
+    feature = "time_bytes_2",
+    feature = "time_bytes_3",
+    feature = "time_bytes_4",
+    feature = "time_bytes_5",
+    feature = "time_bytes_6",
+    feature = "time_bytes_7",
+)))]
 const TIME_BYTES: usize = 8;
 
 #[derive(Clone, Copy, Reflect, PartialEq, Eq)]
@@ -300,16 +296,26 @@ impl PackedTime {
         usize::MAX >> shift
     };
     pub(crate) fn from_internal(time: usize) -> Self {
-        time.try_into().unwrap_or_else(|_| panic!("{time} does not fit into {} bytes, \
+        time.try_into().unwrap_or_else(|_| {
+            panic!(
+                "{time} does not fit into {} bytes, \
             cannot map this value to `PackedTime`. If a log that contains `WithTimestamp` \
             is loaded while RevMeta is created with an offset from the last run, make use
             of the `reduce_timestamps` method of the log as well. If this is not the issue, \
-            this is an internal bug.", Self::BYTES))
+            this is an internal bug.",
+                Self::BYTES
+            )
+        })
     }
     pub(crate) fn from_user(time: usize) -> Self {
-        time.try_into().unwrap_or_else(|_| panic!("{time} does not fit into {} bytes, \
+        time.try_into().unwrap_or_else(|_| {
+            panic!(
+                "{time} does not fit into {} bytes, \
             cannot map this value to `PackedTime`, consider to increase the `time_bytes_*` \
-            feature to a higher amount of bytes to store this value.", Self::BYTES))
+            feature to a higher amount of bytes to store this value.",
+                Self::BYTES
+            )
+        })
     }
 }
 
@@ -364,7 +370,7 @@ impl Default for PackedTime {
 
 impl From<PackedTime> for usize {
     fn from(value: PackedTime) -> Self {
-        usize::from_ne_bytes(value.0)
+        usize::from_le_bytes(value.0)
     }
 }
 
@@ -585,7 +591,10 @@ impl<T: Debug> Debug for RareValue<T> {
 
 impl<T> RareValue<T> {
     fn len(&self) -> usize {
-        usize::from(self.skips) + 1 // `self.data` adds to the len
+        self.skips() + 1 // `self.data` adds to the len
+    }
+    fn skips(&self) -> usize {
+        usize::from(self.skips)
     }
 }
 
@@ -605,6 +614,32 @@ impl<U, A: Copy> EntryAmount<U, A> {
     }
     fn amount<T: WithAmount<Amount = A>>(&self) -> usize {
         <T as WithAmount>::amount_to_usize(self.amount)
+    }
+}
+
+pub trait BorrowTimestamp {
+    type Value;
+    fn borrow_timestamp(&self) -> &WithTimestamp<Self::Value>;
+    fn borrow_timestamp_mut(&mut self) -> &mut WithTimestamp<Self::Value>;
+}
+
+impl<T> BorrowTimestamp for WithTimestamp<T> {
+    type Value = T;
+    fn borrow_timestamp(&self) -> &WithTimestamp<Self::Value> {
+        self
+    }
+    fn borrow_timestamp_mut(&mut self) -> &mut WithTimestamp<Self::Value> {
+        self
+    }
+}
+
+impl<B: BorrowTimestamp, A> BorrowTimestamp for EntryAmount<B, A> {
+    type Value = B::Value;
+    fn borrow_timestamp(&self) -> &WithTimestamp<Self::Value> {
+        self.entry.borrow_timestamp()
+    }
+    fn borrow_timestamp_mut(&mut self) -> &mut WithTimestamp<Self::Value> {
+        self.entry.borrow_timestamp_mut()
     }
 }
 
@@ -745,3 +780,26 @@ macro_rules! impl_with_amount {
 }
 
 use impl_with_amount;
+
+#[cfg(test)]
+mod test {
+    use crate::log::PackedTime;
+
+    use super::{BorrowTimestamp, WithTimestamp};
+
+    #[test]
+    fn test_packed_time() {
+        let mut x = WithTimestamp::new((), 10);
+        assert_eq!(x.logged_at(), 10);
+        x.borrow_timestamp_mut().logged_at = PackedTime::from_internal(20);
+        assert_eq!(x.logged_at(), 20);
+    }
+
+    #[test]
+    fn test_packed_usize() {
+        let mut x = WithTimestamp::new((), 10);
+        assert_eq!(x.logged_at(), 10);
+        x.borrow_timestamp_mut().logged_at = PackedTime::from_internal(20);
+        assert_eq!(x.logged_at(), 20);
+    }
+}

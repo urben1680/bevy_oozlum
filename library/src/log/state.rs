@@ -5,7 +5,7 @@ use bevy::{reflect::Reflect, utils::tracing::error};
 
 use crate::log::INDEX_OOB;
 
-use super::{EntryAmount, LogIter, OutOfLog, WithTimestamp};
+use super::{BorrowTimestamp, LogIter, OutOfLog, PackedTime};
 
 #[derive(Debug, Default, Clone, Reflect)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -191,43 +191,56 @@ impl<T> StateLog<T> {
     }
 }
 
-impl<T> StateLog<WithTimestamp<T>> {
-    pub fn pop_past_by_timestamp(&mut self, log_start: usize) -> Option<WithTimestamp<T>> {
-        if self.past_end()?.logged_at() < log_start {
+impl<B: BorrowTimestamp> StateLog<B> {
+    pub fn pop_past_by_timestamp(&mut self, log_start: usize) -> Option<B> {
+        if self.past_end()?.borrow_timestamp().logged_at() < log_start {
             self.pop_past()
         } else {
             None
         }
     }
-    pub fn drain_past_by_timestamp(&mut self, log_start: usize) -> impl LogIter<WithTimestamp<T>> {
+    pub fn drain_past_by_timestamp(&mut self, log_start: usize) -> impl LogIter<B> {
         let partition_point = self
             .states
-            .partition_point(|entry| entry.logged_at() < log_start);
+            .partition_point(|entry| entry.borrow_timestamp().logged_at() < log_start);
         self.index -= partition_point;
         self.states.drain(..partition_point)
     }
-}
-
-impl<U, Amount> StateLog<EntryAmount<WithTimestamp<U>, Amount>> {
-    pub(crate) fn pop_past_by_timestamp(
-        &mut self,
-        log_start: usize,
-    ) -> Option<EntryAmount<WithTimestamp<U>, Amount>> {
-        if self.past_end()?.entry.logged_at() < log_start {
-            self.pop_past()
-        } else {
-            None
+    pub fn reduce_timestamps(&mut self, by: usize) -> impl LogIter<B> {
+        let reduced_at = self
+            .states
+            .range_mut(..self.index)
+            .position(|with_timestamp| {
+                with_timestamp
+                    .borrow_timestamp()
+                    .logged_at()
+                    .checked_sub(by)
+                    .inspect(|reduced| {
+                        with_timestamp.borrow_timestamp_mut().logged_at =
+                            PackedTime::from_internal(*reduced)
+                    })
+                    .is_some()
+            });
+        self.present.borrow_timestamp_mut().logged_at = match reduced_at {
+            Some(_) => PackedTime::from_internal(self.present.borrow_timestamp().logged_at() - by),
+            None => {
+                let logged_at = self.present.borrow_timestamp().logged_at();
+                match logged_at.checked_sub(by) {
+                    Some(reduced) => PackedTime::from_internal(reduced),
+                    None => panic!(
+                        "present state was logged at {logged_at} which cannot be reduced by {by}"
+                    ),
+                }
+            }
+        };
+        let reduced_at = reduced_at.unwrap_or(self.index);
+        for with_timestamp in self.states.range_mut(reduced_at..) {
+            let logged_at = with_timestamp.borrow_timestamp().logged_at();
+            with_timestamp.borrow_timestamp_mut().logged_at =
+                PackedTime::from_internal(logged_at - by);
         }
-    }
-    pub(crate) fn drain_past_by_timestamp(
-        &mut self,
-        log_start: usize,
-    ) -> impl LogIter<EntryAmount<WithTimestamp<U>, Amount>> {
-        let partition_point = self
-            .states
-            .partition_point(|entry| entry.entry.logged_at() < log_start);
-        self.index -= partition_point;
-        self.states.drain(..partition_point)
+        self.index -= reduced_at;
+        self.states.drain(..reduced_at)
     }
 }
 
@@ -237,7 +250,7 @@ mod test {
 
     use super::*;
 
-    use crate::meta::RevMeta;
+    use crate::{log::WithTimestamp, meta::RevMeta};
 
     #[derive(Clone, Debug)]
     struct MetaAndLogs {

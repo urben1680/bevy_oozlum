@@ -7,8 +7,8 @@ use std::{
 use bevy::reflect::{std_traits::ReflectDefault, Reflect};
 
 use super::{
-    impl_with_amount, into_ok, AmountErr, EntryAmount, LogIter, LogMut, NotUSize, OutOfLog,
-    TransitionLog, ValueEntry, WithAmount, WithTimestamp,
+    impl_with_amount, into_ok, AmountErr, BorrowTimestamp, EntryAmount, LogIter, LogMut, NotUSize,
+    OutOfLog, TransitionLog, ValueEntry, WithAmount,
 };
 
 #[derive(Debug, Clone, Reflect)]
@@ -221,14 +221,14 @@ where
     }
 }
 
-impl<T, U, const AMOUNT_BYTES: usize> TransitionsLog<T, WithTimestamp<U>, AMOUNT_BYTES>
+impl<T, B: BorrowTimestamp, const AMOUNT_BYTES: usize> TransitionsLog<T, B, AMOUNT_BYTES>
 where
     Self: WithAmount,
 {
     pub fn pop_past_by_timestamp(
         &mut self,
         log_start: usize,
-    ) -> Option<ValueEntry<impl LogIter<T>, WithTimestamp<U>>> {
+    ) -> Option<ValueEntry<impl LogIter<T>, B>> {
         self.amounts
             .pop_past_by_timestamp(log_start)
             .map(|entry_amount| self.drain_past_by_amount(entry_amount))
@@ -242,6 +242,15 @@ where
         self.index -= amount;
         self.transitions.drain(..amount)
     }
+    pub fn reduce_timestamps(&mut self, by: usize) -> impl LogIter<T> {
+        let amount = self
+            .amounts
+            .reduce_timestamps(by)
+            .map(|entry_amount| entry_amount.amount::<Self>())
+            .sum::<usize>();
+        self.index -= amount;
+        self.transitions.drain(..amount)
+    }
 }
 
 #[cfg(test)]
@@ -250,7 +259,7 @@ mod test {
 
     use super::*;
 
-    use crate::meta::RevMeta;
+    use crate::{log::WithTimestamp, meta::RevMeta};
 
     #[derive(Clone, Debug)]
     struct MetaAndLogs {
