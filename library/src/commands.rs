@@ -1,8 +1,7 @@
 use std::collections::VecDeque;
 
 use bevy::{
-    prelude::{Commands, Resource, World},
-    utils::synccell::SyncCell,
+    ecs::{component::ComponentId, storage::{ResourceData, SparseSet}, system::EntityCommands}, prelude::{Commands, Component, Entity, FromWorld, Resource, World}, utils::synccell::SyncCell
 };
 
 use crate::{
@@ -10,15 +9,22 @@ use crate::{
     meta::{Direction, RevMeta},
 };
 
+// todo: spawn/despawn with entity disabling https://github.com/bevyengine/bevy/issues/11090
+// todo: commands implementors https://docs.rs/bevy/latest/bevy/ecs/world/trait.Command.html#implementors
+// todo: untyped take component https://github.com/bevyengine/bevy/issues/15350
+
 pub trait RevCommands {
-    fn add_rev<Marker>(&mut self, command: impl RevCommand<Marker>);
-    // todo: entity commands
+    fn rev_add<Marker>(&mut self, command: impl RevCommand<Marker>);
+    fn rev_init_resource<R: Resource + FromWorld>(&mut self);
+    fn rev_insert_resource<R: Resource>(&mut self, resource: R);
+    fn remove_resource<R: Resource>(&mut self);
+    // todo: trigger?
 }
 
 impl RevCommands for Commands<'_, '_> {
-    fn add_rev<Marker>(&mut self, command: impl RevCommand<Marker>) {
+    fn rev_add<Marker>(&mut self, command: impl RevCommand<Marker>) {
         self.add(|world: &mut World| {
-            if let Some(command) = command.apply(world) {
+            if let Some(command) = command.rev_apply(world) {
                 let command: Box<dyn InitializedRevCommand> = Box::new(command);
                 let command = SyncCell::new(command);
                 world
@@ -28,16 +34,59 @@ impl RevCommands for Commands<'_, '_> {
             }
         })
     }
+    fn rev_init_resource<R: Resource + FromWorld>(&mut self) {
+        self.rev_add(|world: &mut World| {
+            let initiialized = ResourceSwap(world.remove_resource::<R>());
+            world.init_resource::<R>();
+            initiialized
+        })
+    }
+    fn rev_insert_resource<R: Resource>(&mut self, resource: R) {
+        self.rev_add(|world: &mut World| {
+            let initiialized = ResourceSwap(world.remove_resource::<R>());
+            world.insert_resource(resource);
+            initiialized
+        })
+    }
+    fn remove_resource<R: Resource>(&mut self) {
+        self.rev_add(|world: &mut World| {
+            world.remove_resource::<R>().map(|resource| ResourceSwap(Some(resource)))
+        })
+    }
+}
+
+struct ResourceSwap<R: Resource>(Option<R>);
+
+impl<R: Resource> InitializedRevCommand for ResourceSwap<R> {
+    fn undo(&mut self, world: &mut World) {
+        match (self.0.as_mut(), world.get_resource_mut::<R>()) {
+            (Some(r1), Some(mut r2)) => core::mem::swap(r1, &mut *r2),
+            (Some(_), None) => world.insert_resource(self.0.take().unwrap()),
+            (None, Some(_)) => self.0 = world.remove_resource::<R>(),
+            (None, None) => {}
+        }
+    }
+    fn redo(&mut self, world: &mut World) {
+        self.undo(world)
+    }
+}
+
+pub trait RevEntityCommands {
+
+}
+
+impl<'a> RevEntityCommands for EntityCommands<'a> {
+
 }
 
 pub trait RevCommand<Marker>: Send + 'static {
-    fn apply(self, world: &mut World) -> Option<impl InitializedRevCommand>;
+    fn rev_apply(self, world: &mut World) -> Option<impl InitializedRevCommand>;
 }
 
 impl<T: InitializedRevCommand, F: FnOnce(&mut World) -> Option<T> + Send + 'static>
     RevCommand<fn(&mut World) -> Option<T>> for F
 {
-    fn apply(self, world: &mut World) -> Option<impl InitializedRevCommand> {
+    fn rev_apply(self, world: &mut World) -> Option<impl InitializedRevCommand> {
         self(world)
     }
 }
@@ -45,19 +94,19 @@ impl<T: InitializedRevCommand, F: FnOnce(&mut World) -> Option<T> + Send + 'stat
 impl<T: InitializedRevCommand, F: FnOnce(&mut World) -> T + Send + 'static>
     RevCommand<fn(&mut World) -> T> for F
 {
-    fn apply(self, world: &mut World) -> Option<impl InitializedRevCommand> {
+    fn rev_apply(self, world: &mut World) -> Option<impl InitializedRevCommand> {
         Some(self(world))
     }
 }
 
 impl<T: InitializedRevCommand> RevCommand<Option<T>> for Option<T> {
-    fn apply(self, _world: &mut World) -> Option<impl InitializedRevCommand> {
+    fn rev_apply(self, _world: &mut World) -> Option<impl InitializedRevCommand> {
         self
     }
 }
 
 impl<T: InitializedRevCommand> RevCommand<T> for T {
-    fn apply(self, _world: &mut World) -> Option<impl InitializedRevCommand> {
+    fn rev_apply(self, _world: &mut World) -> Option<impl InitializedRevCommand> {
         Some(self)
     }
 }

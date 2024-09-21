@@ -16,10 +16,12 @@ use bevy::ecs::{
 };
 
 use crate::{
-    check_tick, error_per_flag,
+    error_per_flag,
     log::{OutOfLog, RareTransitionLog},
     meta::{Direction, RevMeta},
 };
+
+use super::check_tick;
 
 struct RevConditionForward<T> {
     condition: T,
@@ -47,7 +49,7 @@ struct RevConditionBackward<In: Send + Sync + 'static> {
     _in: PhantomData<fn(In)>,
 }
 
-pub(crate) fn forward_backward_conditions<
+pub(super) fn forward_backward_conditions<
     In: Send + Sync + 'static,
     Marker,
     T: IntoSystem<In, bool, Marker, System: ReadOnlySystem>,

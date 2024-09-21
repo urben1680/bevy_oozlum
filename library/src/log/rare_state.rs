@@ -227,11 +227,10 @@ impl<T> RareStateLog<T> {
 
 impl<B: BorrowTimestamp> RareStateLog<B> {
     pub fn pop_past_by_timestamp(&mut self, log_start: usize) -> Option<B> {
-        if self.past_end_rare().map_or(false, |entry| {
-            let logged_at = entry.value.borrow_timestamp().logged_at();
-            let skips = entry.skips();
-            logged_at + skips < log_start
-        }) {
+        let entry = self.past_end_rare()?;
+        let logged_at = entry.value.borrow_timestamp().logged_at();
+        let skips = entry.skips();
+        if logged_at + skips < log_start {
             self.pop_past()
         } else {
             None

@@ -129,10 +129,7 @@ impl<T> TransitionLog<T> {
 
 impl<B: BorrowTimestamp> TransitionLog<B> {
     pub fn pop_past_by_timestamp(&mut self, log_start: usize) -> Option<B> {
-        if self.past_end().map_or(false, |with_timestamp| {
-            // include range().start because this entry instructs how to transition from range().start to range().start - 1
-            with_timestamp.borrow_timestamp().logged_at() <= log_start
-        }) {
+        if self.past_end()?.borrow_timestamp().logged_at() <= log_start {
             self.pop_past()
         } else {
             None

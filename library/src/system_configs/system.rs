@@ -16,8 +16,12 @@ use bevy::ecs::{
 };
 
 use crate::{
-    check_tick, commands::CommandsLog, error_per_flag, set_configs::RevSystemSetConfigs,
-    BackwardCmdsSys, BackwardSys, EMPTY_ARCHETYPE_COMPONENT_ACCESS, EMPTY_COMPONENT_ACCESS,
+    commands::CommandsLog,
+    error_per_flag,
+    set_configs::{
+        check_tick, BackwardCmdsSys, BackwardSys, RevSystemSetConfigs,
+        EMPTY_ARCHETYPE_COMPONENT_ACCESS, EMPTY_COMPONENT_ACCESS,
+    },
 };
 
 use super::{IntoRevSystemConfigs, RevSystemConfigs};

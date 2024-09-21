@@ -38,17 +38,17 @@ impl RevSchedule {
             backward: Schedule::new(BackwardSchedule(label)),
         }
     }
-    pub fn add_rev_systems<Marker>(
+    pub fn rev_add_systems<Marker>(
         &mut self,
         systems: impl IntoRevSystemConfigs<Marker>,
     ) -> &mut Self {
         let configs = systems.into_rev_configs();
         self.forward.add_systems(configs.forward);
         self.backward.add_systems(configs.backward);
-        self.configure_rev_sets(configs.set_configs);
+        self.rev_configure_sets(configs.set_configs);
         self
     }
-    pub fn configure_rev_sets<Marker>(
+    pub fn rev_configure_sets<Marker>(
         &mut self,
         sets: impl IntoRevSystemSetConfigs<Marker>,
     ) -> &mut Self {

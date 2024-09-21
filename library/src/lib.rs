@@ -6,15 +6,6 @@ Features:
 - reversible Event reader/writer
 - entity commands, standard rev commands
 - add license
-- world trait
--- run_rev_schedule
--- try_run_rev_schedule
--- run_forward_schedule
--- run_backward_schedule
--- try_run_forward_schedule
--- try_tun_backward_schedule
--- rev_schedule_scope
--- try_rev_schedule_scope
 
 Enhancements:
 - reduce todo!() and //todo
@@ -23,6 +14,7 @@ Enhancements:
 - tests of other log methods like clear variants
 - config tests
 - make doctests work
+- mod/use/pub cleanup, make prelude
 
 Docs
 - examples
@@ -42,13 +34,7 @@ use std::hash::Hash;
 
 use bevy::{
     app::{FixedUpdate, Plugin},
-    ecs::{
-        archetype::ArchetypeComponentId,
-        component::{ComponentId, Tick},
-        query::Access,
-        schedule::{InternedScheduleLabel, InternedSystemSet, ScheduleLabel},
-    },
-    prelude::{IntoSystemConfigs, SystemSet},
+    ecs::schedule::{InternedScheduleLabel, InternedSystemSet, IntoSystemConfigs, ScheduleLabel},
 };
 
 use meta::RevMeta;
@@ -60,6 +46,8 @@ pub mod meta;
 pub mod schedule;
 pub mod set_configs;
 pub mod system_configs;
+pub mod world;
+pub mod event;
 
 /// Should not be pub to not add invalid settings (see unsupported Schedule settings)
 #[derive(ScheduleLabel, Copy, Clone, Debug, Hash, PartialEq, Eq)]
@@ -116,23 +104,6 @@ impl Plugin for RevSystemsPlugin {
             Some(set) => app.add_systems(schedule, RevMeta::update_world.in_set(set)),
             None => app.add_systems(schedule, RevMeta::update_world),
         };
-    }
-}
-
-#[derive(SystemSet, Copy, Clone, Debug, Hash, PartialEq, Eq)]
-struct BackwardCmdsSys(InternedSystemSet);
-
-#[derive(SystemSet, Copy, Clone, Debug, Hash, PartialEq, Eq)]
-struct BackwardSys(InternedSystemSet);
-
-static EMPTY_COMPONENT_ACCESS: Access<ComponentId> = Access::new();
-static EMPTY_ARCHETYPE_COMPONENT_ACCESS: Access<ArchetypeComponentId> = Access::new();
-
-fn check_tick(own_tick: &mut Tick, change_tick: Tick) {
-    // reference: Tick::check_tick
-    let age = change_tick.get().wrapping_sub(own_tick.get());
-    if age > Tick::MAX.get() {
-        *own_tick = Tick::new(change_tick.get().wrapping_sub(Tick::MAX.get()));
     }
 }
 
