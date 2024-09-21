@@ -175,7 +175,7 @@ impl RevMeta {
     pub fn with_timestamp<T>(&self, value: T) -> WithTimestamp<T> {
         WithTimestamp {
             value,
-            logged_at: PackedTime::from_internal(self.now)
+            logged_at: PackedTime::from_internal(self.now),
         }
     }
     /// Returns the frame range that can be returned to using [`Self::queue_log`].

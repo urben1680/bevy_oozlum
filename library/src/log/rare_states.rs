@@ -7,8 +7,8 @@ use std::{
 use bevy::reflect::Reflect;
 
 use super::{
-    impl_with_amount, into_ok, AmountErr, EntryAmount, LogIter, LogMut, NotUSize, OutOfLog,
-    RareStateLog, ValueEntry, WithAmount, WithTimestamp,
+    impl_with_amount, into_ok, AmountErr, BorrowTimestamp, EntryAmount, LogIter, LogMut, NotUSize,
+    OutOfLog, RareStateLog, ValueEntry, WithAmount,
 };
 
 #[derive(Debug, Clone, Reflect)]
@@ -106,34 +106,34 @@ where
         self.states.shrink_to_fit()
     }
     pub fn get(&self) -> (impl LogIter<&T>, &U) {
-        let with_amount = self.amounts.get();
-        let from = self.index - with_amount.amount::<Self>();
+        let entry_amount = self.amounts.get();
+        let from = self.index - entry_amount.amount::<Self>();
         let states = self.states.range(from..self.index);
-        (states, &with_amount.entry)
+        (states, &entry_amount.entry)
     }
     pub fn unlogged_get_mut(&mut self) -> (impl LogIter<&mut T>, &mut U) {
-        let with_amount = self.amounts.unlogged_get_mut();
-        let from = self.index - with_amount.amount::<Self>();
+        let entry_amount = self.amounts.unlogged_get_mut();
+        let from = self.index - entry_amount.amount::<Self>();
         let states = self.states.range_mut(from..self.index);
-        (states, &mut with_amount.entry)
+        (states, &mut entry_amount.entry)
     }
     pub fn past_end(&self) -> Option<(impl LogIter<&T>, &U)> {
-        let with_amount = self.amounts.past_end()?;
-        let to = with_amount.amount::<Self>();
+        let entry_amount = self.amounts.past_end()?;
+        let to = entry_amount.amount::<Self>();
         let states = self.states.range(..to);
-        Some((states, &with_amount.entry))
+        Some((states, &entry_amount.entry))
     }
     pub fn pop_past(&mut self) -> Option<ValueEntry<impl LogIter<T>, U>> {
         self.amounts
             .pop_past()
-            .map(|with_amount| self.drain_past_by_amount(with_amount))
+            .map(|entry_amount| self.drain_past_by_amount(entry_amount))
     }
     pub fn drain_future(&mut self) -> (impl LogIter<T>, impl LogIter<U>) {
         (
             self.states.drain(self.index..),
             self.amounts
                 .drain_future()
-                .map(|with_amount| with_amount.entry),
+                .map(|entry_amount| entry_amount.entry),
         )
     }
     pub fn clear(&mut self) {
@@ -166,26 +166,26 @@ where
     ) -> Option<ValueEntry<impl LogIter<T>, U>> {
         self.amounts
             .pop_past_by_len(max_past_len)
-            .map(|with_amount| self.drain_past_by_amount(with_amount))
+            .map(|entry_amount| self.drain_past_by_amount(entry_amount))
     }
     pub fn drain_past_by_len(&mut self, max_past_len: usize) -> impl LogIter<T> {
         let amount: usize = self
             .amounts
             .drain_past_by_len(max_past_len)
-            .map(|with_amount| with_amount.amount::<Self>())
+            .map(|entry_amount| entry_amount.amount::<Self>())
             .sum();
         self.index -= amount;
         self.states.drain(..amount)
     }
     fn drain_past_by_amount(
         &mut self,
-        with_amount: EntryAmount<U, <Self as WithAmount>::Amount>,
+        entry_amount: EntryAmount<U, <Self as WithAmount>::Amount>,
     ) -> ValueEntry<impl LogIter<T>, U> {
-        let amount = with_amount.amount::<Self>();
+        let amount = entry_amount.amount::<Self>();
         self.index -= amount;
         ValueEntry {
             value: self.states.drain(..amount),
-            entry: with_amount.entry,
+            entry: entry_amount.entry,
         }
     }
 }
@@ -326,24 +326,33 @@ where
     }
 }
 
-impl<T, U, const AMOUNT_BYTES: usize> RareStatesLog<T, WithTimestamp<U>, AMOUNT_BYTES>
+impl<T, B: BorrowTimestamp, const AMOUNT_BYTES: usize> RareStatesLog<T, B, AMOUNT_BYTES>
 where
     Self: WithAmount,
 {
     pub fn pop_past_by_timestamp(
         &mut self,
         log_start: usize,
-    ) -> Option<ValueEntry<impl LogIter<T>, WithTimestamp<U>>> {
+    ) -> Option<ValueEntry<impl LogIter<T>, B>> {
         self.amounts
             .pop_past_by_timestamp(log_start)
-            .map(|with_amount| self.drain_past_by_amount(with_amount))
+            .map(|entry_amount| self.drain_past_by_amount(entry_amount))
     }
     pub fn drain_past_by_timestamp(&mut self, log_start: usize) -> impl LogIter<T> {
         let amount: usize = self
             .amounts
             .drain_past_by_timestamp(log_start)
-            .map(|with_amount| with_amount.amount::<Self>())
+            .map(|entry_amount| entry_amount.amount::<Self>())
             .sum();
+        self.index -= amount;
+        self.states.drain(..amount)
+    }
+    pub fn reduce_timestamps(&mut self, by: usize) -> impl LogIter<T> {
+        let amount = self
+            .amounts
+            .reduce_timestamps(by)
+            .map(|entry_amount| entry_amount.amount::<Self>())
+            .sum::<usize>();
         self.index -= amount;
         self.states.drain(..amount)
     }

@@ -6,7 +6,7 @@ use bevy::{
     utils::tracing::error,
 };
 
-use super::{EntryAmount, LogIter, OutOfLog, WithTimestamp, INDEX_OOB};
+use super::{BorrowTimestamp, LogIter, OutOfLog, PackedTime, INDEX_OOB};
 
 #[derive(Debug, Clone, Reflect)]
 #[reflect(Default)]
@@ -127,49 +127,60 @@ impl<T> TransitionLog<T> {
     }
 }
 
-impl<T> TransitionLog<WithTimestamp<T>> {
-    pub fn pop_past_by_timestamp(&mut self, log_start: usize) -> Option<WithTimestamp<T>> {
+impl<B: BorrowTimestamp> TransitionLog<B> {
+    pub fn pop_past_by_timestamp(&mut self, log_start: usize) -> Option<B> {
         if self.past_end().map_or(false, |with_timestamp| {
             // include range().start because this entry instructs how to transition from range().start to range().start - 1
-            with_timestamp.logged_at() <= log_start
+            with_timestamp.borrow_timestamp().logged_at() <= log_start
         }) {
             self.pop_past()
         } else {
             None
         }
     }
-    pub fn drain_past_by_timestamp(&mut self, log_start: usize) -> impl LogIter<WithTimestamp<T>> {
+    pub fn drain_past_by_timestamp(&mut self, log_start: usize) -> impl LogIter<B> {
         let partition_point = self
             .transitions
-            .partition_point(|entry| entry.logged_at() <= log_start);
+            .partition_point(|entry| entry.borrow_timestamp().logged_at() <= log_start);
+        println!("partition_point: {partition_point}, log_start: {partition_point}");
         self.index -= partition_point;
         self.transitions.drain(..partition_point)
     }
-}
-
-impl<U, Amount: Copy> TransitionLog<EntryAmount<WithTimestamp<U>, Amount>> {
-    pub(crate) fn pop_past_by_timestamp(
-        &mut self,
-        log_start: usize,
-    ) -> Option<EntryAmount<WithTimestamp<U>, Amount>> {
-        if self.past_end().map_or(false, |with_timestamp| {
-            // include range().start because this entry instructs how to transition from range().start to range().start - 1
-            with_timestamp.entry.logged_at() <= log_start
-        }) {
-            self.pop_past()
-        } else {
-            None
+    pub fn reduce_timestamps(&mut self, by: usize) -> impl LogIter<B> {
+        let reduced_at = self
+            .transitions
+            .range_mut(..self.index)
+            .position(|with_timestamp| {
+                with_timestamp
+                    .borrow_timestamp()
+                    .logged_at()
+                    .checked_sub(by)
+                    .inspect(|reduced| {
+                        with_timestamp.borrow_timestamp_mut().logged_at =
+                            PackedTime::from_internal(*reduced)
+                    })
+                    .is_some()
+            })
+            .unwrap_or(self.index);
+        let mut iter = self.transitions.range_mut(reduced_at..);
+        if reduced_at == self.index {
+            if let Some(with_timestamp) = iter.next() {
+                let logged_at = with_timestamp.borrow_timestamp().logged_at();
+                with_timestamp.borrow_timestamp_mut().logged_at = match logged_at.checked_sub(by) {
+                    Some(reduced) => PackedTime::from_internal(reduced),
+                    None => panic!(
+                        "future transition was logged at {logged_at} which cannot be reduced by {by}"
+                    ),
+                }
+            }
         }
-    }
-    pub(crate) fn drain_past_by_timestamp(
-        &mut self,
-        log_start: usize,
-    ) -> impl LogIter<EntryAmount<WithTimestamp<U>, Amount>> {
-        let partition_point = self
-            .transitions
-            .partition_point(|entry| entry.entry.logged_at() <= log_start);
-        self.index -= partition_point;
-        self.transitions.drain(..partition_point)
+        for with_timestamp in iter {
+            let logged_at = with_timestamp.borrow_timestamp().logged_at();
+            with_timestamp.borrow_timestamp_mut().logged_at =
+                PackedTime::from_internal(logged_at - by);
+        }
+        self.index -= reduced_at;
+        self.transitions.drain(..reduced_at)
     }
 }
 
@@ -179,7 +190,7 @@ mod test {
 
     use super::*;
 
-    use crate::meta::RevMeta;
+    use crate::{log::WithTimestamp, meta::RevMeta};
 
     #[derive(Clone, Debug)]
     struct MetaAndLogs {
@@ -213,7 +224,7 @@ mod test {
                 previous.with_timestamp[0],
                 self.with_timestamp[0]
             );
-
+println!("{self:#?}");
             let _ = self.with_timestamp[1].drain_past_by_timestamp(self.meta.log_range().start);
             let middle = self.with_timestamp[1].clone();
             self.with_timestamp[1].push_present(self.meta.with_timestamp(transition));
