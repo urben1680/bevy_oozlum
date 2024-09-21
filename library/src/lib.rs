@@ -6,7 +6,6 @@ Features:
 - reversible Event reader/writer
 - entity commands, standard rev commands
 - add license
-- reduce_timestamps for all WithTimestamp logs
 - world trait
 -- run_rev_schedule
 -- try_run_rev_schedule
@@ -43,8 +42,13 @@ use std::hash::Hash;
 
 use bevy::{
     app::{FixedUpdate, Plugin},
-    ecs::schedule::{InternedScheduleLabel, InternedSystemSet, ScheduleLabel},
-    prelude::IntoSystemConfigs,
+    ecs::{
+        archetype::ArchetypeComponentId,
+        component::{ComponentId, Tick},
+        query::Access,
+        schedule::{InternedScheduleLabel, InternedSystemSet, ScheduleLabel},
+    },
+    prelude::{IntoSystemConfigs, SystemSet},
 };
 
 use meta::RevMeta;
@@ -53,6 +57,9 @@ pub mod app;
 pub mod commands;
 pub mod log;
 pub mod meta;
+pub mod schedule;
+pub mod set_configs;
+pub mod system_configs;
 
 /// Should not be pub to not add invalid settings (see unsupported Schedule settings)
 #[derive(ScheduleLabel, Copy, Clone, Debug, Hash, PartialEq, Eq)]
@@ -109,6 +116,23 @@ impl Plugin for RevSystemsPlugin {
             Some(set) => app.add_systems(schedule, RevMeta::update_world.in_set(set)),
             None => app.add_systems(schedule, RevMeta::update_world),
         };
+    }
+}
+
+#[derive(SystemSet, Copy, Clone, Debug, Hash, PartialEq, Eq)]
+struct BackwardCmdsSys(InternedSystemSet);
+
+#[derive(SystemSet, Copy, Clone, Debug, Hash, PartialEq, Eq)]
+struct BackwardSys(InternedSystemSet);
+
+static EMPTY_COMPONENT_ACCESS: Access<ComponentId> = Access::new();
+static EMPTY_ARCHETYPE_COMPONENT_ACCESS: Access<ArchetypeComponentId> = Access::new();
+
+fn check_tick(own_tick: &mut Tick, change_tick: Tick) {
+    // reference: Tick::check_tick
+    let age = change_tick.get().wrapping_sub(own_tick.get());
+    if age > Tick::MAX.get() {
+        *own_tick = Tick::new(change_tick.get().wrapping_sub(Tick::MAX.get()));
     }
 }
 

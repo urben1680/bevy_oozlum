@@ -16,8 +16,7 @@ use bevy::ecs::{
 };
 
 use crate::{
-    app::check_tick,
-    error_per_flag,
+    check_tick, error_per_flag,
     log::{OutOfLog, RareTransitionLog},
     meta::{Direction, RevMeta},
 };

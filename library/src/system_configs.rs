@@ -4,7 +4,7 @@ use bevy::{
     utils::all_tuples,
 };
 
-use super::set_configs::{IntoRevSystemSetConfigs, RevSystemSetConfigs};
+use crate::set_configs::{IntoRevSystemSetConfigs, RevSystemSetConfigs};
 
 mod system;
 
