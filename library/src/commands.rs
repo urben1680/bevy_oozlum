@@ -96,6 +96,7 @@ Could add observer for event so it is passed on to the log
 --- or offer an event wrapper that offers a data log where each observer can set data and only read data of previous observers
 ---- data size: TriggerTargets.len()?
 - TriggerTargets could be reversed by rev command! but no order can be specified with rev_trigger (without targets)
+-- this is just an implemention detail
 */
 
 /// Wraps an event to only allow immutable access. 
