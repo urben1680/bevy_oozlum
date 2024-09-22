@@ -3,8 +3,14 @@ TODO:
 
 Features:
 - reversible observer ? or issue to link
+-- Systen with Direction + Event + Entity -> RevTrigger
+-- impl IntoSystem<RevTrigger, Out, Marker>
+-- Input params don't need to be 'static anymore? Could pass in RevMeta. But mutating the resource is then not possible.
+-- Just use regular Observer systems and users needs to add Res<RevMeta> to the system
+-- method just adds it to revcommands
 - reversible Event reader/writer
 - entity commands, standard rev commands
+-- postponed to bevy 0.15 due to required components + disabled entities
 - add license
 
 Enhancements:
@@ -28,6 +34,7 @@ UNSUPPORTED:
 - Schedule::set_apply_final_deferred
 - Schedule::graph_mut
 - ScheduleBuildSettings::auto_insert_apply_deferred
+- Trigger::event_mut 
 */
 
 use std::hash::Hash;
