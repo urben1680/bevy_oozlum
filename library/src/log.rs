@@ -526,12 +526,12 @@ impl<'a, T: Iterator, U> IntoIterator for &'a mut ValueEntry<T, U> {
 /// This will enable a cleanup strategy where entries are forgotten that are older than the global log start.
 #[derive(Clone, Copy, PartialEq, Eq, Reflect)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct WithTimestamp<T = ()> {
+pub struct WithLoggedAt<T = ()> {
     pub value: T,
     pub(crate) logged_at: PackedTime,
 }
 
-impl<T: Debug> Debug for WithTimestamp<T> {
+impl<T: Debug> Debug for WithLoggedAt<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct(std::any::type_name::<Self>())
             .field("value", &self.value)
@@ -540,7 +540,7 @@ impl<T: Debug> Debug for WithTimestamp<T> {
     }
 }
 
-impl<T> WithTimestamp<T> {
+impl<T> WithLoggedAt<T> {
     pub fn new(value: T, logged_at: usize) -> Self {
         Self {
             value,
@@ -552,7 +552,7 @@ impl<T> WithTimestamp<T> {
     }
 }
 
-impl<T: Default> From<usize> for WithTimestamp<T> {
+impl<T: Default> From<usize> for WithLoggedAt<T> {
     fn from(logged_at: usize) -> Self {
         Self {
             value: T::default(),
@@ -561,7 +561,7 @@ impl<T: Default> From<usize> for WithTimestamp<T> {
     }
 }
 
-impl<T: Default> From<&RevMeta> for WithTimestamp<T> {
+impl<T: Default> From<&RevMeta> for WithLoggedAt<T> {
     fn from(meta: &RevMeta) -> Self {
         Self {
             value: T::default(),
@@ -617,30 +617,26 @@ impl<U, A: Copy> EntryAmount<U, A> {
     }
 }
 
-pub trait BorrowTimestamp {
-    //todo: returns PackedTime
-    type Value;
-    fn borrow_timestamp(&self) -> &WithTimestamp<Self::Value>;
-    fn borrow_timestamp_mut(&mut self) -> &mut WithTimestamp<Self::Value>;
+pub trait LoggedAt {
+    fn logged_at(&self) -> usize;
+    fn set_logged_at(&mut self, value: PackedTime);
 }
 
-impl<T> BorrowTimestamp for WithTimestamp<T> {
-    type Value = T;
-    fn borrow_timestamp(&self) -> &WithTimestamp<Self::Value> {
-        self
+impl<T> LoggedAt for WithLoggedAt<T> {
+    fn logged_at(&self) -> usize {
+        self.logged_at.into()
     }
-    fn borrow_timestamp_mut(&mut self) -> &mut WithTimestamp<Self::Value> {
-        self
+    fn set_logged_at(&mut self, value: PackedTime) {
+        self.logged_at = value;
     }
 }
 
-impl<B: BorrowTimestamp, A> BorrowTimestamp for EntryAmount<B, A> {
-    type Value = B::Value;
-    fn borrow_timestamp(&self) -> &WithTimestamp<Self::Value> {
-        self.entry.borrow_timestamp()
+impl<B: LoggedAt, A> LoggedAt for EntryAmount<B, A> {
+    fn logged_at(&self) -> usize {
+        self.entry.logged_at()
     }
-    fn borrow_timestamp_mut(&mut self) -> &mut WithTimestamp<Self::Value> {
-        self.entry.borrow_timestamp_mut()
+    fn set_logged_at(&mut self, value: PackedTime) {
+        self.entry.set_logged_at(value)
     }
 }
 
@@ -786,21 +782,21 @@ use impl_with_amount;
 mod test {
     use crate::log::PackedTime;
 
-    use super::{BorrowTimestamp, WithTimestamp};
+    use super::{LoggedAt, WithLoggedAt};
 
     #[test]
     fn test_packed_time() {
-        let mut x = WithTimestamp::new((), 10);
+        let mut x = WithLoggedAt::new((), 10);
         assert_eq!(x.logged_at(), 10);
-        x.borrow_timestamp_mut().logged_at = PackedTime::from_internal(20);
+        x.set_logged_at(PackedTime::from_internal(20));
         assert_eq!(x.logged_at(), 20);
     }
 
     #[test]
     fn test_packed_usize() {
-        let mut x = WithTimestamp::new((), 10);
+        let mut x = WithLoggedAt::new((), 10);
         assert_eq!(x.logged_at(), 10);
-        x.borrow_timestamp_mut().logged_at = PackedTime::from_internal(20);
+        x.set_logged_at(PackedTime::from_internal(20));
         assert_eq!(x.logged_at(), 20);
     }
 }
