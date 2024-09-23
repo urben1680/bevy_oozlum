@@ -7,7 +7,7 @@ use std::{
 use bevy::reflect::{std_traits::ReflectDefault, Reflect};
 
 use super::{
-    impl_with_amount, into_ok, AmountErr, BorrowTimestamp, EntryAmount, LogIter, LogMut, NotUSize,
+    impl_with_amount, into_ok, AmountErr, LoggedAt, EntryAmount, LogIter, LogMut, NotUSize,
     OutOfLog, TransitionLog, ValueEntry, WithAmount,
 };
 
@@ -221,14 +221,14 @@ where
     }
 }
 
-impl<T, B: BorrowTimestamp, const AMOUNT_BYTES: usize> TransitionsLog<T, B, AMOUNT_BYTES>
+impl<T, U: LoggedAt, const AMOUNT_BYTES: usize> TransitionsLog<T, U, AMOUNT_BYTES>
 where
     Self: WithAmount,
 {
     pub fn pop_past_by_timestamp(
         &mut self,
         log_start: usize,
-    ) -> Option<ValueEntry<impl LogIter<T>, B>> {
+    ) -> Option<ValueEntry<impl LogIter<T>, U>> {
         self.amounts
             .pop_past_by_timestamp(log_start)
             .map(|entry_amount| self.drain_past_by_amount(entry_amount))
@@ -259,12 +259,12 @@ mod test {
 
     use super::*;
 
-    use crate::{log::WithTimestamp, meta::RevMeta};
+    use crate::{log::WithLoggedAt, meta::RevMeta};
 
     #[derive(Clone, Debug)]
     struct MetaAndLogs {
         meta: RevMeta,
-        with_timestamp: [TransitionsLog<usize, WithTimestamp, 1>; 2],
+        with_timestamp: [TransitionsLog<usize, WithLoggedAt, 1>; 2],
         one_per_frame: [TransitionsLog<usize, (), 1>; 2],
     }
 
@@ -608,6 +608,6 @@ mod test {
     #[allow(dead_code)]
     fn impls_reflect() {
         bevy::reflect::TypeRegistry::empty()
-            .register::<TransitionsLog<usize, WithTimestamp<u8>, 1>>();
+            .register::<TransitionsLog<usize, WithLoggedAt<u8>, 1>>();
     }
 }
