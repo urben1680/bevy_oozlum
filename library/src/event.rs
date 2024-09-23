@@ -1,6 +1,6 @@
 /*
 events are buffered for two frames
-a state log would fit 
+a state log would fit
 
 */
 
@@ -12,7 +12,13 @@ type ManualReader<E> = ManualEventReader<E>;
 
 use std::marker::PhantomData;
 
-use bevy::{ecs::{event::{EventId, ManualEventReader}, system::SystemParam}, prelude::{Event, EventReader, EventWriter, Local, Res, ResMut, Resource}};
+use bevy::{
+    ecs::{
+        event::{EventId, ManualEventReader},
+        system::SystemParam,
+    },
+    prelude::{Event, EventReader, EventWriter, Local, Res, ResMut, Resource},
+};
 
 #[derive(SystemParam)]
 pub struct RevEventReader<'w, 's, E: Event> {
