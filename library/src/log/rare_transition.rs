@@ -6,7 +6,7 @@ use bevy::{
     utils::tracing::error,
 };
 
-use super::{LoggedAt, LogIter, OutOfLog, PackedTime, RareValue, INDEX_OOB};
+use super::{LogIter, LoggedAt, OutOfLog, PackedTime, RareValue, INDEX_OOB};
 
 #[derive(Debug, Clone, Reflect)]
 #[reflect(Default)]
@@ -220,9 +220,9 @@ impl<T: LoggedAt> RareTransitionLog<T> {
         }
     }
     pub fn drain_past_by_timestamp(&mut self, log_start: usize) -> impl LogIter<T> {
-        let partition_point = self.transitions.partition_point(|entry| {
-            entry.value.logged_at() <= log_start
-        });
+        let partition_point = self
+            .transitions
+            .partition_point(|entry| entry.value.logged_at() <= log_start);
         self.len -= partition_point // sum of to-be-drained transitions, because of this mapping RareValue::len below is not needed, only skips_before_value
             + self
                 .transitions
@@ -244,7 +244,9 @@ impl<T: LoggedAt> RareTransitionLog<T> {
                     .logged_at()
                     .checked_sub(by)
                     .inspect(|reduced| {
-                        with_timestamp.value.set_logged_at(PackedTime::from_internal(*reduced))
+                        with_timestamp
+                            .value
+                            .set_logged_at(PackedTime::from_internal(*reduced))
                     })
                     .is_some()
             })
@@ -259,12 +261,14 @@ impl<T: LoggedAt> RareTransitionLog<T> {
                         "future transition was logged at {logged_at} which cannot be reduced by {by}"
                     ),
                 };
-                with_timestamp.value.set_logged_at(logged_at); 
+                with_timestamp.value.set_logged_at(logged_at);
             }
         }
         for with_timestamp in iter {
             let logged_at = with_timestamp.value.logged_at();
-            with_timestamp.value.set_logged_at(PackedTime::from_internal(logged_at - by));
+            with_timestamp
+                .value
+                .set_logged_at(PackedTime::from_internal(logged_at - by));
         }
         self.index -= reduced_at;
         self.transitions.drain(..reduced_at).map(|rare| rare.value)

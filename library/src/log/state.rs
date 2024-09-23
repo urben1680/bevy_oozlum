@@ -5,7 +5,7 @@ use bevy::{reflect::Reflect, utils::tracing::error};
 
 use crate::log::INDEX_OOB;
 
-use super::{LoggedAt, LogIter, OutOfLog, PackedTime};
+use super::{LogIter, LoggedAt, OutOfLog, PackedTime};
 
 #[derive(Debug, Default, Clone, Reflect)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -231,7 +231,7 @@ impl<T: LoggedAt> StateLog<T> {
                 }
             }
         };
-        self.present.set_logged_at(logged_at); 
+        self.present.set_logged_at(logged_at);
         let reduced_at = reduced_at.unwrap_or(self.index);
         for with_timestamp in self.states.range_mut(reduced_at..) {
             let logged_at = with_timestamp.logged_at();

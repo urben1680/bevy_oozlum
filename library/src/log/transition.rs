@@ -6,7 +6,7 @@ use bevy::{
     utils::tracing::error,
 };
 
-use super::{LoggedAt, LogIter, OutOfLog, PackedTime, INDEX_OOB};
+use super::{LogIter, LoggedAt, OutOfLog, PackedTime, INDEX_OOB};
 
 #[derive(Debug, Clone, Reflect)]
 #[reflect(Default)]
@@ -152,7 +152,6 @@ impl<T: LoggedAt> TransitionLog<T> {
                     .checked_sub(by)
                     .inspect(|reduced| {
                         with_timestamp.set_logged_at(PackedTime::from_internal(*reduced))
-                            
                     })
                     .is_some()
             })
@@ -167,7 +166,7 @@ impl<T: LoggedAt> TransitionLog<T> {
                         "future transition was logged at {logged_at} which cannot be reduced by {by}"
                     ),
                 };
-                with_timestamp.set_logged_at(logged_at); 
+                with_timestamp.set_logged_at(logged_at);
             }
         }
         for with_timestamp in iter {
