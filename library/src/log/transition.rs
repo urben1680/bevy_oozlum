@@ -6,7 +6,7 @@ use bevy::{
     utils::tracing::error,
 };
 
-use super::{BorrowTimestamp, LogIter, OutOfLog, PackedTime, INDEX_OOB};
+use super::{LoggedAt, LogIter, OutOfLog, PackedTime, INDEX_OOB};
 
 #[derive(Debug, Clone, Reflect)]
 #[reflect(Default)]
@@ -127,33 +127,32 @@ impl<T> TransitionLog<T> {
     }
 }
 
-impl<B: BorrowTimestamp> TransitionLog<B> {
-    pub fn pop_past_by_timestamp(&mut self, log_start: usize) -> Option<B> {
-        if self.past_end()?.borrow_timestamp().logged_at() <= log_start {
+impl<T: LoggedAt> TransitionLog<T> {
+    pub fn pop_past_by_timestamp(&mut self, log_start: usize) -> Option<T> {
+        if self.past_end()?.logged_at() <= log_start {
             self.pop_past()
         } else {
             None
         }
     }
-    pub fn drain_past_by_timestamp(&mut self, log_start: usize) -> impl LogIter<B> {
+    pub fn drain_past_by_timestamp(&mut self, log_start: usize) -> impl LogIter<T> {
         let partition_point = self
             .transitions
-            .partition_point(|entry| entry.borrow_timestamp().logged_at() <= log_start);
+            .partition_point(|entry| entry.logged_at() <= log_start);
         self.index -= partition_point;
         self.transitions.drain(..partition_point)
     }
-    pub fn reduce_timestamps(&mut self, by: usize) -> impl LogIter<B> {
+    pub fn reduce_timestamps(&mut self, by: usize) -> impl LogIter<T> {
         let reduced_at = self
             .transitions
             .range_mut(..self.index)
             .position(|with_timestamp| {
                 with_timestamp
-                    .borrow_timestamp()
                     .logged_at()
                     .checked_sub(by)
                     .inspect(|reduced| {
-                        with_timestamp.borrow_timestamp_mut().logged_at =
-                            PackedTime::from_internal(*reduced)
+                        with_timestamp.set_logged_at(PackedTime::from_internal(*reduced))
+                            
                     })
                     .is_some()
             })
@@ -161,19 +160,19 @@ impl<B: BorrowTimestamp> TransitionLog<B> {
         let mut iter = self.transitions.range_mut(reduced_at..);
         if reduced_at == self.index {
             if let Some(with_timestamp) = iter.next() {
-                let logged_at = with_timestamp.borrow_timestamp().logged_at();
-                with_timestamp.borrow_timestamp_mut().logged_at = match logged_at.checked_sub(by) {
+                let logged_at = with_timestamp.logged_at();
+                let logged_at = match logged_at.checked_sub(by) {
                     Some(reduced) => PackedTime::from_internal(reduced),
                     None => panic!(
                         "future transition was logged at {logged_at} which cannot be reduced by {by}"
                     ),
-                }
+                };
+                with_timestamp.set_logged_at(logged_at); 
             }
         }
         for with_timestamp in iter {
-            let logged_at = with_timestamp.borrow_timestamp().logged_at();
-            with_timestamp.borrow_timestamp_mut().logged_at =
-                PackedTime::from_internal(logged_at - by);
+            let logged_at = with_timestamp.logged_at();
+            with_timestamp.set_logged_at(PackedTime::from_internal(logged_at - by));
         }
         self.index -= reduced_at;
         self.transitions.drain(..reduced_at)
@@ -186,12 +185,12 @@ mod test {
 
     use super::*;
 
-    use crate::{log::WithTimestamp, meta::RevMeta};
+    use crate::{log::WithLoggedAt, meta::RevMeta};
 
     #[derive(Clone, Debug)]
     struct MetaAndLogs {
         meta: RevMeta,
-        with_timestamp: [TransitionLog<WithTimestamp<usize>>; 2],
+        with_timestamp: [TransitionLog<WithLoggedAt<usize>>; 2],
         one_per_frame: [TransitionLog<usize>; 2],
     }
 
@@ -450,6 +449,6 @@ mod test {
 
     #[allow(dead_code)]
     fn impls_reflect() {
-        bevy::reflect::TypeRegistry::empty().register::<TransitionLog<WithTimestamp<usize>>>();
+        bevy::reflect::TypeRegistry::empty().register::<TransitionLog<WithLoggedAt<usize>>>();
     }
 }
