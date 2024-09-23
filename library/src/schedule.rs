@@ -105,7 +105,7 @@ impl RevSchedule {
             .ok_or(TryRunError::RevMetaMissing)?
             .clone();
         match meta.get_direction() {
-            Some(Direction::Forward) | Some(Direction::ForwardLog) => Ok(self.forward.run(world)),
+            Some(Direction::Forward { .. }) => Ok(self.forward.run(world)),
             Some(Direction::BackwardLog) => Ok(self.backward.run(world)),
             None => Err(TryRunError::RevMetaWrongDirection(meta)),
         }
