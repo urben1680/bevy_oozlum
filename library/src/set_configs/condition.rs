@@ -272,13 +272,13 @@ impl<T: ReadOnlySystem<Out = bool>> RevConditionForward<T> {
             }
         };
         match meta.get_direction() {
-            Some(Direction::Forward) => {
+            Some(Direction::Forward { log: false }) => {
                 let out = eval_cond(&mut self.condition);
                 log.pop_past_by_len(meta.past_len().saturating_sub(1));
                 log.push_present(out.then_some(()));
                 out
             }
-            Some(Direction::ForwardLog) => match log.forward_log() {
+            Some(Direction::Forward { log: true }) => match log.forward_log() {
                 Ok(option) => option.is_some(),
                 Err(OutOfLog) => error_per_flag!(&mut self.out_of_log_err, "Reversible condition {} got out of log. \
                     Make sure the reversible schedule this condition is in is correctly called in both the forward and backward direction. \
