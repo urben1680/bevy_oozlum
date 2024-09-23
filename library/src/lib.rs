@@ -3,9 +3,6 @@ TODO:
 
 Features:
 - hooks
--- might be possible: apply them at non-log forward (assert!), undo/redo is command logic that does not trigger the hook
--- filter hooks on entities that serve as parking removed components (use extra flag component)
--- filter hooks during log
 - reversible Event reader/writer
 - entity commands, standard rev commands
 -- postponed to bevy 0.15 due to required components + disabled entities
