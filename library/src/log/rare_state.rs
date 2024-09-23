@@ -3,7 +3,7 @@ use std::collections::{TryReserveError, VecDeque};
 
 use bevy::{reflect::Reflect, utils::tracing::error};
 
-use super::{BorrowTimestamp, LogIter, OutOfLog, PackedTime, RareValue, INDEX_OOB};
+use super::{LoggedAt, LogIter, OutOfLog, PackedTime, RareValue, INDEX_OOB};
 
 #[derive(Debug, Clone, Reflect)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -225,10 +225,10 @@ impl<T> RareStateLog<T> {
     }
 }
 
-impl<B: BorrowTimestamp> RareStateLog<B> {
-    pub fn pop_past_by_timestamp(&mut self, log_start: usize) -> Option<B> {
+impl<T: LoggedAt> RareStateLog<T> {
+    pub fn pop_past_by_timestamp(&mut self, log_start: usize) -> Option<T> {
         let entry = self.past_end_rare()?;
-        let logged_at = entry.value.borrow_timestamp().logged_at();
+        let logged_at = entry.value.logged_at();
         let skips = entry.skips();
         if logged_at + skips < log_start {
             self.pop_past()
@@ -236,9 +236,9 @@ impl<B: BorrowTimestamp> RareStateLog<B> {
             None
         }
     }
-    pub fn drain_past_by_timestamp(&mut self, log_start: usize) -> impl LogIter<B> {
+    pub fn drain_past_by_timestamp(&mut self, log_start: usize) -> impl LogIter<T> {
         let partition_point = self.states.partition_point(|entry| {
-            let logged_at = entry.value.borrow_timestamp().logged_at();
+            let logged_at = entry.value.logged_at();
             let skips = entry.skips();
             logged_at + skips < log_start
         });
@@ -251,28 +251,26 @@ impl<B: BorrowTimestamp> RareStateLog<B> {
         self.index -= partition_point;
         self.states.drain(..partition_point).map(|rare| rare.value)
     }
-    pub fn reduce_timestamps(&mut self, by: usize) -> impl LogIter<B> {
+    pub fn reduce_timestamps(&mut self, by: usize) -> impl LogIter<T> {
         let reduced_at = self
             .states
             .range_mut(..self.index)
             .position(|with_timestamp| {
                 with_timestamp
                     .value
-                    .borrow_timestamp()
                     .logged_at()
                     .checked_sub(by)
                     .inspect(|reduced| {
-                        with_timestamp.value.borrow_timestamp_mut().logged_at =
-                            PackedTime::from_internal(*reduced)
+                        with_timestamp.value.set_logged_at(PackedTime::from_internal(*reduced))
                     })
                     .is_some()
             });
-        self.present.value.borrow_timestamp_mut().logged_at = match reduced_at {
+        let logged_at = match reduced_at {
             Some(_) => {
-                PackedTime::from_internal(self.present.value.borrow_timestamp().logged_at() - by)
+                PackedTime::from_internal(self.present.value.logged_at() - by)
             }
             None => {
-                let logged_at = self.present.value.borrow_timestamp().logged_at();
+                let logged_at = self.present.value.logged_at();
                 match logged_at.checked_sub(by) {
                     Some(reduced) => PackedTime::from_internal(reduced),
                     None => panic!(
@@ -281,11 +279,11 @@ impl<B: BorrowTimestamp> RareStateLog<B> {
                 }
             }
         };
+        self.present.value.set_logged_at(logged_at);
         let reduced_at = reduced_at.unwrap_or(self.index);
         for with_timestamp in self.states.range_mut(reduced_at..) {
-            let logged_at = with_timestamp.value.borrow_timestamp().logged_at();
-            with_timestamp.value.borrow_timestamp_mut().logged_at =
-                PackedTime::from_internal(logged_at - by);
+            let logged_at = with_timestamp.value.logged_at();
+            with_timestamp.value.set_logged_at(PackedTime::from_internal(logged_at - by));
         }
         self.index -= reduced_at;
         self.states.drain(..reduced_at).map(|rare| rare.value)
@@ -298,12 +296,12 @@ mod test {
 
     use super::*;
 
-    use crate::{log::WithTimestamp, meta::RevMeta};
+    use crate::{log::WithLoggedAt, meta::RevMeta};
 
     #[derive(Clone, Debug)]
     struct MetaAndLogs {
         meta: RevMeta,
-        with_timestamp: [RareStateLog<WithTimestamp<usize>>; 2],
+        with_timestamp: [RareStateLog<WithLoggedAt<usize>>; 2],
         one_per_frame: [RareStateLog<usize>; 2],
     }
 
@@ -311,7 +309,7 @@ mod test {
         fn new(present: usize, max_len: Option<NonZeroUsize>) -> Self {
             let meta = RevMeta::new(max_len, 0, false);
             let with_timestamp =
-                RareStateLog::<WithTimestamp<usize>>::from(meta.with_timestamp(present));
+                RareStateLog::<WithLoggedAt<usize>>::from(meta.with_timestamp(present));
             let one_per_frame = RareStateLog::from(present);
             Self {
                 meta: RevMeta::new(max_len, 0, false),
@@ -667,6 +665,6 @@ mod test {
 
     #[allow(dead_code)]
     fn impls_reflect() {
-        bevy::reflect::TypeRegistry::empty().register::<RareStateLog<WithTimestamp<usize>>>();
+        bevy::reflect::TypeRegistry::empty().register::<RareStateLog<WithLoggedAt<usize>>>();
     }
 }
