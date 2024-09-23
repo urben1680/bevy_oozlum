@@ -7,7 +7,7 @@ use std::{
 use bevy::reflect::Reflect;
 
 use super::{
-    impl_with_amount, into_ok, AmountErr, BorrowTimestamp, EntryAmount, LogIter, LogMut, NotUSize,
+    impl_with_amount, into_ok, AmountErr, LoggedAt, EntryAmount, LogIter, LogMut, NotUSize,
     OutOfLog, RareStateLog, ValueEntry, WithAmount,
 };
 
@@ -326,14 +326,14 @@ where
     }
 }
 
-impl<T, B: BorrowTimestamp, const AMOUNT_BYTES: usize> RareStatesLog<T, B, AMOUNT_BYTES>
+impl<T, U: LoggedAt, const AMOUNT_BYTES: usize> RareStatesLog<T, U, AMOUNT_BYTES>
 where
     Self: WithAmount,
 {
     pub fn pop_past_by_timestamp(
         &mut self,
         log_start: usize,
-    ) -> Option<ValueEntry<impl LogIter<T>, B>> {
+    ) -> Option<ValueEntry<impl LogIter<T>, U>> {
         self.amounts
             .pop_past_by_timestamp(log_start)
             .map(|entry_amount| self.drain_past_by_amount(entry_amount))
