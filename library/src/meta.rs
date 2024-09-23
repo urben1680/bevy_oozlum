@@ -18,7 +18,7 @@ use bevy::{
 use bevy::reflect::{ReflectDeserialize, ReflectSerialize};
 
 use crate::{
-    log::{PackedTime, WithTimestamp},
+    log::{PackedTime, WithLoggedAt},
     BackwardSchedule, ForwardSchedule, RevUpdate,
 };
 
@@ -30,8 +30,7 @@ use crate::{
     reflect(Serialize, Deserialize)
 )]
 pub enum Direction {
-    Forward,
-    ForwardLog,
+    Forward { log: bool },
     BackwardLog,
 }
 
@@ -87,8 +86,8 @@ impl InternalDirection {
     }
     pub fn get_direction(self) -> Option<Direction> {
         match self {
-            Self::RunningForward => Some(Direction::Forward),
-            Self::RunningForwardLog { .. } => Some(Direction::ForwardLog),
+            Self::RunningForward => Some(Direction::Forward { log: false }),
+            Self::RunningForwardLog { .. } => Some(Direction::Forward { log: true }),
             Self::RunningBackwardLog { .. } => Some(Direction::BackwardLog),
             _ => None,
         }
@@ -138,10 +137,10 @@ impl Default for RevMeta {
 }
 
 impl RevMeta {
-    const END_MAX_MSG: &'static str = "Maximum reversible timestamp reached: `usize::MAX`";
+    pub const MAX_FRAME: usize = PackedTime::MAX_USIZE - 1;
     pub const fn new(max_len: Option<NonZeroUsize>, now: usize, paused: bool) -> Self {
-        if now >= PackedTime::MAX_USIZE {
-            panic!("{}", Self::END_MAX_MSG);
+        if now >= Self::MAX_FRAME {
+            panic!("now must be less than RevMeta::MAX_FRAME")
         }
         Self {
             max_len,
@@ -172,8 +171,8 @@ impl RevMeta {
     pub fn past_len(&self) -> usize {
         self.now - self.range.start
     }
-    pub fn with_timestamp<T>(&self, value: T) -> WithTimestamp<T> {
-        WithTimestamp {
+    pub fn with_timestamp<T>(&self, value: T) -> WithLoggedAt<T> {
+        WithLoggedAt {
             value,
             logged_at: PackedTime::from_internal(self.now),
         }
@@ -240,7 +239,7 @@ impl RevMeta {
         this.update();
         let this = this.clone();
         let result = match this.get_direction() {
-            Some(Direction::Forward) | Some(Direction::ForwardLog) => {
+            Some(Direction::Forward { .. }) => {
                 world.try_run_schedule(ForwardSchedule::of(RevUpdate))
             }
             Some(Direction::BackwardLog) => world.try_run_schedule(BackwardSchedule::of(RevUpdate)),
@@ -258,8 +257,8 @@ impl RevMeta {
             Some(queue) => {
                 self.direction = queue;
                 match self.get_direction() {
-                    Some(Direction::Forward) => self.update_forward(),
-                    Some(Direction::ForwardLog) => self.now += 1,
+                    Some(Direction::Forward { log: false }) => self.update_forward(),
+                    Some(Direction::Forward { log: true }) => self.now += 1,
                     Some(Direction::BackwardLog) => self.now -= 1,
                     None => {}
                 }
@@ -287,8 +286,8 @@ impl RevMeta {
     }
     fn update_forward(&mut self) {
         self.now += 1;
-        if self.range.end >= PackedTime::MAX_USIZE {
-            panic!("{}", Self::END_MAX_MSG);
+        if self.now >= Self::MAX_FRAME {
+            panic!("Maximum reversible timestamp reached: {}", Self::MAX_FRAME)
         }
         self.range.end = self.now + 1;
         if let Some(max_len) = self.max_len {
