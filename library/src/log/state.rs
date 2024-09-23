@@ -5,7 +5,7 @@ use bevy::{reflect::Reflect, utils::tracing::error};
 
 use crate::log::INDEX_OOB;
 
-use super::{BorrowTimestamp, LogIter, OutOfLog, PackedTime};
+use super::{LoggedAt, LogIter, OutOfLog, PackedTime};
 
 #[derive(Debug, Default, Clone, Reflect)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -191,40 +191,38 @@ impl<T> StateLog<T> {
     }
 }
 
-impl<B: BorrowTimestamp> StateLog<B> {
-    pub fn pop_past_by_timestamp(&mut self, log_start: usize) -> Option<B> {
-        if self.past_end()?.borrow_timestamp().logged_at() < log_start {
+impl<T: LoggedAt> StateLog<T> {
+    pub fn pop_past_by_timestamp(&mut self, log_start: usize) -> Option<T> {
+        if self.past_end()?.logged_at() < log_start {
             self.pop_past()
         } else {
             None
         }
     }
-    pub fn drain_past_by_timestamp(&mut self, log_start: usize) -> impl LogIter<B> {
+    pub fn drain_past_by_timestamp(&mut self, log_start: usize) -> impl LogIter<T> {
         let partition_point = self
             .states
-            .partition_point(|entry| entry.borrow_timestamp().logged_at() < log_start);
+            .partition_point(|entry| entry.logged_at() < log_start);
         self.index -= partition_point;
         self.states.drain(..partition_point)
     }
-    pub fn reduce_timestamps(&mut self, by: usize) -> impl LogIter<B> {
+    pub fn reduce_timestamps(&mut self, by: usize) -> impl LogIter<T> {
         let reduced_at = self
             .states
             .range_mut(..self.index)
             .position(|with_timestamp| {
                 with_timestamp
-                    .borrow_timestamp()
                     .logged_at()
                     .checked_sub(by)
                     .inspect(|reduced| {
-                        with_timestamp.borrow_timestamp_mut().logged_at =
-                            PackedTime::from_internal(*reduced)
+                        with_timestamp.set_logged_at(PackedTime::from_internal(*reduced))
                     })
                     .is_some()
             });
-        self.present.borrow_timestamp_mut().logged_at = match reduced_at {
-            Some(_) => PackedTime::from_internal(self.present.borrow_timestamp().logged_at() - by),
+        let logged_at = match reduced_at {
+            Some(_) => PackedTime::from_internal(self.present.logged_at() - by),
             None => {
-                let logged_at = self.present.borrow_timestamp().logged_at();
+                let logged_at = self.present.logged_at();
                 match logged_at.checked_sub(by) {
                     Some(reduced) => PackedTime::from_internal(reduced),
                     None => panic!(
@@ -233,11 +231,11 @@ impl<B: BorrowTimestamp> StateLog<B> {
                 }
             }
         };
+        self.present.set_logged_at(logged_at); 
         let reduced_at = reduced_at.unwrap_or(self.index);
         for with_timestamp in self.states.range_mut(reduced_at..) {
-            let logged_at = with_timestamp.borrow_timestamp().logged_at();
-            with_timestamp.borrow_timestamp_mut().logged_at =
-                PackedTime::from_internal(logged_at - by);
+            let logged_at = with_timestamp.logged_at();
+            with_timestamp.set_logged_at(PackedTime::from_internal(logged_at - by));
         }
         self.index -= reduced_at;
         self.states.drain(..reduced_at)
@@ -250,12 +248,12 @@ mod test {
 
     use super::*;
 
-    use crate::{log::WithTimestamp, meta::RevMeta};
+    use crate::{log::WithLoggedAt, meta::RevMeta};
 
     #[derive(Clone, Debug)]
     struct MetaAndLogs {
         meta: RevMeta,
-        with_timestamp: [StateLog<WithTimestamp<usize>>; 2],
+        with_timestamp: [StateLog<WithLoggedAt<usize>>; 2],
         one_per_frame: [StateLog<usize>; 2],
     }
 
@@ -263,7 +261,7 @@ mod test {
         fn new(present: usize, max_len: Option<NonZeroUsize>) -> Self {
             let meta = RevMeta::new(max_len, 0, false);
             let with_timestamp =
-                StateLog::<WithTimestamp<usize>>::from(meta.with_timestamp(present));
+                StateLog::<WithLoggedAt<usize>>::from(meta.with_timestamp(present));
             let one_per_frame = StateLog::from(present);
             Self {
                 meta: RevMeta::new(max_len, 0, false),
@@ -615,6 +613,6 @@ mod test {
 
     #[allow(dead_code)]
     fn impls_reflect() {
-        bevy::reflect::TypeRegistry::empty().register::<StateLog<WithTimestamp<usize>>>();
+        bevy::reflect::TypeRegistry::empty().register::<StateLog<WithLoggedAt<usize>>>();
     }
 }
