@@ -12,10 +12,10 @@ use bevy::{
 };
 
 use crate::{
+    commands::{InitializedRevCommand, RevCommand},
     error_per_flag,
     log::{OutOfLog, TransitionsLog, WithLoggedAt},
     meta::{Direction, RevMeta},
-    commands::{InitializedRevCommand, RevCommand}
 };
 
 #[derive(Event)]

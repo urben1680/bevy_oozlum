@@ -22,7 +22,7 @@ use bevy::{
 
 #[derive(SystemParam)]
 pub struct RevEventReader<'w, 's, E: Event> {
-    reader: Local<'s, ManualEventReader<E>>,
+    reader: Local<'s, RevManualEventReader<E>>,
     events: Res<'w, RevEvents<E>>,
 }
 
@@ -44,6 +44,15 @@ pub struct RevEvents<E: Event> {
 pub struct RevManualEventReader<E: Event> {
     last_event_count: usize,
     _marker: PhantomData<E>,
+}
+
+impl<E: Event> Default for RevManualEventReader<E> {
+    fn default() -> Self {
+        Self {
+            last_event_count: 0,
+            _marker: PhantomData
+        }
+    }
 }
 
 struct RevEventSequence<E: Event> {

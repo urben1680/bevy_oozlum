@@ -1,7 +1,6 @@
-use bevy::{
-    ecs::{schedule::ScheduleLabel, world::World},
-    prelude::Schedules,
-};
+use bevy::
+    ecs::{schedule::{ScheduleLabel, Schedules}, world::World}
+;
 
 use crate::{
     app::RevSchedule,
@@ -20,15 +19,15 @@ pub enum TryRunRevError {
 pub struct ScheduleMissing;
 
 pub trait RevWorld {
-    fn run_rev_schedule(&mut self, label: impl ScheduleLabel);
-    fn try_run_rev_schedule(&mut self, label: impl ScheduleLabel) -> Result<(), TryRunRevError>;
-    fn run_forward_schedule(&mut self, label: impl ScheduleLabel);
-    fn try_run_forward_schedule(
+    fn rev_run_schedule(&mut self, label: impl ScheduleLabel);
+    fn rev_try_run_schedule(&mut self, label: impl ScheduleLabel) -> Result<(), TryRunRevError>;
+    fn rev_run_forward_schedule(&mut self, label: impl ScheduleLabel);
+    fn rev_try_run_forward_schedule(
         &mut self,
         label: impl ScheduleLabel,
     ) -> Result<(), ScheduleMissing>;
-    fn run_backward_schedule(&mut self, label: impl ScheduleLabel);
-    fn try_run_backward_schedule(
+    fn rev_run_backward_schedule(&mut self, label: impl ScheduleLabel);
+    fn rev_try_run_backward_schedule(
         &mut self,
         label: impl ScheduleLabel,
     ) -> Result<(), ScheduleMissing>;
@@ -37,7 +36,7 @@ pub trait RevWorld {
         label: impl ScheduleLabel,
         f: impl FnOnce(&mut World, &mut RevSchedule) -> R,
     ) -> R;
-    fn try_rev_schedule_scope<R>(
+    fn rev_try_schedule_scope<R>(
         &mut self,
         label: impl ScheduleLabel,
         f: impl FnOnce(&mut World, &mut RevSchedule) -> R,
@@ -45,10 +44,10 @@ pub trait RevWorld {
 }
 
 impl RevWorld for World {
-    fn run_rev_schedule(&mut self, label: impl ScheduleLabel) {
-        self.try_run_rev_schedule(label).unwrap()
+    fn rev_run_schedule(&mut self, label: impl ScheduleLabel) {
+        self.rev_try_run_schedule(label).unwrap()
     }
-    fn try_run_rev_schedule(&mut self, label: impl ScheduleLabel) -> Result<(), TryRunRevError> {
+    fn rev_try_run_schedule(&mut self, label: impl ScheduleLabel) -> Result<(), TryRunRevError> {
         let meta = self
             .get_resource::<RevMeta>()
             .ok_or(TryRunRevError::RevMetaMissing)?;
@@ -56,25 +55,25 @@ impl RevWorld for World {
             .get_direction()
             .ok_or_else(|| TryRunRevError::NoRevScheduleRunning(meta.clone()))?
         {
-            Direction::Forward { .. } => self.try_run_forward_schedule(label),
-            Direction::BackwardLog => self.try_run_backward_schedule(label),
+            Direction::Forward { .. } => self.rev_try_run_forward_schedule(label),
+            Direction::BackwardLog => self.rev_try_run_backward_schedule(label),
         }
         .map_err(|ScheduleMissing| TryRunRevError::ScheduleMissing)
     }
-    fn run_forward_schedule(&mut self, label: impl ScheduleLabel) {
-        self.try_run_forward_schedule(label).unwrap()
+    fn rev_run_forward_schedule(&mut self, label: impl ScheduleLabel) {
+        self.rev_try_run_forward_schedule(label).unwrap()
     }
-    fn try_run_forward_schedule(
+    fn rev_try_run_forward_schedule(
         &mut self,
         label: impl ScheduleLabel,
     ) -> Result<(), ScheduleMissing> {
         self.try_run_schedule(ForwardSchedule(label.intern()))
             .map_err(|_| ScheduleMissing)
     }
-    fn run_backward_schedule(&mut self, label: impl ScheduleLabel) {
-        self.try_run_backward_schedule(label).unwrap()
+    fn rev_run_backward_schedule(&mut self, label: impl ScheduleLabel) {
+        self.rev_try_run_backward_schedule(label).unwrap()
     }
-    fn try_run_backward_schedule(
+    fn rev_try_run_backward_schedule(
         &mut self,
         label: impl ScheduleLabel,
     ) -> Result<(), ScheduleMissing> {
@@ -86,9 +85,9 @@ impl RevWorld for World {
         label: impl ScheduleLabel,
         f: impl FnOnce(&mut World, &mut RevSchedule) -> R,
     ) -> R {
-        self.try_rev_schedule_scope(label, f).unwrap()
+        self.rev_try_schedule_scope(label, f).unwrap()
     }
-    fn try_rev_schedule_scope<R>(
+    fn rev_try_schedule_scope<R>(
         &mut self,
         label: impl ScheduleLabel,
         f: impl FnOnce(&mut World, &mut RevSchedule) -> R,

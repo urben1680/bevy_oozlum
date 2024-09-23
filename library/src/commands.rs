@@ -18,6 +18,7 @@ use crate::{
 
 mod bundle;
 pub mod observer;
+pub mod hook;
 
 // todo: spawn/despawn with entity disabling https://github.com/bevyengine/bevy/issues/11090
 // todo: commands implementors https://docs.rs/bevy/latest/bevy/ecs/world/trait.Command.html#implementors

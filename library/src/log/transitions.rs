@@ -7,7 +7,7 @@ use std::{
 use bevy::reflect::{std_traits::ReflectDefault, Reflect};
 
 use super::{
-    impl_with_amount, into_ok, AmountErr, LoggedAt, EntryAmount, LogIter, LogMut, NotUSize,
+    impl_with_amount, into_ok, AmountErr, EntryAmount, LogIter, LogMut, LoggedAt, NotUSize,
     OutOfLog, TransitionLog, ValueEntry, WithAmount,
 };
 

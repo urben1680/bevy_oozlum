@@ -3,7 +3,7 @@ use std::collections::{TryReserveError, VecDeque};
 
 use bevy::{reflect::Reflect, utils::tracing::error};
 
-use super::{LoggedAt, LogIter, OutOfLog, PackedTime, RareValue, INDEX_OOB};
+use super::{LogIter, LoggedAt, OutOfLog, PackedTime, RareValue, INDEX_OOB};
 
 #[derive(Debug, Clone, Reflect)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -261,14 +261,14 @@ impl<T: LoggedAt> RareStateLog<T> {
                     .logged_at()
                     .checked_sub(by)
                     .inspect(|reduced| {
-                        with_timestamp.value.set_logged_at(PackedTime::from_internal(*reduced))
+                        with_timestamp
+                            .value
+                            .set_logged_at(PackedTime::from_internal(*reduced))
                     })
                     .is_some()
             });
         let logged_at = match reduced_at {
-            Some(_) => {
-                PackedTime::from_internal(self.present.value.logged_at() - by)
-            }
+            Some(_) => PackedTime::from_internal(self.present.value.logged_at() - by),
             None => {
                 let logged_at = self.present.value.logged_at();
                 match logged_at.checked_sub(by) {
@@ -283,7 +283,9 @@ impl<T: LoggedAt> RareStateLog<T> {
         let reduced_at = reduced_at.unwrap_or(self.index);
         for with_timestamp in self.states.range_mut(reduced_at..) {
             let logged_at = with_timestamp.value.logged_at();
-            with_timestamp.value.set_logged_at(PackedTime::from_internal(logged_at - by));
+            with_timestamp
+                .value
+                .set_logged_at(PackedTime::from_internal(logged_at - by));
         }
         self.index -= reduced_at;
         self.states.drain(..reduced_at).map(|rare| rare.value)

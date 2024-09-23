@@ -2,6 +2,10 @@
 TODO:
 
 Features:
+- hooks
+-- might be possible: apply them at non-log forward (assert!), undo/redo is command logic that does not trigger the hook
+-- filter hooks on entities that serve as parking removed components (use extra flag component)
+-- filter hooks during log
 - reversible Event reader/writer
 - entity commands, standard rev commands
 -- postponed to bevy 0.15 due to required components + disabled entities
@@ -17,6 +21,7 @@ Enhancements:
 - mod/use/pub cleanup, make prelude
 - setting for state logs that serde only takes the current state into account
 - observer tests
+- commands -> observer -> hook reversible order test
 
 Docs
 - examples
@@ -25,7 +30,6 @@ Docs
 UNSUPPORTED:
 
 - Change Detection
-- Hooks
 - IntoSystemConfigs::distributive_run_if
 - Schedule::set_apply_final_deferred
 - Schedule::graph_mut
