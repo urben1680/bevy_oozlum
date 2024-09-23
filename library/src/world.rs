@@ -56,7 +56,7 @@ impl RevWorld for World {
             .get_direction()
             .ok_or_else(|| TryRunRevError::NoRevScheduleRunning(meta.clone()))?
         {
-            Direction::Forward | Direction::ForwardLog => self.try_run_forward_schedule(label),
+            Direction::Forward { .. } => self.try_run_forward_schedule(label),
             Direction::BackwardLog => self.try_run_backward_schedule(label),
         }
         .map_err(|ScheduleMissing| TryRunRevError::ScheduleMissing)
