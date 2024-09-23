@@ -2,12 +2,6 @@
 TODO:
 
 Features:
-- reversible observer ? or issue to link
--- Systen with Direction + Event + Entity -> RevTrigger
--- impl IntoSystem<RevTrigger, Out, Marker>
--- Input params don't need to be 'static anymore? Could pass in RevMeta. But mutating the resource is then not possible.
--- Just use regular Observer systems and users needs to add Res<RevMeta> to the system
--- method just adds it to revcommands
 - reversible Event reader/writer
 - entity commands, standard rev commands
 -- postponed to bevy 0.15 due to required components + disabled entities
@@ -21,6 +15,8 @@ Enhancements:
 - config tests
 - make doctests work
 - mod/use/pub cleanup, make prelude
+- setting for state logs that serde only takes the current state into account
+- observer tests
 
 Docs
 - examples
@@ -34,7 +30,7 @@ UNSUPPORTED:
 - Schedule::set_apply_final_deferred
 - Schedule::graph_mut
 - ScheduleBuildSettings::auto_insert_apply_deferred
-- Trigger::event_mut 
+- Trigger::event_mut
 */
 
 use std::hash::Hash;
@@ -48,13 +44,13 @@ use meta::RevMeta;
 
 pub mod app;
 pub mod commands;
+pub mod event;
 pub mod log;
 pub mod meta;
 pub mod schedule;
 pub mod set_configs;
 pub mod system_configs;
 pub mod world;
-pub mod event;
 
 /// Should not be pub to not add invalid settings (see unsupported Schedule settings)
 #[derive(ScheduleLabel, Copy, Clone, Debug, Hash, PartialEq, Eq)]
@@ -81,16 +77,14 @@ pub struct RevUpdate;
 
 pub struct RevSystemsPlugin {
     pub rev_meta: Option<RevMeta>,
-    pub rev_meta_sys_schedule: Option<InternedScheduleLabel>,
-    pub rev_meta_sys_set: Option<InternedSystemSet>,
+    pub add_rev_meta_sys_in: Option<(InternedScheduleLabel, Option<InternedSystemSet>)>,
 }
 
 impl Default for RevSystemsPlugin {
     fn default() -> Self {
         Self {
             rev_meta: Some(RevMeta::default()),
-            rev_meta_sys_schedule: Some(FixedUpdate.intern()),
-            rev_meta_sys_set: None,
+            add_rev_meta_sys_in: Some((FixedUpdate.intern(), None)),
         }
     }
 }
@@ -103,13 +97,12 @@ impl Plugin for RevSystemsPlugin {
             app.insert_resource(rev_meta.clone());
         }
 
-        let Some(schedule) = self.rev_meta_sys_schedule else {
-            return;
-        };
-
-        match self.rev_meta_sys_set {
-            Some(set) => app.add_systems(schedule, RevMeta::update_world.in_set(set)),
-            None => app.add_systems(schedule, RevMeta::update_world),
+        match self.add_rev_meta_sys_in {
+            Some((schedule, None)) => app.add_systems(schedule, RevMeta::update_world),
+            Some((schedule, Some(set))) => {
+                app.add_systems(schedule, RevMeta::update_world.in_set(set))
+            }
+            None => app,
         };
     }
 }
