@@ -178,7 +178,13 @@ impl<T: System> System for ArcSystem<T> {
             .shared
             .try_write()
             .unwrap_or_else(expect_shared(&self.name));
+
         shared.system.apply_deferred(world);
+
+        // make sure everything is done, expect that all hooks and observers ran too
+        // todo: remove this if it is not needed
+        world.flush();
+
         if let Some(commands_err) = self.commands_forward_err.as_mut() {
             // reverisble commands are now in the buffer resource so commands_log can take them
             if let Err(err) = shared.commands_log.forward(world) {
