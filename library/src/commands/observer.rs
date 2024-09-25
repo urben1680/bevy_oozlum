@@ -19,15 +19,22 @@ use crate::{
 };
 
 #[derive(Event)]
-pub struct RevEvent<E: Event> {
+pub struct RevEvent<E: Event + Clone> {
+    // Mutations are not logged, therefore nothing is mutably accessible.
     event: E,
-    pub direction: Direction,
+    direction: Direction,
 }
 
-impl<E: Event> Deref for RevEvent<E> {
+impl<E: Event + Clone> Deref for RevEvent<E> {
     type Target = E;
     fn deref(&self) -> &Self::Target {
         &self.event
+    }
+}
+
+impl<E: Event + Clone> RevEvent<E> {
+    pub fn direction(&self) -> Direction {
+        self.direction
     }
 }
 
