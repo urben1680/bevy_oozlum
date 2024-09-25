@@ -4,9 +4,8 @@ use bevy::{
     ecs::{
         event::Event,
         observer::{TriggerEvent, TriggerTargets},
-        system::EntityCommands,
-        system::{Commands, Resource},
-        world::{FromWorld, World},
+        system::{Commands, EntityCommands, Resource},
+        world::{DeferredWorld, FromWorld, World},
     },
     utils::synccell::SyncCell,
 };
@@ -17,8 +16,8 @@ use crate::{
 };
 
 mod bundle;
-pub mod observer;
 pub mod hook;
+pub mod observer;
 
 // todo: spawn/despawn with entity disabling https://github.com/bevyengine/bevy/issues/11090
 // todo: commands implementors https://docs.rs/bevy/latest/bevy/ecs/world/trait.Command.html#implementors
@@ -33,16 +32,21 @@ pub trait RevCommands {
     fn rev_trigger_targets(&mut self, event: impl Event + Clone, targets: impl TriggerTargets);
 }
 
+fn buffer_rev_command(world: &mut DeferredWorld, command: impl InitializedRevCommand) {
+    let command: Box<dyn InitializedRevCommand> = Box::new(command);
+    let command = SyncCell::new(command);
+    world
+        .get_resource_mut::<RevCommandBuffer>()
+        .expect("todo")
+        .0
+        .push_back(command);
+}
+
 impl RevCommands for Commands<'_, '_> {
     fn rev_add<Marker>(&mut self, command: impl RevCommand<Marker>) {
         self.add(|world: &mut World| {
             if let Some(command) = command.rev_apply(world) {
-                let command: Box<dyn InitializedRevCommand> = Box::new(command);
-                let command = SyncCell::new(command);
-                world
-                    .get_resource_or_insert_with(RevCommandBuffer::default)
-                    .0
-                    .push_back(command);
+                buffer_rev_command(&mut world.into(), command)
             }
         })
     }
@@ -135,7 +139,7 @@ pub trait InitializedRevCommand: Send + 'static {
 }
 
 #[derive(Resource, Default)]
-struct RevCommandBuffer(VecDeque<SyncCell<Box<dyn InitializedRevCommand>>>);
+pub(crate) struct RevCommandBuffer(VecDeque<SyncCell<Box<dyn InitializedRevCommand>>>);
 
 #[derive(Default)]
 pub struct CommandsLog(TransitionsLog<SyncCell<Box<dyn InitializedRevCommand>>, WithLoggedAt>);
