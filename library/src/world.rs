@@ -1,26 +1,23 @@
-use bevy::
-    ecs::{schedule::{ScheduleLabel, Schedules}, world::World}
-;
+use bevy::ecs::{
+    schedule::{ScheduleLabel, Schedules},
+    world::World,
+};
 
 use crate::{
     app::RevSchedule,
-    meta::{Direction, RevMeta},
-    BackwardSchedule, ForwardSchedule,
+    meta::{Direction, RevMeta, RevTryRunScheduleError},
+    BackwardSchedule, ForwardSchedule, RevUpdate,
 };
-
-#[derive(Clone, Debug)]
-pub enum TryRunRevError {
-    ScheduleMissing,
-    RevMetaMissing,
-    NoRevScheduleRunning(RevMeta),
-}
 
 #[derive(Clone, Copy, Debug)]
 pub struct ScheduleMissing;
 
 pub trait RevWorld {
     fn rev_run_schedule(&mut self, label: impl ScheduleLabel);
-    fn rev_try_run_schedule(&mut self, label: impl ScheduleLabel) -> Result<(), TryRunRevError>;
+    fn rev_try_run_schedule(
+        &mut self,
+        label: impl ScheduleLabel,
+    ) -> Result<(), RevTryRunScheduleError>;
     fn rev_run_forward_schedule(&mut self, label: impl ScheduleLabel);
     fn rev_try_run_forward_schedule(
         &mut self,
@@ -47,18 +44,30 @@ impl RevWorld for World {
     fn rev_run_schedule(&mut self, label: impl ScheduleLabel) {
         self.rev_try_run_schedule(label).unwrap()
     }
-    fn rev_try_run_schedule(&mut self, label: impl ScheduleLabel) -> Result<(), TryRunRevError> {
-        let meta = self
-            .get_resource::<RevMeta>()
-            .ok_or(TryRunRevError::RevMetaMissing)?;
-        match meta
-            .get_direction()
-            .ok_or_else(|| TryRunRevError::NoRevScheduleRunning(meta.clone()))?
-        {
-            Direction::Forward { .. } => self.rev_try_run_forward_schedule(label),
-            Direction::BackwardLog => self.rev_try_run_backward_schedule(label),
+    fn rev_try_run_schedule(
+        &mut self,
+        label: impl ScheduleLabel,
+    ) -> Result<(), RevTryRunScheduleError> {
+        if label.intern() == RevUpdate.intern() {
+            RevMeta::try_update_world(self)
+        } else {
+            let meta = self
+                .get_resource::<RevMeta>()
+                .ok_or(RevTryRunScheduleError::RevMetaMissing)?
+                .clone();
+            let direction = meta
+                .get_direction()
+                .ok_or_else(|| RevTryRunScheduleError::NoRevScheduleRunning(meta.clone()))?;
+            let label = label.intern();
+            match direction {
+                Direction::Forward { .. } => self.rev_try_run_forward_schedule(label),
+                Direction::BackwardLog => self.rev_try_run_backward_schedule(label),
+            }
+            .map_err(|_| RevTryRunScheduleError::ScheduleMissing {
+                meta,
+                schedule: format!("{label:?}"),
+            })
         }
-        .map_err(|ScheduleMissing| TryRunRevError::ScheduleMissing)
     }
     fn rev_run_forward_schedule(&mut self, label: impl ScheduleLabel) {
         self.rev_try_run_forward_schedule(label).unwrap()
