@@ -50,7 +50,7 @@ impl<E: Event> Default for RevManualEventReader<E> {
     fn default() -> Self {
         Self {
             last_event_count: 0,
-            _marker: PhantomData
+            _marker: PhantomData,
         }
     }
 }
