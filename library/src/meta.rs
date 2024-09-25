@@ -2,10 +2,7 @@ use core::{num::NonZeroUsize, ops::Range};
 
 use bevy::{
     ecs::{
-        archetype::ArchetypeComponentId,
-        component::ComponentId,
-        query::Access,
-        system::{Local, Resource},
+        archetype::ArchetypeComponentId, component::ComponentId, query::Access, system::Resource,
         world::World,
     },
     log::warn_once,
@@ -19,8 +16,16 @@ use bevy::reflect::{ReflectDeserialize, ReflectSerialize};
 
 use crate::{
     log::{PackedTime, WithLoggedAt},
-    BackwardSchedule, ForwardSchedule, RevUpdate,
+    world::RevWorld,
+    RevUpdate,
 };
+
+#[derive(Clone, Debug)]
+pub enum RevTryRunScheduleError {
+    RevMetaMissing,
+    NoRevScheduleRunning(RevMeta),
+    ScheduleMissing { meta: RevMeta, schedule: String },
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Reflect)]
 #[reflect(PartialEq)]
@@ -111,7 +116,7 @@ impl InternalDirection {
     reflect(Serialize, Deserialize)
 )]
 pub struct RevMeta {
-    /// The maximum amount of states of the world that is logged to be jumped in, or None if growth is unrestricted.
+    /// The maximum amount of states of the world that can be jumped to, or None if growth is unrestricted.
     ///
     /// As the world is always in a certain state, the amount cannot be zero.
     ///
@@ -122,7 +127,7 @@ pub struct RevMeta {
     ///
     /// Reducing this value alone does not cause deallocations, this has to be done manually with each [`crate::log`] struct if desired.
     ///
-    /// Changing this value is always possible but only comes into effect when updating the world during [`Direction::Forward`].
+    /// Changing this value is always possible but only comes into effect when updating the world during non-log [`Direction::Forward`].
     pub max_len: Option<NonZeroUsize>,
     now: usize,
     range: Range<usize>,
@@ -225,31 +230,56 @@ impl RevMeta {
     pub fn end_running(&mut self) {
         self.direction.end_running();
     }
-    pub fn update_world(world: &mut World, mut rev_meta_exists: Local<Option<bool>>) {
-        let Some(mut this) = world.get_resource_mut::<Self>() else {
-            match *rev_meta_exists {
+    pub fn try_update_world(world: &mut World) -> Result<(), RevTryRunScheduleError> {
+        #[derive(Resource)]
+        struct Existed(bool);
+
+        let Some(mut meta) = world.get_resource_mut::<Self>() else {
+            match world.get_resource::<Existed>() {
                 None => info!("RevMeta does not exist yet, reversible schedule RevUpdate will not be called until it is inserted."),
-                Some(true) => info!("RevMeta was removed, reversible schedule RevUpdate will not be called until it is inserted again."),
+                Some(Existed(true)) => info!("RevMeta was removed, reversible schedule RevUpdate will not be called until it is inserted again."),
                 _ => {}
             }
-            *rev_meta_exists = Some(false);
-            return;
+            world.insert_resource(Existed(false));
+            return Err(RevTryRunScheduleError::RevMetaMissing);
         };
-        *rev_meta_exists = Some(true);
-        this.update();
-        let this = this.clone();
-        let result = match this.get_direction() {
-            Some(Direction::Forward { .. }) => {
-                world.try_run_schedule(ForwardSchedule::of(RevUpdate))
+
+        let previous = meta.clone();
+        meta.update();
+        let meta = meta.clone();
+        world.insert_resource(Existed(true));
+
+        match meta.get_direction() {
+            Some(direction) => {
+                let result = match direction {
+                    Direction::Forward { .. } => world.rev_try_run_forward_schedule(RevUpdate),
+                    Direction::BackwardLog => world.rev_try_run_backward_schedule(RevUpdate),
+                }
+                .map_err(|_| RevTryRunScheduleError::ScheduleMissing {
+                    meta,
+                    schedule: format!("{RevUpdate:?}"),
+                });
+                if let Some(mut meta) = world.get_resource_mut::<Self>() {
+                    match result {
+                        Ok(()) => meta.end_running(),
+                        Err(_) => *meta = previous,
+                    }
+                }
+                result
             }
-            Some(Direction::BackwardLog) => world.try_run_schedule(BackwardSchedule::of(RevUpdate)),
-            None => Ok(()),
-        };
-        if result.is_err() {
-            warn_once!("RevMeta cannot find reversible schedule RevUpdate, make sure to not call it or RevMeta::update_world recursively.\n{this:?}");
+            None => {
+                if let Some(mut this) = world.get_resource_mut::<Self>() {
+                    this.end_running()
+                }
+                Err(RevTryRunScheduleError::NoRevScheduleRunning(meta))
+            }
         }
-        if let Some(mut this) = world.get_resource_mut::<Self>() {
-            this.direction.end_running();
+    }
+    pub fn update_world(world: &mut World) {
+        if let Err(RevTryRunScheduleError::ScheduleMissing { meta, .. }) =
+            Self::try_update_world(world)
+        {
+            warn_once!("RevMeta cannot find reversible schedule RevUpdate, make sure to not call it or RevMeta::update_world recursively.\n{meta:?}");
         }
     }
     pub fn update(&mut self) {
