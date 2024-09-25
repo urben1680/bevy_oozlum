@@ -640,6 +640,85 @@ impl<B: LoggedAt, A> LoggedAt for EntryAmount<B, A> {
     }
 }
 
+#[cfg(feature = "serde")]
+mod custom_serde {
+    use std::ops::Deref;
+
+    use serde::{Deserialize, Serialize};
+
+    pub trait StateOnly: From<Self::State> + Deref<Target = Self::State> {
+        type State: Serialize + for<'de> Deserialize<'de>;
+    }
+
+    /*
+    StateLog T: From<T::State> + From<WithCapacity<T, usize>> + From<WithCapacity<T::State, usize>>
+    StatesLog T: From<Vec<T::State>> + From<WithCapacity<T, [usize;2]>> + From<WithCapacity<Vec<T::State>, [usize;2]>>
+    TransitionLog T: From<WithCapacity<T, usize>>
+    TransitionsLog T: From<WithCapacity<T, [usize;2]>>
+     */
+
+    pub trait Capacity<T: Serialize + for<'de> Deserialize<'de>> {
+        type Capacity: Serialize + for<'de> Deserialize<'de>;
+        fn capacity_for_serde(&self) -> WithCapacity<T, Self::Capacity>;
+        fn from_capacity_for_serde(this: WithCapacity<T, Self::Capacity>) -> Self;
+    }
+
+    #[derive(Deserialize, Serialize)]
+    pub struct WithCapacity<T, C> {
+        data: T,
+        capacity: C
+    } 
+
+    pub mod state_only {
+        use super::StateOnly;
+        use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+        pub fn serialize<S, T>(foo: &T, serializer: S) -> Result<S::Ok, S::Error>
+        where 
+            S: Serializer,
+            T: StateOnly
+        {
+            foo.deref().serialize(serializer)
+        }
+
+        pub fn deserialize<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+        where 
+            D: Deserializer<'de>,
+            T: StateOnly
+        {
+            <T::State as Deserialize<'de>>::deserialize(deserializer).map(Into::into)
+        }
+    }
+
+    pub mod with_capacity {
+        use super::{Capacity, WithCapacity};
+        use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+        pub fn serialize<S, T>(foo: &T, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+            T: Capacity<T> + Serialize + for<'_de> Deserialize<'_de>
+        {
+            foo.capacity_for_serde().serialize(serializer)
+        }
+
+        pub fn deserialize<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+        where 
+            D: Deserializer<'de>,
+            T: Capacity<T> + Serialize + for<'_de> Deserialize<'_de>
+        {
+            WithCapacity::deserialize(deserializer).map(<T as Capacity<T>>::from_capacity_for_serde)
+        }
+    }
+
+    pub mod state_only_with_capacity {
+        use super::{StateOnly, Capacity, WithCapacity};
+        use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+        //todo
+    }
+}
+
 const INDEX_OOB: &'static str = "self.index should always be <= the deque len, so successfully reducing it without underflow is expected to result in a valid index into the log which is not the case here";
 
 /// unwrap bad, https://github.com/rust-lang/rust/issues/61695
