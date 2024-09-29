@@ -1,5 +1,8 @@
 use core::fmt::Debug;
-use std::collections::{TryReserveError, VecDeque};
+use std::{
+    collections::{TryReserveError, VecDeque},
+    ops::Deref,
+};
 
 use bevy::{reflect::Reflect, utils::tracing::error};
 
@@ -16,19 +19,86 @@ pub struct RareStateLog<T> {
     len: usize,
 }
 
-#[derive(Debug)]
-#[allow(dead_code)]
-struct RareStateLogDebug {
-    states_len: usize,
-    present_skips: usize,
-    index: usize,
-    skips: usize,
-    len: usize,
+#[cfg(feature = "serde")]
+mod serde_with {
+    use std::collections::VecDeque;
+
+    use serde::{Deserialize, Serialize};
+
+    use crate::log::serde_with::{
+        LoglessState, LoglessWithCapacity, WithCapacity, WithCapacityWrapper,
+    };
+
+    use super::{RareStateLog, RareValue};
+
+    impl<T: Serialize + for<'de> Deserialize<'de> + 'static> LoglessState for RareStateLog<T> {
+        type Se<'se> = &'se T;
+        type De = T;
+        fn get_logless_state(&self) -> Self::Se<'_> {
+            &self.present.value
+        }
+        fn from_logless_state(logless_state: Self::De) -> Self {
+            logless_state.into()
+        }
+    }
+
+    impl<T: Serialize + for<'de> Deserialize<'de> + 'static> WithCapacity for RareStateLog<T> {
+        type Se<'se> = (
+            WithCapacityWrapper<&'se VecDeque<RareValue<T>>>,
+            &'se RareValue<T>,
+            usize,
+            usize,
+            usize,
+        );
+        type De = (
+            WithCapacityWrapper<VecDeque<RareValue<T>>>,
+            RareValue<T>,
+            usize,
+            usize,
+            usize,
+        );
+        fn get_with_capacity(&self) -> Self::Se<'_> {
+            (
+                WithCapacityWrapper(&self.states),
+                &self.present,
+                self.index,
+                self.skips,
+                self.len,
+            )
+        }
+        fn from_with_capacity(with_capacity: Self::De) -> Self {
+            Self {
+                states: with_capacity.0 .0,
+                present: with_capacity.1,
+                index: with_capacity.2,
+                skips: with_capacity.3,
+                len: with_capacity.4,
+            }
+        }
+    }
+
+    impl<T: Serialize + for<'de> Deserialize<'de> + 'static> LoglessWithCapacity for RareStateLog<T> {
+        type Se<'se> = (&'se T, usize);
+        type De = (T, usize);
+        fn get_logless_with_capacity(&self) -> Self::Se<'_> {
+            (&self.present.value, self.states_capacity())
+        }
+        fn from_logless_with_capacity(logless_with_capacity: Self::De) -> Self {
+            Self::with_capacity(logless_with_capacity.0, logless_with_capacity.1)
+        }
+    }
 }
 
 impl<T> From<T> for RareStateLog<T> {
     fn from(present: T) -> Self {
         Self::new(present)
+    }
+}
+
+impl<T> Deref for RareStateLog<T> {
+    type Target = T;
+    fn deref(&self) -> &Self::Target {
+        &self.present.value
     }
 }
 
@@ -90,9 +160,6 @@ impl<T> RareStateLog<T> {
     }
     pub fn states_shrink_to_fit(&mut self) {
         self.states.shrink_to_fit()
-    }
-    pub fn get(&self) -> &T {
-        &self.present.value
     }
     pub fn unlogged_get_mut(&mut self) -> &mut T {
         &mut self.present.value
@@ -173,6 +240,16 @@ impl<T> RareStateLog<T> {
             self.skips = self.present.skips.into();
             self.len -= 1;
             return Ok(());
+        }
+
+        #[derive(Debug)]
+        #[allow(dead_code)]
+        struct RareStateLogDebug {
+            states_len: usize,
+            present_skips: usize,
+            index: usize,
+            skips: usize,
+            len: usize,
         }
 
         let debug_struct = RareStateLogDebug {
@@ -352,12 +429,9 @@ mod test {
                 self.with_timestamp[0]
             );
             assert_eq!(
-                self.with_timestamp[0].get().value,
-                state,
+                self.with_timestamp[0].value, state,
                 "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
-                self.meta,
-                previous.with_timestamp[0],
-                self.with_timestamp[0]
+                self.meta, previous.with_timestamp[0], self.with_timestamp[0]
             );
 
             self.with_timestamp[1].push_present(push.then_some(with_timestamp));
@@ -379,12 +453,9 @@ mod test {
                 self.with_timestamp[1]
             );
             assert_eq!(
-                self.with_timestamp[1].get().value,
-                state,
+                self.with_timestamp[1].value, state,
                 "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
-                self.meta,
-                previous.with_timestamp[1],
-                self.with_timestamp[1]
+                self.meta, previous.with_timestamp[1], self.with_timestamp[1]
             );
 
             self.one_per_frame[0].push_present(push.then_some(state.into()));
@@ -406,12 +477,9 @@ mod test {
                 self.one_per_frame[0]
             );
             assert_eq!(
-                *self.one_per_frame[0].get(),
-                state,
+                *self.one_per_frame[0], state,
                 "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
-                self.meta,
-                previous.one_per_frame[0],
-                self.one_per_frame[0]
+                self.meta, previous.one_per_frame[0], self.one_per_frame[0]
             );
 
             self.one_per_frame[1].push_present(push.then_some(state.into()));
@@ -433,12 +501,9 @@ mod test {
                 self.one_per_frame[1]
             );
             assert_eq!(
-                *self.one_per_frame[1].get(),
-                state,
+                *self.one_per_frame[1], state,
                 "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
-                self.meta,
-                previous.one_per_frame[1],
-                self.one_per_frame[1]
+                self.meta, previous.one_per_frame[1], self.one_per_frame[1]
             );
         }
         fn backward_log(&mut self, expected_state: Result<usize, OutOfLog>) {
@@ -452,7 +517,7 @@ mod test {
                     self.meta.update();
 
                     let is_ok = self.with_timestamp[0].backward_log().is_ok();
-                    let state = self.with_timestamp[0].get().value;
+                    let state = self.with_timestamp[0].value;
                     assert!(
                         is_ok,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
@@ -465,7 +530,7 @@ mod test {
                     );
 
                     let is_ok = self.with_timestamp[1].backward_log().is_ok();
-                    let state = self.with_timestamp[1].get().value;
+                    let state = self.with_timestamp[1].value;
                     assert!(
                         is_ok,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
@@ -478,7 +543,7 @@ mod test {
                     );
 
                     let is_ok = self.one_per_frame[0].backward_log().is_ok();
-                    let state = *self.one_per_frame[0].get();
+                    let state = *self.one_per_frame[0];
                     assert!(
                         is_ok,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
@@ -491,7 +556,7 @@ mod test {
                     );
 
                     let is_ok = self.one_per_frame[1].backward_log().is_ok();
-                    let state = *self.one_per_frame[1].get();
+                    let state = *self.one_per_frame[1];
                     assert!(
                         is_ok,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
@@ -546,7 +611,7 @@ mod test {
                     self.meta.update();
 
                     let is_ok = self.with_timestamp[0].forward_log().is_ok();
-                    let state = self.with_timestamp[0].get().value;
+                    let state = self.with_timestamp[0].value;
                     assert!(
                         is_ok,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
@@ -559,7 +624,7 @@ mod test {
                     );
 
                     let is_ok = self.with_timestamp[1].forward_log().is_ok();
-                    let state = self.with_timestamp[1].get().value;
+                    let state = self.with_timestamp[1].value;
                     assert!(
                         is_ok,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
@@ -572,7 +637,7 @@ mod test {
                     );
 
                     let is_ok = self.one_per_frame[0].forward_log().is_ok();
-                    let state = *self.one_per_frame[0].get();
+                    let state = *self.one_per_frame[0];
                     assert!(
                         is_ok,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
@@ -585,7 +650,7 @@ mod test {
                     );
 
                     let is_ok = self.one_per_frame[1].forward_log().is_ok();
-                    let state = *self.one_per_frame[1].get();
+                    let state = *self.one_per_frame[1];
                     assert!(
                         is_ok,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",

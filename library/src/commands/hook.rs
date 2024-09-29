@@ -69,7 +69,7 @@ pub enum HookDirection {
     /// being `Some` or the default value **or**
     /// - [`RevMeta::update_world`] was manually inserted to run the reversible schedules **or**
     /// - Between manually calling [`RevMeta::end_running`] and [`RevMeta::update`]
-    /// 
+    ///
     /// Otherwise the hook triggers with one of the deterministic variants, depending on which
     /// reversible schedule last ran.
     NonReversibleSchedule,
@@ -254,12 +254,7 @@ impl HookCommand {
             HookVariant::OnInsert => hooks.on_insert,
             HookVariant::OnRemove => hooks.on_remove,
         };
-        hook.expect("todo")(
-            direction,
-            world.into(),
-            self.entity,
-            self.component,
-        )
+        hook.expect("todo")(direction, world.into(), self.entity, self.component)
     }
 }
 

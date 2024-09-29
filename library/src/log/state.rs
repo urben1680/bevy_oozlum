@@ -1,5 +1,8 @@
 use core::fmt::Debug;
-use std::collections::{TryReserveError, VecDeque};
+use std::{
+    collections::{TryReserveError, VecDeque},
+    ops::Deref,
+};
 
 use bevy::{reflect::Reflect, utils::tracing::error};
 
@@ -23,16 +26,70 @@ pub struct StateLog<T> {
     index: usize,
 }
 
-#[derive(Debug)]
-#[allow(dead_code)]
-struct StateLogDebug {
-    states_len: usize,
-    index: usize,
+#[cfg(feature = "serde")]
+mod serde_with {
+    use std::collections::VecDeque;
+
+    use serde::{Deserialize, Serialize};
+
+    use crate::log::serde_with::{
+        LoglessState, LoglessWithCapacity, WithCapacity, WithCapacityWrapper,
+    };
+
+    use super::StateLog;
+
+    impl<T: Serialize + for<'de> Deserialize<'de> + 'static> LoglessState for StateLog<T> {
+        type Se<'se> = &'se T;
+        type De = T;
+        fn get_logless_state(&self) -> Self::Se<'_> {
+            &self.present
+        }
+        fn from_logless_state(logless_state: Self::De) -> Self {
+            logless_state.into()
+        }
+    }
+
+    impl<T: Serialize + for<'de> Deserialize<'de> + 'static> WithCapacity for StateLog<T> {
+        type Se<'se> = (WithCapacityWrapper<&'se VecDeque<T>>, &'se T, usize);
+        type De = (WithCapacityWrapper<VecDeque<T>>, T, usize);
+        fn get_with_capacity(&self) -> Self::Se<'_> {
+            (WithCapacityWrapper(&self.states), &self.present, self.index)
+        }
+        fn from_with_capacity(with_capacity: Self::De) -> Self {
+            Self {
+                states: with_capacity.0 .0,
+                present: with_capacity.1,
+                index: with_capacity.2,
+            }
+        }
+    }
+
+    impl<T: Serialize + for<'de> Deserialize<'de> + 'static> LoglessWithCapacity for StateLog<T> {
+        type Se<'se> = (&'se T, usize);
+        type De = (T, usize);
+        fn get_logless_with_capacity(&self) -> Self::Se<'_> {
+            (&self.present, self.states.capacity())
+        }
+        fn from_logless_with_capacity(logless_with_capacity: Self::De) -> Self {
+            Self {
+                states: VecDeque::with_capacity(logless_with_capacity.1),
+                present: logless_with_capacity.0,
+                index: 0,
+            }
+        }
+    }
 }
 
 impl<T> From<T> for StateLog<T> {
     fn from(present: T) -> Self {
         Self::new(present)
+    }
+}
+
+impl<T> Deref for StateLog<T> {
+    type Target = T;
+    fn deref(&self) -> &Self::Target {
+        &self.present
     }
 }
 
@@ -80,9 +137,6 @@ impl<T> StateLog<T> {
     }
     pub fn shrink_to_fit(&mut self) {
         self.states.shrink_to_fit()
-    }
-    pub fn get(&self) -> &T {
-        &self.present
     }
     pub fn unlogged_get_mut(&mut self) -> &mut T {
         &mut self.present
@@ -167,6 +221,13 @@ impl<T> StateLog<T> {
             return Ok(());
         }
 
+        #[derive(Debug)]
+        #[allow(dead_code)]
+        struct StateLogDebug {
+            states_len: usize,
+            index: usize,
+        }
+
         if self.index != self.states.len() {
             let debug_struct = StateLogDebug {
                 states_len: self.states.len(),
@@ -246,9 +307,82 @@ impl<T: LoggedAt> StateLog<T> {
 mod test {
     use std::num::NonZeroUsize;
 
+    use serde::{Deserialize, Serialize};
+
     use super::*;
 
     use crate::{log::WithLoggedAt, meta::RevMeta};
+
+    #[test]
+    fn serde_with() {
+        #[derive(Serialize, Deserialize)]
+        struct Logs {
+            full: StateLog<char>,
+            #[serde(with = "crate::log::logless_state")]
+            logless: StateLog<char>,
+            #[serde(with = "crate::log::with_capacity")]
+            full_with_capacity: StateLog<char>,
+            #[serde(with = "crate::log::logless_with_capacity")]
+            logless_with_capacity: StateLog<char>,
+        }
+
+        let mut log = StateLog::from('a');
+        log.push_present('b');
+        log.push_present('c');
+        log.backward_log().expect("in log");
+
+        let mut logs = Logs {
+            full: log.clone(),
+            logless: log.clone(),
+            full_with_capacity: log.clone(),
+            logless_with_capacity: log.clone(),
+        };
+
+        logs.full.reserve_exact(98);
+        logs.logless.reserve_exact(98);
+        logs.full_with_capacity.reserve_exact(98);
+        logs.logless_with_capacity.reserve_exact(98);
+
+        let serialized = serde_json::to_string_pretty(&logs).unwrap();
+        let Logs {
+            full,
+            logless,
+            full_with_capacity,
+            logless_with_capacity,
+        } = serde_json::from_str(&serialized).unwrap();
+
+        assert_eq!(full.len(), 2, "serialized: {serialized}");
+        assert_eq!(*full, 'b', "serialized: {serialized}");
+        assert!(
+            full.capacity() < 100,
+            "actual capacity: {}, serialized: {serialized}",
+            full.capacity()
+        );
+
+        assert_eq!(logless.len(), 0, "serialized: {serialized}");
+        assert_eq!(*logless, 'b', "serialized: {serialized}");
+        assert!(
+            logless.capacity() < 100,
+            "actual capacity: {}, serialized: {serialized}",
+            logless.capacity()
+        );
+
+        assert_eq!(full_with_capacity.len(), 2, "serialized: {serialized}");
+        assert_eq!(*full_with_capacity, 'b', "serialized: {serialized}");
+        assert!(
+            full_with_capacity.capacity() >= 100,
+            "actual capacity: {}, serialized: {serialized}",
+            full_with_capacity.capacity()
+        );
+
+        assert_eq!(logless_with_capacity.len(), 0, "serialized: {serialized}");
+        assert_eq!(*logless_with_capacity, 'b', "serialized: {serialized}");
+        assert!(
+            logless_with_capacity.capacity() >= 100,
+            "actual capacity: {}, serialized: {serialized}",
+            logless_with_capacity.capacity()
+        );
+    }
 
     #[derive(Clone, Debug)]
     struct MetaAndLogs {
@@ -287,12 +421,9 @@ mod test {
                 self.with_timestamp[0]
             );
             assert_eq!(
-                self.with_timestamp[0].get().value,
-                state,
+                self.with_timestamp[0].value, state,
                 "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
-                self.meta,
-                previous.with_timestamp[0],
-                self.with_timestamp[0]
+                self.meta, previous.with_timestamp[0], self.with_timestamp[0]
             );
 
             self.with_timestamp[1].push_present(self.meta.with_timestamp(state));
@@ -307,12 +438,9 @@ mod test {
                 self.with_timestamp[1]
             );
             assert_eq!(
-                self.with_timestamp[1].get().value,
-                state,
+                self.with_timestamp[1].value, state,
                 "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
-                self.meta,
-                previous.with_timestamp[1],
-                self.with_timestamp[1]
+                self.meta, previous.with_timestamp[1], self.with_timestamp[1]
             );
 
             self.one_per_frame[0].push_present(state.into());
@@ -327,12 +455,9 @@ mod test {
                 self.one_per_frame[0]
             );
             assert_eq!(
-                *self.one_per_frame[0].get(),
-                state,
+                *self.one_per_frame[0], state,
                 "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
-                self.meta,
-                previous.one_per_frame[0],
-                self.one_per_frame[0]
+                self.meta, previous.one_per_frame[0], self.one_per_frame[0]
             );
 
             self.one_per_frame[1].push_present(state.into());
@@ -347,12 +472,9 @@ mod test {
                 self.one_per_frame[1]
             );
             assert_eq!(
-                *self.one_per_frame[1].get(),
-                state,
+                *self.one_per_frame[1], state,
                 "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
-                self.meta,
-                previous.one_per_frame[1],
-                self.one_per_frame[1]
+                self.meta, previous.one_per_frame[1], self.one_per_frame[1]
             );
         }
         fn backward_log(&mut self, expected_state: Result<usize, OutOfLog>) {
@@ -375,12 +497,9 @@ mod test {
                         self.with_timestamp[0]
                     );
                     assert_eq!(
-                        self.with_timestamp[0].get().value,
-                        expected_state,
+                        self.with_timestamp[0].value, expected_state,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                        self.meta,
-                        previous.with_timestamp[0],
-                        self.with_timestamp[0]
+                        self.meta, previous.with_timestamp[0], self.with_timestamp[0]
                     );
 
                     assert_eq!(
@@ -392,12 +511,9 @@ mod test {
                         self.with_timestamp[1]
                     );
                     assert_eq!(
-                        self.with_timestamp[1].get().value,
-                        expected_state,
+                        self.with_timestamp[1].value, expected_state,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                        self.meta,
-                        previous.with_timestamp[1],
-                        self.with_timestamp[1]
+                        self.meta, previous.with_timestamp[1], self.with_timestamp[1]
                     );
 
                     assert_eq!(
@@ -409,12 +525,9 @@ mod test {
                         self.one_per_frame[0]
                     );
                     assert_eq!(
-                        *self.one_per_frame[0].get(),
-                        expected_state,
+                        *self.one_per_frame[0], expected_state,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                        self.meta,
-                        previous.one_per_frame[0],
-                        self.one_per_frame[0]
+                        self.meta, previous.one_per_frame[0], self.one_per_frame[0]
                     );
 
                     assert_eq!(
@@ -426,12 +539,9 @@ mod test {
                         self.one_per_frame[1]
                     );
                     assert_eq!(
-                        *self.one_per_frame[1].get(),
-                        expected_state,
+                        *self.one_per_frame[1], expected_state,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                        self.meta,
-                        previous.one_per_frame[1],
-                        self.one_per_frame[1]
+                        self.meta, previous.one_per_frame[1], self.one_per_frame[1]
                     );
                 }
                 Err(OutOfLog) => {
@@ -489,12 +599,9 @@ mod test {
                         self.with_timestamp[0]
                     );
                     assert_eq!(
-                        self.with_timestamp[0].get().value,
-                        expected_state,
+                        self.with_timestamp[0].value, expected_state,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                        self.meta,
-                        previous.with_timestamp[0],
-                        self.with_timestamp[0]
+                        self.meta, previous.with_timestamp[0], self.with_timestamp[0]
                     );
 
                     assert_eq!(
@@ -506,12 +613,9 @@ mod test {
                         self.with_timestamp[1]
                     );
                     assert_eq!(
-                        self.with_timestamp[1].get().value,
-                        expected_state,
+                        self.with_timestamp[1].value, expected_state,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                        self.meta,
-                        previous.with_timestamp[1],
-                        self.with_timestamp[1]
+                        self.meta, previous.with_timestamp[1], self.with_timestamp[1]
                     );
 
                     assert_eq!(
@@ -523,12 +627,9 @@ mod test {
                         self.one_per_frame[0]
                     );
                     assert_eq!(
-                        *self.one_per_frame[0].get(),
-                        expected_state,
+                        *self.one_per_frame[0], expected_state,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                        self.meta,
-                        previous.one_per_frame[0],
-                        self.one_per_frame[0]
+                        self.meta, previous.one_per_frame[0], self.one_per_frame[0]
                     );
 
                     assert_eq!(
@@ -540,12 +641,9 @@ mod test {
                         self.one_per_frame[1]
                     );
                     assert_eq!(
-                        *self.one_per_frame[1].get(),
-                        expected_state,
+                        *self.one_per_frame[1], expected_state,
                         "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                        self.meta,
-                        previous.one_per_frame[1],
-                        self.one_per_frame[1]
+                        self.meta, previous.one_per_frame[1], self.one_per_frame[1]
                     );
                 }
                 Err(OutOfLog) => {

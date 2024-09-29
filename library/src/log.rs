@@ -211,7 +211,7 @@
 //! [`BackwardLog`]: crate::meta::Direction::BackwardLog
 
 use std::{
-    collections::VecDeque,
+    collections::{TryReserveError, VecDeque},
     fmt::{Debug, Display},
     iter::FusedIterator,
 };
@@ -225,6 +225,8 @@ mod rare_state;
 mod rare_states;
 mod rare_transition;
 mod rare_transitions;
+#[cfg(feature = "serde")]
+mod serde_with;
 mod state;
 mod states;
 mod transition;
@@ -234,6 +236,8 @@ pub use rare_state::RareStateLog;
 pub use rare_states::RareStatesLog;
 pub use rare_transition::RareTransitionLog;
 pub use rare_transitions::RareTransitionsLog;
+#[cfg(feature = "serde")]
+pub use serde_with::{logless_state, logless_with_capacity, with_capacity};
 pub use state::StateLog;
 pub use states::StatesLog;
 pub use transition::TransitionLog;
@@ -317,6 +321,14 @@ impl PackedTime {
             )
         })
     }
+    fn from_internal_err(time: usize) -> String {
+        format!(
+            "{time} does not fit into {} bytes, cannot map this value to `PackedTime` \
+            on this machine, increase the `time_bytes_*` feature of the reversible_systems \
+            crate to the value of the source where this value was serialized",
+            Self::BYTES,
+        )
+    }
 }
 
 #[cfg(feature = "serde")]
@@ -338,12 +350,7 @@ impl<'de> serde::Deserialize<'de> for PackedTime {
         match usize::deserialize(deserializer) {
             Ok(time) => match Self::try_from(time) {
                 Ok(this) => Ok(this),
-                Err(USizeTooLarge) => Err(serde::de::Error::custom(format!(
-                    "{time} does not fit into {} bytes, cannot map this value to `PackedTime` \
-                    on this machine, increase the `time_bytes_*` feature of the reversible_systems \
-                    crate to the value of the source where this value was serialized",
-                    Self::BYTES,
-                ))),
+                Err(USizeTooLarge) => Err(serde::de::Error::custom(Self::from_internal_err(time))),
             },
             Err(err) => Err(err),
         }
@@ -469,6 +476,33 @@ impl<'a, T> LogMut<'a, T> {
     pub fn push_back(&mut self, value: T) {
         self.0.push_back(value);
     }
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+    pub fn capacity(&self) -> usize {
+        self.0.capacity()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+    pub fn reserve(&mut self, additional: usize) {
+        self.0.reserve(additional)
+    }
+    pub fn reserve_exact(&mut self, additional: usize) {
+        self.0.reserve_exact(additional)
+    }
+    pub fn try_reserve(&mut self, additional: usize) -> Result<(), TryReserveError> {
+        self.0.try_reserve(additional)
+    }
+    pub fn try_reserve_exact(&mut self, additional: usize) -> Result<(), TryReserveError> {
+        self.0.try_reserve_exact(additional)
+    }
+    pub fn shrink_to(&mut self, min_capacity: usize) {
+        self.0.shrink_to(min_capacity)
+    }
+    pub fn shrink_to_fit(&mut self) {
+        self.0.shrink_to_fit()
+    }
 }
 
 impl<'a, T> Extend<&'a T> for LogMut<'a, T>
@@ -570,9 +604,10 @@ impl<T: Default> From<&RevMeta> for WithLoggedAt<T> {
     }
 }
 
+#[doc(hidden)]
 #[derive(Clone, PartialEq, Reflect)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-struct RareValue<T> {
+pub struct RareValue<T> {
     value: T,
     /// If `T` is a transiton, then these are the skips before the transition.
     ///
@@ -598,9 +633,10 @@ impl<T> RareValue<T> {
     }
 }
 
+#[doc(hidden)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Reflect)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-struct EntryAmount<U, A> {
+pub struct EntryAmount<U, A> {
     entry: U,
     amount: A,
 }
@@ -637,85 +673,6 @@ impl<B: LoggedAt, A> LoggedAt for EntryAmount<B, A> {
     }
     fn set_logged_at(&mut self, value: PackedTime) {
         self.entry.set_logged_at(value)
-    }
-}
-
-#[cfg(feature = "serde")]
-mod custom_serde {
-    use std::ops::Deref;
-
-    use serde::{Deserialize, Serialize};
-
-    pub trait StateOnly: From<Self::State> + Deref<Target = Self::State> {
-        type State: Serialize + for<'de> Deserialize<'de>;
-    }
-
-    /*
-    StateLog T: From<T::State> + From<WithCapacity<T, usize>> + From<WithCapacity<T::State, usize>>
-    StatesLog T: From<Vec<T::State>> + From<WithCapacity<T, [usize;2]>> + From<WithCapacity<Vec<T::State>, [usize;2]>>
-    TransitionLog T: From<WithCapacity<T, usize>>
-    TransitionsLog T: From<WithCapacity<T, [usize;2]>>
-     */
-
-    pub trait Capacity<T: Serialize + for<'de> Deserialize<'de>> {
-        type Capacity: Serialize + for<'de> Deserialize<'de>;
-        fn capacity_for_serde(&self) -> WithCapacity<T, Self::Capacity>;
-        fn from_capacity_for_serde(this: WithCapacity<T, Self::Capacity>) -> Self;
-    }
-
-    #[derive(Deserialize, Serialize)]
-    pub struct WithCapacity<T, C> {
-        data: T,
-        capacity: C
-    } 
-
-    pub mod state_only {
-        use super::StateOnly;
-        use serde::{Deserialize, Deserializer, Serialize, Serializer};
-
-        pub fn serialize<S, T>(foo: &T, serializer: S) -> Result<S::Ok, S::Error>
-        where 
-            S: Serializer,
-            T: StateOnly
-        {
-            foo.deref().serialize(serializer)
-        }
-
-        pub fn deserialize<'de, D, T>(deserializer: D) -> Result<T, D::Error>
-        where 
-            D: Deserializer<'de>,
-            T: StateOnly
-        {
-            <T::State as Deserialize<'de>>::deserialize(deserializer).map(Into::into)
-        }
-    }
-
-    pub mod with_capacity {
-        use super::{Capacity, WithCapacity};
-        use serde::{Deserialize, Deserializer, Serialize, Serializer};
-
-        pub fn serialize<S, T>(foo: &T, serializer: S) -> Result<S::Ok, S::Error>
-        where
-            S: Serializer,
-            T: Capacity<T> + Serialize + for<'_de> Deserialize<'_de>
-        {
-            foo.capacity_for_serde().serialize(serializer)
-        }
-
-        pub fn deserialize<'de, D, T>(deserializer: D) -> Result<T, D::Error>
-        where 
-            D: Deserializer<'de>,
-            T: Capacity<T> + Serialize + for<'_de> Deserialize<'_de>
-        {
-            WithCapacity::deserialize(deserializer).map(<T as Capacity<T>>::from_capacity_for_serde)
-        }
-    }
-
-    pub mod state_only_with_capacity {
-        use super::{StateOnly, Capacity, WithCapacity};
-        use serde::{Deserialize, Deserializer, Serialize, Serializer};
-
-        //todo
     }
 }
 

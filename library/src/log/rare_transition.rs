@@ -21,14 +21,61 @@ pub struct RareTransitionLog<T> {
     len: usize,
 }
 
-#[derive(Debug)]
-#[allow(dead_code)]
-struct RareTransitionLogDebug {
-    transitions_len: usize,
-    index: usize,
-    skips: usize,
-    skips_max: usize,
-    len: usize,
+#[cfg(feature = "serde")]
+mod serde_with {
+    use std::collections::VecDeque;
+
+    use serde::{Deserialize, Serialize};
+
+    use crate::log::serde_with::{LoglessWithCapacity, WithCapacity, WithCapacityWrapper};
+
+    use super::{RareTransitionLog, RareValue};
+
+    impl<T: Serialize + for<'de> Deserialize<'de> + 'static> WithCapacity for RareTransitionLog<T> {
+        type Se<'se> = (
+            WithCapacityWrapper<&'se VecDeque<RareValue<T>>>,
+            usize,
+            usize,
+            usize,
+            usize,
+        );
+        type De = (
+            WithCapacityWrapper<VecDeque<RareValue<T>>>,
+            usize,
+            usize,
+            usize,
+            usize,
+        );
+        fn get_with_capacity(&self) -> Self::Se<'_> {
+            (
+                WithCapacityWrapper(&self.transitions),
+                self.index,
+                self.skips,
+                self.skips_max,
+                self.len,
+            )
+        }
+        fn from_with_capacity(with_capacity: Self::De) -> Self {
+            Self {
+                transitions: with_capacity.0 .0,
+                index: with_capacity.1,
+                skips: with_capacity.2,
+                skips_max: with_capacity.3,
+                len: with_capacity.4,
+            }
+        }
+    }
+
+    impl<T> LoglessWithCapacity for RareTransitionLog<T> {
+        type Se<'se> = usize where T: 'se;
+        type De = usize;
+        fn get_logless_with_capacity(&self) -> Self::Se<'_> {
+            self.transitions.capacity()
+        }
+        fn from_logless_with_capacity(logless_with_capacity: Self::De) -> Self {
+            Self::with_capacity(logless_with_capacity)
+        }
+    }
 }
 
 impl<T> Default for RareTransitionLog<T> {
@@ -152,6 +199,16 @@ impl<T> RareTransitionLog<T> {
                 self.skips = entry.skips.into();
                 self.len -= 1;
                 return Ok(Some(&mut entry.value));
+            }
+
+            #[derive(Debug)]
+            #[allow(dead_code)]
+            struct RareTransitionLogDebug {
+                transitions_len: usize,
+                index: usize,
+                skips: usize,
+                skips_max: usize,
+                len: usize,
             }
 
             let debug_struct = RareTransitionLogDebug {

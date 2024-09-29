@@ -15,20 +15,14 @@ Enhancements:
 - config tests
 - make doctests work
 - mod/use/pub cleanup, make prelude
-- setting for state logs that serde only takes the current state into account (default?)
-- setting for logs to serde the current capacity as well
--- all as functions for #[serde(with = "module")], uses $module::serialize and $module::deserialize
-                            State   Transition
-default                     full    full
-state_only                  x       -
-with_capacity               x       x
-state_only_with_capacity    x       -
-
+- serde-with tests
 - observer tests
 - hook -> observer -> commands reversible order test
 -- commands should also trigger hooks here
 -- commands shouls also call observer here
 -- a second sync point aftwerwards should be scheduled to assert nothing ist postponed into it
+- use serde from bevy reexport
+- seal log structs (pub after appearing in pub interface)
 
 Docs
 - examples

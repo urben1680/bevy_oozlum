@@ -244,7 +244,7 @@ macro_rules! impl_into_rev_set_configs {
                 //  : [BackwardSetConfigs, ..., BackwardSetConfigs]
                 //  = [var9.1, ..., var0.1];
                 let mut arr = [$($var.1,)*];
-                arr.reverse(); // reversing tuple via a tt muncher macro instead can signifincantly increase compile time
+                arr.reverse();
                 let [$($var,)*] = arr;
 
                 let backward_cmds_sys = ($($var.backward_cmds_sys,)*).into_configs();
