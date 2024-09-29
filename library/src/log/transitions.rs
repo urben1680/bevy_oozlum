@@ -23,6 +23,69 @@ where
     index: usize,
 }
 
+#[cfg(feature = "serde")]
+mod serde_with {
+    use std::collections::VecDeque;
+
+    use serde::{Deserialize, Serialize};
+
+    use crate::log::serde_with::{LoglessWithCapacity, WithCapacity, WithCapacityWrapper};
+
+    use super::{EntryAmount, TransitionLog, TransitionsLog, WithAmount};
+
+    impl<T, U, const AMOUNT_BYTES: usize> WithCapacity for TransitionsLog<T, U, AMOUNT_BYTES>
+    where
+        T: Serialize + for<'de> Deserialize<'de> + 'static,
+        U: Serialize + for<'de> Deserialize<'de> + 'static,
+        Self: WithAmount,
+    {
+        type Se<'se> = (
+            (
+                WithCapacityWrapper<&'se VecDeque<EntryAmount<U, <Self as WithAmount>::Amount>>>,
+                usize,
+            ),
+            WithCapacityWrapper<&'se VecDeque<T>>,
+            usize,
+        );
+        type De = (
+            (
+                WithCapacityWrapper<VecDeque<EntryAmount<U, <Self as WithAmount>::Amount>>>,
+                usize,
+            ),
+            WithCapacityWrapper<VecDeque<T>>,
+            usize,
+        );
+        fn get_with_capacity(&self) -> Self::Se<'_> {
+            (
+                self.amounts.get_with_capacity(),
+                WithCapacityWrapper(&self.transitions),
+                self.index,
+            )
+        }
+        fn from_with_capacity(with_capacity: Self::De) -> Self {
+            Self {
+                amounts: TransitionLog::from_with_capacity(with_capacity.0),
+                transitions: with_capacity.1 .0,
+                index: with_capacity.2,
+            }
+        }
+    }
+
+    impl<T, U, const AMOUNT_BYTES: usize> LoglessWithCapacity for TransitionsLog<T, U, AMOUNT_BYTES>
+    where
+        Self: WithAmount,
+    {
+        type Se<'se> = (usize, usize) where T: 'se, U: 'se;
+        type De = (usize, usize);
+        fn get_logless_with_capacity(&self) -> Self::Se<'_> {
+            (self.amounts.capacity(), self.transitions.capacity())
+        }
+        fn from_logless_with_capacity(logless_with_capacity: Self::De) -> Self {
+            Self::with_capacities(logless_with_capacity.0, logless_with_capacity.1)
+        }
+    }
+}
+
 impl_with_amount!(TransitionsLog);
 
 impl<T, U, const AMOUNT_BYTES: usize> Default for TransitionsLog<T, U, AMOUNT_BYTES>

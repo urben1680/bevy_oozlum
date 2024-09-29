@@ -2,6 +2,7 @@ use std::{
     collections::{TryReserveError, VecDeque},
     convert::Infallible,
     fmt::Debug,
+    ops::Range,
 };
 
 use bevy::reflect::Reflect;
@@ -22,6 +23,133 @@ where
     index: usize,
 }
 
+#[cfg(feature = "serde")]
+mod serde_with {
+    use std::collections::VecDeque;
+
+    use serde::{Deserialize, Serialize};
+
+    use crate::log::serde_with::{
+        LoglessState, LoglessWithCapacity, WithCapacity, WithCapacityWrapper, WithRange,
+    };
+
+    use super::{EntryAmount, StateLog, StatesLog, WithAmount};
+
+    impl<T, U, const AMOUNT_BYTES: usize> LoglessState for StatesLog<T, U, AMOUNT_BYTES>
+    where
+        T: Serialize + for<'de> Deserialize<'de> + 'static,
+        U: Serialize + for<'de> Deserialize<'de> + 'static,
+        Self: WithAmount,
+    {
+        type Se<'se> = (
+            &'se EntryAmount<U, <Self as WithAmount>::Amount>,
+            WithRange<'se, T>,
+        );
+        type De = (EntryAmount<U, <Self as WithAmount>::Amount>, VecDeque<T>);
+        fn get_logless_state(&self) -> Self::Se<'_> {
+            let amounts_se = self.amounts.get_logless_state();
+            let range = self.get_range_entry().0;
+            (
+                amounts_se,
+                WithRange {
+                    deque: &self.states,
+                    range,
+                },
+            )
+        }
+        fn from_logless_state(logless_state: Self::De) -> Self {
+            let amounts = <
+                StateLog<EntryAmount<U, <Self as WithAmount>::Amount>> as LoglessState
+            >::from_logless_state(logless_state.0);
+            Self {
+                states: logless_state.1,
+                amounts,
+                index: 0,
+            }
+        }
+    }
+
+    impl<T, U, const AMOUNT_BYTES: usize> WithCapacity for StatesLog<T, U, AMOUNT_BYTES>
+    where
+        T: Serialize + for<'de> Deserialize<'de> + 'static,
+        U: Serialize + for<'de> Deserialize<'de> + 'static,
+        Self: WithAmount,
+    {
+        type Se<'se> = (
+            (
+                WithCapacityWrapper<&'se VecDeque<EntryAmount<U, <Self as WithAmount>::Amount>>>,
+                &'se EntryAmount<U, <Self as WithAmount>::Amount>,
+                usize,
+            ),
+            WithCapacityWrapper<&'se VecDeque<T>>,
+            usize,
+        );
+        type De = (
+            (
+                WithCapacityWrapper<VecDeque<EntryAmount<U, <Self as WithAmount>::Amount>>>,
+                EntryAmount<U, <Self as WithAmount>::Amount>,
+                usize,
+            ),
+            WithCapacityWrapper<VecDeque<T>>,
+            usize,
+        );
+        fn get_with_capacity(&self) -> Self::Se<'_> {
+            (
+                WithCapacity::get_with_capacity(&self.amounts),
+                WithCapacityWrapper(&self.states),
+                self.index,
+            )
+        }
+        fn from_with_capacity(with_capacity: Self::De) -> Self {
+            let amounts = WithCapacity::from_with_capacity(with_capacity.0);
+            let states = with_capacity.1 .0;
+            let index = with_capacity.2;
+            Self {
+                amounts,
+                states,
+                index,
+            }
+        }
+    }
+
+    impl<T, U, const AMOUNT_BYTES: usize> LoglessWithCapacity for StatesLog<T, U, AMOUNT_BYTES>
+    where
+        T: Serialize + for<'de> Deserialize<'de> + 'static,
+        U: Serialize + for<'de> Deserialize<'de> + 'static,
+        Self: WithAmount,
+    {
+        type Se<'se> = (
+            (&'se EntryAmount<U, <Self as WithAmount>::Amount>, usize),
+            WithCapacityWrapper<WithRange<'se, T>>,
+        );
+        type De = (
+            (EntryAmount<U, <Self as WithAmount>::Amount>, usize),
+            WithCapacityWrapper<VecDeque<T>>,
+        );
+        fn get_logless_with_capacity(&self) -> Self::Se<'_> {
+            let amounts_se = self.amounts.get_logless_with_capacity();
+            let range = self.get_range_entry().0;
+            (
+                amounts_se,
+                WithCapacityWrapper(WithRange {
+                    deque: &self.states,
+                    range,
+                }),
+            )
+        }
+        fn from_logless_with_capacity(logless_with_capacity: Self::De) -> Self {
+            let amounts = StateLog::from_logless_with_capacity(logless_with_capacity.0);
+            Self {
+                amounts,
+                states: logless_with_capacity.1 .0,
+                index: 0,
+            }
+        }
+    }
+}
+
+impl_with_amount!(StatesLog);
+
 impl<T, U: Default, const AMOUNT_BYTES: usize> Default for StatesLog<T, U, AMOUNT_BYTES>
 where
     Self: WithAmount,
@@ -30,8 +158,6 @@ where
         Self::new_empty(U::default())
     }
 }
-
-impl_with_amount!(StatesLog);
 
 impl<T, U, const AMOUNT_BYTES: usize> StatesLog<T, U, AMOUNT_BYTES>
 where
@@ -105,12 +231,16 @@ where
     pub fn states_shrink_to_fit(&mut self) {
         self.states.shrink_to_fit()
     }
-    pub fn get(&self) -> (impl LogIter<&T>, &U) {
-        let entry_amount = self.amounts.get();
+    fn get_range_entry(&self) -> (Range<usize>, &U) {
+        let entry_amount = &self.amounts;
         let amount = entry_amount.amount::<Self>();
         let from = self.index - amount;
-        let states = self.states.range(from..self.index);
-        (states, &entry_amount.entry)
+        (from..self.index, &entry_amount.entry)
+    }
+    pub fn get(&self) -> (impl LogIter<&T>, &U) {
+        let (range, entry) = self.get_range_entry();
+        let states = self.states.range(range);
+        (states, entry)
     }
     pub fn unlogged_get_mut(&mut self) -> (impl LogIter<&mut T>, &mut U) {
         let entry_amount = self.amounts.unlogged_get_mut();
@@ -140,7 +270,7 @@ where
     }
     pub fn clear(&mut self) {
         self.amounts.clear();
-        let amount = self.amounts.get().amount::<Self>();
+        let amount = self.amounts.amount::<Self>();
         self.states.drain(..self.index);
         self.states.truncate(amount);
         self.index = 0;
@@ -155,14 +285,14 @@ where
         self.index = 0;
     }
     pub fn backward_log(&mut self) -> Result<(), OutOfLog> {
-        let amount = self.amounts.get().amount::<Self>();
+        let amount = self.amounts.amount::<Self>();
         self.amounts.backward_log()?;
         self.index -= amount;
         Ok(())
     }
     pub fn forward_log(&mut self) -> Result<(), OutOfLog> {
         self.amounts.forward_log()?;
-        let amount = self.amounts.get().amount::<Self>();
+        let amount = self.amounts.amount::<Self>();
         self.index += amount;
         Ok(())
     }
@@ -248,9 +378,9 @@ where
 
 impl<T, U, const AMOUNT_BYTES: usize> StatesLog<T, U, AMOUNT_BYTES>
 where
-    Self: WithAmount<Amount: NotUSize>,
+    Self: WithAmount,
 {
-    pub fn try_new(
+    fn try_new_internal(
         iter: impl IntoIterator<Item = T>,
         entry: U,
     ) -> Result<Self, AmountErr<VecDeque<T>, U>> {
@@ -265,7 +395,7 @@ where
             Err(_) => Err(AmountErr::new::<Self>(states, entry, pushed_amount)),
         }
     }
-    pub fn try_with_capacities(
+    fn try_with_capacities_internal(
         iter: impl IntoIterator<Item = T>,
         entry: U,
         states_capacity: usize,
@@ -282,6 +412,26 @@ where
             }),
             Err(_) => Err(AmountErr::new::<Self>(states, entry, pushed_amount)),
         }
+    }
+}
+
+impl<T, U, const AMOUNT_BYTES: usize> StatesLog<T, U, AMOUNT_BYTES>
+where
+    Self: WithAmount<Amount: NotUSize>,
+{
+    pub fn try_new(
+        iter: impl IntoIterator<Item = T>,
+        entry: U,
+    ) -> Result<Self, AmountErr<VecDeque<T>, U>> {
+        Self::try_new_internal(iter, entry)
+    }
+    pub fn try_with_capacities(
+        iter: impl IntoIterator<Item = T>,
+        entry: U,
+        states_capacity: usize,
+        log_capacity: usize,
+    ) -> Result<Self, AmountErr<VecDeque<T>, U>> {
+        Self::try_with_capacities_internal(iter, entry, states_capacity, log_capacity)
     }
     pub fn try_push_present<Out: Into<U>>(
         &mut self,

@@ -16,11 +16,40 @@ pub struct TransitionLog<T> {
     index: usize,
 }
 
-#[derive(Debug)]
-#[allow(dead_code)]
-struct TransitionLogDebug {
-    transitions_len: usize,
-    index: usize,
+#[cfg(feature = "serde")]
+mod serde_with {
+    use std::collections::VecDeque;
+
+    use serde::{Deserialize, Serialize};
+
+    use crate::log::serde_with::{LoglessWithCapacity, WithCapacity, WithCapacityWrapper};
+
+    use super::TransitionLog;
+
+    impl<T: Serialize + for<'de> Deserialize<'de> + 'static> WithCapacity for TransitionLog<T> {
+        type Se<'se> = (WithCapacityWrapper<&'se VecDeque<T>>, usize);
+        type De = (WithCapacityWrapper<VecDeque<T>>, usize);
+        fn get_with_capacity(&self) -> Self::Se<'_> {
+            (WithCapacityWrapper(&self.transitions), self.index)
+        }
+        fn from_with_capacity(with_capacity: Self::De) -> Self {
+            Self {
+                transitions: with_capacity.0 .0,
+                index: with_capacity.1,
+            }
+        }
+    }
+
+    impl<T> LoglessWithCapacity for TransitionLog<T> {
+        type Se<'se> = usize where T: 'se;
+        type De = usize;
+        fn get_logless_with_capacity(&self) -> Self::Se<'_> {
+            self.transitions.capacity()
+        }
+        fn from_logless_with_capacity(logless_with_capacity: Self::De) -> Self {
+            Self::with_capacity(logless_with_capacity)
+        }
+    }
 }
 
 impl<T> Default for TransitionLog<T> {
@@ -97,6 +126,13 @@ impl<T> TransitionLog<T> {
         if let Some(transition) = self.transitions.get_mut(index) {
             self.index = index;
             return Ok(transition);
+        }
+
+        #[derive(Debug)]
+        #[allow(dead_code)]
+        struct TransitionLogDebug {
+            transitions_len: usize,
+            index: usize,
         }
 
         let debug_struct = TransitionLogDebug {
