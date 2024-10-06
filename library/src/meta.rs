@@ -413,12 +413,9 @@ impl VerifyingRevMeta<'_, '_> {
     /// 
     /// [`Self::get_last_run`] is a fallible variant.
     pub fn last_run(&self) -> Option<usize> {
-        match &self.last_run_or_err {
-            Ok(last_run) => last_run.map(NonZeroUsize::get),
-            Err(err) => panic!(
-                "VerifyingRevMeta::last_run panicked: VerifyingRevMeta::get_param failed previously, see log\n{err:#?}"
-            )
-        }
+        self.get_last_run().unwrap_or_else(|err| panic!(
+            "VerifyingRevMeta::last_run panicked: VerifyingRevMeta::get_param failed previously, see log\n{err:#?}"
+        ))
     }
 
     /// Get the frame the system last ran.
