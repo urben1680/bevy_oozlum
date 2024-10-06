@@ -4,7 +4,7 @@ use bevy::{
     ecs::{
         event::Event,
         observer::{TriggerEvent, TriggerTargets},
-        system::{Commands, EntityCommands, Resource},
+        system::{Commands, Resource},
         world::{DeferredWorld, FromWorld, World},
     },
     utils::synccell::SyncCell,
@@ -15,7 +15,6 @@ use crate::{
     meta::{Direction, RevMeta},
 };
 
-mod bundle;
 pub mod hook;
 pub mod observer;
 
@@ -94,10 +93,6 @@ impl<R: Resource> InitializedRevCommand for ResourceSwap<R> {
         self.undo(world)
     }
 }
-
-pub trait RevEntityCommands {}
-
-impl<'a> RevEntityCommands for EntityCommands<'a> {}
 
 pub trait RevCommand<Marker>: Send + 'static {
     fn rev_apply(self, world: &mut World) -> Option<impl InitializedRevCommand>;

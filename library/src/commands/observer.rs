@@ -276,7 +276,7 @@ mod trigger_target {
     }
 }
 
-#[cfg(not(debug_assertions))]
+#[cfg(not(debug_assertions))] // todo, too hot, make ObserverLog have two logs
 mod trigger_target {
     use bevy::ecs::{component::ComponentId, entity::Entity, event::Event, world::World};
 

@@ -1,11 +1,15 @@
 use core::{num::NonZeroUsize, ops::Range};
+use std::ops::Deref;
 
 use bevy::{
     ecs::{
-        archetype::ArchetypeComponentId, component::ComponentId, query::Access, system::Resource,
+        archetype::ArchetypeComponentId,
+        component::ComponentId,
+        query::Access,
+        system::{ReadOnlySystemParam, Resource, SystemMeta, SystemParam},
         world::World,
     },
-    log::warn_once,
+    log::{error, warn_once},
     prelude::{IntoSystem, Res, System},
     reflect::{std_traits::ReflectDefault, Reflect},
     utils::tracing::info,
@@ -15,7 +19,7 @@ use bevy::{
 use bevy::reflect::{ReflectDeserialize, ReflectSerialize};
 
 use crate::{
-    log::{PackedTime, WithLoggedAt},
+    log::{OutOfLog, PackedTime, StateLog, WithLoggedAt},
     world::RevWorld,
     RevUpdate,
 };
@@ -37,6 +41,12 @@ pub enum RevTryRunScheduleError {
 pub enum Direction {
     Forward { log: bool },
     BackwardLog,
+}
+
+#[allow(non_upper_case_globals)] // every crate need a little crime
+impl Direction {
+    pub const NotLog: Self = Self::Forward { log: false };
+    pub const ForwardLog: Self = Self::Forward { log: true };
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Reflect)]
@@ -371,6 +381,196 @@ fn reduction_successful(updates_until_pause: &mut NonZeroUsize) -> bool {
         .map(|reduced| *updates_until_pause = reduced)
         .is_some()
 }
+
+/// `RevMeta` system param wrapper to keep track of the system's running frames.
+///
+/// Can be used to automatically verify the system is running at the right frame
+/// and to get the frame number the system last ran, if any.
+#[derive(Debug)]
+pub struct RevMetaWithVerify<'w> {
+    meta: &'w RevMeta,
+    last_run: Result<Option<usize>, LastRunError>,
+}
+
+impl Deref for RevMetaWithVerify<'_> {
+    type Target = RevMeta;
+    fn deref(&self) -> &Self::Target {
+        self.meta
+    }
+}
+
+impl RevMetaWithVerify<'_> {
+    pub fn last_run(&self) -> Option<usize> {
+        match &self.last_run {
+            Ok(last_run) => last_run.clone(),
+            Err(err) => panic!("RevMetaWithVerify::last_run panicked: RevMetaWithVerify::get_param failed previously, see log\n{err:#?}")
+        }
+    }
+    pub fn get_last_run(&self) -> &Result<Option<usize>, LastRunError> {
+        &self.last_run
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct LastRunError {
+    pub variant: LastRunErrorVariant,
+    pub frame_log_at_err: Option<StateLog<WithLoggedAt>>,
+    pub meta_at_err: RevMeta,
+}
+
+#[derive(Copy, Clone, Debug)]
+pub enum LastRunErrorVariant {
+    ForwardLogFirstRun,
+    BackwardLogFirstRun,
+    ForwardLogFrameMismatch,
+    BackwardLogFrameMismatch,
+    ForwardLogOutOfLog,
+    BackwardLogOutOfLog,
+    NonRevSchedule,
+}
+
+impl LastRunErrorVariant {
+    fn log_and_convert(
+        self,
+        frame_log: &Result<Option<StateLog<WithLoggedAt>>, LastRunError>,
+        rev_meta: &RevMeta,
+        system_meta: &SystemMeta,
+    ) -> LastRunError {
+        let name = system_meta.name();
+        let err = LastRunError {
+            variant: self,
+            frame_log_at_err: frame_log.as_ref().ok().cloned().flatten(),
+            meta_at_err: rev_meta.clone(),
+        };
+        const SUGGESTION: &'static str = ", check if the schedule this system is added to is actually a reversible schedule \
+            by using `rev_` prefixed methods on the `App` and that the schedule and was correctly triggered";
+        let log_first_run = |direction| {
+            error!(
+            "RevMetaWithVerify::get_param failed: first run of system \"{name}\" happened during {direction} log schedule, \
+            unable to log states that can be jumped to{SUGGESTION}\n{err:#?}",
+        )
+        };
+        let mismatch = |direction| {
+            let mut expected = err
+                .frame_log_at_err
+                .as_ref()
+                .expect("last_run was constructed previously for this err")
+                .logged_at();
+            let actual = rev_meta.now();
+            if direction == "backward" {
+                expected -= 1;
+            }
+            error!(
+                "RevMetaWithVerify::get_param failed: system \"{name}\" is expected to run at frame {expected} but ran at \
+                frame {actual} during {direction} log schedule{SUGGESTION}\n{err:#?}"
+            )
+        };
+        let out_of_log = |direction| {
+            error!(
+            "RevMetaWithVerify::get_param failed: system \"{name}\" is out of log during {direction} log schedule, at least \
+            once a run during another schedule was missed{SUGGESTION}\n{err:#?}",
+        )
+        };
+        match self {
+            Self::ForwardLogFirstRun => log_first_run("forward"),
+            Self::BackwardLogFirstRun => log_first_run("backward"),
+            Self::ForwardLogFrameMismatch => mismatch("forward"),
+            Self::BackwardLogFrameMismatch => mismatch("backward"),
+            Self::ForwardLogOutOfLog => out_of_log("forward"),
+            Self::BackwardLogOutOfLog => out_of_log("backward"),
+            Self::NonRevSchedule => error!(
+                "RevMetaWithVerify::get_param failed: run of system \"{name}\" happened during non-reversible schedule, \
+                be aware this param is intended only for systems in reversible schedules{SUGGESTION}\n{err:#?}",
+            )
+        }
+        err
+    }
+}
+
+#[doc(hidden)]
+pub struct RevMetaWithVerifyState {
+    meta: ComponentId,
+    frame_log: Result<Option<StateLog<WithLoggedAt>>, LastRunError>,
+}
+
+unsafe impl SystemParam for RevMetaWithVerify<'_> {
+    type Item<'world, 'state> = RevMetaWithVerify<'world>;
+    type State = RevMetaWithVerifyState;
+    fn init_state(
+        world: &mut World,
+        system_meta: &mut bevy::ecs::system::SystemMeta,
+    ) -> Self::State {
+        let meta = Res::<RevMeta>::init_state(world, system_meta);
+        RevMetaWithVerifyState {
+            meta,
+            frame_log: Ok(None),
+        }
+    }
+    unsafe fn get_param<'world, 'state>(
+        state: &'state mut Self::State,
+        system_meta: &bevy::ecs::system::SystemMeta,
+        world: bevy::ecs::world::unsafe_world_cell::UnsafeWorldCell<'world>,
+        _change_tick: bevy::ecs::component::Tick,
+    ) -> Self::Item<'world, 'state> {
+        let meta: &RevMeta = world
+            .get_resource_by_id(state.meta)
+            .expect("todo, upcoming verify params feature")
+            .deref(); //SAFETY: correct ComponentId from Res::<RevMeta>::init_state
+        let frame_log = match state.frame_log.as_mut() {
+            Ok(frame_log) => frame_log.as_mut(),
+            Err(err) => {
+                return RevMetaWithVerify {
+                    meta,
+                    last_run: Err(err.clone()),
+                }
+            }
+        };
+        let last_run = frame_log.as_ref().map(|frame_log| frame_log.logged_at());
+        let last_run_err = match (meta.get_direction(), frame_log) {
+            (Some(Direction::NotLog), Some(frame_log)) => {
+                frame_log.pop_past_by_timestamp(meta.log_range().start);
+                frame_log.push_present(meta.now.into());
+                None
+            }
+            (Some(Direction::ForwardLog), Some(frame_log)) => match frame_log.forward_log() {
+                Ok(()) => {
+                    let last_run = frame_log.logged_at();
+                    (last_run != meta.now())
+                        .then_some(LastRunErrorVariant::ForwardLogFrameMismatch)
+                }
+                Err(OutOfLog) => Some(LastRunErrorVariant::ForwardLogOutOfLog),
+            },
+            (Some(Direction::BackwardLog), Some(frame_log)) => match frame_log.backward_log() {
+                Ok(()) => {
+                    let last_run = frame_log.logged_at() - 1;
+                    (last_run != meta.now())
+                        .then_some(LastRunErrorVariant::BackwardLogFrameMismatch)
+                }
+                Err(OutOfLog) => Some(LastRunErrorVariant::BackwardLogOutOfLog),
+            },
+            (Some(Direction::NotLog), None) => {
+                let logged_at: WithLoggedAt = meta.now().into();
+                state.frame_log = Ok(Some(logged_at.into()));
+                None
+            }
+            (None, _) => Some(LastRunErrorVariant::NonRevSchedule),
+            (Some(Direction::ForwardLog), None) => Some(LastRunErrorVariant::ForwardLogFirstRun),
+            (Some(Direction::BackwardLog), None) => Some(LastRunErrorVariant::BackwardLogFirstRun),
+        };
+        let last_run = match last_run_err {
+            None => Ok(last_run),
+            Some(err) => {
+                let err = err.log_and_convert(&state.frame_log, meta, system_meta);
+                state.frame_log = Err(err.clone());
+                Err(err)
+            }
+        };
+        RevMetaWithVerify { meta, last_run }
+    }
+}
+
+// SAFETY: Only reads RevMeta
+unsafe impl ReadOnlySystemParam for RevMetaWithVerify<'_> {}
 
 #[cfg(test)]
 mod test {
