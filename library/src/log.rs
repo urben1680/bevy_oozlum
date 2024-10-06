@@ -576,6 +576,12 @@ impl<T: Debug> Debug for WithLoggedAt<T> {
 }
 
 impl<T> WithLoggedAt<T> {
+    pub fn new_default(logged_at: usize) -> Self
+    where
+        T: Default,
+    {
+        Self::new(T::default(), logged_at)
+    }
     pub fn new(value: T, logged_at: usize) -> Self {
         Self {
             value,
