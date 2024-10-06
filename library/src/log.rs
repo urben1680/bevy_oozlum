@@ -321,7 +321,8 @@ impl PackedTime {
             )
         })
     }
-    fn from_internal_err(time: usize) -> String {
+    #[cfg(feature = "serde")]
+    fn from_serde_err(time: usize) -> String {
         format!(
             "{time} does not fit into {} bytes, cannot map this value to `PackedTime` \
             on this machine, increase the `time_bytes_*` feature of the reversible_systems \
@@ -350,7 +351,7 @@ impl<'de> serde::Deserialize<'de> for PackedTime {
         match usize::deserialize(deserializer) {
             Ok(time) => match Self::try_from(time) {
                 Ok(this) => Ok(this),
-                Err(USizeTooLarge) => Err(serde::de::Error::custom(Self::from_internal_err(time))),
+                Err(USizeTooLarge) => Err(serde::de::Error::custom(Self::from_serde_err(time))),
             },
             Err(err) => Err(err),
         }

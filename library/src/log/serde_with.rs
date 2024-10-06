@@ -149,9 +149,9 @@ where
     where
         D: Deserializer<'de>,
     {
-        struct VecVisitor<T>(PhantomData<T>);
+        struct WithCapacityVisitor<T>(PhantomData<T>);
 
-        impl<'de, T: Deserialize<'de>> Visitor<'de> for VecVisitor<T> {
+        impl<'de, T: Deserialize<'de>> Visitor<'de> for WithCapacityVisitor<T> {
             type Value = WithCapacityWrapper<VecDeque<T>>;
 
             fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
@@ -177,7 +177,7 @@ where
             }
         }
 
-        deserializer.deserialize_seq(VecVisitor(PhantomData))
+        deserializer.deserialize_seq(WithCapacityVisitor(PhantomData))
     }
 }
 

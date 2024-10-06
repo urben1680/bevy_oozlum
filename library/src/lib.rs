@@ -2,9 +2,8 @@
 TODO:
 
 Features:
-- reversible Event reader/writer
 - entity commands, standard rev commands
--- postponed to bevy 0.15 due to required components + disabled entities
+-- postponed to bevy 0.15 due to required components + disabled entities + moving components
 - add license
 
 Enhancements:
@@ -23,6 +22,10 @@ Enhancements:
 -- a second sync point aftwerwards should be scheduled to assert nothing ist postponed into it
 - use serde from bevy reexport
 - seal log structs (pub after appearing in pub interface)
+- thiserror for error types
+- reflect behind feature flag
+- use upcoming param verification for system (params)
+- RevMetaWithVerify tests
 
 Docs
 - examples
@@ -36,6 +39,8 @@ UNSUPPORTED:
 - Schedule::graph_mut
 - ScheduleBuildSettings::auto_insert_apply_deferred
 - Trigger::event_mut
+- EventReader/Writer
+-- no usecase, work with them in Non-Log Forward and log the effect of them instead
 */
 
 use std::hash::Hash;
@@ -50,7 +55,6 @@ use meta::RevMeta;
 
 pub mod app;
 pub mod commands;
-pub mod event;
 pub mod log;
 pub mod meta;
 pub mod schedule;
