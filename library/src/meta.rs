@@ -389,7 +389,7 @@ fn reduction_successful(updates_until_pause: &mut NonZeroUsize) -> bool {
 #[derive(Debug, Copy, Clone)]
 pub struct VerifyingRevMeta<'w, 's> {
     meta: &'w RevMeta,
-    last_run_or_err: Result<Option<NonZeroUsize>, LastRunError<'s>>,
+    last_run_or_err: Result<Option<NonZeroUsize>, VerifyError<'s>>,
 }
 
 impl Deref for VerifyingRevMeta<'_, '_> {
@@ -426,7 +426,7 @@ impl VerifyingRevMeta<'_, '_> {
     ///
     /// Returns Err if the update of the value failed or if the the current frame does not
     /// match with the frame that is logged by this SystemParam.
-    pub fn get_last_run(&self) -> Result<Option<usize>, LastRunError> {
+    pub fn get_last_run(&self) -> Result<Option<usize>, VerifyError> {
         self.last_run_or_err
             .map(|last_run| last_run.map(NonZeroUsize::get))
     }
@@ -434,13 +434,13 @@ impl VerifyingRevMeta<'_, '_> {
 
 #[derive(Clone, Copy, Debug)]
 #[allow(dead_code)]
-pub struct LastRunError<'s> {
+pub struct VerifyError<'s> {
     frame_log_at_err: &'s StateLog<WithLoggedAt>,
-    err_state: &'s LastRunErrorState,
+    err_state: &'s VerifyErrorState,
 }
 
 #[derive(Copy, Clone, Debug)]
-pub enum LastRunErrorVariant {
+enum VerifyErrorVariant {
     ForwardLogFrameMismatch,
     BackwardLogFrameMismatch,
     ForwardLogOutOfLog,
@@ -448,14 +448,14 @@ pub enum LastRunErrorVariant {
     NonRevSchedule,
 }
 
-impl LastRunErrorVariant {
+impl VerifyErrorVariant {
     fn log_and_convert(
         self,
         frame_log: &StateLog<WithLoggedAt>,
         rev_meta: &RevMeta,
         system_name: &str,
-    ) -> LastRunErrorState {
-        let err = LastRunErrorState {
+    ) -> VerifyErrorState {
+        let err = VerifyErrorState {
             variant: self,
             meta_at_err: rev_meta.clone(),
         };
@@ -495,8 +495,8 @@ impl LastRunErrorVariant {
 #[doc(hidden)]
 pub struct VerifyingRevMetaState {
     meta: ComponentId,
-    frame_log: StateLog<WithLoggedAt>, //todo: zurück zo None durch backward log
-    error: Option<LastRunErrorState>,
+    frame_log: StateLog<WithLoggedAt>,
+    error: Option<VerifyErrorState>,
 }
 
 impl VerifyingRevMetaState {
@@ -508,7 +508,7 @@ impl VerifyingRevMetaState {
         // borrow checker does not like `if let Some` here
         if self.error.is_some() {
             let err_state = self.error.as_ref().expect("just checked that Some");
-            let err = LastRunError {
+            let err = VerifyError {
                 frame_log_at_err: &self.frame_log,
                 err_state,
             };
@@ -529,31 +529,31 @@ impl VerifyingRevMetaState {
             Some(Direction::ForwardLog) => {
                 last_run = self.frame_log.logged_at();
                 if self.frame_log.forward_log() == Err(OutOfLog) {
-                    Some(LastRunErrorVariant::ForwardLogOutOfLog)
+                    Some(VerifyErrorVariant::ForwardLogOutOfLog)
                 } else if self.frame_log.logged_at() != meta.now() {
-                    Some(LastRunErrorVariant::ForwardLogFrameMismatch)
+                    Some(VerifyErrorVariant::ForwardLogFrameMismatch)
                 } else {
                     None
                 }
             }
             Some(Direction::BackwardLog) => {
                 if self.frame_log.logged_at() - 1 != meta.now() {
-                    Some(LastRunErrorVariant::BackwardLogFrameMismatch)
+                    Some(VerifyErrorVariant::BackwardLogFrameMismatch)
                 } else if self.frame_log.backward_log() == Err(OutOfLog) {
-                    Some(LastRunErrorVariant::BackwardLogOutOfLog)
+                    Some(VerifyErrorVariant::BackwardLogOutOfLog)
                 } else {
                     last_run = self.frame_log.logged_at();
                     None
                 }
             }
-            None => Some(LastRunErrorVariant::NonRevSchedule),
+            None => Some(VerifyErrorVariant::NonRevSchedule),
         };
 
         let last_run_or_err = match last_run_err {
             None => Ok(NonZeroUsize::new(last_run)),
             Some(err) => {
                 self.error = Some(err.log_and_convert(&self.frame_log, meta, system_name));
-                Err(LastRunError {
+                Err(VerifyError {
                     frame_log_at_err: &self.frame_log,
                     err_state: self.error.as_ref().expect("just set to Some"),
                 })
@@ -569,8 +569,8 @@ impl VerifyingRevMetaState {
 
 #[derive(Debug)]
 #[allow(dead_code)]
-struct LastRunErrorState {
-    variant: LastRunErrorVariant,
+struct VerifyErrorState {
+    variant: VerifyErrorVariant,
     meta_at_err: RevMeta,
 }
 
