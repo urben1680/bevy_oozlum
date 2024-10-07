@@ -433,70 +433,16 @@ impl VerifyingRevMeta<'_, '_> {
 }
 
 #[derive(Clone, Copy, Debug)]
-#[allow(dead_code)]
 pub struct VerifyError<'s> {
-    frame_log_at_err: &'s StateLog<WithLoggedAt>,
-    err_state: &'s VerifyErrorState,
-}
-
-#[derive(Copy, Clone, Debug)]
-enum VerifyErrorVariant {
-    ForwardLogFrameMismatch,
-    BackwardLogFrameMismatch,
-    ForwardLogOutOfLog,
-    BackwardLogOutOfLog,
-    NonRevSchedule,
-}
-
-impl VerifyErrorVariant {
-    fn log_and_convert(
-        self,
-        frame_log: &StateLog<WithLoggedAt>,
-        rev_meta: &RevMeta,
-        system_name: &str,
-    ) -> VerifyErrorState {
-        let err = VerifyErrorState {
-            variant: self,
-            meta_at_err: rev_meta.clone(),
-        };
-        const SUGGESTION: &'static str = ", check if the schedule this system is added to is actually a reversible \
-            schedule by using `rev_` prefixed methods on the `App` and that the schedule and was correctly triggered";
-        let mismatch = |direction| {
-            let mut expected = frame_log.logged_at();
-            if direction == "backward" {
-                expected -= 1;
-            }
-            let actual = rev_meta.now();
-            error!(
-                "VerifyingRevMeta::get_param failed: system \"{system_name}\" is expected to run at frame {expected} \
-                but ran at  frame {actual} during {direction} log schedule{SUGGESTION}\n{err:#?}\n{frame_log:#?}"
-            )
-        };
-        let out_of_log = |direction| {
-            error!(
-                "VerifyingRevMeta::get_param failed: system \"{system_name}\" is out of log during {direction} log \
-                schedule, at least once a run during another schedule was missed{SUGGESTION}\n{err:#?}\n{frame_log:#?}",
-            )
-        };
-        match self {
-            Self::ForwardLogFrameMismatch => mismatch("forward"),
-            Self::BackwardLogFrameMismatch => mismatch("backward"),
-            Self::ForwardLogOutOfLog => out_of_log("forward"),
-            Self::BackwardLogOutOfLog => out_of_log("backward"),
-            Self::NonRevSchedule => error!(
-                "VerifyingRevMeta::get_param failed: run of system \"{system_name}\" happened during non-reversible \
-                schedule{SUGGESTION}\n{err:#?}\n{frame_log:#?}",
-            )
-        }
-        err
-    }
+    pub frame_log_at_err: &'s StateLog<WithLoggedAt>,
+    pub meta_at_err: &'s RevMeta,
 }
 
 #[doc(hidden)]
 pub struct VerifyingRevMetaState {
     meta: ComponentId,
     frame_log: StateLog<WithLoggedAt>,
-    error: Option<VerifyErrorState>,
+    error: Option<RevMeta>,
 }
 
 impl VerifyingRevMetaState {
@@ -505,73 +451,87 @@ impl VerifyingRevMetaState {
         meta: &'w RevMeta,
         system_name: &str,
     ) -> VerifyingRevMeta<'w, 's> {
-        // borrow checker does not like `if let Some` here
-        if self.error.is_some() {
-            let err_state = self.error.as_ref().expect("just checked that Some");
-            let err = VerifyError {
-                frame_log_at_err: &self.frame_log,
-                err_state,
-            };
-            return VerifyingRevMeta {
-                meta,
-                last_run_or_err: Err(err),
-            };
+        let mut last_run = None;
+        if self.error.is_none() {
+            last_run = self.update_state_get_last_run(meta, system_name);
         }
-
+        match self.error.as_ref() {
+            None => VerifyingRevMeta {
+                meta,
+                last_run_or_err: Ok(last_run),
+            },
+            Some(meta_at_err) => VerifyingRevMeta {
+                meta,
+                last_run_or_err: Err(VerifyError {
+                    frame_log_at_err: &self.frame_log,
+                    meta_at_err,
+                }),
+            },
+        }
+    }
+    fn update_state_get_last_run(
+        &mut self,
+        meta: &RevMeta,
+        system_name: &str,
+    ) -> Option<NonZeroUsize> {
         let mut last_run = 0;
-        let last_run_err = match meta.get_direction() {
+        match meta.get_direction() {
             Some(Direction::NotLog) => {
                 last_run = self.frame_log.logged_at();
                 self.frame_log.pop_past_by_timestamp(meta.log_range().start);
                 self.frame_log.push_present(meta.now.into());
-                None
             }
             Some(Direction::ForwardLog) => {
                 last_run = self.frame_log.logged_at();
                 if self.frame_log.forward_log() == Err(OutOfLog) {
-                    Some(VerifyErrorVariant::ForwardLogOutOfLog)
+                    self.out_of_log("forward", meta, system_name);
                 } else if self.frame_log.logged_at() != meta.now() {
-                    Some(VerifyErrorVariant::ForwardLogFrameMismatch)
-                } else {
-                    None
+                    self.mismatch("forward", meta, system_name);
                 }
             }
             Some(Direction::BackwardLog) => {
                 if self.frame_log.logged_at() - 1 != meta.now() {
-                    Some(VerifyErrorVariant::BackwardLogFrameMismatch)
+                    self.mismatch("backward", meta, system_name);
                 } else if self.frame_log.backward_log() == Err(OutOfLog) {
-                    Some(VerifyErrorVariant::BackwardLogOutOfLog)
-                } else {
-                    last_run = self.frame_log.logged_at();
-                    None
+                    self.out_of_log("backward", meta, system_name);
                 }
+                last_run = self.frame_log.logged_at();
             }
-            None => Some(VerifyErrorVariant::NonRevSchedule),
+            None => self.non_rev_schedule(meta, system_name),
         };
-
-        let last_run_or_err = match last_run_err {
-            None => Ok(NonZeroUsize::new(last_run)),
-            Some(err) => {
-                self.error = Some(err.log_and_convert(&self.frame_log, meta, system_name));
-                Err(VerifyError {
-                    frame_log_at_err: &self.frame_log,
-                    err_state: self.error.as_ref().expect("just set to Some"),
-                })
-            }
-        };
-
-        VerifyingRevMeta {
-            meta,
-            last_run_or_err,
-        }
+        NonZeroUsize::new(last_run)
     }
-}
-
-#[derive(Debug)]
-#[allow(dead_code)]
-struct VerifyErrorState {
-    variant: VerifyErrorVariant,
-    meta_at_err: RevMeta,
+    const SUGGESTION: &'static str = ", check if the schedule this system is added to is actually a reversible \
+        schedule by using `rev_` prefixed methods on the `App` and that the schedule and was correctly triggered";
+    fn out_of_log(&mut self, direction: &str, meta: &RevMeta, system_name: &str) {
+        error!(
+            "VerifyingRevMeta::get_param failed: system \"{system_name}\" is out of log during {direction} log \
+            schedule, at least once a run during another schedule was missed{}\n{meta:#?}\n{:#?}",
+            Self::SUGGESTION, self.frame_log
+        );
+        self.error = Some(meta.clone());
+    }
+    fn mismatch(&mut self, direction: &str, meta: &RevMeta, system_name: &str) {
+        let mut expected = self.frame_log.logged_at();
+        if direction == "backward" {
+            expected -= 1;
+        }
+        let actual = meta.now();
+        error!(
+            "VerifyingRevMeta::get_param failed: system \"{system_name}\" is expected to run at frame {expected} \
+            but ran at  frame {actual} during {direction} log schedule{}\n{meta:#?}\n{:#?}",
+            Self::SUGGESTION, self.frame_log
+        );
+        self.error = Some(meta.clone());
+    }
+    fn non_rev_schedule(&mut self, meta: &RevMeta, system_name: &str) {
+        error!(
+            "VerifyingRevMeta::get_param failed: run of system \"{system_name}\" happened during non-reversible \
+            schedule{}\n{meta:#?}\n{:#?}",
+            Self::SUGGESTION, self.frame_log
+        );
+        self.error = Some(meta.clone());
+    }
 }
 
 unsafe impl SystemParam for VerifyingRevMeta<'_, '_> {
