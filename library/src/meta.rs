@@ -401,16 +401,16 @@ impl Deref for VerifyingRevMeta<'_, '_> {
 
 impl VerifyingRevMeta<'_, '_> {
     /// Get the frame the system last ran.
-    /// 
+    ///
     /// Returns None if the system did not run in the past.
-    /// 
+    ///
     /// Note that this is the chronical last run and therefore is always in the past.
-    /// 
+    ///
     /// # Panics
-    /// 
+    ///
     /// Panics if the update of the value failed or if the the current frame does not
     /// match with the frame that is logged by this SystemParam.
-    /// 
+    ///
     /// [`Self::get_last_run`] is a fallible variant.
     pub fn last_run(&self) -> Option<usize> {
         self.get_last_run().unwrap_or_else(|err| panic!(
@@ -419,16 +419,15 @@ impl VerifyingRevMeta<'_, '_> {
     }
 
     /// Get the frame the system last ran.
-    /// 
+    ///
     /// Returns None if the system did not run in the past.
-    /// 
+    ///
     /// Note that this is the chronical last run and therefore is always in the past.
-    /// 
+    ///
     /// Returns Err if the update of the value failed or if the the current frame does not
     /// match with the frame that is logged by this SystemParam.
     pub fn get_last_run(&self) -> Result<Option<usize>, LastRunError> {
         self.last_run_or_err
-            .clone()
             .map(|last_run| last_run.map(NonZeroUsize::get))
     }
 }
