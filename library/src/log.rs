@@ -636,7 +636,7 @@ impl<T> RareValue<T> {
         self.skips() + 1 // `self.data` adds to the len
     }
     fn skips(&self) -> usize {
-        usize::from(self.skips)
+        self.skips.into()
     }
 }
 

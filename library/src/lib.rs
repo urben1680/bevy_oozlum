@@ -3,7 +3,7 @@ TODO:
 
 Features:
 - entity commands, standard rev commands
--- postponed to bevy 0.15 due to required components + disabled entities + moving components
+-- postponed due to required components + disabled entities + moving components
 - add license
 
 Enhancements:
