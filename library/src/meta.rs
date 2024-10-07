@@ -131,13 +131,13 @@ pub struct RevMeta {
     /// As the world is always in a certain state, the amount cannot be zero.
     ///
     /// World states that become too old will no longer be accessible after an update, even if raising this value afterwards.
-    /// If one wants to keep a certain frame accessible, one needs to _either_:
+    /// If one wants to keep a certain `frame` accessible, one needs to _either_:
     /// - regularily set this value to not less than `now() + 2 - frame` before the next update
     /// - set it to `None`, disabling forgetting world states
     ///
     /// Reducing this value alone does not cause deallocations, this has to be done manually with each [`crate::log`] struct if desired.
     ///
-    /// Changing this value is always possible but only comes into effect when updating the world during non-log [`Direction::Forward`].
+    /// Changing this value is always possible but only comes into effect when updating the world during [`Direction::NotLog`].
     pub max_len: Option<NonZeroUsize>,
     now: usize,
     range: Range<usize>,
@@ -289,7 +289,7 @@ impl RevMeta {
         if let Err(RevTryRunScheduleError::ScheduleMissing { meta, .. }) =
             Self::try_update_world(world)
         {
-            warn_once!("RevMeta cannot find reversible schedule RevUpdate, make sure to not call it or RevMeta::update_world recursively.\n{meta:?}");
+            warn_once!("RevMeta cannot find reversible schedule RevUpdate, make sure to not run it or call RevMeta::update_world recursively.\n{meta:?}");
         }
     }
     pub fn update(&mut self) {
@@ -442,7 +442,7 @@ pub struct VerifyError<'s> {
 pub struct VerifyingRevMetaState {
     meta: ComponentId,
     frame_log: StateLog<WithLoggedAt>,
-    error: Option<RevMeta>,
+    meta_at_err: Option<RevMeta>,
 }
 
 impl VerifyingRevMetaState {
@@ -452,10 +452,10 @@ impl VerifyingRevMetaState {
         system_name: &str,
     ) -> VerifyingRevMeta<'w, 's> {
         let mut last_run = None;
-        if self.error.is_none() {
+        if self.meta_at_err.is_none() {
             last_run = self.update_state_get_last_run(meta, system_name);
         }
-        match self.error.as_ref() {
+        match self.meta_at_err.as_ref() {
             None => VerifyingRevMeta {
                 meta,
                 last_run_or_err: Ok(last_run),
@@ -502,14 +502,14 @@ impl VerifyingRevMetaState {
         NonZeroUsize::new(last_run)
     }
     const SUGGESTION: &'static str = ", check if the schedule this system is added to is actually a reversible \
-        schedule by using `rev_` prefixed methods on the `App` and that the schedule and was correctly triggered";
+        schedule by using `rev_` prefixed methods on the `App` and that the schedule and is correctly triggered";
     fn out_of_log(&mut self, direction: &str, meta: &RevMeta, system_name: &str) {
         error!(
             "VerifyingRevMeta::get_param failed: system \"{system_name}\" is out of log during {direction} log \
             schedule, at least once a run during another schedule was missed{}\n{meta:#?}\n{:#?}",
             Self::SUGGESTION, self.frame_log
         );
-        self.error = Some(meta.clone());
+        self.meta_at_err = Some(meta.clone());
     }
     fn mismatch(&mut self, direction: &str, meta: &RevMeta, system_name: &str) {
         let mut expected = self.frame_log.logged_at();
@@ -522,7 +522,7 @@ impl VerifyingRevMetaState {
             but ran at  frame {actual} during {direction} log schedule{}\n{meta:#?}\n{:#?}",
             Self::SUGGESTION, self.frame_log
         );
-        self.error = Some(meta.clone());
+        self.meta_at_err = Some(meta.clone());
     }
     fn non_rev_schedule(&mut self, meta: &RevMeta, system_name: &str) {
         error!(
@@ -530,7 +530,7 @@ impl VerifyingRevMetaState {
             schedule{}\n{meta:#?}\n{:#?}",
             Self::SUGGESTION, self.frame_log
         );
-        self.error = Some(meta.clone());
+        self.meta_at_err = Some(meta.clone());
     }
 }
 
@@ -540,14 +540,16 @@ unsafe impl SystemParam for VerifyingRevMeta<'_, '_> {
     fn init_state(world: &mut World, system_meta: &mut SystemMeta) -> Self::State {
         let meta = Res::<RevMeta>::init_state(world, system_meta);
 
-        // 0 is a special value here, during non-log schedules the current frame is never 0, so if the
-        // value passed to Self::Item is 0, this indicates that the system did not run in a past frame
-        let logged_at: WithLoggedAt = 0.into();
+        // 0 is a special value here, during forward schedules the current frame is never 0, so if the
+        // value passed to Self::Item is 0, this indicates that the system did not run in a past frame.
+        // This works better than wrapping the log in an Option that becomes Some at the first run as 
+        // then undoing that call would be undistinguishable to an out-of-log error.
+        let logged_at = WithLoggedAt::from(0);
 
         VerifyingRevMetaState {
             meta,
             frame_log: logged_at.into(),
-            error: None,
+            meta_at_err: None,
         }
     }
     unsafe fn get_param<'world, 'state>(
