@@ -85,14 +85,14 @@ impl<E: Event + Clone, Targets: TriggerTargets> RevCommand<()> for TriggerEvent<
             let components = self.targets.components();
             let entities = self.targets.entities();
             match (components.len(), entities.len()) {
-                (0, 0) => meta.with_timestamp((TriggerTargetTag::COMPONENT, self.event.clone())),
+                (0, 0) => meta.with_logged_at((TriggerTargetTag::COMPONENT, self.event.clone())),
                 (0, _) => {
                     log.extend(entities.map(TriggerTargetData::from));
-                    meta.with_timestamp((TriggerTargetTag::ENTITY, self.event.clone()))
+                    meta.with_logged_at((TriggerTargetTag::ENTITY, self.event.clone()))
                 }
                 (_, 0) => {
                     log.extend(components.map(TriggerTargetData::from));
-                    meta.with_timestamp((TriggerTargetTag::COMPONENT, self.event.clone()))
+                    meta.with_logged_at((TriggerTargetTag::COMPONENT, self.event.clone()))
                 }
                 (_, _) => unimplemented!(
                     "consider to support both as users can implement TriggerTargets for both as well"
