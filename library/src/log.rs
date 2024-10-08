@@ -210,6 +210,22 @@
 //! [`ForwardLog`]: crate::meta::Direction::ForwardLog
 //! [`BackwardLog`]: crate::meta::Direction::BackwardLog
 
+/*
+test unification:
+
+methods on log that takes &mut RevMeta and...
+- log: Result<T, OutOfLog> where T is trait defined
+- non-log:
+-- state: T, expected_log_len
+-- states: Result<[T;N], [T;N]>, expected_log_len
+-- rare_state: Option<T>, minimum_log_len, expected_states_len
+-- rate_states: Result<[T;N], [T;N]>, minimum_log_len, expected_states_len
+-- transition: T, expected_log_len
+-- transitions: Result<[T;N], [T;N]>, expected_log_len
+-- rare_transition: Option<T>, minimum_log_len, expected_transitions_len
+-- rare_transitions: Result<[T;N], [T;N]>, minimum_log_len, expected_transitions_len
+*/
+
 use std::{
     collections::{TryReserveError, VecDeque},
     fmt::{Debug, Display},
@@ -691,6 +707,15 @@ fn into_ok<T>(result: Result<T, std::convert::Infallible>) -> T {
         Ok(ok) => ok,
         Err(err) => match err {},
     }
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone, Copy)]
+enum ForwardStrategy {
+    PopPastByLen,
+    DrainPastByLen,
+    PopPastByTimestamp,
+    DrainPastByTimestamp,
 }
 
 #[doc(hidden)]

@@ -186,7 +186,7 @@ impl RevMeta {
     pub fn past_len(&self) -> usize {
         self.now - self.range.start
     }
-    pub fn with_timestamp<T>(&self, value: T) -> WithLoggedAt<T> {
+    pub fn with_logged_at<T>(&self, value: T) -> WithLoggedAt<T> {
         WithLoggedAt {
             value,
             logged_at: PackedTime::from_internal(self.now),

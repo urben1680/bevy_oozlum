@@ -388,7 +388,7 @@ mod test {
         fn new(present: usize, max_len: Option<NonZeroUsize>) -> Self {
             let meta = RevMeta::new(max_len, 0, false);
             let with_timestamp =
-                RareStateLog::<WithLoggedAt<usize>>::from(meta.with_timestamp(present));
+                RareStateLog::<WithLoggedAt<usize>>::from(meta.with_logged_at(present));
             let one_per_frame = RareStateLog::from(present);
             Self {
                 meta: RevMeta::new(max_len, 0, false),
@@ -408,7 +408,7 @@ mod test {
             self.meta.queue_forward();
             self.meta.update();
 
-            let with_timestamp = self.meta.with_timestamp(state);
+            let with_timestamp = self.meta.with_logged_at(state);
 
             self.with_timestamp[0].push_present(push.then_some(with_timestamp));
             let middle = self.with_timestamp[0].clone();

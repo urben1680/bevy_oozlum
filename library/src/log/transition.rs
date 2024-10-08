@@ -245,7 +245,7 @@ mod test {
 
             self.with_timestamp[0].pop_past_by_timestamp(self.meta.log_range().start);
             let middle = self.with_timestamp[0].clone();
-            self.with_timestamp[0].push_present(self.meta.with_timestamp(transition));
+            self.with_timestamp[0].push_present(self.meta.with_logged_at(transition));
             assert_eq!(
                 self.with_timestamp[0].len(),
                 expected_len,
@@ -257,7 +257,7 @@ mod test {
 
             let _ = self.with_timestamp[1].drain_past_by_timestamp(self.meta.log_range().start);
             let middle = self.with_timestamp[1].clone();
-            self.with_timestamp[1].push_present(self.meta.with_timestamp(transition));
+            self.with_timestamp[1].push_present(self.meta.with_logged_at(transition));
             assert_eq!(
                 self.with_timestamp[1].len(),
                 expected_len,

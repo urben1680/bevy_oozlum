@@ -366,7 +366,7 @@ mod test {
             self.meta.queue_forward();
             self.meta.update();
 
-            let with_timestamp = transition.map(|transition| self.meta.with_timestamp(transition));
+            let with_timestamp = transition.map(|transition| self.meta.with_logged_at(transition));
 
             self.with_timestamp[0].pop_past_by_timestamp(self.meta.log_range().start);
             let middle = self.with_timestamp[0].clone();

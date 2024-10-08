@@ -311,7 +311,7 @@ mod test {
 
     use super::*;
 
-    use crate::{log::WithLoggedAt, meta::RevMeta};
+    use crate::{log::{ForwardStrategy, WithLoggedAt}, meta::RevMeta};
 
     #[test]
     fn serde_with() {
@@ -384,6 +384,41 @@ mod test {
         );
     }
 
+    impl StateLog<WithLoggedAt<u8>> {
+        fn test_forward(&mut self, meta: &mut RevMeta, strategy: ForwardStrategy, state: u8, expected_log_len: usize) {
+            meta.queue_forward();
+            meta.update();
+            let state = meta.with_logged_at(state);
+            let previous = self.clone();
+            self.push_present(state);
+            let middle = self.clone();
+            match strategy {
+                ForwardStrategy::PopPastByLen => {
+                    let _ = self.pop_past_by_len(meta.past_len());
+                },
+                ForwardStrategy::DrainPastByLen => {
+                    let _ = self.drain_past_by_len(meta.past_len());
+                },
+                ForwardStrategy::PopPastByTimestamp => {
+                    let _ = self.pop_past_by_timestamp(meta.log_range().start);
+                },
+                ForwardStrategy::DrainPastByTimestamp => {
+                    let _ = self.drain_past_by_timestamp(meta.log_range().start);
+                }
+            }
+            assert_eq!(
+                self.len(),
+                expected_log_len,
+                "\nmeta: {meta:#?}\nprevious: {previous:#?}\nmiddle: {middle:#?}\nnow: {self:#?}",
+            );
+            assert_eq!(
+                **self, 
+                state,
+                "\nmeta: {meta:#?}\nprevious: {previous:#?}\nmiddle: {middle:#?}\nnow: {self:#?}",
+            );
+        }
+    }
+
     #[derive(Clone, Debug)]
     struct MetaAndLogs {
         meta: RevMeta,
@@ -395,7 +430,7 @@ mod test {
         fn new(present: usize, max_len: Option<NonZeroUsize>) -> Self {
             let meta = RevMeta::new(max_len, 0, false);
             let with_timestamp =
-                StateLog::<WithLoggedAt<usize>>::from(meta.with_timestamp(present));
+                StateLog::<WithLoggedAt<usize>>::from(meta.with_logged_at(present));
             let one_per_frame = StateLog::from(present);
             Self {
                 meta: RevMeta::new(max_len, 0, false),
@@ -409,7 +444,7 @@ mod test {
             self.meta.queue_forward();
             self.meta.update();
 
-            self.with_timestamp[0].push_present(self.meta.with_timestamp(state));
+            self.with_timestamp[0].push_present(self.meta.with_logged_at(state));
             let middle = self.with_timestamp[0].clone();
             self.with_timestamp[0].pop_past_by_timestamp(self.meta.log_range().start);
             assert_eq!(
@@ -426,7 +461,7 @@ mod test {
                 self.meta, previous.with_timestamp[0], self.with_timestamp[0]
             );
 
-            self.with_timestamp[1].push_present(self.meta.with_timestamp(state));
+            self.with_timestamp[1].push_present(self.meta.with_logged_at(state));
             let middle = self.with_timestamp[1].clone();
             let _ = self.with_timestamp[1].drain_past_by_timestamp(self.meta.log_range().start);
             assert_eq!(

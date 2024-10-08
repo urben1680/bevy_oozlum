@@ -526,7 +526,7 @@ mod test {
     impl MetaAndLogs {
         fn new<const N: usize>(present: [usize; N], max_len: Option<NonZeroUsize>) -> Self {
             let meta = RevMeta::new(max_len, 0, false);
-            let with_timestamp = StatesLog::try_new(present, meta.with_timestamp(())).unwrap();
+            let with_timestamp = StatesLog::try_new(present, meta.with_logged_at(())).unwrap();
             let one_per_frame = StatesLog::try_new(present, ()).unwrap();
             Self {
                 meta: RevMeta::new(max_len, 0, false),
@@ -552,7 +552,7 @@ mod test {
             let is_ok = self.with_timestamp[0]
                 .try_push_present(|mut log| {
                     log.extend(states);
-                    self.meta.with_timestamp(())
+                    self.meta.with_logged_at(())
                 })
                 .is_ok();
             let middle = self.with_timestamp[0].clone();
@@ -584,7 +584,7 @@ mod test {
             let is_ok = self.with_timestamp[1]
                 .try_push_present(|mut log| {
                     log.extend(states);
-                    self.meta.with_timestamp(())
+                    self.meta.with_logged_at(())
                 })
                 .is_ok();
             let middle = self.with_timestamp[1].clone();

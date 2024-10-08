@@ -399,7 +399,7 @@ mod test {
             let is_ok = self.with_timestamp[0]
                 .try_push_present(|mut log| {
                     log.extend(transitions);
-                    self.meta.with_timestamp(())
+                    self.meta.with_logged_at(())
                 })
                 .is_ok();
             assert_eq!(
@@ -428,7 +428,7 @@ mod test {
             let is_ok = self.with_timestamp[1]
                 .try_push_present(|mut log| {
                     log.extend(transitions);
-                    self.meta.with_timestamp(())
+                    self.meta.with_logged_at(())
                 })
                 .is_ok();
             assert_eq!(
