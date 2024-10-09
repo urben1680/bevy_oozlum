@@ -481,13 +481,13 @@ where
         log_start: usize,
     ) -> Option<ValueEntry<impl LogIter<T>, U>> {
         self.amounts
-            .pop_past_by_timestamp(log_start)
+            .pop_past_by_logged_at(log_start)
             .map(|entry_amount| self.drain_past_by_amount(entry_amount))
     }
     pub fn drain_past_by_timestamp(&mut self, log_start: usize) -> impl LogIter<T> {
         let amount: usize = self
             .amounts
-            .drain_past_by_timestamp(log_start)
+            .drain_past_by_logged_at(log_start)
             .map(|entry_amount| entry_amount.amount::<Self>())
             .sum();
         self.index -= amount;

@@ -26,7 +26,6 @@ Enhancements:
 - use upcoming param verification for system (params)
 - RevMetaWithVerify
 -- tests
--- own submodule
 - LoggedAt module
 
 Docs
