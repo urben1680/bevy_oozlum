@@ -253,14 +253,14 @@ impl<T> StateLog<T> {
 }
 
 impl<T: LoggedAt> StateLog<T> {
-    pub fn pop_past_by_timestamp(&mut self, log_start: usize) -> Option<T> {
+    pub fn pop_past_by_logged_at(&mut self, log_start: usize) -> Option<T> {
         if self.past_end()?.logged_at() < log_start {
             self.pop_past()
         } else {
             None
         }
     }
-    pub fn drain_past_by_timestamp(&mut self, log_start: usize) -> impl LogIter<T> {
+    pub fn drain_past_by_logged_at(&mut self, log_start: usize) -> impl LogIter<T> {
         let partition_point = self
             .states
             .partition_point(|entry| entry.logged_at() < log_start);
@@ -411,6 +411,14 @@ mod test {
                         "\nmeta: {meta:#?}\nprevious: {previous:#?}\nmiddle: {middle:#?}\nnow: {self:#?}",
                     );
                 }
+                ForwardStrategy::PopPastByTimestamp => {
+                    let actual = self.pop_past_by_logged_at(meta.start());
+                    assert_eq!(
+                        actual,
+                        popped,
+                        "\nmeta: {meta:#?}\nprevious: {previous:#?}\nmiddle: {middle:#?}\nnow: {self:#?}",
+                    );
+                }
                 ForwardStrategy::DrainPastByLen => {
                     let mut iter = self.drain_past_by_len(meta.past_len());
                     let actual = iter.next();
@@ -427,16 +435,8 @@ mod test {
                         "\nmeta: {meta:#?}\nprevious: {previous:#?}\nmiddle: {middle:#?}\nnow: {self:#?}",
                     );
                 }
-                ForwardStrategy::PopPastByTimestamp => {
-                    let actual = self.pop_past_by_timestamp(meta.start());
-                    assert_eq!(
-                        actual,
-                        popped,
-                        "\nmeta: {meta:#?}\nprevious: {previous:#?}\nmiddle: {middle:#?}\nnow: {self:#?}",
-                    );
-                }
                 ForwardStrategy::DrainPastByTimestamp => {
-                    let mut iter = self.drain_past_by_timestamp(meta.start());
+                    let mut iter = self.drain_past_by_logged_at(meta.start());
                     let actual = iter.next();
                     let following = iter.next();
                     drop(iter);

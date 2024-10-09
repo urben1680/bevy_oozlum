@@ -259,8 +259,6 @@ pub use states::StatesLog;
 pub use transition::TransitionLog;
 pub use transitions::TransitionsLog;
 
-use crate::meta::RevMeta;
-
 #[cfg(feature = "time_bytes_1")]
 const TIME_BYTES: usize = 1;
 
@@ -310,7 +308,7 @@ impl PackedTime {
     pub const MAX: Self = Self([u8::MAX; Self::BYTES]);
     pub const MAX_USIZE: usize = {
         let bits = Self::BYTES as u32 * 8;
-        let shift = if bits <= usize::BITS {
+        let shift = if bits < usize::BITS {
             usize::BITS - bits
         } else {
             0
@@ -555,15 +553,6 @@ impl<T: Default> From<usize> for WithLoggedAt<T> {
         Self {
             value: T::default(),
             logged_at: PackedTime::from_user(logged_at),
-        }
-    }
-}
-
-impl<T: Default> From<&RevMeta> for WithLoggedAt<T> {
-    fn from(meta: &RevMeta) -> Self {
-        Self {
-            value: T::default(),
-            logged_at: PackedTime::from_internal(meta.now()),
         }
     }
 }
