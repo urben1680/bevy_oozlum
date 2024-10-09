@@ -1,14 +1,11 @@
 use bevy::{
-    ecs::{
-        archetype::ArchetypeComponentId,
-        component::{ComponentId, Tick},
-        query::Access,
-        schedule::{InternedSystemSet, SystemSetConfigs},
-    },
+    ecs::schedule::{InternedSystemSet, SystemSetConfigs},
     prelude::{Condition, IntoSystemSet, IntoSystemSetConfigs, SystemSet},
     utils::all_tuples,
 };
 use condition::forward_backward_conditions;
+
+use crate::{BackwardCmdsSys, BackwardSys};
 
 mod condition;
 
@@ -175,23 +172,6 @@ impl RevSystemSetConfigs {
                 backward_sys: self.backward_sys,
             },
         )
-    }
-}
-
-#[derive(SystemSet, Copy, Clone, Debug, Hash, PartialEq, Eq)]
-pub(crate) struct BackwardCmdsSys(pub(crate) InternedSystemSet);
-
-#[derive(SystemSet, Copy, Clone, Debug, Hash, PartialEq, Eq)]
-pub(crate) struct BackwardSys(pub(crate) InternedSystemSet);
-
-pub(crate) static EMPTY_COMPONENT_ACCESS: Access<ComponentId> = Access::new();
-pub(crate) static EMPTY_ARCHETYPE_COMPONENT_ACCESS: Access<ArchetypeComponentId> = Access::new();
-
-pub(crate) fn check_tick(own_tick: &mut Tick, change_tick: Tick) {
-    // reference: Tick::check_tick
-    let age = change_tick.get().wrapping_sub(own_tick.get());
-    if age > Tick::MAX.get() {
-        *own_tick = Tick::new(change_tick.get().wrapping_sub(Tick::MAX.get()));
     }
 }
 
