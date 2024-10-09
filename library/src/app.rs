@@ -9,7 +9,7 @@ pub use crate::{
     system_configs::IntoRevSystemConfigs,
 };
 
-use crate::{BackwardSchedule, ForwardSchedule};
+use crate::{meta::CommandsLogReducings, BackwardSchedule, ForwardSchedule};
 
 pub trait RevApp {
     fn rev_add_systems<Marker>(
@@ -38,7 +38,11 @@ impl RevApp for App {
         systems: impl IntoRevSystemConfigs<Marker>,
     ) -> &mut Self {
         let schedule = schedule.intern();
-        let configs = systems.into_rev_configs();
+        let mut configs = systems.into_rev_configs();
+        self.world_mut()
+            .get_resource_or_insert_with(CommandsLogReducings::default)
+            .0
+            .append(&mut configs.commands_logged_at_reductions);
         self.add_systems(ForwardSchedule(schedule), configs.forward)
             .add_systems(BackwardSchedule(schedule), configs.backward)
             .rev_configure_sets(schedule, configs.set_configs)
@@ -80,10 +84,18 @@ impl RevApp for App {
         let backward = schedules
             .remove(backward_label)
             .unwrap_or_else(|| Schedule::new(backward_label));
-        let mut rev_schedule = RevSchedule { forward, backward };
+        let mut rev_schedule = RevSchedule {
+            forward,
+            backward,
+            commands_logged_at_reductions: Vec::new(),
+        };
         f(&mut rev_schedule);
         schedules.insert(rev_schedule.forward);
         schedules.insert(rev_schedule.backward);
+        self.world_mut()
+            .get_resource_or_insert_with(CommandsLogReducings::default)
+            .0
+            .append(&mut rev_schedule.commands_logged_at_reductions);
         self
     }
 }
