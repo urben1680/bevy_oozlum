@@ -5,6 +5,8 @@ Features:
 - entity commands, standard rev commands
 -- postponed due to required components + disabled entities + moving components
 - add license
+- reversible versions of World::observe / App::observe
+- Schedule::ignore_ambiguity
 
 Enhancements:
 - reduce todo!() and //todo
@@ -25,7 +27,10 @@ Enhancements:
 - thiserror for error types
 - reflect behind feature flag
 - use upcoming param verification for system (params)
-- RevMetaWithVerify tests
+- RevMetaWithVerify
+-- tests
+-- own submodule
+- rename Direction to RevDirecton to not clash with non-crate types with that name
 
 Docs
 - examples
@@ -34,13 +39,20 @@ Docs
 UNSUPPORTED:
 
 - Change Detection
+-- would be very complex and would rely heavily on implemention details of bevy
+-- might be more easy to do if Ticks needed no wrapping, like with proposed u64 Ticks
 - IntoSystemConfigs::distributive_run_if
+-- incompatible with how internals work
 - Schedule::set_apply_final_deferred
+-- default behavior is critical for assumptions of backward schedule
 - Schedule::graph_mut
+-- why not?
 - ScheduleBuildSettings::auto_insert_apply_deferred
+-- see unsupported Schedule::set_apply_final_deferred
 - Trigger::event_mut
-- EventReader/Writer
--- no usecase, work with them in Non-Log Forward and log the effect of them instead
+-- mutations on the event are not reflectable in the log
+- EntityCommands/EntityWorldMut
+-- missing features on bevy's side
 */
 
 use std::hash::Hash;
@@ -61,6 +73,16 @@ pub mod schedule;
 pub mod set_configs;
 pub mod system_configs;
 pub mod world;
+
+/// Contains important extension traits `as _`, [`RevMeta`] and [`Direction`].
+pub mod prelude {
+    pub use crate::app::RevApp as _;
+    pub use crate::commands::RevCommands as _;
+    pub use crate::meta::{RevMeta, Direction};
+    pub use crate::set_configs::IntoRevSystemSetConfigs as _;
+    pub use crate::system_configs::IntoRevSystemConfigs as _;
+    pub use crate::world::RevWorld as _;
+}
 
 /// Should not be pub to not add invalid settings (see unsupported Schedule settings)
 #[derive(ScheduleLabel, Copy, Clone, Debug, Hash, PartialEq, Eq)]
