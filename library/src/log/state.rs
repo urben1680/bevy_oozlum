@@ -267,7 +267,7 @@ impl<T: LoggedAt> StateLog<T> {
         self.index -= partition_point;
         self.states.drain(..partition_point)
     }
-    pub fn reduce_timestamps(&mut self, by: usize) -> impl LogIter<T> {
+    pub fn reduce_logged_at(&mut self, by: usize) -> impl LogIter<T> {
         let reduced_at = self
             .states
             .range_mut(..self.index)
@@ -311,7 +311,10 @@ mod test {
 
     use super::*;
 
-    use crate::{log::{ForwardStrategy, WithLoggedAt}, meta::RevMeta};
+    use crate::{
+        log::{test::ForwardStrategy, WithLoggedAt},
+        meta::RevMeta,
+    };
 
     #[test]
     fn serde_with() {
@@ -385,25 +388,68 @@ mod test {
     }
 
     impl StateLog<WithLoggedAt<u8>> {
-        fn test_forward(&mut self, meta: &mut RevMeta, strategy: ForwardStrategy, state: u8, expected_log_len: usize) {
+        fn test_forward(
+            &mut self,
+            meta: &mut RevMeta,
+            strategy: ForwardStrategy,
+            push: u8,
+            expected_log_len: usize,
+            popped: Option<WithLoggedAt<u8>>,
+        ) {
             meta.queue_forward();
             meta.update();
-            let state = meta.with_logged_at(state);
+            let push = meta.with_logged_at(push);
             let previous = self.clone();
-            self.push_present(state);
+            self.push_present(push);
             let middle = self.clone();
             match strategy {
                 ForwardStrategy::PopPastByLen => {
-                    let _ = self.pop_past_by_len(meta.past_len());
-                },
+                    let actual = self.pop_past_by_len(meta.past_len());
+                    assert_eq!(
+                        actual,
+                        popped,
+                        "\nmeta: {meta:#?}\nprevious: {previous:#?}\nmiddle: {middle:#?}\nnow: {self:#?}",
+                    );
+                }
                 ForwardStrategy::DrainPastByLen => {
-                    let _ = self.drain_past_by_len(meta.past_len());
-                },
+                    let mut iter = self.drain_past_by_len(meta.past_len());
+                    let actual = iter.next();
+                    let following = iter.next();
+                    drop(iter);
+                    assert_eq!(
+                        actual,
+                        popped,
+                        "\nmeta: {meta:#?}\nprevious: {previous:#?}\nmiddle: {middle:#?}\nnow: {self:#?}",
+                    );
+                    assert_eq!(
+                        following,
+                        None,
+                        "\nmeta: {meta:#?}\nprevious: {previous:#?}\nmiddle: {middle:#?}\nnow: {self:#?}",
+                    );
+                }
                 ForwardStrategy::PopPastByTimestamp => {
-                    let _ = self.pop_past_by_timestamp(meta.log_range().start);
-                },
+                    let actual = self.pop_past_by_timestamp(meta.start());
+                    assert_eq!(
+                        actual,
+                        popped,
+                        "\nmeta: {meta:#?}\nprevious: {previous:#?}\nmiddle: {middle:#?}\nnow: {self:#?}",
+                    );
+                }
                 ForwardStrategy::DrainPastByTimestamp => {
-                    let _ = self.drain_past_by_timestamp(meta.log_range().start);
+                    let mut iter = self.drain_past_by_timestamp(meta.start());
+                    let actual = iter.next();
+                    let following = iter.next();
+                    drop(iter);
+                    assert_eq!(
+                        actual,
+                        popped,
+                        "\nmeta: {meta:#?}\nprevious: {previous:#?}\nmiddle: {middle:#?}\nnow: {self:#?}",
+                    );
+                    assert_eq!(
+                        following,
+                        None,
+                        "\nmeta: {meta:#?}\nprevious: {previous:#?}\nmiddle: {middle:#?}\nnow: {self:#?}",
+                    );
                 }
             }
             assert_eq!(
@@ -412,307 +458,74 @@ mod test {
                 "\nmeta: {meta:#?}\nprevious: {previous:#?}\nmiddle: {middle:#?}\nnow: {self:#?}",
             );
             assert_eq!(
-                **self, 
-                state,
+                **self, push,
                 "\nmeta: {meta:#?}\nprevious: {previous:#?}\nmiddle: {middle:#?}\nnow: {self:#?}",
             );
         }
-    }
-
-    #[derive(Clone, Debug)]
-    struct MetaAndLogs {
-        meta: RevMeta,
-        with_timestamp: [StateLog<WithLoggedAt<usize>>; 2],
-        one_per_frame: [StateLog<usize>; 2],
-    }
-
-    impl MetaAndLogs {
-        fn new(present: usize, max_len: Option<NonZeroUsize>) -> Self {
-            let meta = RevMeta::new(max_len, 0, false);
-            let with_timestamp =
-                StateLog::<WithLoggedAt<usize>>::from(meta.with_logged_at(present));
-            let one_per_frame = StateLog::from(present);
-            Self {
-                meta: RevMeta::new(max_len, 0, false),
-                with_timestamp: [with_timestamp.clone(), with_timestamp],
-                one_per_frame: [one_per_frame.clone(), one_per_frame],
-            }
-        }
-        fn forward(&mut self, state: usize, expected_log_len: usize) {
-            let previous = self.clone();
-
-            self.meta.queue_forward();
-            self.meta.update();
-
-            self.with_timestamp[0].push_present(self.meta.with_logged_at(state));
-            let middle = self.with_timestamp[0].clone();
-            self.with_timestamp[0].pop_past_by_timestamp(self.meta.log_range().start);
-            assert_eq!(
-                self.with_timestamp[0].len(),
-                expected_log_len,
-                "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
-                self.meta,
-                previous.with_timestamp[0],
-                self.with_timestamp[0]
-            );
-            assert_eq!(
-                self.with_timestamp[0].value, state,
-                "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
-                self.meta, previous.with_timestamp[0], self.with_timestamp[0]
-            );
-
-            self.with_timestamp[1].push_present(self.meta.with_logged_at(state));
-            let middle = self.with_timestamp[1].clone();
-            let _ = self.with_timestamp[1].drain_past_by_timestamp(self.meta.log_range().start);
-            assert_eq!(
-                self.with_timestamp[1].len(),
-                expected_log_len,
-                "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
-                self.meta,
-                previous.with_timestamp[1],
-                self.with_timestamp[1]
-            );
-            assert_eq!(
-                self.with_timestamp[1].value, state,
-                "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
-                self.meta, previous.with_timestamp[1], self.with_timestamp[1]
-            );
-
-            self.one_per_frame[0].push_present(state.into());
-            let middle = self.one_per_frame[0].clone();
-            self.one_per_frame[0].pop_past_by_len(self.meta.past_len());
-            assert_eq!(
-                self.one_per_frame[0].len(),
-                expected_log_len,
-                "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
-                self.meta,
-                previous.one_per_frame[0],
-                self.one_per_frame[0]
-            );
-            assert_eq!(
-                *self.one_per_frame[0], state,
-                "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
-                self.meta, previous.one_per_frame[0], self.one_per_frame[0]
-            );
-
-            self.one_per_frame[1].push_present(state.into());
-            let middle = self.one_per_frame[1].clone();
-            let _ = self.one_per_frame[1].drain_past_by_len(self.meta.past_len());
-            assert_eq!(
-                self.one_per_frame[1].len(),
-                expected_log_len,
-                "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
-                self.meta,
-                previous.one_per_frame[1],
-                self.one_per_frame[1]
-            );
-            assert_eq!(
-                *self.one_per_frame[1], state,
-                "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
-                self.meta, previous.one_per_frame[1], self.one_per_frame[1]
-            );
-        }
-        fn backward_log(&mut self, expected_state: Result<usize, OutOfLog>) {
-            let previous = self.clone();
-
-            match expected_state {
-                Ok(expected_state) => {
-                    assert!(
-                        self.meta.queue_log(self.meta.now() - 1).is_ok(),
-                        "\npreviously: {previous:?}\nnow: {self:?}"
-                    );
-                    self.meta.update();
-
+        fn test_forward_log(&mut self, meta: &mut RevMeta, state: Result<u8, u8>) {
+            match state {
+                Ok(state) => {
+                    meta.queue_log(meta.now() + 1).unwrap();
+                    meta.update();
+                    let previous = self.clone();
+                    let result = self.forward_log();
                     assert_eq!(
-                        self.with_timestamp[0].backward_log(),
+                        result,
                         Ok(()),
-                        "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                        self.meta,
-                        previous.with_timestamp[0],
-                        self.with_timestamp[0]
+                        "\nmeta: {meta:#?}\nprevious: {previous:#?}\nnow: {self:#?}",
                     );
                     assert_eq!(
-                        self.with_timestamp[0].value, expected_state,
-                        "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                        self.meta, previous.with_timestamp[0], self.with_timestamp[0]
-                    );
-
-                    assert_eq!(
-                        self.with_timestamp[1].backward_log(),
-                        Ok(()),
-                        "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                        self.meta,
-                        previous.with_timestamp[1],
-                        self.with_timestamp[1]
-                    );
-                    assert_eq!(
-                        self.with_timestamp[1].value, expected_state,
-                        "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                        self.meta, previous.with_timestamp[1], self.with_timestamp[1]
-                    );
-
-                    assert_eq!(
-                        self.one_per_frame[0].backward_log(),
-                        Ok(()),
-                        "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                        self.meta,
-                        previous.one_per_frame[0],
-                        self.one_per_frame[0]
-                    );
-                    assert_eq!(
-                        *self.one_per_frame[0], expected_state,
-                        "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                        self.meta, previous.one_per_frame[0], self.one_per_frame[0]
-                    );
-
-                    assert_eq!(
-                        self.one_per_frame[1].backward_log(),
-                        Ok(()),
-                        "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                        self.meta,
-                        previous.one_per_frame[1],
-                        self.one_per_frame[1]
-                    );
-                    assert_eq!(
-                        *self.one_per_frame[1], expected_state,
-                        "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                        self.meta, previous.one_per_frame[1], self.one_per_frame[1]
+                        **self,
+                        meta.with_logged_at(state),
+                        "\nmeta: {meta:#?}\nprevious: {previous:#?}\nnow: {self:#?}",
                     );
                 }
-                Err(OutOfLog) => {
+                Err(state) => {
+                    let previous = self.clone();
+                    let result = self.forward_log();
                     assert_eq!(
-                        self.with_timestamp[0].backward_log(),
+                        result,
                         Err(OutOfLog),
-                        "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                        self.meta,
-                        previous.with_timestamp[0],
-                        self.with_timestamp[0]
+                        "\nmeta: {meta:#?}\nprevious: {previous:#?}\nnow: {self:#?}",
                     );
                     assert_eq!(
-                        self.with_timestamp[1].backward_log(),
-                        Err(OutOfLog),
-                        "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                        self.meta,
-                        previous.with_timestamp[1],
-                        self.with_timestamp[1]
-                    );
-                    assert_eq!(
-                        self.one_per_frame[0].backward_log(),
-                        Err(OutOfLog),
-                        "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                        self.meta,
-                        previous.one_per_frame[0],
-                        self.one_per_frame[0]
-                    );
-                    assert_eq!(
-                        self.one_per_frame[1].backward_log(),
-                        Err(OutOfLog),
-                        "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                        self.meta,
-                        previous.one_per_frame[1],
-                        self.one_per_frame[1]
+                        **self,
+                        meta.with_logged_at(state),
+                        "\nmeta: {meta:#?}\nprevious: {previous:#?}\nnow: {self:#?}",
                     );
                 }
             }
         }
-        fn forward_log(&mut self, expected_state: Result<usize, OutOfLog>) {
-            let previous = self.clone();
-            match expected_state {
-                Ok(expected_state) => {
-                    assert!(
-                        self.meta.queue_log(self.meta.now() + 1).is_ok(),
-                        "\npreviously: {previous:?}\nnow: {self:?}"
-                    );
-                    self.meta.update();
-
+        fn test_backward_log(&mut self, meta: &mut RevMeta, state: Result<u8, u8>) {
+            match state {
+                Ok(state) => {
+                    meta.queue_log(meta.now() - 1).unwrap();
+                    meta.update();
+                    let previous = self.clone();
+                    let result = self.backward_log();
                     assert_eq!(
-                        self.with_timestamp[0].forward_log(),
+                        result,
                         Ok(()),
-                        "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                        self.meta,
-                        previous.with_timestamp[0],
-                        self.with_timestamp[0]
+                        "\nmeta: {meta:#?}\nprevious: {previous:#?}\nnow: {self:#?}",
                     );
                     assert_eq!(
-                        self.with_timestamp[0].value, expected_state,
-                        "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                        self.meta, previous.with_timestamp[0], self.with_timestamp[0]
-                    );
-
-                    assert_eq!(
-                        self.with_timestamp[1].forward_log(),
-                        Ok(()),
-                        "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                        self.meta,
-                        previous.with_timestamp[1],
-                        self.with_timestamp[1]
-                    );
-                    assert_eq!(
-                        self.with_timestamp[1].value, expected_state,
-                        "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                        self.meta, previous.with_timestamp[1], self.with_timestamp[1]
-                    );
-
-                    assert_eq!(
-                        self.one_per_frame[0].forward_log(),
-                        Ok(()),
-                        "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                        self.meta,
-                        previous.one_per_frame[0],
-                        self.one_per_frame[0]
-                    );
-                    assert_eq!(
-                        *self.one_per_frame[0], expected_state,
-                        "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                        self.meta, previous.one_per_frame[0], self.one_per_frame[0]
-                    );
-
-                    assert_eq!(
-                        self.one_per_frame[1].forward_log(),
-                        Ok(()),
-                        "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                        self.meta,
-                        previous.one_per_frame[1],
-                        self.one_per_frame[1]
-                    );
-                    assert_eq!(
-                        *self.one_per_frame[1], expected_state,
-                        "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                        self.meta, previous.one_per_frame[1], self.one_per_frame[1]
+                        **self,
+                        meta.with_logged_at(state),
+                        "\nmeta: {meta:#?}\nprevious: {previous:#?}\nnow: {self:#?}",
                     );
                 }
-                Err(OutOfLog) => {
+                Err(state) => {
+                    let previous = self.clone();
+                    let result = self.backward_log();
                     assert_eq!(
-                        self.with_timestamp[0].forward_log(),
+                        result,
                         Err(OutOfLog),
-                        "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                        self.meta,
-                        previous.with_timestamp[0],
-                        self.with_timestamp[0]
+                        "\nmeta: {meta:#?}\nprevious: {previous:#?}\nnow: {self:#?}",
                     );
                     assert_eq!(
-                        self.with_timestamp[1].forward_log(),
-                        Err(OutOfLog),
-                        "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                        self.meta,
-                        previous.with_timestamp[1],
-                        self.with_timestamp[1]
-                    );
-                    assert_eq!(
-                        self.one_per_frame[0].forward_log(),
-                        Err(OutOfLog),
-                        "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                        self.meta,
-                        previous.one_per_frame[0],
-                        self.one_per_frame[0]
-                    );
-                    assert_eq!(
-                        self.one_per_frame[1].forward_log(),
-                        Err(OutOfLog),
-                        "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                        self.meta,
-                        previous.one_per_frame[1],
-                        self.one_per_frame[1]
+                        **self,
+                        meta.with_logged_at(state),
+                        "\nmeta: {meta:#?}\nprevious: {previous:#?}\nnow: {self:#?}",
                     );
                 }
             }
@@ -720,28 +533,31 @@ mod test {
     }
 
     #[test]
-    fn test() {
-        let mut meta_and_logs = MetaAndLogs::new(0, NonZeroUsize::new(3));
+    fn push_and_log_traversal() {
+        for strategy in ForwardStrategy::VARIANTS {
+            let meta = &mut RevMeta::new(NonZeroUsize::new(3), 0, false);
+            let mut log = StateLog::new(meta.with_logged_at(0));
 
-        meta_and_logs.forward(1, 1);
-        meta_and_logs.forward(2, 2);
-        // pop_front called internally
-        meta_and_logs.forward(3, 2);
+            log.test_forward(meta, strategy, 1, 1, None);
+            log.test_forward(meta, strategy, 2, 2, None);
+            // shortened log
+            log.test_forward(meta, strategy, 3, 2, Some(WithLoggedAt::new(0, 0)));
 
-        meta_and_logs.backward_log(Ok(2));
-        meta_and_logs.backward_log(Ok(1));
-        // out of log, no mutations happend to both meta and log here
-        meta_and_logs.backward_log(Err(OutOfLog));
+            log.test_backward_log(meta, Ok(2));
+            log.test_backward_log(meta, Ok(1));
+            // out of log, no mutations happend to both meta and log here
+            log.test_backward_log(meta, Err(1));
 
-        meta_and_logs.forward_log(Ok(2));
-        meta_and_logs.forward_log(Ok(3));
-        // nothing ever logged past 8, no mutations happend to both meta and log here
-        meta_and_logs.forward_log(Err(OutOfLog));
+            log.test_forward_log(meta, Ok(2));
+            log.test_forward_log(meta, Ok(3));
+            // nothing ever logged past 3, no mutations happend to both meta and log here
+            log.test_forward_log(meta, Err(3));
 
-        meta_and_logs.backward_log(Ok(2));
-        meta_and_logs.backward_log(Ok(1));
-        // all entries are truncated as they are in the future, the new logged entry increases len to 1
-        meta_and_logs.forward(4, 1);
+            log.test_backward_log(meta, Ok(2));
+            log.test_backward_log(meta, Ok(1));
+            // all entries are truncated as they are in the future, the new logged entry increases len to 1
+            log.test_forward(meta, strategy, 4, 1, None);
+        }
     }
 
     #[allow(dead_code)]
