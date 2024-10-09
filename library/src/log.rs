@@ -293,14 +293,16 @@ const TIME_BYTES: usize = 7;
 )))]
 const TIME_BYTES: usize = 8;
 
+const USIZE_BYTES: usize = usize::BITS as usize / 8;
+
 #[derive(Clone, Copy, Reflect, PartialEq, Eq)]
 #[reflect(Default, Debug)]
 #[cfg_attr(feature = "serde", reflect(Serialize, Deserialize))]
 pub struct PackedTime([u8; Self::BYTES]);
 
 impl PackedTime {
-    pub const BYTES: usize = if TIME_BYTES > PackedUSize::BYTES {
-        PackedUSize::BYTES
+    pub const BYTES: usize = if TIME_BYTES > USIZE_BYTES {
+        USIZE_BYTES
     } else {
         TIME_BYTES
     };
@@ -319,10 +321,10 @@ impl PackedTime {
         time.try_into().unwrap_or_else(|_| {
             panic!(
                 "{time} does not fit into {} bytes, \
-            cannot map this value to `PackedTime`. If a log that contains `WithTimestamp` \
-            is loaded while RevMeta is created with an offset from the last run, make use
-            of the `reduce_timestamps` method of the log as well. If this is not the issue, \
-            this is an internal bug.",
+                cannot map this value to `PackedTime`. If a log that contains `WithTimestamp` \
+                is loaded while RevMeta is created with an offset from the last run, make use
+                of the `reduce_timestamps` method of the log as well. If this is not the issue, \
+                this is an internal bug.",
                 Self::BYTES
             )
         })
@@ -331,8 +333,8 @@ impl PackedTime {
         time.try_into().unwrap_or_else(|_| {
             panic!(
                 "{time} does not fit into {} bytes, \
-            cannot map this value to `PackedTime`, consider to increase the `time_bytes_*` \
-            feature to a higher amount of bytes to store this value.",
+                cannot map this value to `PackedTime`, consider to increase the `time_bytes_*` \
+                feature to a higher amount of bytes to store this value.",
                 Self::BYTES
             )
         })
@@ -407,67 +409,6 @@ impl TryFrom<usize> for PackedTime {
         } else {
             Err(USizeTooLarge)
         }
-    }
-}
-
-#[derive(Clone, Copy, Reflect, PartialEq, Eq)]
-#[reflect(Default, Debug)]
-#[cfg_attr(feature = "serde", reflect(Serialize, Deserialize))]
-pub struct PackedUSize([u8; Self::BYTES]);
-
-impl PackedUSize {
-    pub const BYTES: usize = usize::BITS as usize / 8;
-    pub const MIN: Self = Self([u8::MIN; Self::BYTES]);
-    pub const MAX: Self = Self([u8::MAX; Self::BYTES]);
-}
-
-#[cfg(feature = "serde")]
-impl serde::Serialize for PackedUSize {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        Into::<usize>::into(*self).serialize(serializer)
-    }
-}
-
-#[cfg(feature = "serde")]
-impl<'de> serde::Deserialize<'de> for PackedUSize {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        usize::deserialize(deserializer).map(Into::into)
-    }
-}
-
-impl Debug for PackedUSize {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        Debug::fmt(&usize::from(*self), f)
-    }
-}
-
-impl Display for PackedUSize {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        Display::fmt(&usize::from(*self), f)
-    }
-}
-
-impl Default for PackedUSize {
-    fn default() -> Self {
-        Self::MIN
-    }
-}
-
-impl From<PackedUSize> for usize {
-    fn from(value: PackedUSize) -> Self {
-        usize::from_ne_bytes(value.0)
-    }
-}
-
-impl From<usize> for PackedUSize {
-    fn from(value: usize) -> Self {
-        Self(value.to_ne_bytes())
     }
 }
 
@@ -699,7 +640,8 @@ impl<B: LoggedAt, A> LoggedAt for EntryAmount<B, A> {
     }
 }
 
-const INDEX_OOB: &'static str = "self.index should always be <= the deque len, so successfully reducing it without underflow is expected to result in a valid index into the log which is not the case here";
+const INDEX_OOB: &'static str = "self.index should always be <= the deque len, so successfully reducing \
+    it without underflow is expected to result in a valid index into the log which is not the case here";
 
 /// unwrap bad, https://github.com/rust-lang/rust/issues/61695
 fn into_ok<T>(result: Result<T, std::convert::Infallible>) -> T {
@@ -709,22 +651,12 @@ fn into_ok<T>(result: Result<T, std::convert::Infallible>) -> T {
     }
 }
 
-#[cfg(test)]
-#[derive(Debug, Clone, Copy)]
-enum ForwardStrategy {
-    PopPastByLen,
-    DrainPastByLen,
-    PopPastByTimestamp,
-    DrainPastByTimestamp,
-}
-
 #[doc(hidden)]
 #[derive(Debug, Clone, Copy)]
 pub struct USizeTooLarge;
 
 #[doc(hidden)]
-pub trait NotUSize {} // remove with const generic expressions, then bound on AMOUNT_BYTES > 0
-impl NotUSize for PackedUSize {}
+pub trait NotUSize {} // remove if bounds on const generics (> 0) or type inequality (!= usize) stabilizes
 impl<const AMOUNT_BYTES: usize> NotUSize for [u8; AMOUNT_BYTES] {}
 
 pub trait WithAmount {
@@ -830,15 +762,15 @@ macro_rules! impl_with_amount {
     };
     ($Log: ident, $AMOUNT_BYTES: literal, Infallible) => {
         impl<T, U> crate::log::WithAmount for $Log<T, U, $AMOUNT_BYTES> {
-            type Amount = crate::log::PackedUSize;
+            type Amount = [u8; crate::log::USIZE_BYTES];
             type Err = std::convert::Infallible;
-            const MIN: Self::Amount = crate::log::PackedUSize::MIN;
-            const MAX: Self::Amount = crate::log::PackedUSize::MAX;
+            const MIN: Self::Amount = [u8::MIN; crate::log::USIZE_BYTES];
+            const MAX: Self::Amount = [u8::MAX; crate::log::USIZE_BYTES];
             fn amount_to_usize(value: Self::Amount) -> usize {
-                value.into()
+                usize::from_ne_bytes(value)
             }
             fn usize_to_amount(value: usize) -> Result<Self::Amount, Self::Err> {
-                Ok(value.into())
+                Ok(value.to_ne_bytes())
             }
         }
     };
@@ -850,21 +782,27 @@ use impl_with_amount;
 mod test {
     use crate::log::PackedTime;
 
-    use super::{LoggedAt, WithLoggedAt};
+    #[derive(Debug, Clone, Copy)]
+    pub(super) enum ForwardStrategy {
+        PopPastByLen,
+        DrainPastByLen,
+        PopPastByTimestamp,
+        DrainPastByTimestamp,
+    }
 
-    #[test]
-    fn test_packed_time() {
-        let mut x = WithLoggedAt::new((), 10);
-        assert_eq!(x.logged_at(), 10);
-        x.set_logged_at(PackedTime::from_internal(20));
-        assert_eq!(x.logged_at(), 20);
+    impl ForwardStrategy {
+        pub(super) const VARIANTS: [Self; 4] = [
+            Self::PopPastByLen,
+            Self::DrainPastByLen,
+            Self::PopPastByTimestamp,
+            Self::DrainPastByTimestamp,
+        ];
     }
 
     #[test]
-    fn test_packed_usize() {
-        let mut x = WithLoggedAt::new((), 10);
-        assert_eq!(x.logged_at(), 10);
-        x.set_logged_at(PackedTime::from_internal(20));
-        assert_eq!(x.logged_at(), 20);
+    fn test_packed_time() {
+        let x = PackedTime::try_from(10).unwrap();
+        let x: usize = x.into();
+        assert_eq!(x, 10);
     }
 }
