@@ -493,10 +493,10 @@ where
         self.index -= amount;
         self.states.drain(..amount)
     }
-    pub fn reduce_timestamps(&mut self, by: usize) -> impl LogIter<T> {
+    pub fn reduce_logged_at(&mut self, by: usize) -> impl LogIter<T> {
         let amount = self
             .amounts
-            .reduce_timestamps(by)
+            .reduce_logged_at(by)
             .map(|entry_amount| entry_amount.amount::<Self>())
             .sum::<usize>();
         self.index -= amount;
@@ -556,7 +556,7 @@ mod test {
                 })
                 .is_ok();
             let middle = self.with_timestamp[0].clone();
-            self.with_timestamp[0].pop_past_by_timestamp(self.meta.log_range().start);
+            self.with_timestamp[0].pop_past_by_timestamp(*self.meta.log_range().start());
             assert_eq!(
                 is_ok, expected_ok,
                 "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
@@ -588,7 +588,7 @@ mod test {
                 })
                 .is_ok();
             let middle = self.with_timestamp[1].clone();
-            let _ = self.with_timestamp[1].drain_past_by_timestamp(self.meta.log_range().start);
+            let _ = self.with_timestamp[1].drain_past_by_timestamp(*self.meta.log_range().start());
             assert_eq!(
                 is_ok, expected_ok,
                 "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
