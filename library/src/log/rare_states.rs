@@ -489,10 +489,10 @@ where
         self.index -= amount;
         self.states.drain(..amount)
     }
-    pub fn reduce_timestamps(&mut self, by: usize) -> impl LogIter<T> {
+    pub fn reduce_logged_at(&mut self, by: usize) -> impl LogIter<T> {
         let amount = self
             .amounts
-            .reduce_timestamps(by)
+            .reduce_logged_at(by)
             .map(|entry_amount| entry_amount.amount::<Self>())
             .sum::<usize>();
         self.index -= amount;
