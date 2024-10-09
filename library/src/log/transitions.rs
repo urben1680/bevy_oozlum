@@ -305,10 +305,10 @@ where
         self.index -= amount;
         self.transitions.drain(..amount)
     }
-    pub fn reduce_timestamps(&mut self, by: usize) -> impl LogIter<T> {
+    pub fn reduce_logged_at(&mut self, by: usize) -> impl LogIter<T> {
         let amount = self
             .amounts
-            .reduce_timestamps(by)
+            .reduce_logged_at(by)
             .map(|entry_amount| entry_amount.amount::<Self>())
             .sum::<usize>();
         self.index -= amount;
@@ -358,7 +358,7 @@ mod test {
                 Err(transitions) => (transitions, false),
             };
 
-            self.with_timestamp[0].pop_past_by_timestamp(self.meta.log_range().start);
+            self.with_timestamp[0].pop_past_by_timestamp(*self.meta.log_range().start());
             let middle = self.with_timestamp[0].clone();
             let is_ok = self.with_timestamp[0]
                 .try_push_present(|mut log| {
@@ -380,7 +380,7 @@ mod test {
                 self.with_timestamp[0]
             );
 
-            let _ = self.with_timestamp[1].drain_past_by_timestamp(self.meta.log_range().start);
+            let _ = self.with_timestamp[1].drain_past_by_timestamp(*self.meta.log_range().start());
             let middle = self.with_timestamp[1].clone();
             let is_ok = self.with_timestamp[1]
                 .try_push_present(|mut log| {
