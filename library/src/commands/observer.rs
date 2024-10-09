@@ -15,14 +15,14 @@ use crate::{
     commands::{InitializedRevCommand, RevCommand},
     error_per_flag,
     log::{OutOfLog, TransitionsLog, WithLoggedAt},
-    meta::{Direction, RevMeta},
+    meta::{RevDirection, RevMeta},
 };
 
 #[derive(Event)]
 pub struct RevEvent<E: Event + Clone> {
     // Mutations are not logged, therefore nothing is mutably accessible.
     event: E,
-    direction: Direction,
+    direction: RevDirection,
 }
 
 impl<E: Event + Clone> Deref for RevEvent<E> {
@@ -33,7 +33,7 @@ impl<E: Event + Clone> Deref for RevEvent<E> {
 }
 
 impl<E: Event + Clone> RevEvent<E> {
-    pub fn direction(&self) -> Direction {
+    pub fn direction(&self) -> RevDirection {
         self.direction
     }
 }
@@ -71,7 +71,7 @@ impl<E: Event + Clone, Targets: TriggerTargets> RevCommand<()> for TriggerEvent<
                 std::any::type_name::<E>()
             );
         };
-        if meta.get_direction() != Some(Direction::Forward { log: false }) {
+        if meta.get_direction() != Some(RevDirection::NotLog) {
             return error_per_flag!(
                 &mut log.direction_err,
                 "Initial event {} trigger failed, RevMeta is not in the non-log Direction::Forward, \
@@ -80,7 +80,7 @@ impl<E: Event + Clone, Targets: TriggerTargets> RevCommand<()> for TriggerEvent<
             );
         }
 
-        let _ = log.log.drain_past_by_timestamp(meta.log_range().start);
+        let _ = log.log.drain_past_by_timestamp(meta.start());
         log.log.push_present(|mut log| {
             let components = self.targets.components();
             let entities = self.targets.entities();
@@ -103,7 +103,7 @@ impl<E: Event + Clone, Targets: TriggerTargets> RevCommand<()> for TriggerEvent<
         world.trigger_targets(
             RevEvent {
                 event: self.event,
-                direction: Direction::Forward { log: false },
+                direction: RevDirection::NotLog,
             },
             self.targets,
         );
@@ -134,15 +134,15 @@ impl<E: Event + Clone> RevEventInitialized<E> {
         world.resource_scope(|world, mut resource: Mut<ObserverLog<E>>| {
             match meta {
                 Some(meta) => match meta.get_direction() {
-                    Some(Direction::BackwardLog) => {
+                    Some(RevDirection::BackwardLog) => {
                         let result = if undo {
                             resource.log.backward_log().map(|entry| {
-                                let direction = Direction::BackwardLog;
+                                let direction = RevDirection::BackwardLog;
                                 trigger(world, entry, direction);
                             })
                         } else {
                             resource.log.forward_log().map(|entry| {
-                                let direction = Direction::Forward { log: true };
+                                let direction = RevDirection::ForwardLog;
                                 trigger(world, entry, direction);
                             })
                         };
@@ -192,7 +192,7 @@ mod trigger_target {
 
     use crate::{
         log::{LogIter, ValueEntry, WithLoggedAt},
-        meta::Direction,
+        meta::RevDirection,
     };
 
     use super::RevEvent;
@@ -228,7 +228,7 @@ mod trigger_target {
             impl LogIter<'a, &'a mut TriggerTargetData>,
             &mut WithLoggedAt<(TriggerTargetTag, impl Event + Clone)>,
         >,
-        direction: Direction,
+        direction: RevDirection,
     ) {
         let ValueEntry {
             value: mut iter,
@@ -282,7 +282,7 @@ mod trigger_target {
 
     use crate::{
         log::{LogIter, ValueEntry, WithLoggedAt},
-        meta::Direction,
+        meta::RevDirection,
     };
 
     use super::RevEvent;
@@ -320,7 +320,7 @@ mod trigger_target {
             impl LogIter<'a, &'a mut TriggerTargetData>,
             &mut WithLoggedAt<(TriggerTargetTag, impl Event + Clone)>,
         >,
-        direction: Direction,
+        direction: RevDirection,
     ) {
         let ValueEntry {
             value: iter,
