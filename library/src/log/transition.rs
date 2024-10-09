@@ -178,7 +178,7 @@ impl<T: LoggedAt> TransitionLog<T> {
         self.index -= partition_point;
         self.transitions.drain(..partition_point)
     }
-    pub fn reduce_timestamps(&mut self, by: usize) -> impl LogIter<T> {
+    pub fn reduce_logged_at(&mut self, by: usize) -> impl LogIter<T> {
         let reduced_at = self
             .transitions
             .range_mut(..self.index)
@@ -243,7 +243,7 @@ mod test {
             self.meta.queue_forward();
             self.meta.update();
 
-            self.with_timestamp[0].pop_past_by_timestamp(self.meta.log_range().start);
+            self.with_timestamp[0].pop_past_by_timestamp(*self.meta.log_range().start());
             let middle = self.with_timestamp[0].clone();
             self.with_timestamp[0].push_present(self.meta.with_logged_at(transition));
             assert_eq!(
@@ -255,7 +255,7 @@ mod test {
                 self.with_timestamp[0]
             );
 
-            let _ = self.with_timestamp[1].drain_past_by_timestamp(self.meta.log_range().start);
+            let _ = self.with_timestamp[1].drain_past_by_timestamp(*self.meta.log_range().start());
             let middle = self.with_timestamp[1].clone();
             self.with_timestamp[1].push_present(self.meta.with_logged_at(transition));
             assert_eq!(
