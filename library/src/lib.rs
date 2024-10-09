@@ -6,7 +6,6 @@ Features:
 -- postponed due to required components + disabled entities + moving components
 - add license
 - reversible versions of World::observe / App::observe
-- Schedule::ignore_ambiguity
 
 Enhancements:
 - reduce todo!() and //todo
@@ -15,22 +14,20 @@ Enhancements:
 - tests of other log methods like clear variants
 - config tests
 - make doctests work
-- mod/use/pub cleanup, make prelude
+- mod/use/pub cleanup
 - serde-with tests
 - observer tests
-- hook -> observer -> commands reversible order test
--- commands should also trigger hooks here
--- commands shouls also call observer here
+- commands -> hook -> observer -> reversible order test
 -- a second sync point aftwerwards should be scheduled to assert nothing ist postponed into it
+-- test uses masks for systems that are const generic
 - use serde from bevy reexport
 - seal log structs (pub after appearing in pub interface)
-- thiserror for error types
 - reflect behind feature flag
 - use upcoming param verification for system (params)
 - RevMetaWithVerify
 -- tests
 -- own submodule
-- rename Direction to RevDirecton to not clash with non-crate types with that name
+- LoggedAt module
 
 Docs
 - examples
@@ -45,8 +42,6 @@ UNSUPPORTED:
 -- incompatible with how internals work
 - Schedule::set_apply_final_deferred
 -- default behavior is critical for assumptions of backward schedule
-- Schedule::graph_mut
--- why not?
 - ScheduleBuildSettings::auto_insert_apply_deferred
 -- see unsupported Schedule::set_apply_final_deferred
 - Trigger::event_mut
@@ -59,7 +54,12 @@ use std::hash::Hash;
 
 use bevy::{
     app::{FixedUpdate, Plugin},
-    ecs::schedule::{InternedScheduleLabel, InternedSystemSet, IntoSystemConfigs, ScheduleLabel},
+    ecs::{
+        component::Tick,
+        schedule::{
+            InternedScheduleLabel, InternedSystemSet, IntoSystemConfigs, ScheduleLabel, SystemSet,
+        },
+    },
 };
 
 use commands::RevCommandBuffer;
@@ -74,11 +74,11 @@ pub mod set_configs;
 pub mod system_configs;
 pub mod world;
 
-/// Contains important extension traits `as _`, [`RevMeta`] and [`Direction`].
+/// Contains important extension traits `as _`, [`RevMeta`] and [`RevDirection`].
 pub mod prelude {
     pub use crate::app::RevApp as _;
     pub use crate::commands::RevCommands as _;
-    pub use crate::meta::{RevMeta, Direction};
+    pub use crate::meta::{RevDirection, RevMeta};
     pub use crate::set_configs::IntoRevSystemSetConfigs as _;
     pub use crate::system_configs::IntoRevSystemConfigs as _;
     pub use crate::world::RevWorld as _;
@@ -129,6 +129,20 @@ impl Plugin for RevSystemsPlugin {
     }
 }
 
+#[derive(SystemSet, Copy, Clone, Debug, Hash, PartialEq, Eq)]
+struct BackwardCmdsSys(InternedSystemSet);
+
+#[derive(SystemSet, Copy, Clone, Debug, Hash, PartialEq, Eq)]
+struct BackwardSys(InternedSystemSet);
+
+fn check_tick(own_tick: &mut Tick, change_tick: Tick) {
+    // reference: Tick::check_tick
+    let age = change_tick.get().wrapping_sub(own_tick.get());
+    if age > Tick::MAX.get() {
+        *own_tick = Tick::new(change_tick.get().wrapping_sub(Tick::MAX.get()));
+    }
+}
+
 macro_rules! error_per_flag {
     ($flag:expr, $($arg:tt)+) => ({
         if !*$flag {
@@ -139,4 +153,4 @@ macro_rules! error_per_flag {
     });
 }
 
-pub(crate) use error_per_flag;
+use error_per_flag;
