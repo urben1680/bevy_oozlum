@@ -16,12 +16,8 @@ use bevy::ecs::{
 };
 
 use crate::{
-    commands::CommandsLog,
-    error_per_flag,
-    set_configs::{
-        check_tick, BackwardCmdsSys, BackwardSys, RevSystemSetConfigs,
-        EMPTY_ARCHETYPE_COMPONENT_ACCESS, EMPTY_COMPONENT_ACCESS,
-    },
+    check_tick, commands::CommandsLog, error_per_flag, meta::CommandsLogReducingBox,
+    set_configs::RevSystemSetConfigs, BackwardCmdsSys, BackwardSys,
 };
 
 use super::{IntoRevSystemConfigs, RevSystemConfigs};
@@ -52,6 +48,7 @@ where
         let fwd_sys_name = name(" (forward)");
         let bwd_sys_name = name(" (backward)");
         let bwd_cmd_name = name(" (backward commands)");
+        let observer_name = name(" (observer)");
 
         let shared = Arc::new(RwLock::new(Shared {
             system,
@@ -78,7 +75,7 @@ where
         };
 
         let backward_cmd = CommandsBackward {
-            shared,
+            shared: shared.clone(),
             name: bwd_cmd_name,
             tick: Tick::new(0),
             commands_err: false,
@@ -93,6 +90,14 @@ where
         backward = config_in_sets(BackwardCmdsSys, &sets, backward);
         let set_configs = RevSystemSetConfigs::from_sets(sets).unwrap(); // sets not empty
 
+        let observer: CommandsLogReducingBox = Box::new(move |event, world| {
+            shared
+                .try_write()
+                .unwrap_or_else(expect_shared(&observer_name))
+                .commands_log
+                .reduce_logged_at(world, event.by());
+        });
+
         // Note that System::has_deferred may return no correct value before initializing the system.
         // Because of this and that initializing the system here might be surprising for the user
         // the CommandsBackward system is always added. it becomes noop if the system ends up having no
@@ -101,6 +106,7 @@ where
             forward,
             backward,
             set_configs,
+            commands_logged_at_reductions: vec![observer],
         }
     }
 }
@@ -261,10 +267,12 @@ impl<T: System> System for CommandsBackward<T> {
         Cow::Owned(self.name.clone())
     }
     fn component_access(&self) -> &Access<ComponentId> {
-        &EMPTY_COMPONENT_ACCESS
+        static EMPTY: Access<ComponentId> = Access::new();
+        &EMPTY
     }
     fn archetype_component_access(&self) -> &Access<ArchetypeComponentId> {
-        &EMPTY_ARCHETYPE_COMPONENT_ACCESS
+        static EMPTY: Access<ArchetypeComponentId> = Access::new();
+        &EMPTY
     }
     fn is_send(&self) -> bool {
         true
