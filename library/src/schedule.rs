@@ -1,14 +1,14 @@
 use bevy::ecs::{
     schedule::{
-        ExecutorKind, LogLevel, Schedule, ScheduleBuildError, ScheduleBuildSettings, ScheduleGraph,
-        ScheduleLabel,
+        ExecutorKind, IntoSystemSet, LogLevel, Schedule, ScheduleBuildError, ScheduleBuildSettings,
+        ScheduleGraph, ScheduleLabel, SystemSet,
     },
     world::World,
 };
 
 use crate::{
-    meta::{Direction, RevMeta},
-    BackwardSchedule, ForwardSchedule,
+    meta::{CommandsLogReducingBox, RevDirection, RevMeta},
+    BackwardSchedule, BackwardSys, ForwardSchedule,
 };
 
 use super::{set_configs::IntoRevSystemSetConfigs, system_configs::IntoRevSystemConfigs};
@@ -16,6 +16,7 @@ use super::{set_configs::IntoRevSystemSetConfigs, system_configs::IntoRevSystemC
 pub struct RevSchedule {
     pub(crate) forward: Schedule,
     pub(crate) backward: Schedule,
+    pub(crate) commands_logged_at_reductions: Vec<CommandsLogReducingBox>,
 }
 
 pub struct RevScheduleBuildSettings {
@@ -36,12 +37,10 @@ impl RevSchedule {
         Self {
             forward: Schedule::new(ForwardSchedule(label)),
             backward: Schedule::new(BackwardSchedule(label)),
+            commands_logged_at_reductions: Vec::new(),
         }
     }
-    pub fn add_systems<Marker>(
-        &mut self,
-        systems: impl IntoRevSystemConfigs<Marker>,
-    ) -> &mut Self {
+    pub fn add_systems<Marker>(&mut self, systems: impl IntoRevSystemConfigs<Marker>) -> &mut Self {
         let configs = systems.into_rev_configs();
         self.forward.add_systems(configs.forward);
         self.backward.add_systems(configs.backward);
@@ -105,8 +104,8 @@ impl RevSchedule {
             .ok_or(TryRunError::RevMetaMissing)?
             .clone();
         match meta.get_direction() {
-            Some(Direction::Forward { .. }) => Ok(self.forward.run(world)),
-            Some(Direction::BackwardLog) => Ok(self.backward.run(world)),
+            Some(RevDirection::Forward { .. }) => Ok(self.forward.run(world)),
+            Some(RevDirection::BackwardLog) => Ok(self.backward.run(world)),
             None => Err(TryRunError::RevMetaWrongDirection(meta)),
         }
     }
@@ -133,6 +132,18 @@ impl RevSchedule {
     }
     pub fn graphs_mut(&mut self) -> (&mut ScheduleGraph, &mut ScheduleGraph) {
         (self.forward.graph_mut(), self.backward.graph_mut())
+    }
+    pub fn ignore_ambiguity<M1, M2>(
+        &mut self,
+        a: impl IntoSystemSet<M1>,
+        b: impl IntoSystemSet<M1>,
+    ) -> &mut Self {
+        let a = a.into_system_set().intern();
+        let b = b.into_system_set().intern();
+        self.forward.ignore_ambiguity(a, b);
+        self.backward
+            .ignore_ambiguity(BackwardSys(a), BackwardSys(b));
+        self
     }
     pub fn systems_len(&self) -> usize {
         self.forward.systems_len()
