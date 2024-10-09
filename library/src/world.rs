@@ -5,7 +5,7 @@ use bevy::ecs::{
 
 use crate::{
     app::RevSchedule,
-    meta::{Direction, RevMeta, RevTryRunScheduleError},
+    meta::{CommandsLogReducings, RevDirection, RevMeta, RevTryRunScheduleError},
     BackwardSchedule, ForwardSchedule, RevUpdate,
 };
 
@@ -51,21 +51,18 @@ impl RevWorld for World {
         if label.intern() == RevUpdate.intern() {
             RevMeta::try_update_world(self)
         } else {
-            let meta = self
-                .get_resource::<RevMeta>()
-                .ok_or(RevTryRunScheduleError::RevMetaMissing)?
-                .clone();
-            let direction = meta
-                .get_direction()
-                .ok_or_else(|| RevTryRunScheduleError::NoRevScheduleRunning(meta.clone()))?;
+            let meta = RevMeta::get_from_world(self)?.clone();
+            let direction = meta.get_direction().ok_or_else(|| {
+                RevTryRunScheduleError::NoRevScheduleRunning { meta: meta.clone() }
+            })?;
             let label = label.intern();
             match direction {
-                Direction::Forward { .. } => self.rev_try_run_forward_schedule(label),
-                Direction::BackwardLog => self.rev_try_run_backward_schedule(label),
+                RevDirection::Forward { .. } => self.rev_try_run_forward_schedule(label),
+                RevDirection::BackwardLog => self.rev_try_run_backward_schedule(label),
             }
             .map_err(|_| RevTryRunScheduleError::ScheduleMissing {
                 meta,
-                schedule: format!("{label:?}"),
+                schedule: label,
             })
         }
     }
@@ -110,11 +107,18 @@ impl RevWorld for World {
         let (Some(forward), Some(backward)) = (forward, backward) else {
             return Err(ScheduleMissing);
         };
-        let mut rev_schedule = RevSchedule { forward, backward };
+        let mut rev_schedule = RevSchedule {
+            forward,
+            backward,
+            commands_logged_at_reductions: Vec::new(),
+        };
         let r = f(self, &mut rev_schedule);
         let mut schedules = self.resource_mut::<Schedules>();
         schedules.insert(rev_schedule.forward);
         schedules.insert(rev_schedule.backward);
+        self.get_resource_or_insert_with(CommandsLogReducings::default)
+            .0
+            .append(&mut rev_schedule.commands_logged_at_reductions);
         Ok(r)
     }
 }
