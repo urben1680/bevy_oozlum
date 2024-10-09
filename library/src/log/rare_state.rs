@@ -328,7 +328,7 @@ impl<T: LoggedAt> RareStateLog<T> {
         self.index -= partition_point;
         self.states.drain(..partition_point).map(|rare| rare.value)
     }
-    pub fn reduce_timestamps(&mut self, by: usize) -> impl LogIter<T> {
+    pub fn reduce_logged_at(&mut self, by: usize) -> impl LogIter<T> {
         let reduced_at = self
             .states
             .range_mut(..self.index)
@@ -412,7 +412,7 @@ mod test {
 
             self.with_timestamp[0].push_present(push.then_some(with_timestamp));
             let middle = self.with_timestamp[0].clone();
-            self.with_timestamp[0].pop_past_by_timestamp(self.meta.log_range().start);
+            self.with_timestamp[0].pop_past_by_timestamp(*self.meta.log_range().start());
             assert!(
                 self.with_timestamp[0].log_len() >= minimum_log_len,
                 "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
@@ -436,7 +436,7 @@ mod test {
 
             self.with_timestamp[1].push_present(push.then_some(with_timestamp));
             let middle = self.with_timestamp[1].clone();
-            let _ = self.with_timestamp[1].drain_past_by_timestamp(self.meta.log_range().start);
+            let _ = self.with_timestamp[1].drain_past_by_timestamp(*self.meta.log_range().start());
             assert!(
                 self.with_timestamp[1].log_len() >= minimum_log_len,
                 "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
