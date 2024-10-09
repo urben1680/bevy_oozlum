@@ -4,7 +4,7 @@ use bevy::{
     utils::HashMap,
 };
 
-use crate::meta::{Direction, RevMeta};
+use crate::meta::{RevDirection, RevMeta};
 
 use super::{buffer_rev_command, InitializedRevCommand};
 
@@ -81,9 +81,9 @@ impl HookDirection {
             .get_resource::<RevMeta>()
             .and_then(RevMeta::get_direction)
         {
-            Some(Direction::Forward { log: false }) => Self::Forward { log: false },
-            Some(Direction::Forward { log: true }) => Self::IndeterministicForward,
-            Some(Direction::BackwardLog) => Self::IndeterministicBackward,
+            Some(RevDirection::NotLog) => Self::Forward { log: false },
+            Some(RevDirection::ForwardLog) => Self::IndeterministicForward,
+            Some(RevDirection::BackwardLog) => Self::IndeterministicBackward,
             None => Self::NonReversibleSchedule,
         }
     }
