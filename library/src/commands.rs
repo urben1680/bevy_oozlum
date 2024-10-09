@@ -12,7 +12,7 @@ use bevy::{
 
 use crate::{
     log::{OutOfLog, TransitionsLog, WithLoggedAt},
-    meta::{Direction, RevMeta},
+    meta::{RevDirection, RevMeta},
 };
 
 pub mod hook;
@@ -153,11 +153,11 @@ impl CommandsLog {
             .ok_or(CommandsLogErr::RevMetaMissing)?
             .clone();
         match meta.get_direction() {
-            Some(Direction::Forward { log: false }) => {
+            Some(RevDirection::NotLog) => {
                 for command in self.0.drain_future().0.rev() {
                     SyncCell::to_inner(command).undone_finalize(world);
                 }
-                for command in self.0.drain_past_by_timestamp(meta.log_range().start) {
+                for command in self.0.drain_past_by_timestamp(meta.start()) {
                     SyncCell::to_inner(command).redone_finalize(world);
                 }
                 let mut buffer = world.get_resource_or_insert_with(RevCommandBuffer::default);
@@ -169,7 +169,7 @@ impl CommandsLog {
                 }
                 Ok(())
             }
-            Some(Direction::Forward { log: true }) => {
+            Some(RevDirection::ForwardLog) => {
                 for command in self
                     .0
                     .forward_log()
@@ -187,7 +187,7 @@ impl CommandsLog {
         let meta = world
             .get_resource::<RevMeta>()
             .ok_or(CommandsLogErr::RevMetaMissing)?;
-        if meta.get_direction() != Some(Direction::BackwardLog) {
+        if meta.get_direction() != Some(RevDirection::BackwardLog) {
             return Err(CommandsLogErr::RevMetaWrongDirection(meta.clone()));
         }
         for command in self
@@ -199,5 +199,10 @@ impl CommandsLog {
             command.get().undo(world);
         }
         Ok(())
+    }
+    pub fn reduce_logged_at(&mut self, world: &mut World, by: usize) {
+        for command in self.0.reduce_logged_at(by) {
+            SyncCell::to_inner(command).redone_finalize(world);
+        }
     }
 }
