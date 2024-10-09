@@ -16,12 +16,10 @@ use bevy::ecs::{
 };
 
 use crate::{
-    error_per_flag,
+    check_tick, error_per_flag,
     log::{OutOfLog, RareTransitionLog},
-    meta::{Direction, RevMeta},
+    meta::{RevDirection, RevMeta},
 };
-
-use super::check_tick;
 
 struct RevConditionForward<T> {
     condition: T,
@@ -272,13 +270,13 @@ impl<T: ReadOnlySystem<Out = bool>> RevConditionForward<T> {
             }
         };
         match meta.get_direction() {
-            Some(Direction::Forward { log: false }) => {
+            Some(RevDirection::NotLog) => {
                 let out = eval_cond(&mut self.condition);
                 log.pop_past_by_len(meta.past_len().saturating_sub(1));
                 log.push_present(out.then_some(()));
                 out
             }
-            Some(Direction::Forward { log: true }) => match log.forward_log() {
+            Some(RevDirection::ForwardLog) => match log.forward_log() {
                 Ok(option) => option.is_some(),
                 Err(OutOfLog) => error_per_flag!(&mut self.out_of_log_err, "Reversible condition {} got out of log. \
                     Make sure the reversible schedule this condition is in is correctly called in both the forward and backward direction. \
@@ -300,7 +298,7 @@ impl<In: Send + Sync + 'static> RevConditionBackward<In> {
                 self.name
             );
         };
-        if meta.get_direction() != Some(Direction::BackwardLog) {
+        if meta.get_direction() != Some(RevDirection::BackwardLog) {
             return error_per_flag!(
                 &mut self.direction_err,
                 "Reversible condition {} did run while RevMeta was in a wrong direction. \
