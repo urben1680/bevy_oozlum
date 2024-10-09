@@ -1,10 +1,12 @@
 use bevy::{
-    ecs::schedule::{Condition, IntoSystemSet, SystemConfigs, SystemSet},
-    prelude::IntoSystemConfigs,
+    ecs::schedule::{Condition, IntoSystemConfigs, IntoSystemSet, SystemConfigs, SystemSet},
     utils::all_tuples,
 };
 
-use crate::set_configs::{IntoRevSystemSetConfigs, RevSystemSetConfigs};
+use crate::{
+    meta::CommandsLogReducingBox,
+    set_configs::{IntoRevSystemSetConfigs, RevSystemSetConfigs},
+};
 
 mod system;
 
@@ -22,6 +24,9 @@ pub struct RevSystemConfigs {
 
     /// Actual configuration of the systems.
     pub(crate) set_configs: RevSystemSetConfigs,
+
+    /// todo
+    pub(crate) commands_logged_at_reductions: Vec<CommandsLogReducingBox>,
 }
 
 pub trait IntoRevSystemConfigs<Marker>
@@ -122,10 +127,13 @@ macro_rules! impl_into_rev_system_configs {
 
                 let set_configs = ($($var.set_configs,)*).into_rev_configs();
 
+                let commands_logged_at_reductions = [$($var.commands_logged_at_reductions.into_iter(),)*].into_iter().flatten().collect();
+
                 RevSystemConfigs {
                     forward,
                     backward,
                     set_configs,
+                    commands_logged_at_reductions
                 }
             }
         }
