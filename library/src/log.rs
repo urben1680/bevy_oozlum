@@ -775,16 +775,16 @@ mod test {
     pub(super) enum ForwardStrategy {
         PopPastByLen,
         DrainPastByLen,
-        PopPastByTimestamp,
-        DrainPastByTimestamp,
+        PopPastByLoggedAt,
+        DrainPastByLoggedAt,
     }
 
     impl ForwardStrategy {
         pub(super) const VARIANTS: [Self; 4] = [
             Self::PopPastByLen,
             Self::DrainPastByLen,
-            Self::PopPastByTimestamp,
-            Self::DrainPastByTimestamp,
+            Self::PopPastByLoggedAt,
+            Self::DrainPastByLoggedAt,
         ];
     }
 
