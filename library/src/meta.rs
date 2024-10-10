@@ -494,7 +494,10 @@ mod test {
                 updates_until_pause,
             } => {
                 assert!(now <= *range.end(), "{meta:?}");
-                assert!(range.start() + updates_until_pause.get() - 1 <= now, "{meta:?}");
+                assert!(
+                    range.start() + updates_until_pause.get() - 1 <= now,
+                    "{meta:?}"
+                );
             }
             InternalDirection::Pause => assert!(now <= *range.end(), "{meta:?}"),
             _ => unimplemented!(),
