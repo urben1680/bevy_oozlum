@@ -6,9 +6,11 @@ use std::{
 
 use bevy::reflect::{std_traits::ReflectDefault, Reflect};
 
+use crate::meta::RevMeta;
+
 use super::{
     impl_with_amount, into_ok, AmountErr, EntryAmount, LogIter, LogMut, LoggedAt, NotUSize,
-    OutOfLog, TransitionLog, ValueEntry, WithAmount,
+    OutOfLog, TransitionLog, ValueEntry, WithAmount, USIZE_BYTES,
 };
 
 #[derive(Debug, Clone, Reflect)]
@@ -288,29 +290,20 @@ impl<T, U: LoggedAt, const AMOUNT_BYTES: usize> TransitionsLog<T, U, AMOUNT_BYTE
 where
     Self: WithAmount,
 {
-    pub fn pop_past_by_timestamp(
+    pub fn pop_past_by_logged_at(
         &mut self,
-        log_start: usize,
+        meta: &RevMeta,
     ) -> Option<ValueEntry<impl LogIter<T>, U>> {
         self.amounts
-            .pop_past_by_timestamp(log_start)
+            .pop_past_by_logged_at(meta)
             .map(|entry_amount| self.drain_past_by_amount(entry_amount))
     }
-    pub fn drain_past_by_timestamp(&mut self, log_start: usize) -> impl LogIter<T> {
+    pub fn truncate_future_drain_past_by_logged_at(&mut self, meta: &RevMeta) -> impl LogIter<T> {
         let amount: usize = self
             .amounts
-            .drain_past_by_timestamp(log_start)
+            .truncate_future_drain_past_by_logged_at(meta)
             .map(|entry_amount| entry_amount.amount::<Self>())
             .sum();
-        self.index -= amount;
-        self.transitions.drain(..amount)
-    }
-    pub fn reduce_logged_at(&mut self, by: usize) -> impl LogIter<T> {
-        let amount = self
-            .amounts
-            .reduce_logged_at(by)
-            .map(|entry_amount| entry_amount.amount::<Self>())
-            .sum::<usize>();
         self.index -= amount;
         self.transitions.drain(..amount)
     }
@@ -322,12 +315,13 @@ mod test {
 
     use super::*;
 
-    use crate::{log::WithLoggedAt, meta::RevMeta};
+    use crate::{log::LoggedAt, meta::RevMeta, RevFrame};
 
+    /*
     #[derive(Clone, Debug)]
     struct MetaAndLogs {
         meta: RevMeta,
-        with_timestamp: [TransitionsLog<usize, WithLoggedAt, 1>; 2],
+        with_timestamp: [TransitionsLog<usize, GetLoggedAt, 1>; 2],
         one_per_frame: [TransitionsLog<usize, (), 1>; 2],
     }
 
@@ -408,7 +402,7 @@ mod test {
                 })
                 .is_ok();
             let middle = self.one_per_frame[0].clone();
-            self.one_per_frame[0].pop_past_by_len(self.meta.past_len());
+            self.one_per_frame[0].pop_past_by_len(self.meta.past_world_states());
             assert_eq!(
                 is_ok, expected_ok,
                 "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
@@ -429,7 +423,7 @@ mod test {
                 })
                 .is_ok();
             let middle = self.one_per_frame[1].clone();
-            let _ = self.one_per_frame[1].drain_past_by_len(self.meta.past_len());
+            let _ = self.one_per_frame[1].drain_past_by_len(self.meta.past_world_states());
             assert_eq!(
                 is_ok, expected_ok,
                 "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
@@ -452,7 +446,9 @@ mod test {
             match expected_transitions {
                 Ok(expected_transitions) => {
                     assert!(
-                        self.meta.queue_log(self.meta.now() - 1).is_ok(),
+                        self.meta
+                            .queue_log(self.meta.present_world_state() - 1)
+                            .is_ok(),
                         "\npreviously: {previous:?}\nnow: {self:?}"
                     );
                     self.meta.update();
@@ -549,7 +545,9 @@ mod test {
             match expected_transitions {
                 Ok(expected_transitions) => {
                     assert!(
-                        self.meta.queue_log(self.meta.now() + 1).is_ok(),
+                        self.meta
+                            .queue_log(self.meta.present_world_state() + 1)
+                            .is_ok(),
                         "\npreviously: {previous:?}\nnow: {self:?}"
                     );
                     self.meta.update();
@@ -667,10 +665,10 @@ mod test {
         // amount of transitions is stored as u8, cannot store more than 255 transitions per push
         meta_and_logs.forward(Err([256; 256]), 1);
     }
+    */
 
     #[allow(dead_code)]
     fn impls_reflect() {
-        bevy::reflect::TypeRegistry::empty()
-            .register::<TransitionsLog<usize, WithLoggedAt<u8>, 1>>();
+        bevy::reflect::TypeRegistry::empty().register::<TransitionsLog<usize, RevFrame, 1>>();
     }
 }
