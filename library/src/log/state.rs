@@ -6,9 +6,9 @@ use std::{
 
 use bevy::{reflect::Reflect, utils::tracing::error};
 
-use crate::log::INDEX_OOB;
+use crate::{log::INDEX_OOB, meta::RevMeta};
 
-use super::{LogIter, LoggedAt, OutOfLog, PackedTime};
+use super::{LogIter, LoggedAt, OutOfLog};
 
 #[derive(Debug, Default, Clone, Reflect)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -157,8 +157,8 @@ impl<T> StateLog<T> {
     }
     pub fn push_present(&mut self, state: T) {
         self.states.truncate(self.index);
-        let previous = core::mem::replace(&mut self.present, state);
-        self.states.push_back(previous);
+        let before = core::mem::replace(&mut self.present, state);
+        self.states.push_back(before);
         self.index += 1;
     }
     pub fn drain_future(&mut self) -> impl LogIter<T> {
@@ -253,53 +253,25 @@ impl<T> StateLog<T> {
 }
 
 impl<T: LoggedAt> StateLog<T> {
-    pub fn pop_past_by_logged_at(&mut self, log_start: usize) -> Option<T> {
-        if self.past_end()?.logged_at() < log_start {
+    pub fn pop_past_by_logged_at(&mut self, meta: &RevMeta) -> Option<T> {
+        let logged_at = self.past_end()?.logged_at();
+        if !meta.contains(logged_at) {
             self.pop_past()
         } else {
             None
         }
     }
-    pub fn drain_past_by_logged_at(&mut self, log_start: usize) -> impl LogIter<T> {
-        let partition_point = self
+    pub fn truncate_future_drain_past_by_logged_at(&mut self, meta: &RevMeta) -> impl LogIter<T> {
+        // may be redundant but if not improves partition_point performance
+        self.states.truncate(self.index);
+
+        let ref_len = meta.past_world_states();
+        let start = meta.oldest_world_state().0;
+        let to = self
             .states
-            .partition_point(|entry| entry.logged_at() < log_start);
-        self.index -= partition_point;
-        self.states.drain(..partition_point)
-    }
-    pub fn reduce_logged_at(&mut self, by: usize) -> impl LogIter<T> {
-        let reduced_at = self
-            .states
-            .range_mut(..self.index)
-            .position(|with_timestamp| {
-                with_timestamp
-                    .logged_at()
-                    .checked_sub(by)
-                    .inspect(|reduced| {
-                        with_timestamp.set_logged_at(PackedTime::from_internal(*reduced))
-                    })
-                    .is_some()
-            });
-        let logged_at = match reduced_at {
-            Some(_) => PackedTime::from_internal(self.present.logged_at() - by),
-            None => {
-                let logged_at = self.present.logged_at();
-                match logged_at.checked_sub(by) {
-                    Some(reduced) => PackedTime::from_internal(reduced),
-                    None => panic!(
-                        "present state was logged at {logged_at} which cannot be reduced by {by}"
-                    ),
-                }
-            }
-        };
-        self.present.set_logged_at(logged_at);
-        let reduced_at = reduced_at.unwrap_or(self.index);
-        for with_timestamp in self.states.range_mut(reduced_at..) {
-            let logged_at = with_timestamp.logged_at();
-            with_timestamp.set_logged_at(PackedTime::from_internal(logged_at - by));
-        }
-        self.index -= reduced_at;
-        self.states.drain(..reduced_at)
+            .partition_point(|entry| !RevMeta::contains_buffered(start, entry, ref_len));
+        self.index -= to;
+        self.states.drain(..to)
     }
 }
 
@@ -312,8 +284,9 @@ mod test {
     use super::*;
 
     use crate::{
-        log::{test::ForwardStrategy, WithLoggedAt},
+        log::{test::ForwardStrategy, PackedRevFrame},
         meta::RevMeta,
+        RevFrame,
     };
 
     #[test]
@@ -387,111 +360,86 @@ mod test {
         );
     }
 
-    impl StateLog<WithLoggedAt<u8>> {
+    impl StateLog<(u8, RevFrame)> {
         fn test_forward(
             &mut self,
             meta: &mut RevMeta,
             strategy: ForwardStrategy,
             push: u8,
             expected_log_len: usize,
-            popped: Option<WithLoggedAt<u8>>,
+            popped: Option<(u8, usize)>,
         ) {
             meta.queue_forward();
             meta.update();
-            let push = meta.with_logged_at(push);
-            let previous = self.clone();
+            let before = self.clone();
+            let push = (push, meta.present_world_state());
             self.push_present(push);
-            let middle = self.clone();
-            match strategy {
-                ForwardStrategy::PopPastByLen => {
-                    let actual = self.pop_past_by_len(meta.past_len());
-                    assert_eq!(
-                        actual,
-                        popped,
-                        "\nmeta: {meta:#?}\nprevious: {previous:#?}\nmiddle: {middle:#?}\nnow: {self:#?}",
+            let after_push = self.clone();
+            let actual = match strategy {
+                ForwardStrategy::PopPastByLen => self.pop_past_by_len(meta.past_world_states()),
+                ForwardStrategy::PopPastByLoggedAt => self.pop_past_by_logged_at(meta),
+                ForwardStrategy::DrainPastByLen | ForwardStrategy::DrainPastByLoggedAt => {
+                    let mut actual: Vec<_> = match strategy {
+                        ForwardStrategy::DrainPastByLen => {
+                            self.drain_past_by_len(meta.past_world_states()).collect()
+                        }
+                        ForwardStrategy::DrainPastByLoggedAt => {
+                            self.truncate_future_drain_past_by_logged_at(meta).collect()
+                        }
+                        _ => unreachable!(),
+                    };
+                    assert!(
+                        actual.len() <= 1,
+                        "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}\npopped: {actual:#?}",                
                     );
+                    actual.pop()
                 }
-                ForwardStrategy::PopPastByTimestamp => {
-                    let actual = self.pop_past_by_logged_at(meta.start());
-                    assert_eq!(
-                        actual,
-                        popped,
-                        "\nmeta: {meta:#?}\nprevious: {previous:#?}\nmiddle: {middle:#?}\nnow: {self:#?}",
-                    );
-                }
-                ForwardStrategy::DrainPastByLen => {
-                    let mut iter = self.drain_past_by_len(meta.past_len());
-                    let actual = iter.next();
-                    let following = iter.next();
-                    drop(iter);
-                    assert_eq!(
-                        actual,
-                        popped,
-                        "\nmeta: {meta:#?}\nprevious: {previous:#?}\nmiddle: {middle:#?}\nnow: {self:#?}",
-                    );
-                    assert_eq!(
-                        following,
-                        None,
-                        "\nmeta: {meta:#?}\nprevious: {previous:#?}\nmiddle: {middle:#?}\nnow: {self:#?}",
-                    );
-                }
-                ForwardStrategy::DrainPastByTimestamp => {
-                    let mut iter = self.drain_past_by_logged_at(meta.start());
-                    let actual = iter.next();
-                    let following = iter.next();
-                    drop(iter);
-                    assert_eq!(
-                        actual,
-                        popped,
-                        "\nmeta: {meta:#?}\nprevious: {previous:#?}\nmiddle: {middle:#?}\nnow: {self:#?}",
-                    );
-                    assert_eq!(
-                        following,
-                        None,
-                        "\nmeta: {meta:#?}\nprevious: {previous:#?}\nmiddle: {middle:#?}\nnow: {self:#?}",
-                    );
-                }
-            }
+            }.map(|(value, logged_at)| (value, logged_at.into()));
+            assert_eq!(
+                actual, popped,
+                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
+            );
             assert_eq!(
                 self.len(),
                 expected_log_len,
-                "\nmeta: {meta:#?}\nprevious: {previous:#?}\nmiddle: {middle:#?}\nnow: {self:#?}",
+                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
             );
             assert_eq!(
                 **self, push,
-                "\nmeta: {meta:#?}\nprevious: {previous:#?}\nmiddle: {middle:#?}\nnow: {self:#?}",
+                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
             );
         }
         fn test_forward_log(&mut self, meta: &mut RevMeta, state: Result<u8, u8>) {
             match state {
                 Ok(state) => {
-                    meta.queue_log(meta.now() + 1).unwrap();
+                    meta.queue_log(RevFrame(meta.present_world_state().0 + 1))
+                        .unwrap();
                     meta.update();
-                    let previous = self.clone();
+                    let before = self.clone();
                     let result = self.forward_log();
                     assert_eq!(
                         result,
                         Ok(()),
-                        "\nmeta: {meta:#?}\nprevious: {previous:#?}\nnow: {self:#?}",
+                        "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_forward: {self:#?}",
                     );
                     assert_eq!(
                         **self,
-                        meta.with_logged_at(state),
-                        "\nmeta: {meta:#?}\nprevious: {previous:#?}\nnow: {self:#?}",
+                        (state, meta.present_world_state()),
+                        "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_forward: {self:#?}",
                     );
                 }
                 Err(state) => {
-                    let previous = self.clone();
+                    let before = self.clone();
                     let result = self.forward_log();
                     assert_eq!(
                         result,
                         Err(OutOfLog),
-                        "\nmeta: {meta:#?}\nprevious: {previous:#?}\nnow: {self:#?}",
+                        "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_forward: {self:#?}",
                     );
                     assert_eq!(
                         **self,
-                        meta.with_logged_at(state),
-                        "\nmeta: {meta:#?}\nprevious: {previous:#?}\nnow: {self:#?}",
+                        (state, meta.present_world_state()),
+                        "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_forward: {self:#?}",
                     );
                 }
             }
@@ -499,33 +447,34 @@ mod test {
         fn test_backward_log(&mut self, meta: &mut RevMeta, state: Result<u8, u8>) {
             match state {
                 Ok(state) => {
-                    meta.queue_log(meta.now() - 1).unwrap();
+                    meta.queue_log(RevFrame(meta.present_world_state().0 - 1))
+                        .unwrap();
                     meta.update();
-                    let previous = self.clone();
+                    let before = self.clone();
                     let result = self.backward_log();
                     assert_eq!(
                         result,
                         Ok(()),
-                        "\nmeta: {meta:#?}\nprevious: {previous:#?}\nnow: {self:#?}",
+                        "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_backward: {self:#?}",
                     );
                     assert_eq!(
                         **self,
-                        meta.with_logged_at(state),
-                        "\nmeta: {meta:#?}\nprevious: {previous:#?}\nnow: {self:#?}",
+                        (state, meta.present_world_state()),
+                        "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_backward: {self:#?}",
                     );
                 }
                 Err(state) => {
-                    let previous = self.clone();
+                    let before = self.clone();
                     let result = self.backward_log();
                     assert_eq!(
                         result,
                         Err(OutOfLog),
-                        "\nmeta: {meta:#?}\nprevious: {previous:#?}\nnow: {self:#?}",
+                        "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_backward: {self:#?}",
                     );
                     assert_eq!(
                         **self,
-                        meta.with_logged_at(state),
-                        "\nmeta: {meta:#?}\nprevious: {previous:#?}\nnow: {self:#?}",
+                        (state, meta.present_world_state()),
+                        "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_backward: {self:#?}",
                     );
                 }
             }
@@ -536,12 +485,12 @@ mod test {
     fn push_and_log_traversal() {
         for strategy in ForwardStrategy::VARIANTS {
             let meta = &mut RevMeta::new(NonZeroUsize::new(3), 0, false);
-            let mut log = StateLog::new(meta.with_logged_at(0));
+            let mut log = StateLog::new((0, meta.present_world_state()));
 
             log.test_forward(meta, strategy, 1, 1, None);
             log.test_forward(meta, strategy, 2, 2, None);
             // shortened log
-            log.test_forward(meta, strategy, 3, 2, Some(WithLoggedAt::new(0, 0)));
+            log.test_forward(meta, strategy, 3, 2, Some((0, 0)));
 
             log.test_backward_log(meta, Ok(2));
             log.test_backward_log(meta, Ok(1));
@@ -562,6 +511,6 @@ mod test {
 
     #[allow(dead_code)]
     fn impls_reflect() {
-        bevy::reflect::TypeRegistry::empty().register::<StateLog<WithLoggedAt<usize>>>();
+        bevy::reflect::TypeRegistry::empty().register::<StateLog<PackedRevFrame>>();
     }
 }
