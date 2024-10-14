@@ -228,11 +228,14 @@ methods on log that takes &mut RevMeta and...
 
 use std::{
     collections::{TryReserveError, VecDeque},
-    fmt::{Debug, Display},
+    fmt::Debug,
     iter::FusedIterator,
 };
 
-use bevy::reflect::{std_traits::ReflectDefault, Reflect};
+use bevy::{
+    reflect::Reflect,
+    utils::all_tuples,
+};
 
 #[cfg(feature = "serde")]
 use bevy::reflect::{ReflectDeserialize, ReflectSerialize};
@@ -294,18 +297,16 @@ const TIME_BYTES: usize = 8;
 const USIZE_BYTES: usize = usize::BITS as usize / 8;
 
 #[derive(Clone, Copy, Reflect, PartialEq, Eq)]
-#[reflect(Default, Debug)]
+#[reflect(Debug)]
 #[cfg_attr(feature = "serde", reflect(Serialize, Deserialize))]
-pub struct PackedTime([u8; Self::BYTES]);
+pub struct PackedRevFrame([u8; Self::BYTES]);
 
-impl PackedTime {
+impl PackedRevFrame {
     pub const BYTES: usize = if TIME_BYTES > USIZE_BYTES {
         USIZE_BYTES
     } else {
         TIME_BYTES
     };
-    pub const MIN: Self = Self([u8::MIN; Self::BYTES]);
-    pub const MAX: Self = Self([u8::MAX; Self::BYTES]);
     pub const MAX_USIZE: usize = {
         let bits = Self::BYTES as u32 * 8;
         let shift = if bits < usize::BITS {
@@ -315,32 +316,24 @@ impl PackedTime {
         };
         usize::MAX >> shift
     };
-    pub(crate) fn from_internal(time: usize) -> Self {
-        time.try_into().unwrap_or_else(|_| {
-            panic!(
-                "{time} does not fit into {} bytes, \
-                cannot map this value to `PackedTime`. If a log that contains `WithTimestamp` \
-                is loaded while RevMeta is created with an offset from the last run, make use
-                of the `reduce_timestamps` method of the log as well. If this is not the issue, \
-                this is an internal bug.",
-                Self::BYTES
-            )
-        })
+    pub(crate) const MIN: Self = Self([u8::MIN; Self::BYTES]);
+    pub(crate) const MAX: Self = Self([u8::MAX; Self::BYTES]);
+    fn into_usize(self) -> usize {
+        let mut i = self.0.into_iter();
+        usize::from_le_bytes(std::array::from_fn(|_| i.next().unwrap_or(0)))
     }
-    pub(crate) fn from_user(time: usize) -> Self {
-        time.try_into().unwrap_or_else(|_| {
-            panic!(
-                "{time} does not fit into {} bytes, \
-                cannot map this value to `PackedTime`, consider to increase the `time_bytes_*` \
-                feature to a higher amount of bytes to store this value.",
-                Self::BYTES
-            )
-        })
+    fn try_from_usize(value: usize) -> Result<Self, ()> {
+        if value <= Self::MAX_USIZE {
+            let mut i = value.to_le_bytes().into_iter();
+            Ok(Self(std::array::from_fn(|_| i.next().unwrap_or(0))))
+        } else {
+            Err(())
+        }
     }
     #[cfg(feature = "serde")]
-    fn from_serde_err(time: usize) -> String {
+    fn from_serde_err(value: usize) -> String {
         format!(
-            "{time} does not fit into {} bytes, cannot map this value to `PackedTime` \
+            "{value} does not fit into {} bytes, cannot map this value to `PackedTime` \
             on this machine, increase the `time_bytes_*` feature of the reversible_systems \
             crate to the value of the source where this value was serialized",
             Self::BYTES,
@@ -348,8 +341,29 @@ impl PackedTime {
     }
 }
 
+impl From<PackedRevFrame> for RevFrame {
+    fn from(value: PackedRevFrame) -> Self {
+        RevFrame(usize::from_le_bytes(value.0))
+    }
+}
+
+impl From<RevFrame> for PackedRevFrame {
+    fn from(value: RevFrame) -> Self {
+        // RevFrame is only constructed from usize <= PackedRevFrame::MAX_USIZE
+        let mut i = value.0.to_le_bytes().into_iter();
+        Self(std::array::from_fn(|_| i.next().unwrap_or(0)))
+    }
+}
+
+impl Into<usize> for PackedRevFrame {
+    fn into(self) -> usize {
+        let this: RevFrame = self.into();
+        this.0
+    }
+}
+
 #[cfg(feature = "serde")]
-impl serde::Serialize for PackedTime {
+impl serde::Serialize for PackedRevFrame {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
@@ -359,54 +373,24 @@ impl serde::Serialize for PackedTime {
 }
 
 #[cfg(feature = "serde")]
-impl<'de> serde::Deserialize<'de> for PackedTime {
+impl<'de> serde::Deserialize<'de> for PackedRevFrame {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
         match usize::deserialize(deserializer) {
-            Ok(time) => match Self::try_from(time) {
+            Ok(time) => match Self::try_from_usize(time) {
                 Ok(this) => Ok(this),
-                Err(USizeTooLarge) => Err(serde::de::Error::custom(Self::from_serde_err(time))),
+                Err(()) => Err(serde::de::Error::custom(Self::from_serde_err(time))),
             },
             Err(err) => Err(err),
         }
     }
 }
 
-impl Debug for PackedTime {
+impl Debug for PackedRevFrame {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        Debug::fmt(&usize::from(*self), f)
-    }
-}
-
-impl Display for PackedTime {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        Display::fmt(&usize::from(*self), f)
-    }
-}
-
-impl Default for PackedTime {
-    fn default() -> Self {
-        Self::MIN
-    }
-}
-
-impl From<PackedTime> for usize {
-    fn from(value: PackedTime) -> Self {
-        usize::from_le_bytes(value.0)
-    }
-}
-
-impl TryFrom<usize> for PackedTime {
-    type Error = USizeTooLarge;
-    fn try_from(value: usize) -> Result<Self, Self::Error> {
-        if value <= Self::MAX_USIZE {
-            let mut i = value.to_le_bytes().into_iter();
-            Ok(Self(std::array::from_fn(|_| i.next().unwrap_or(0))))
-        } else {
-            Err(USizeTooLarge)
-        }
+        Debug::fmt(&self.into_usize(), f)
     }
 }
 
@@ -511,52 +495,6 @@ impl<'a, T: Iterator, U> IntoIterator for &'a mut ValueEntry<T, U> {
     }
 }
 
-/// Call `update` of a log with this struct up to one time per reversible frame.
-///
-/// This will enable a cleanup strategy where entries are forgotten that are older than the global log start.
-#[derive(Clone, Copy, PartialEq, Eq, Reflect)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct WithLoggedAt<T = ()> {
-    pub value: T,
-    pub(crate) logged_at: PackedTime,
-}
-
-impl<T: Debug> Debug for WithLoggedAt<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct(std::any::type_name::<Self>())
-            .field("value", &self.value)
-            .field("logged_at", &usize::from(self.logged_at))
-            .finish()
-    }
-}
-
-impl<T> WithLoggedAt<T> {
-    pub fn new_default(logged_at: usize) -> Self
-    where
-        T: Default,
-    {
-        Self::new(T::default(), logged_at)
-    }
-    pub fn new(value: T, logged_at: usize) -> Self {
-        Self {
-            value,
-            logged_at: PackedTime::from_user(logged_at),
-        }
-    }
-    pub fn logged_at(&self) -> usize {
-        self.logged_at.into()
-    }
-}
-
-impl<T: Default> From<usize> for WithLoggedAt<T> {
-    fn from(logged_at: usize) -> Self {
-        Self {
-            value: T::default(),
-            logged_at: PackedTime::from_user(logged_at),
-        }
-    }
-}
-
 #[doc(hidden)]
 #[derive(Clone, PartialEq, Reflect)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -565,14 +503,14 @@ pub struct RareValue<T> {
     /// If `T` is a transiton, then these are the skips before the transition.
     ///
     /// If `T` is a value, then these are the skips after the value.
-    skips: PackedTime,
+    skips: PackedRevFrame,
 }
 
 impl<T: Debug> Debug for RareValue<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct(std::any::type_name::<Self>())
             .field("value", &self.value)
-            .field("skips", &usize::from(self.skips))
+            .field("skips", &self.skips.into_usize())
             .finish()
     }
 }
@@ -606,29 +544,6 @@ impl<U, A: Copy> EntryAmount<U, A> {
     }
 }
 
-pub trait LoggedAt {
-    fn logged_at(&self) -> usize;
-    fn set_logged_at(&mut self, value: PackedTime);
-}
-
-impl<T> LoggedAt for WithLoggedAt<T> {
-    fn logged_at(&self) -> usize {
-        self.logged_at.into()
-    }
-    fn set_logged_at(&mut self, value: PackedTime) {
-        self.logged_at = value;
-    }
-}
-
-impl<B: LoggedAt, A> LoggedAt for EntryAmount<B, A> {
-    fn logged_at(&self) -> usize {
-        self.entry.logged_at()
-    }
-    fn set_logged_at(&mut self, value: PackedTime) {
-        self.entry.set_logged_at(value)
-    }
-}
-
 const INDEX_OOB: &'static str = "self.index should always be <= the deque len, so successfully reducing \
     it without underflow is expected to result in a valid index into the log which is not the case here";
 
@@ -640,9 +555,50 @@ fn into_ok<T>(result: Result<T, std::convert::Infallible>) -> T {
     }
 }
 
-#[doc(hidden)]
-#[derive(Debug, Clone, Copy)]
-pub struct USizeTooLarge;
+/// Logged types that contain the information when these were logged, for example
+/// by containing [`RevFrame`] or the more compact [`PackedRevFrame`] from
+/// [`RevMeta::present_world_state`](crate::meta::RevMeta::present_world_state).
+pub trait LoggedAt {
+    fn logged_at(&self) -> RevFrame;
+}
+
+impl LoggedAt for RevFrame {
+    fn logged_at(&self) -> RevFrame {
+        *self
+    }
+}
+
+impl LoggedAt for PackedRevFrame {
+    fn logged_at(&self) -> RevFrame {
+        RevFrame(self.into_usize())
+    }
+}
+
+impl<U: LoggedAt, A> LoggedAt for EntryAmount<U, A> {
+    fn logged_at(&self) -> RevFrame {
+        self.entry.logged_at()
+    }
+}
+
+impl<T: LoggedAt> LoggedAt for RareValue<T> {
+    fn logged_at(&self) -> RevFrame {
+        self.value.logged_at()
+    }
+}
+
+macro_rules! impl_logged_at {
+    ($($T: ident),*) => {
+        impl<$($T,)* U: LoggedAt> LoggedAt for ($($T,)* U) {
+            fn logged_at(&self) -> RevFrame {
+                #[allow(non_snake_case, unused_variables)]
+                let ($($T,)* logged_at) = self;
+                logged_at.logged_at()
+            }
+        }
+    };
+}
+
+all_tuples!(impl_logged_at, 1, 20, T);
 
 #[doc(hidden)]
 pub trait NotUSize {} // remove if bounds on const generics (> 0) or type inequality (!= usize) stabilizes
@@ -730,7 +686,7 @@ macro_rules! impl_with_amount {
     ($Log: ident, $AMOUNT_BYTES: literal) => {
         impl<T, U> crate::log::WithAmount for $Log<T, U, $AMOUNT_BYTES> {
             type Amount = [u8; $AMOUNT_BYTES];
-            type Err = crate::log::USizeTooLarge;
+            type Err = ();
             const MIN: Self::Amount = [u8::MIN; $AMOUNT_BYTES];
             const MAX: Self::Amount = [u8::MAX; $AMOUNT_BYTES];
             fn amount_to_usize(value: Self::Amount) -> usize {
@@ -744,7 +700,7 @@ macro_rules! impl_with_amount {
                     let mut i = value.to_le_bytes().into_iter();
                     Ok(std::array::from_fn(|_| i.next().unwrap_or(0)))
                 } else {
-                    Err(crate::log::USizeTooLarge)
+                    Err(())
                 }
             }
         }
@@ -767,9 +723,11 @@ macro_rules! impl_with_amount {
 
 use impl_with_amount;
 
+use crate::RevFrame;
+
 #[cfg(test)]
 mod test {
-    use crate::log::PackedTime;
+    use crate::log::PackedRevFrame;
 
     #[derive(Debug, Clone, Copy)]
     pub(super) enum ForwardStrategy {
@@ -790,7 +748,7 @@ mod test {
 
     #[test]
     fn test_packed_time() {
-        let x = PackedTime::try_from(10).unwrap();
+        let x = PackedRevFrame::try_from_usize(10).unwrap();
         let x: usize = x.into();
         assert_eq!(x, 10);
     }
