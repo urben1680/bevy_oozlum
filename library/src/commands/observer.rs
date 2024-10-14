@@ -1,21 +1,17 @@
-use std::{marker::PhantomData, ops::Deref};
+use std::{collections::VecDeque, marker::PhantomData, ops::Deref};
 
 use bevy::{
     ecs::{
-        change_detection::Mut,
-        event::Event,
-        observer::{TriggerEvent, TriggerTargets},
-        system::Resource,
-        world::World,
+        change_detection::Mut, component::ComponentId, event::Event, observer::{TriggerEvent, TriggerTargets}, system::Resource, world::World
     },
-    log::error_once,
+    log::error_once, prelude::{default, Entity},
 };
 
 use crate::{
     commands::{InitializedRevCommand, RevCommand},
     error_per_flag,
-    log::{OutOfLog, TransitionsLog, WithLoggedAt},
-    meta::{RevDirection, RevMeta},
+    log::{LoggedAt, OutOfLog, PackedRevFrame, TransitionLog, TransitionsLog},
+    meta::{RevDirection, RevMeta}, RevFrame,
 };
 
 #[derive(Event)]
@@ -38,9 +34,19 @@ impl<E: Event + Clone> RevEvent<E> {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct Counts {
+    components: usize,
+    entities: usize
+}
+
 #[derive(Resource)]
 struct ObserverLog<E> {
-    log: TransitionsLog<TriggerTargetData, WithLoggedAt<(TriggerTargetTag, E)>>,
+    components_log: VecDeque<ComponentId>,
+    entities_log: VecDeque<Entity>,
+    counts_log: TransitionLog<(E, Counts, RevFrame)>,
+    components_index: usize,
+    entities_index: usize,
     rev_meta_err: bool,
     out_of_log_err: bool,
     direction_err: bool,
@@ -49,11 +55,34 @@ struct ObserverLog<E> {
 impl<E> Default for ObserverLog<E> {
     fn default() -> Self {
         Self {
-            log: Default::default(),
-            rev_meta_err: false,
-            out_of_log_err: false,
-            direction_err: false,
+            components_log: default(),
+            entities_log: default(),
+            counts_log: default(),
+            components_index: default(),
+            entities_index: default(),
+            rev_meta_err: default(),
+            out_of_log_err: default(),
+            direction_err: default(),
         }
+    }
+}
+
+impl<E: Event + Clone> ObserverLog<E> {
+    fn trigger(&mut self, world: &mut World, forward: bool) {
+        let transition = match forward {
+            true => self.counts_log.forward_log(),
+            false => self.counts_log.backward_log()
+        };
+        let Ok((event, counts, logged_at)) = transition.cloned() else {
+            return error_per_flag!(
+                &mut self.out_of_log_err,
+                "{doing} event {} trigger failed, reached end of internal log, \
+                future triggers likely are applied at the wrong frames from now on, \
+                this is a crate bug\n{meta:?}",
+                std::any::type_name::<E>()
+            );
+        };
+        
     }
 }
 
@@ -62,7 +91,7 @@ struct RevEventInitialized<E>(PhantomData<E>);
 impl<E: Event + Clone, Targets: TriggerTargets> RevCommand<()> for TriggerEvent<E, Targets> {
     fn rev_apply(self, world: &mut World) -> Option<impl InitializedRevCommand> {
         let meta = world.get_resource::<RevMeta>().cloned();
-        let mut log = world.get_resource_or_insert_with::<ObserverLog<E>>(Default::default);
+        let mut log = world.get_resource_or_insert_with::<ObserverLog<E>>(default);
         let Some(meta) = meta else {
             return error_per_flag!(
                 &mut log.rev_meta_err,
@@ -80,25 +109,27 @@ impl<E: Event + Clone, Targets: TriggerTargets> RevCommand<()> for TriggerEvent<
             );
         }
 
-        let _ = log.log.drain_past_by_timestamp(meta.start());
-        log.log.push_present(|mut log| {
-            let components = self.targets.components();
-            let entities = self.targets.entities();
-            match (components.len(), entities.len()) {
-                (0, 0) => meta.with_logged_at((TriggerTargetTag::COMPONENT, self.event.clone())),
-                (0, _) => {
-                    log.extend(entities.map(TriggerTargetData::from));
-                    meta.with_logged_at((TriggerTargetTag::ENTITY, self.event.clone()))
-                }
-                (_, 0) => {
-                    log.extend(components.map(TriggerTargetData::from));
-                    meta.with_logged_at((TriggerTargetTag::COMPONENT, self.event.clone()))
-                }
-                (_, _) => unimplemented!(
-                    "consider to support both as users can implement TriggerTargets for both as well"
-                ),
-            }
-        });
+        let components = self.targets.components();
+        let entities = self.targets.entities();
+        let components_index = log.components_index;
+        let entities_index = log.entities_index;
+        log.components_log.truncate(components_index);
+        log.entities_log.truncate(entities_index);
+        if let Some((_, counts, _)) =  log.counts_log.pop_past_by_logged_at(&meta) {
+            log.components_index -= counts.components;
+            log.entities_index -= counts.entities;
+            log.components_log.drain(..counts.components);
+            log.entities_log.drain(..counts.entities);
+        }
+        let counts = Counts {
+            components: components.len(),
+            entities: entities.len()
+        };
+        log.components_index += counts.components;
+        log.entities_index += counts.entities;
+        log.components_log.extend(components);
+        log.entities_log.extend(entities);
+        log.counts_log.push_present((self.event.clone(), counts, meta.present_world_state()));
 
         world.trigger_targets(
             RevEvent {
@@ -131,24 +162,24 @@ impl<E: Event + Clone> RevEventInitialized<E> {
             }
             return;
         }
-        world.resource_scope(|world, mut resource: Mut<ObserverLog<E>>| {
+        world.resource_scope(|world, mut log: Mut<ObserverLog<E>>| {
             match meta {
                 Some(meta) => match meta.get_direction() {
                     Some(RevDirection::BackwardLog) => {
                         let result = if undo {
-                            resource.log.backward_log().map(|entry| {
+                            log.log.backward_log().map(|entry| {
                                 let direction = RevDirection::BackwardLog;
                                 trigger(world, entry, direction);
                             })
                         } else {
-                            resource.log.forward_log().map(|entry| {
+                            log.log.forward_log().map(|entry| {
                                 let direction = RevDirection::ForwardLog;
                                 trigger(world, entry, direction);
                             })
                         };
                         if result == Err(OutOfLog) {
                             error_per_flag!(
-                                &mut resource.out_of_log_err,
+                                &mut log.out_of_log_err,
                                 "{doing} event {} trigger failed, reached end of internal log, \
                                 future triggers likely are applied at the wrong frames from now on, \
                                 this is a crate bug\n{meta:?}",
@@ -157,7 +188,7 @@ impl<E: Event + Clone> RevEventInitialized<E> {
                         }
                     },
                     _ => error_per_flag!(
-                        &mut resource.direction_err,
+                        &mut log.direction_err,
                         "{doing} event {} trigger failed, RevMeta is not in Direction::Backward, \
                         future triggers likely are applied at the wrong frames from now on, \
                         this is a crate bug\n{meta:?}",
@@ -165,7 +196,7 @@ impl<E: Event + Clone> RevEventInitialized<E> {
                     )
                 },
                 None => error_per_flag!(
-                    &mut resource.rev_meta_err,
+                    &mut log.rev_meta_err,
                     "{doing} event {} trigger failed, could not find RevMeta, \
                     future triggers likely are applied at the wrong frames from now on",
                     std::any::type_name::<E>()
@@ -191,7 +222,7 @@ mod trigger_target {
     use bevy::ecs::{component::ComponentId, entity::Entity, event::Event, world::World};
 
     use crate::{
-        log::{LogIter, ValueEntry, WithLoggedAt},
+        log::{LogIter, LoggedAt, ValueEntry},
         meta::RevDirection,
     };
 
@@ -226,13 +257,13 @@ mod trigger_target {
         world: &mut World,
         entry: ValueEntry<
             impl LogIter<'a, &'a mut TriggerTargetData>,
-            &mut WithLoggedAt<(TriggerTargetTag, impl Event + Clone)>,
+            &mut LoggedAt<(TriggerTargetTag, impl Event + Clone)>,
         >,
         direction: RevDirection,
     ) {
         let ValueEntry {
             value: mut iter,
-            entry: WithLoggedAt {
+            entry: LoggedAt {
                 value: (_, event), ..
             },
         } = entry;
@@ -281,7 +312,7 @@ mod trigger_target {
     use bevy::ecs::{component::ComponentId, entity::Entity, event::Event, world::World};
 
     use crate::{
-        log::{LogIter, ValueEntry, WithLoggedAt},
+        log::{LogIter, LoggedAt, ValueEntry},
         meta::RevDirection,
     };
 
@@ -318,17 +349,16 @@ mod trigger_target {
         world: &mut World,
         entry: ValueEntry<
             impl LogIter<'a, &'a mut TriggerTargetData>,
-            &mut WithLoggedAt<(TriggerTargetTag, impl Event + Clone)>,
+            &mut LoggedAt<(TriggerTargetTag, impl Event + Clone)>,
         >,
         direction: RevDirection,
     ) {
         let ValueEntry {
             value: iter,
-            entry:
-                WithLoggedAt {
-                    value: (tag, event),
-                    ..
-                },
+            entry: LoggedAt {
+                value: (tag, event),
+                ..
+            },
         } = entry;
 
         let event = RevEvent {
