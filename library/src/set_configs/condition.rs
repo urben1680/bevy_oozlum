@@ -5,15 +5,14 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use bevy::ecs::{
+use bevy::{ecs::{
     archetype::ArchetypeComponentId,
     component::{ComponentId, Tick},
     query::Access,
     schedule::{Condition, InternedSystemSet},
     system::{IntoSystem, ReadOnlySystem, System},
-    world::World,
-    world::{unsafe_world_cell::UnsafeWorldCell, DeferredWorld},
-};
+    world::{unsafe_world_cell::UnsafeWorldCell, DeferredWorld, World},
+}, utils::default};
 
 use crate::{
     check_tick, error_per_flag,
@@ -62,14 +61,14 @@ pub(super) fn forward_backward_conditions<
     name_forward.push_str(" (forward condition)");
     name_backward.push_str(" (backward condition)");
 
-    let log: Arc<Mutex<RareTransitionLog<()>>> = Default::default();
+    let log: Arc<Mutex<RareTransitionLog<()>>> = default();;
 
     let forward = RevConditionForward {
         condition,
         log: log.clone(),
         name: name_forward,
-        component_access: Default::default(),
-        archetype_component_access: Default::default(),
+        component_access: default(),
+        archetype_component_access: default(),
         rev_meta_err: false,
         lock_err: false,
         out_of_log_err: false,
@@ -80,8 +79,8 @@ pub(super) fn forward_backward_conditions<
         sets,
         log,
         name: name_backward,
-        component_access: Default::default(),
-        archetype_component_access: Default::default(),
+        component_access: default(),
+        archetype_component_access: default(),
         tick: Tick::new(0), // set by initialize
         rev_meta_err: false,
         lock_err: false,
@@ -272,7 +271,7 @@ impl<T: ReadOnlySystem<Out = bool>> RevConditionForward<T> {
         match meta.get_direction() {
             Some(RevDirection::NotLog) => {
                 let out = eval_cond(&mut self.condition);
-                log.pop_past_by_len(meta.past_len().saturating_sub(1));
+                log.pop_past_by_len(meta.past_world_states().saturating_sub(1));
                 log.push_present(out.then_some(()));
                 out
             }
