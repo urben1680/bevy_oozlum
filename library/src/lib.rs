@@ -27,6 +27,20 @@ Enhancements:
 - RevMetaWithVerify
 -- tests
 - LoggedAt module
+- Andere Observer Strategie:
+-- Wrapping Logik
+--- die Timestamps werden nicht reduziert, nur bei jeden bevorstehenden overflow
+    ruft der observer drain_past_by_timestamp auf damit ältere logs nicht wieder im
+    log range auftauchen
+--- ermöglicht den ganzen PackedTime range zu nutzen ohne jeden tick reduzieren zu müssen
+---- stimmt nicht, wenn end_inclusive+1==start ist, muss weiterhin ticklich reduziert werden
+----- neue strategie: log.drain_past_by_logged_at achtet auch auf now, wenn das kleiner als
+----- das ende vom log ist, aber größer als der anfang, wird das ganze log geleert
+----- funktioniert das denn? start kann 1 sein, end max-1, wenn das event nur bei 0 gefeuert
+----- wird, passiert hier nichts
+----- alternative: log range ist capped by PackedTime::MAX / 2
+--- verringert API, macht logs auch ohne RevMeta stabiler
+- forward/backward keine schedules sondern system sets mit run_if, benötigt dann kein RevSchedule
 
 Docs
 - examples
@@ -58,10 +72,11 @@ use bevy::{
         schedule::{
             InternedScheduleLabel, InternedSystemSet, IntoSystemConfigs, ScheduleLabel, SystemSet,
         },
-    },
+    }, reflect::Reflect,
 };
 
 use commands::RevCommandBuffer;
+use log::PackedRevFrame;
 use meta::RevMeta;
 
 pub mod app;
@@ -81,6 +96,36 @@ pub mod prelude {
     pub use crate::set_configs::IntoRevSystemSetConfigs as _;
     pub use crate::system_configs::IntoRevSystemConfigs as _;
     pub use crate::world::RevWorld as _;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Reflect)]
+pub struct RevFrame(usize);
+
+impl Into<usize> for RevFrame {
+    fn into(self) -> usize {
+        self.0
+    }
+}
+
+impl RevFrame {
+    const fn new(value: usize) -> Self {
+        debug_assert!(value <= PackedRevFrame::MAX_USIZE);
+        Self(value)
+    }
+    const fn wrapping_add(self, value: usize) -> Self {
+        let mut value = self.0.wrapping_add(value);
+        if value > PackedRevFrame::MAX_USIZE {
+            value -= PackedRevFrame::MAX_USIZE;
+        }
+        Self(value)
+    }
+    const fn wrapping_sub(self, value: usize) -> Self {
+        let mut value = self.0.wrapping_sub(value);
+        if value > PackedRevFrame::MAX_USIZE {
+            value -= PackedRevFrame::MAX_USIZE;
+        }
+        Self(value)
+    }
 }
 
 /// Should not be pub to not add invalid settings (see unsupported Schedule settings)
@@ -134,11 +179,11 @@ struct BackwardCmdsSys(InternedSystemSet);
 #[derive(SystemSet, Copy, Clone, Debug, Hash, PartialEq, Eq)]
 struct BackwardSys(InternedSystemSet);
 
-fn check_tick(own_tick: &mut Tick, change_tick: Tick) {
-    // reference: Tick::check_tick
-    let age = change_tick.get().wrapping_sub(own_tick.get());
+/// reference: Tick::check_tick
+fn check_tick(this: &mut Tick, change_tick: Tick) {
+    let age = change_tick.get().wrapping_sub(this.get());
     if age > Tick::MAX.get() {
-        *own_tick = Tick::new(change_tick.get().wrapping_sub(Tick::MAX.get()));
+        *this = Tick::new(change_tick.get().wrapping_sub(Tick::MAX.get()));
     }
 }
 
