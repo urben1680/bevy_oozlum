@@ -6,14 +6,14 @@ use std::{
     sync::{Arc, RwLock},
 };
 
-use bevy::ecs::{
+use bevy::{ecs::{
     archetype::ArchetypeComponentId,
     component::{ComponentId, Tick},
     query::Access,
     schedule::{InternedSystemSet, IntoSystemConfigs, SystemConfigs, SystemSet},
     system::{IntoSystem, ReadOnlySystem, System},
     world::{unsafe_world_cell::UnsafeWorldCell, DeferredWorld, World},
-};
+}, utils::default};
 
 use crate::{
     check_tick, commands::CommandsLog, error_per_flag, meta::CommandsLogReducingBox,
@@ -53,7 +53,7 @@ where
         let shared = Arc::new(RwLock::new(Shared {
             system,
             initialized: false,
-            commands_log: Default::default(),
+            commands_log: default(),
         }));
 
         let forward_sys = ArcSystem {
@@ -61,8 +61,8 @@ where
             name: fwd_sys_name,
             tick: Tick::new(0),
             commands_forward_err: Some(false),
-            component_access: Default::default(),
-            archetype_component_access: Default::default(),
+            component_access: default(),
+            archetype_component_access: default(),
         };
 
         let backward_sys = ArcSystem {
@@ -70,8 +70,8 @@ where
             name: bwd_sys_name,
             tick: Tick::new(0),
             commands_forward_err: None,
-            component_access: Default::default(),
-            archetype_component_access: Default::default(),
+            component_access: default(),
+            archetype_component_access: default(),
         };
 
         let backward_cmd = CommandsBackward {
@@ -95,7 +95,7 @@ where
                 .try_write()
                 .unwrap_or_else(expect_shared(&observer_name))
                 .commands_log
-                .reduce_logged_at(world, event.by());
+                .reduce_logged_at(world, event);
         });
 
         // Note that System::has_deferred may return no correct value before initializing the system.
