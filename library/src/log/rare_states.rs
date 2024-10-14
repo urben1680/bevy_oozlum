@@ -7,9 +7,10 @@ use std::{
 
 use bevy::reflect::Reflect;
 
+use crate::meta::RevMeta;
+
 use super::{
-    impl_with_amount, into_ok, AmountErr, EntryAmount, LogIter, LogMut, LoggedAt, NotUSize,
-    OutOfLog, RareStateLog, ValueEntry, WithAmount,
+    impl_with_amount, into_ok, AmountErr, EntryAmount, LogIter, LogMut, LoggedAt, NotUSize, OutOfLog, RareStateLog, ValueEntry, WithAmount, USIZE_BYTES
 };
 
 #[derive(Debug, Clone, Reflect)]
@@ -472,29 +473,20 @@ impl<T, U: LoggedAt, const AMOUNT_BYTES: usize> RareStatesLog<T, U, AMOUNT_BYTES
 where
     Self: WithAmount,
 {
-    pub fn pop_past_by_timestamp(
+    pub fn pop_past_by_logged_at(
         &mut self,
-        log_start: usize,
+        meta: &RevMeta,
     ) -> Option<ValueEntry<impl LogIter<T>, U>> {
         self.amounts
-            .pop_past_by_timestamp(log_start)
+            .pop_past_by_logged_at(meta)
             .map(|entry_amount| self.drain_past_by_amount(entry_amount))
     }
-    pub fn drain_past_by_timestamp(&mut self, log_start: usize) -> impl LogIter<T> {
+    pub fn truncate_future_drain_past_by_logged_at(&mut self, meta: &RevMeta) -> impl LogIter<T> {
         let amount: usize = self
             .amounts
-            .drain_past_by_timestamp(log_start)
+            .truncate_future_drain_past_by_logged_at(meta)
             .map(|entry_amount| entry_amount.amount::<Self>())
             .sum();
-        self.index -= amount;
-        self.states.drain(..amount)
-    }
-    pub fn reduce_logged_at(&mut self, by: usize) -> impl LogIter<T> {
-        let amount = self
-            .amounts
-            .reduce_logged_at(by)
-            .map(|entry_amount| entry_amount.amount::<Self>())
-            .sum::<usize>();
         self.index -= amount;
         self.states.drain(..amount)
     }
