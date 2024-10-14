@@ -1,5 +1,5 @@
 use core::num::NonZeroUsize;
-use std::ops::RangeInclusive;
+use std::ops::Deref;
 
 use bevy::{
     ecs::{
@@ -20,9 +20,9 @@ use bevy::{
 use bevy::reflect::{ReflectDeserialize, ReflectSerialize};
 
 use crate::{
-    log::{PackedTime, WithLoggedAt},
+    log::{LoggedAt, OutOfLog, PackedRevFrame},
     world::RevWorld,
-    RevUpdate,
+    RevFrame, RevUpdate,
 };
 
 mod verifying;
@@ -128,20 +128,20 @@ impl InternalDirection {
     }
 }
 
-#[derive(Clone, Copy, Debug, Event)]
-pub struct ReduceLoggedAt(NonZeroUsize);
+#[derive(Clone, Debug, Event)]
+pub struct CheckLoggedAt(RevMeta);
 
-impl ReduceLoggedAt {
-    pub fn by(self) -> usize {
-        self.0.get()
+impl Deref for CheckLoggedAt {
+    type Target = RevMeta;
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }
 
 #[derive(Resource, Default)]
 pub(crate) struct CommandsLogReducings(pub(crate) Vec<CommandsLogReducingBox>);
 
-pub(crate) type CommandsLogReducingBox =
-    Box<dyn Fn(ReduceLoggedAt, &mut World) + Send + Sync + 'static>;
+pub(crate) type CommandsLogReducingBox = Box<dyn Fn(&RevMeta, &mut World) + Send + Sync + 'static>;
 
 /// RevMeta is used to control the processing of reversible systems.
 ///
@@ -165,12 +165,13 @@ pub struct RevMeta {
     ///
     /// Reducing this value alone does not cause deallocations, this has to be done manually with each [log structs](crate::log) if desired.
     ///
-    /// Changing this value is always possible but only comes into effect when updating the world during [`Direction::NotLog`].
+    /// Changing this value is always possible but only comes into effect when updating the world during [`RevDirection::NotLog`].
     ///
-    /// If the value exceeds [`PackedTime::MAX_USIZE`], this has no effect as the log gets reduced by frame wrapping before that, see (todo).
-    pub max_len: Option<NonZeroUsize>,
-    now: usize,
-    range: RangeInclusive<usize>,
+    /// **Note** that there is a hard limit of [`Self::MAX_WORLD_STATES`].
+    pub max_world_states: Option<NonZeroUsize>,
+    present_world_state: usize,
+    oldest_world_state: usize,
+    youngest_world_state: usize,
     queue: Option<InternalDirection>,
     direction: InternalDirection,
 }
@@ -182,14 +183,16 @@ impl Default for RevMeta {
 }
 
 impl RevMeta {
+    pub const MAX_WORLD_STATES: usize = PackedRevFrame::MAX_USIZE / 2;
     pub const fn new(max_len: Option<NonZeroUsize>, now: usize, paused: bool) -> Self {
-        if now > PackedTime::MAX_USIZE {
+        if now > PackedRevFrame::MAX_USIZE {
             panic!("now must not be larger than PackedTime::MAX_USIZE")
         }
         Self {
-            max_len,
-            now,
-            range: now..=now,
+            max_world_states: max_len,
+            present_world_state: now,
+            oldest_world_state: now,
+            youngest_world_state: now,
             direction: match paused {
                 true => InternalDirection::Pause,
                 false => InternalDirection::RanForward,
@@ -209,40 +212,57 @@ impl RevMeta {
     pub fn running_rev_schedule(&self) -> bool {
         self.direction.running_rev_schedule()
     }
-    pub fn now(&self) -> usize {
-        self.now
+    pub fn present_world_state(&self) -> RevFrame {
+        RevFrame(self.present_world_state)
     }
-    pub fn past_len(&self) -> usize {
-        self.now - self.range.start()
+    pub fn oldest_world_state(&self) -> RevFrame {
+        RevFrame(self.oldest_world_state)
     }
-    pub fn start(&self) -> usize {
-        *self.range.start()
+    pub fn youngest_world_state(&self) -> RevFrame {
+        RevFrame(self.youngest_world_state)
     }
-    pub fn end_inclusive(&self) -> usize {
-        *self.range.end()
+    pub fn past_world_states(&self) -> usize {
+        frame_len(self.oldest_world_state, self.present_world_state)
     }
-    pub fn with_logged_at<T>(&self, value: T) -> WithLoggedAt<T> {
-        WithLoggedAt {
-            value,
-            logged_at: PackedTime::from_internal(self.now),
-        }
+    pub fn future_world_states(&self) -> usize {
+        frame_len(self.present_world_state, self.youngest_world_state)
     }
-    pub fn log_range(&self) -> RangeInclusive<usize> {
-        self.range.clone()
+    pub fn world_states(&self) -> usize {
+        frame_len(self.oldest_world_state, self.youngest_world_state).wrapping_add(1)
     }
-    pub fn reduce_range(&mut self, range: RangeInclusive<usize>) -> Result<(), ()> {
-        if range.start() >= self.range.start()
-            && range.end() <= self.range.end()
-            && range.contains(&self.now)
-        {
-            self.range = range;
-            Ok(())
-        } else {
-            Err(())
-        }
+    pub fn only_present_world_state(&self) -> bool {
+        self.oldest_world_state == self.youngest_world_state
+    }
+    pub fn no_past_world_states(&self) -> bool {
+        self.oldest_world_state == self.present_world_state
+    }
+    pub fn no_future_world_states(&self) -> bool {
+        self.present_world_state == self.youngest_world_state
+    }
+    pub fn contains(&self, value: RevFrame) -> bool {
+        frame_contains(self.oldest_world_state, value.0, self.youngest_world_state)
+    }
+    pub fn past_contains(&self, value: RevFrame) -> bool {
+        frame_contains(self.oldest_world_state, value.0, self.present_world_state)
+    }
+    pub fn future_contains(&self, value: RevFrame) -> bool {
+        let nearest_future_world_state = self.present_world_state().wrapping_add(1).0;
+        frame_contains(
+            nearest_future_world_state,
+            value.0,
+            self.youngest_world_state,
+        )
+    }
+    pub(crate) fn contains_buffered(start: usize, value: &impl LoggedAt, ref_len: usize) -> bool {
+        frame_len(start, value.logged_at().0) <= ref_len
+    }
+    pub(crate) fn past_exclusive_oldest_contains(&self, value: RevFrame) -> bool {
+        let second_oldest_world_state = self.oldest_world_state().wrapping_add(1).0;
+        frame_contains(second_oldest_world_state, value.0, self.present_world_state)
     }
     pub fn clear(&mut self) {
-        self.range = self.now..=self.now;
+        self.oldest_world_state = self.present_world_state;
+        self.youngest_world_state = self.present_world_state;
     }
     /// Queue to go forward.
     ///
@@ -250,14 +270,15 @@ impl RevMeta {
     pub fn queue_forward(&mut self) {
         self.queue = Some(InternalDirection::RunningForward);
     }
-    pub fn queue_log(&mut self, to: usize) -> Result<usize, RangeInclusive<usize>> {
-        if !self.log_range().contains(&to) {
-            return Err(self.log_range());
+    pub fn queue_log(&mut self, to: RevFrame) -> Result<usize, OutOfLog> {
+        if !self.contains(to) {
+            return Err(OutOfLog);
         }
-        let updates_until_pause = to.abs_diff(self.now);
+        let to = to.0;
+        let updates_until_pause = to.abs_diff(self.present_world_state);
         self.queue = Some(NonZeroUsize::new(updates_until_pause).map_or(
             InternalDirection::Pause,
-            |updates_until_pause| match to > self.now {
+            |updates_until_pause| match to > self.present_world_state {
                 true => InternalDirection::RunningForwardLog {
                     updates_until_pause,
                 },
@@ -311,7 +332,7 @@ impl RevMeta {
                             if let Some(reducings) = world.remove_resource::<CommandsLogReducings>()
                             {
                                 for reducing in &reducings.0 {
-                                    reducing(reduce_logged_at, world);
+                                    reducing(&meta, world);
                                 }
                                 world.insert_resource(reducings);
                             }
@@ -356,14 +377,14 @@ impl RevMeta {
             _ => {}
         }
     }
-    pub fn update(&mut self) -> Option<ReduceLoggedAt> {
+    pub fn update(&mut self) -> Option<CheckLoggedAt> {
         match self.queue.take() {
             Some(queue) => {
                 self.direction = queue;
                 match self.get_direction() {
                     Some(RevDirection::NotLog) => return self.update_forward(),
-                    Some(RevDirection::ForwardLog) => self.now += 1,
-                    Some(RevDirection::BackwardLog) => self.now -= 1,
+                    Some(RevDirection::ForwardLog) => self.present_world_state += 1,
+                    Some(RevDirection::BackwardLog) => self.present_world_state -= 1,
                     None => {}
                 }
             }
@@ -374,13 +395,13 @@ impl RevMeta {
                     InternalDirection::RunningForwardLog {
                         updates_until_pause,
                     } => match reduction_successful(updates_until_pause) {
-                        true => self.now += 1,
+                        true => self.present_world_state += 1,
                         false => self.direction = InternalDirection::Pause,
                     },
                     InternalDirection::RunningBackwardLog {
                         updates_until_pause,
                     } => match reduction_successful(updates_until_pause) {
-                        true => self.now -= 1,
+                        true => self.present_world_state -= 1,
                         false => self.direction = InternalDirection::Pause,
                     },
                     _ => {}
@@ -389,27 +410,22 @@ impl RevMeta {
         }
         None
     }
-    fn update_forward(&mut self) -> Option<ReduceLoggedAt> {
-        if self.now == PackedTime::MAX_USIZE {
-            let mut reduce = *self.range.start();
-            reduce = reduce.max(1); // force reduction if needed, ensure non-zero
-            if let Some(max_len) = self.max_len {
-                reduce = reduce.max(self.now.saturating_sub(max_len.get() - 1))
-            }
-            self.now -= reduce;
-            self.range = 0..=self.now;
-            Some(ReduceLoggedAt(
-                NonZeroUsize::new(reduce).expect("ensured non-zero"),
-            ))
-        } else {
-            self.now += 1;
-            let mut start = *self.range.start();
-            if let Some(max_len) = self.max_len {
-                start = start.max(self.now.saturating_sub(max_len.get() - 1));
-            }
-            self.range = start..=self.now;
-            None
+    fn update_forward(&mut self) -> Option<CheckLoggedAt> {
+        self.present_world_state = self.present_world_state().wrapping_add(1).0;
+        let max_world_states = self
+            .max_world_states
+            .map(NonZeroUsize::get)
+            .unwrap_or(Self::MAX_WORLD_STATES)
+            .min(Self::MAX_WORLD_STATES);
+        if self.past_world_states() > max_world_states {
+            self.oldest_world_state = self.oldest_world_state().wrapping_add(1).0;
         }
+        self.youngest_world_state = self.present_world_state;
+        matches!(
+            self.present_world_state,
+            Self::MAX_WORLD_STATES | PackedRevFrame::MAX_USIZE
+        )
+        .then_some(CheckLoggedAt(self.clone()))
     }
     pub(crate) fn add_read_if_no_write(
         world: &mut World,
@@ -456,8 +472,18 @@ fn reduction_successful(updates_until_pause: &mut NonZeroUsize) -> bool {
         .is_some()
 }
 
+fn frame_len(start: usize, end: usize) -> usize {
+    (PackedRevFrame::MAX_USIZE - start).wrapping_add(end)
+}
+
+fn frame_contains(start: usize, value: usize, end: usize) -> bool {
+    frame_len(start, value) <= frame_len(start, end)
+}
+
 #[cfg(test)]
 mod test {
+    use std::ops::RangeInclusive;
+
     use super::*;
 
     const ONE: NonZeroUsize = NonZeroUsize::MIN;
@@ -472,9 +498,10 @@ mod test {
         direction: InternalDirection,
     ) -> RevMeta {
         let meta = RevMeta {
-            max_len,
-            now,
-            range: range.clone(),
+            max_world_states: max_len,
+            present_world_state: now,
+            oldest_world_state: *range.start(),
+            youngest_world_state: *range.end(),
             direction,
             queue: None,
         };
@@ -523,11 +550,11 @@ mod test {
                 updates_until_pause: ONE
             }
         );
-        assert_eq!(meta.now(), 1);
+        assert_eq!(meta.present_world_state, 1);
 
         meta.update();
         assert_eq!(meta.get_direction(), None);
-        assert_eq!(meta.now(), 1);
+        assert_eq!(meta.present_world_state, 1);
     }
 
     #[test]
@@ -548,11 +575,11 @@ mod test {
                 updates_until_pause: ONE
             }
         );
-        assert_eq!(meta.now(), 0);
+        assert_eq!(meta.present_world_state, 0);
 
         meta.update();
         assert_eq!(meta.get_direction(), None);
-        assert_eq!(meta.now(), 0);
+        assert_eq!(meta.present_world_state, 0);
     }
 
     #[test]
@@ -560,20 +587,20 @@ mod test {
         let mut meta = RevMeta::new(Some(TWO), 0, false);
 
         meta.update();
-        assert_eq!(meta.now(), 1);
-        assert_eq!(meta.log_range(), 0..=1);
+        assert_eq!(meta.present_world_state, 1);
+        assert_eq!(meta.world_states(), 1);
 
         meta.update();
-        assert_eq!(meta.now(), 2);
-        assert_eq!(meta.log_range(), 1..=2);
+        assert_eq!(meta.present_world_state, 2);
+        assert_eq!(meta.world_states(), 1);
     }
 
     #[test]
     fn queue_log_to_out_of_range_fails() {
         let mut meta = arrange(None, 2, 1..=3, InternalDirection::Pause);
 
-        assert_eq!(meta.queue_log(0), Err(1..=3));
-        assert_eq!(meta.queue_log(4), Err(1..=3));
+        assert_eq!(meta.queue_log(RevFrame(0)), Err(OutOfLog));
+        assert_eq!(meta.queue_log(RevFrame(4)), Err(OutOfLog));
     }
 
     #[test]
@@ -588,16 +615,10 @@ mod test {
         );
 
         meta.update();
-        assert_eq!(meta.now(), 1);
-        assert_eq!(meta.log_range(), 0..=2);
-
         meta.update();
-        assert_eq!(meta.now(), 0);
-        assert_eq!(meta.log_range(), 0..=2);
-
+        assert_eq!(meta.world_states(), 3);
         meta.queue_forward();
         meta.update();
-        assert_eq!(meta.now(), 1);
-        assert_eq!(meta.log_range(), 0..=1);
+        assert_eq!(meta.world_states(), 1);
     }
 }
