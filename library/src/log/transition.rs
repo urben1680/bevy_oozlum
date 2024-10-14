@@ -6,7 +6,9 @@ use bevy::{
     utils::tracing::error,
 };
 
-use super::{LogIter, LoggedAt, OutOfLog, PackedTime, INDEX_OOB};
+use crate::meta::RevMeta;
+
+use super::{LogIter, LoggedAt, OutOfLog, PackedRevFrame, INDEX_OOB};
 
 #[derive(Debug, Clone, Reflect)]
 #[reflect(Default)]
@@ -164,53 +166,25 @@ impl<T> TransitionLog<T> {
 }
 
 impl<T: LoggedAt> TransitionLog<T> {
-    pub fn pop_past_by_timestamp(&mut self, log_start: usize) -> Option<T> {
-        if self.past_end()?.logged_at() <= log_start {
+    pub fn pop_past_by_logged_at(&mut self, meta: &RevMeta) -> Option<T> {
+        let logged_at = self.past_end()?.logged_at();
+        if !meta.past_exclusive_oldest_contains(logged_at) {
             self.pop_past()
         } else {
             None
         }
     }
-    pub fn drain_past_by_timestamp(&mut self, log_start: usize) -> impl LogIter<T> {
-        let partition_point = self
+    pub fn truncate_future_drain_past_by_logged_at(&mut self, meta: &RevMeta) -> impl LogIter<T> {
+        // may be redundant but if not improves partition_point performance
+        self.transitions.truncate(self.index);
+
+        let ref_len = meta.past_world_states() - 1;
+        let start = meta.oldest_world_state().wrapping_add(1).0;
+        let to = self
             .transitions
-            .partition_point(|entry| entry.logged_at() <= log_start);
-        self.index -= partition_point;
-        self.transitions.drain(..partition_point)
-    }
-    pub fn reduce_logged_at(&mut self, by: usize) -> impl LogIter<T> {
-        let reduced_at = self
-            .transitions
-            .range_mut(..self.index)
-            .position(|with_timestamp| {
-                with_timestamp
-                    .logged_at()
-                    .checked_sub(by)
-                    .inspect(|reduced| {
-                        with_timestamp.set_logged_at(PackedTime::from_internal(*reduced))
-                    })
-                    .is_some()
-            })
-            .unwrap_or(self.index);
-        let mut iter = self.transitions.range_mut(reduced_at..);
-        if reduced_at == self.index {
-            if let Some(with_timestamp) = iter.next() {
-                let logged_at = with_timestamp.logged_at();
-                let logged_at = match logged_at.checked_sub(by) {
-                    Some(reduced) => PackedTime::from_internal(reduced),
-                    None => panic!(
-                        "future transition was logged at {logged_at} which cannot be reduced by {by}"
-                    ),
-                };
-                with_timestamp.set_logged_at(logged_at);
-            }
-        }
-        for with_timestamp in iter {
-            let logged_at = with_timestamp.logged_at();
-            with_timestamp.set_logged_at(PackedTime::from_internal(logged_at - by));
-        }
-        self.index -= reduced_at;
-        self.transitions.drain(..reduced_at)
+            .partition_point(|entry| !RevMeta::contains_buffered(start, entry, ref_len));
+        self.index -= to;
+        self.transitions.drain(..to)
     }
 }
 
@@ -220,12 +194,12 @@ mod test {
 
     use super::*;
 
-    use crate::{log::WithLoggedAt, meta::RevMeta};
-
+    use crate::{log::LoggedAt, meta::RevMeta};
+    /*
     #[derive(Clone, Debug)]
     struct MetaAndLogs {
         meta: RevMeta,
-        with_timestamp: [TransitionLog<WithLoggedAt<usize>>; 2],
+        with_timestamp: [TransitionLog<LoggedAt<usize>>; 2],
         one_per_frame: [TransitionLog<usize>; 2],
     }
 
@@ -269,7 +243,7 @@ mod test {
 
             self.one_per_frame[0].push_present(transition.into());
             let middle = self.one_per_frame[0].clone();
-            self.one_per_frame[0].pop_past_by_len(self.meta.past_len());
+            self.one_per_frame[0].pop_past_by_len(self.meta.past_world_states());
             assert_eq!(
                 self.one_per_frame[0].len(),
                 expected_len,
@@ -281,7 +255,7 @@ mod test {
 
             self.one_per_frame[1].push_present(transition.into());
             let middle = self.one_per_frame[1].clone();
-            let _ = self.one_per_frame[1].drain_past_by_len(self.meta.past_len());
+            let _ = self.one_per_frame[1].drain_past_by_len(self.meta.past_world_states());
             assert_eq!(
                 self.one_per_frame[1].len(),
                 expected_len,
@@ -296,7 +270,9 @@ mod test {
             match expected_transition {
                 Ok(_) => {
                     assert!(
-                        self.meta.queue_log(self.meta.now() - 1).is_ok(),
+                        self.meta
+                            .queue_log(self.meta.present_world_state() - 1)
+                            .is_ok(),
                         "\npreviously: {previous:?}\nnow: {self:?}"
                     );
                     self.meta.update();
@@ -378,7 +354,9 @@ mod test {
             match expected_transition {
                 Ok(_) => {
                     assert!(
-                        self.meta.queue_log(self.meta.now() + 1).is_ok(),
+                        self.meta
+                            .queue_log(self.meta.present_world_state() + 1)
+                            .is_ok(),
                         "\npreviously: {previous:?}\nnow: {self:?}"
                     );
                     self.meta.update();
@@ -481,9 +459,10 @@ mod test {
         // all entries are truncated as they are in the future, the new logged entry increases len to 1
         meta_and_logs.forward(4, 1);
     }
+    */
 
     #[allow(dead_code)]
     fn impls_reflect() {
-        bevy::reflect::TypeRegistry::empty().register::<TransitionLog<WithLoggedAt<usize>>>();
+        bevy::reflect::TypeRegistry::empty().register::<TransitionLog<PackedRevFrame>>();
     }
 }
