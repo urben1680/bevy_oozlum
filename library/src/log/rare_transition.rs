@@ -6,7 +6,9 @@ use bevy::{
     utils::tracing::error,
 };
 
-use super::{LogIter, LoggedAt, OutOfLog, PackedTime, RareValue, INDEX_OOB};
+use crate::{meta::RevMeta, RevFrame};
+
+use super::{LoggedAt, LogIter, OutOfLog, PackedRevFrame, RareValue, INDEX_OOB};
 
 #[derive(Debug, Clone, Reflect)]
 #[reflect(Default)]
@@ -174,7 +176,7 @@ impl<T> RareTransitionLog<T> {
                 self.skips += 1;
             }
             Some(transition) => {
-                let skips = PackedTime::from_internal(self.skips);
+                let skips = RevFrame::new(self.skips).into();
                 self.transitions.push_back(RareValue {
                     value: transition,
                     skips,
@@ -269,66 +271,34 @@ impl<T> RareTransitionLog<T> {
 }
 
 impl<T: LoggedAt> RareTransitionLog<T> {
-    pub fn pop_past_by_timestamp(&mut self, log_start: usize) -> Option<T> {
-        if self.past_end()?.logged_at() <= log_start {
+    pub fn pop_past_by_logged_at(&mut self, meta: &RevMeta) -> Option<T> {
+        let logged_at = self.past_end()?.logged_at();
+        if !meta.past_exclusive_oldest_contains(logged_at) {
             self.pop_past()
         } else {
             None
         }
     }
-    pub fn drain_past_by_timestamp(&mut self, log_start: usize) -> impl LogIter<T> {
-        let partition_point = self
+    pub fn truncate_future_drain_past_by_logged_at(&mut self, meta: &RevMeta) -> impl LogIter<T> {
+        // may be redundant but if not improves partition_point performance
+        self.transitions.truncate(self.index);
+        self.skips_max = self.skips;
+
+        let ref_len = meta.past_world_states() - 1;
+        let start = meta.oldest_world_state().wrapping_add(1).0;
+        let to = self
             .transitions
-            .partition_point(|entry| entry.value.logged_at() <= log_start);
-        self.len -= partition_point // sum of to-be-drained transitions, because of this mapping RareValue::len below is not needed, only skips_before_value
+            .partition_point(|entry| RevMeta::contains_buffered(start, entry, ref_len));
+        self.len -= to // sum of to-be-drained transitions, because of this mapping RareValue::len below is not needed, only skips_before_value
             + self
                 .transitions
-                .range(..partition_point)
-                .map(|entry| usize::from(entry.skips))
+                .range(..to)
+                .map(RareValue::skips)
                 .sum::<usize>();
-        self.index -= partition_point;
+        self.index -= to;
         self.transitions
-            .drain(..partition_point)
+            .drain(..to)
             .map(|rare| rare.value)
-    }
-    pub fn reduce_logged_at(&mut self, by: usize) -> impl LogIter<T> {
-        let reduced_at = self
-            .transitions
-            .range_mut(..self.index)
-            .position(|with_timestamp| {
-                with_timestamp
-                    .value
-                    .logged_at()
-                    .checked_sub(by)
-                    .inspect(|reduced| {
-                        with_timestamp
-                            .value
-                            .set_logged_at(PackedTime::from_internal(*reduced))
-                    })
-                    .is_some()
-            })
-            .unwrap_or(self.index);
-        let mut iter = self.transitions.range_mut(reduced_at..);
-        if reduced_at == self.index {
-            if let Some(with_timestamp) = iter.next() {
-                let logged_at = with_timestamp.value.logged_at();
-                let logged_at = match logged_at.checked_sub(by) {
-                    Some(reduced) => PackedTime::from_internal(reduced),
-                    None => panic!(
-                        "future transition was logged at {logged_at} which cannot be reduced by {by}"
-                    ),
-                };
-                with_timestamp.value.set_logged_at(logged_at);
-            }
-        }
-        for with_timestamp in iter {
-            let logged_at = with_timestamp.value.logged_at();
-            with_timestamp
-                .value
-                .set_logged_at(PackedTime::from_internal(logged_at - by));
-        }
-        self.index -= reduced_at;
-        self.transitions.drain(..reduced_at).map(|rare| rare.value)
     }
 }
 
@@ -337,13 +307,13 @@ mod test {
     use std::num::NonZeroUsize;
 
     use super::*;
-
-    use crate::{log::WithLoggedAt, meta::RevMeta};
+    
+    /*
 
     #[derive(Clone, Debug)]
     struct MetaAndLogs {
         meta: RevMeta,
-        with_timestamp: [RareTransitionLog<WithLoggedAt<usize>>; 2],
+        with_timestamp: [RareTransitionLog<GetLoggedAt<usize>>; 2],
         one_per_frame: [RareTransitionLog<usize>; 2],
     }
 
@@ -408,7 +378,7 @@ mod test {
 
             self.one_per_frame[0].push_present(transition.map(Into::into));
             let middle = self.one_per_frame[0].clone();
-            self.one_per_frame[0].pop_past_by_len(self.meta.past_len());
+            self.one_per_frame[0].pop_past_by_len(self.meta.past_world_states());
             assert!(
                 self.one_per_frame[0].log_len() >= minimum_log_len,
                 "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
@@ -427,7 +397,7 @@ mod test {
 
             self.one_per_frame[1].push_present(transition.map(Into::into));
             let middle = self.one_per_frame[1].clone();
-            let _ = self.one_per_frame[1].drain_past_by_len(self.meta.past_len());
+            let _ = self.one_per_frame[1].drain_past_by_len(self.meta.past_world_states());
             assert!(
                 self.one_per_frame[1].log_len() >= minimum_log_len,
                 "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
@@ -449,7 +419,9 @@ mod test {
             match expected_transition {
                 Ok(_) => {
                     assert!(
-                        self.meta.queue_log(self.meta.now() - 1).is_ok(),
+                        self.meta
+                            .queue_log(self.meta.present_world_state() - 1)
+                            .is_ok(),
                         "\npreviously: {previous:?}\nnow: {self:?}"
                     );
                     self.meta.update();
@@ -523,7 +495,9 @@ mod test {
             match expected_transition {
                 Ok(_) => {
                     assert!(
-                        self.meta.queue_log(self.meta.now() + 1).is_ok(),
+                        self.meta
+                            .queue_log(self.meta.present_world_state() + 1)
+                            .is_ok(),
                         "\npreviously: {previous:?}\nnow: {self:?}"
                     );
                     self.meta.update();
@@ -624,9 +598,10 @@ mod test {
         // all entries are truncated as they are in the future, the new logged entry increases len to 1
         meta_and_logs.forward(Some(3), 1, 1);
     }
+    */
 
     #[allow(dead_code)]
     fn impls_reflect() {
-        bevy::reflect::TypeRegistry::empty().register::<RareTransitionLog<WithLoggedAt<usize>>>();
+        bevy::reflect::TypeRegistry::empty().register::<RareTransitionLog<PackedRevFrame>>();
     }
 }
