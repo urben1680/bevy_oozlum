@@ -11,7 +11,7 @@ use bevy::{
 };
 
 use crate::{
-    log::{OutOfLog, TransitionsLog, WithLoggedAt},
+    log::{OutOfLog, PackedRevFrame, TransitionsLog},
     meta::{RevDirection, RevMeta},
 };
 
@@ -137,7 +137,7 @@ pub trait InitializedRevCommand: Send + 'static {
 pub(crate) struct RevCommandBuffer(VecDeque<SyncCell<Box<dyn InitializedRevCommand>>>);
 
 #[derive(Default)]
-pub struct CommandsLog(TransitionsLog<SyncCell<Box<dyn InitializedRevCommand>>, WithLoggedAt>);
+pub struct CommandsLog(TransitionsLog<SyncCell<Box<dyn InitializedRevCommand>>, PackedRevFrame>);
 
 #[derive(Clone, Debug)]
 pub enum CommandsLogErr {
@@ -157,14 +157,14 @@ impl CommandsLog {
                 for command in self.0.drain_future().0.rev() {
                     SyncCell::to_inner(command).undone_finalize(world);
                 }
-                for command in self.0.drain_past_by_timestamp(meta.start()) {
+                for command in self.0.truncate_future_drain_past_by_logged_at(&meta) {
                     SyncCell::to_inner(command).redone_finalize(world);
                 }
                 let mut buffer = world.get_resource_or_insert_with(RevCommandBuffer::default);
                 if !buffer.0.is_empty() {
                     self.0.push_present(|mut log| {
                         log.append(&mut buffer.0);
-                        meta.now()
+                        meta.present_world_state()
                     });
                 }
                 Ok(())
@@ -200,8 +200,8 @@ impl CommandsLog {
         }
         Ok(())
     }
-    pub fn reduce_logged_at(&mut self, world: &mut World, by: usize) {
-        for command in self.0.reduce_logged_at(by) {
+    pub fn reduce_logged_at(&mut self, world: &mut World, meta: &RevMeta) {
+        for command in self.0.truncate_future_drain_past_by_logged_at(meta) {
             SyncCell::to_inner(command).redone_finalize(world);
         }
     }
