@@ -9,7 +9,7 @@ use bevy::{
     log::error,
 };
 
-use crate::log::{OutOfLog, StateLog, WithLoggedAt};
+use crate::log::{LoggedAt, OutOfLog, PackedRevFrame, StateLog};
 
 use super::{RevDirection, RevMeta};
 
@@ -65,13 +65,13 @@ impl VerifyingRevMeta<'_, '_> {
 
 #[derive(Clone, Copy, Debug)]
 pub struct VerifyError<'s> {
-    pub frame_log_at_err: &'s StateLog<WithLoggedAt>,
+    pub frame_log_at_err: &'s StateLog<PackedRevFrame>,
     pub meta_at_err: &'s RevMeta,
 }
 
 pub struct VerifyingRevMetaState {
     meta: ComponentId,
-    frame_log: StateLog<WithLoggedAt>,
+    frame_log: StateLog<PackedRevFrame>,
     meta_at_err: Option<RevMeta>,
 }
 
@@ -108,19 +108,20 @@ impl VerifyingRevMetaState {
         match meta.get_direction() {
             Some(RevDirection::NotLog) => {
                 last_run = self.frame_log.logged_at();
-                self.frame_log.pop_past_by_logged_at(meta.start());
-                self.frame_log.push_present(meta.now.into());
+                self.frame_log
+                    .pop_past_by_logged_at(meta.first_world_state());
+                self.frame_log.push_present(meta.present_world_state.into());
             }
             Some(RevDirection::ForwardLog) => {
                 last_run = self.frame_log.logged_at();
                 if self.frame_log.forward_log() == Err(OutOfLog) {
                     self.out_of_log("forward", meta, system_name);
-                } else if self.frame_log.logged_at() != meta.now() {
+                } else if self.frame_log.logged_at() != meta.present_world_state() {
                     self.mismatch("forward", meta, system_name);
                 }
             }
             Some(RevDirection::BackwardLog) => {
-                if self.frame_log.logged_at() - 1 != meta.now() {
+                if self.frame_log.logged_at() - 1 != meta.present_world_state() {
                     self.mismatch("backward", meta, system_name);
                 } else if self.frame_log.backward_log() == Err(OutOfLog) {
                     self.out_of_log("backward", meta, system_name);
@@ -146,7 +147,7 @@ impl VerifyingRevMetaState {
         if direction == "backward" {
             expected -= 1;
         }
-        let actual = meta.now();
+        let actual = meta.present_world_state();
         error!(
             "VerifyingRevMeta::get_param failed: system \"{system_name}\" is expected to run at frame {expected} \
             but ran at  frame {actual} during {direction} log schedule{}\n{meta:#?}\n{:#?}",
@@ -174,11 +175,11 @@ unsafe impl SystemParam for VerifyingRevMeta<'_, '_> {
         // value passed to Self::Item is 0, this indicates that the system did not run in a past frame.
         // This works better than wrapping the log in an Option that becomes Some at the first run as
         // then undoing that call would be undistinguishable to an out-of-log error.
-        let logged_at = WithLoggedAt::from(0);
+        todo!("let logged_at = GetLoggedAt::from(0);"); // 0 nicht mehr besonders bei wrapping logik
 
         VerifyingRevMetaState {
             meta,
-            frame_log: logged_at.into(),
+            frame_log: todo!(),
             meta_at_err: None,
         }
     }
