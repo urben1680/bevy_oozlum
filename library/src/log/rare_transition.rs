@@ -8,7 +8,7 @@ use bevy::{
 
 use crate::{meta::RevMeta, RevFrame};
 
-use super::{LoggedAt, LogIter, OutOfLog, PackedRevFrame, RareValue, INDEX_OOB};
+use super::{LogIter, LoggedAt, OutOfLog, PackedRevFrame, RareValue, INDEX_OOB};
 
 #[derive(Debug, Clone, Reflect)]
 #[reflect(Default)]
@@ -296,9 +296,7 @@ impl<T: LoggedAt> RareTransitionLog<T> {
                 .map(RareValue::skips)
                 .sum::<usize>();
         self.index -= to;
-        self.transitions
-            .drain(..to)
-            .map(|rare| rare.value)
+        self.transitions.drain(..to).map(|rare| rare.value)
     }
 }
 
@@ -307,7 +305,7 @@ mod test {
     use std::num::NonZeroUsize;
 
     use super::*;
-    
+
     /*
 
     #[derive(Clone, Debug)]

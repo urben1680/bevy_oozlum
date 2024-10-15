@@ -72,7 +72,8 @@ use bevy::{
         schedule::{
             InternedScheduleLabel, InternedSystemSet, IntoSystemConfigs, ScheduleLabel, SystemSet,
         },
-    }, reflect::Reflect,
+    },
+    reflect::Reflect,
 };
 
 use commands::RevCommandBuffer;

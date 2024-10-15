@@ -5,14 +5,17 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use bevy::{ecs::{
-    archetype::ArchetypeComponentId,
-    component::{ComponentId, Tick},
-    query::Access,
-    schedule::{Condition, InternedSystemSet},
-    system::{IntoSystem, ReadOnlySystem, System},
-    world::{unsafe_world_cell::UnsafeWorldCell, DeferredWorld, World},
-}, utils::default};
+use bevy::{
+    ecs::{
+        archetype::ArchetypeComponentId,
+        component::{ComponentId, Tick},
+        query::Access,
+        schedule::{Condition, InternedSystemSet},
+        system::{IntoSystem, ReadOnlySystem, System},
+        world::{unsafe_world_cell::UnsafeWorldCell, DeferredWorld, World},
+    },
+    utils::default,
+};
 
 use crate::{
     check_tick, error_per_flag,
@@ -61,7 +64,7 @@ pub(super) fn forward_backward_conditions<
     name_forward.push_str(" (forward condition)");
     name_backward.push_str(" (backward condition)");
 
-    let log: Arc<Mutex<RareTransitionLog<()>>> = default();;
+    let log: Arc<Mutex<RareTransitionLog<()>>> = default();
 
     let forward = RevConditionForward {
         condition,

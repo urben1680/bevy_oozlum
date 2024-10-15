@@ -10,7 +10,8 @@ use bevy::reflect::Reflect;
 use crate::meta::RevMeta;
 
 use super::{
-    impl_with_amount, into_ok, AmountErr, EntryAmount, LogIter, LogMut, LoggedAt, NotUSize, OutOfLog, RareStateLog, ValueEntry, WithAmount, USIZE_BYTES
+    impl_with_amount, into_ok, AmountErr, EntryAmount, LogIter, LogMut, LoggedAt, NotUSize,
+    OutOfLog, RareStateLog, ValueEntry, WithAmount, USIZE_BYTES,
 };
 
 #[derive(Debug, Clone, Reflect)]
