@@ -6,14 +6,17 @@ use std::{
     sync::{Arc, RwLock},
 };
 
-use bevy::{ecs::{
-    archetype::ArchetypeComponentId,
-    component::{ComponentId, Tick},
-    query::Access,
-    schedule::{InternedSystemSet, IntoSystemConfigs, SystemConfigs, SystemSet},
-    system::{IntoSystem, ReadOnlySystem, System},
-    world::{unsafe_world_cell::UnsafeWorldCell, DeferredWorld, World},
-}, utils::default};
+use bevy::{
+    ecs::{
+        archetype::ArchetypeComponentId,
+        component::{ComponentId, Tick},
+        query::Access,
+        schedule::{InternedSystemSet, IntoSystemConfigs, SystemConfigs, SystemSet},
+        system::{IntoSystem, ReadOnlySystem, System},
+        world::{unsafe_world_cell::UnsafeWorldCell, DeferredWorld, World},
+    },
+    utils::default,
+};
 
 use crate::{
     check_tick, commands::CommandsLog, error_per_flag, meta::CommandsLogReducingBox,

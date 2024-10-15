@@ -232,10 +232,7 @@ use std::{
     iter::FusedIterator,
 };
 
-use bevy::{
-    reflect::Reflect,
-    utils::all_tuples,
-};
+use bevy::{reflect::Reflect, utils::all_tuples};
 
 #[cfg(feature = "serde")]
 use bevy::reflect::{ReflectDeserialize, ReflectSerialize};

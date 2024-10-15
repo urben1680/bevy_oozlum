@@ -2,16 +2,23 @@ use std::{collections::VecDeque, marker::PhantomData, ops::Deref};
 
 use bevy::{
     ecs::{
-        change_detection::Mut, component::ComponentId, event::Event, observer::{TriggerEvent, TriggerTargets}, system::Resource, world::World
+        change_detection::Mut,
+        component::ComponentId,
+        event::Event,
+        observer::{TriggerEvent, TriggerTargets},
+        system::Resource,
+        world::World,
     },
-    log::error_once, prelude::{default, Entity},
+    log::error_once,
+    prelude::{default, Entity},
 };
 
 use crate::{
     commands::{InitializedRevCommand, RevCommand},
     error_per_flag,
     log::{LoggedAt, OutOfLog, PackedRevFrame, TransitionLog, TransitionsLog},
-    meta::{RevDirection, RevMeta}, RevFrame,
+    meta::{RevDirection, RevMeta},
+    RevFrame,
 };
 
 #[derive(Event)]
@@ -34,19 +41,66 @@ impl<E: Event + Clone> RevEvent<E> {
     }
 }
 
+// currently (bevy 0.15) only either one or the other can be triggered
+#[derive(Debug, Clone, Copy)]
+enum TriggerTargetsCount {
+    Components(usize),
+    Entities(usize),
+}
+
 #[derive(Debug, Clone, Copy)]
 struct Counts {
     components: usize,
-    entities: usize
+    entities: usize,
+}
+
+struct TargetLog<T> {
+    log: VecDeque<T>,
+    index: usize,
+}
+
+impl<T> Default for TargetLog<T> {
+    fn default() -> Self {
+        Self {
+            log: default(),
+            index: default(),
+        }
+    }
+}
+
+impl<T: Copy> TargetLog<T> {
+    fn drain(&mut self, count: usize) {
+        self.index -= count;
+        self.log.drain(..count);
+    }
+    fn extend(
+        &mut self,
+        iter: impl ExactSizeIterator<Item = T>,
+        map: impl FnOnce(usize) -> TriggerTargetsCount,
+    ) -> TriggerTargetsCount {
+        let len = iter.len();
+        self.log.truncate(self.index);
+        self.log.extend(iter);
+        self.index += len;
+        map(len)
+    }
+    fn forward(&mut self, count: usize) -> Vec<T> {
+        let from = self.index;
+        self.index += count;
+        self.log.range(from..self.index).copied().collect()
+    }
+    fn backward(&mut self, count: usize) -> Vec<T> {
+        let to = self.index;
+        self.index -= count;
+        self.log.range(self.index..to).copied().collect()
+    }
 }
 
 #[derive(Resource)]
 struct ObserverLog<E> {
-    components_log: VecDeque<ComponentId>,
-    entities_log: VecDeque<Entity>,
-    counts_log: TransitionLog<(E, Counts, RevFrame)>,
-    components_index: usize,
-    entities_index: usize,
+    components_log: TargetLog<ComponentId>,
+    entities_log: TargetLog<Entity>,
+    counts_log: TransitionLog<(E, TriggerTargetsCount, RevFrame)>,
     rev_meta_err: bool,
     out_of_log_err: bool,
     direction_err: bool,
@@ -58,8 +112,6 @@ impl<E> Default for ObserverLog<E> {
             components_log: default(),
             entities_log: default(),
             counts_log: default(),
-            components_index: default(),
-            entities_index: default(),
             rev_meta_err: default(),
             out_of_log_err: default(),
             direction_err: default(),
@@ -69,11 +121,37 @@ impl<E> Default for ObserverLog<E> {
 
 impl<E: Event + Clone> ObserverLog<E> {
     fn trigger(&mut self, world: &mut World, forward: bool) {
-        let transition = match forward {
-            true => self.counts_log.forward_log(),
-            false => self.counts_log.backward_log()
+        let doing = if forward { "Redoing" } else { "Undoing" };
+        let meta = world.get_resource::<RevMeta>().cloned();
+        if !world.contains_resource::<ObserverLog<E>>() {
+            match meta {
+                None => error_once!(
+                    "{doing} event {} trigger failed, could not find RevMeta and specific \
+                    log resource, this might be or will be the case for other event types as well",
+                    std::any::type_name::<E>()
+                ),
+                Some(meta) => error_once!(
+                    "{doing} event {} trigger failed, could not find specific log resource, \
+                    this might be or will be the case for other event types as well\n{meta:?}",
+                    std::any::type_name::<E>()
+                ),
+            }
+            return;
+        }
+        let Some(meta) = meta else {
+            return error_per_flag!(
+                &mut self.rev_meta_err,
+                "{doing} event {} trigger failed, could not find RevMeta, \
+                future triggers likely are applied at the wrong frames from now on",
+                std::any::type_name::<E>()
+            );
         };
-        let Ok((event, counts, logged_at)) = transition.cloned() else {
+        let transition = if forward {
+            self.counts_log.forward_log()
+        } else {
+            self.counts_log.backward_log()
+        };
+        let Ok((event, count, logged_at)) = transition.cloned() else {
             return error_per_flag!(
                 &mut self.out_of_log_err,
                 "{doing} event {} trigger failed, reached end of internal log, \
@@ -82,7 +160,39 @@ impl<E: Event + Clone> ObserverLog<E> {
                 std::any::type_name::<E>()
             );
         };
-        
+        if forward {
+            debug_assert_eq!(
+                logged_at,
+                meta.present_world_state(),
+                "todo"
+            );
+            match count {
+                TriggerTargetsCount::Components(count) => {
+                    let targets = self.components_log.forward(count);
+                    world.trigger_targets(event, targets);
+                },
+                TriggerTargetsCount::Entities(count) => {
+                    let targets = self.entities_log.forward(count);
+                    world.trigger_targets(event, targets);
+                }
+            }
+        } else {
+            debug_assert_eq!(
+                logged_at,
+                meta.present_world_state().wrapping_sub(1),
+                "todo"
+            );
+            match count {
+                TriggerTargetsCount::Components(count) => {
+                    let targets = self.components_log.backward(count);
+                    world.trigger_targets(event, targets);
+                },
+                TriggerTargetsCount::Entities(count) => {
+                    let targets = self.entities_log.backward(count);
+                    world.trigger_targets(event, targets);
+                }
+            }
+        }
     }
 }
 
@@ -108,28 +218,31 @@ impl<E: Event + Clone, Targets: TriggerTargets> RevCommand<()> for TriggerEvent<
                 std::any::type_name::<E>()
             );
         }
-
-        let components = self.targets.components();
-        let entities = self.targets.entities();
-        let components_index = log.components_index;
-        let entities_index = log.entities_index;
-        log.components_log.truncate(components_index);
-        log.entities_log.truncate(entities_index);
-        if let Some((_, counts, _)) =  log.counts_log.pop_past_by_logged_at(&meta) {
-            log.components_index -= counts.components;
-            log.entities_index -= counts.entities;
-            log.components_log.drain(..counts.components);
-            log.entities_log.drain(..counts.entities);
+        match log.counts_log.pop_past_by_logged_at(&meta) {
+            Some((_, TriggerTargetsCount::Components(count), _)) => {
+                log.components_log.drain(count);
+            }
+            Some((_, TriggerTargetsCount::Entities(count), _)) => {
+                log.entities_log.drain(count);
+            }
+            None => {}
         }
-        let counts = Counts {
-            components: components.len(),
-            entities: entities.len()
+        let count = if self.targets.entities().len() == 0 {
+            log.components_log.extend(
+                self.targets.components(), 
+                TriggerTargetsCount::Components
+            )
+        } else {
+            log.entities_log.extend(
+                self.targets.entities(), 
+                TriggerTargetsCount::Entities
+            )
         };
-        log.components_index += counts.components;
-        log.entities_index += counts.entities;
-        log.components_log.extend(components);
-        log.entities_log.extend(entities);
-        log.counts_log.push_present((self.event.clone(), counts, meta.present_world_state()));
+        log.counts_log.push_present((
+            self.event.clone(), 
+            count, 
+            meta.present_world_state()
+        ));
 
         world.trigger_targets(
             RevEvent {
