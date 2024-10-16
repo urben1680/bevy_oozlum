@@ -6,7 +6,7 @@ use bevy::{
 
 use crate::meta::{RevDirection, RevMeta};
 
-use super::{buffer_rev_command, InitializedRevCommand};
+use super::{buffer_rev_command, RevCommandLog};
 
 /*
 
@@ -258,7 +258,7 @@ impl HookCommand {
     }
 }
 
-impl InitializedRevCommand for HookCommand {
+impl RevCommandLog for HookCommand {
     fn undo(&mut self, world: &mut World) {
         self.undo_redo(world.into(), true)
     }
