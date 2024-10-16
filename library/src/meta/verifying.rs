@@ -1,4 +1,4 @@
-use std::{num::NonZeroUsize, ops::Deref};
+use std::ops::Deref;
 
 use bevy::{
     ecs::{
@@ -7,20 +7,24 @@ use bevy::{
         world::World,
     },
     log::error,
+    utils::default,
 };
 
-use crate::log::{LoggedAt, OutOfLog, PackedRevFrame, StateLog};
+use crate::{
+    log::{InitiallyNoneStateLog, OutOfLog, PackedRevFrame},
+    RevFrame,
+};
 
 use super::{RevDirection, RevMeta};
 
-/// `RevMeta` system param wrapper to keep track of the system's running frames.
+/// `Res<RevMeta>` wrapper to keep track of the system's running frames.
 ///
 /// Can be used to automatically verify that the system is running at the right
 /// frame and to get the frame number the system last ran, if any.
 #[derive(Debug, Copy, Clone)]
 pub struct VerifyingRevMeta<'w, 's> {
     meta: &'w RevMeta,
-    last_run_or_err: Result<Option<NonZeroUsize>, VerifyError<'s>>,
+    pub last_run_or_err: Result<Option<RevFrame>, VerifyError<'s>>,
 }
 
 impl Deref for VerifyingRevMeta<'_, '_> {
@@ -43,39 +47,29 @@ impl VerifyingRevMeta<'_, '_> {
     /// match with the frame that is logged by this SystemParam.
     ///
     /// [`Self::get_last_run`] is a fallible variant.
-    pub fn last_run(&self) -> Option<usize> {
-        self.get_last_run().unwrap_or_else(|err| panic!(
+    pub fn last_run(&self) -> Option<RevFrame> {
+        self.last_run_or_err.unwrap_or_else(|err| panic!(
             "VerifyingRevMeta::last_run panicked: VerifyingRevMeta::get_param failed previously, see log\n{err:#?}"
         ))
-    }
-
-    /// Get the frame the system last ran.
-    ///
-    /// Returns None if the system did not run in the past.
-    ///
-    /// Note that this is the chronical last run and therefore is always in the past.
-    ///
-    /// Returns Err if the update of the value failed or if the the current frame does not
-    /// match with the frame that is logged by this SystemParam.
-    pub fn get_last_run(&self) -> Result<Option<usize>, VerifyError> {
-        self.last_run_or_err
-            .map(|last_run| last_run.map(NonZeroUsize::get))
     }
 }
 
 #[derive(Clone, Copy, Debug)]
 pub struct VerifyError<'s> {
-    pub frame_log_at_err: &'s StateLog<PackedRevFrame>,
+    pub frame_log_at_err: &'s InitiallyNoneStateLog<PackedRevFrame>,
     pub meta_at_err: &'s RevMeta,
 }
 
 pub struct VerifyingRevMetaState {
     meta: ComponentId,
-    frame_log: StateLog<PackedRevFrame>,
+    frame_log: InitiallyNoneStateLog<PackedRevFrame>,
     meta_at_err: Option<RevMeta>,
 }
 
 impl VerifyingRevMetaState {
+    fn get(&self) -> Option<RevFrame> {
+        self.frame_log.get().cloned().map(Into::into)
+    }
     fn get_param<'w, 's>(
         &'s mut self,
         meta: &'w RevMeta,
@@ -99,38 +93,49 @@ impl VerifyingRevMetaState {
             },
         }
     }
-    fn update_state_get_last_run(
-        &mut self,
-        meta: &RevMeta,
-        system_name: &str,
-    ) -> Option<NonZeroUsize> {
-        let mut last_run = 0;
+    fn update_state_get_last_run(&mut self, meta: &RevMeta, system_name: &str) -> Option<RevFrame> {
+        let last_run;
         match meta.get_direction() {
             Some(RevDirection::NotLog) => {
-                last_run = self.frame_log.logged_at();
+                last_run = self.get();
+                if let Some(log) = self.frame_log.get_log_mut() {
+                    log.pop_past_by_logged_at(meta);
+                }
                 self.frame_log
-                    .pop_past_by_logged_at(meta.first_world_state());
-                self.frame_log.push_present(meta.present_world_state.into());
+                    .push_present(meta.present_world_state().into());
             }
             Some(RevDirection::ForwardLog) => {
-                last_run = self.frame_log.logged_at();
-                if self.frame_log.forward_log() == Err(OutOfLog) {
-                    self.out_of_log("forward", meta, system_name);
-                } else if self.frame_log.logged_at() != meta.present_world_state() {
-                    self.mismatch("forward", meta, system_name);
+                last_run = self.get();
+                match self.frame_log.forward_log() {
+                    Ok(log) => {
+                        let this_run = (**log).into();
+                        if this_run != meta.present_world_state() {
+                            self.mismatch("forward", meta, this_run, system_name);
+                        }
+                    }
+                    Err(OutOfLog) => self.out_of_log("forward", meta, system_name),
                 }
             }
             Some(RevDirection::BackwardLog) => {
-                if self.frame_log.logged_at() - 1 != meta.present_world_state() {
-                    self.mismatch("backward", meta, system_name);
-                } else if self.frame_log.backward_log() == Err(OutOfLog) {
-                    self.out_of_log("backward", meta, system_name);
+                match self.get() {
+                    Some(mut this_run) => {
+                        this_run = this_run.wrapping_sub(1);
+                        if this_run != meta.present_world_state() {
+                            self.mismatch("backward", meta, this_run, system_name);
+                        } else {
+                            let _ok = self.frame_log.backward_log();
+                        }
+                    }
+                    None => self.out_of_log("backward", meta, system_name),
                 }
-                last_run = self.frame_log.logged_at();
+                last_run = self.get();
             }
-            None => self.non_rev_schedule(meta, system_name),
+            None => {
+                self.non_rev_schedule(meta, system_name);
+                last_run = None;
+            }
         };
-        NonZeroUsize::new(last_run)
+        last_run
     }
     const SUGGESTION: &'static str = ", check if the schedule this system is added to is actually a reversible \
         schedule by using `rev_` prefixed methods on the `App` and that the schedule and is correctly triggered";
@@ -142,16 +147,11 @@ impl VerifyingRevMetaState {
         );
         self.meta_at_err = Some(meta.clone());
     }
-    fn mismatch(&mut self, direction: &str, meta: &RevMeta, system_name: &str) {
-        let mut expected = self.frame_log.logged_at();
-        if direction == "backward" {
-            expected -= 1;
-        }
-        let actual = meta.present_world_state();
+    fn mismatch(&mut self, direction: &str, meta: &RevMeta, expected: RevFrame, system_name: &str) {
         error!(
-            "VerifyingRevMeta::get_param failed: system \"{system_name}\" is expected to run at frame {expected} \
-            but ran at  frame {actual} during {direction} log schedule{}\n{meta:#?}\n{:#?}",
-            Self::SUGGESTION, self.frame_log
+            "VerifyingRevMeta::get_param failed: system \"{system_name}\" is expected to run at frame {expected:?} \
+            but ran at  frame {:?} during {direction} log schedule{}\n{meta:#?}\n{:#?}",
+            meta.present_world_state(), Self::SUGGESTION, self.frame_log
         );
         self.meta_at_err = Some(meta.clone());
     }
@@ -169,17 +169,9 @@ unsafe impl SystemParam for VerifyingRevMeta<'_, '_> {
     type Item<'world, 'state> = VerifyingRevMeta<'world, 'state>;
     type State = VerifyingRevMetaState;
     fn init_state(world: &mut World, system_meta: &mut SystemMeta) -> Self::State {
-        let meta = Res::<RevMeta>::init_state(world, system_meta);
-
-        // 0 is a special value here, during forward schedules the current frame is never 0, so if the
-        // value passed to Self::Item is 0, this indicates that the system did not run in a past frame.
-        // This works better than wrapping the log in an Option that becomes Some at the first run as
-        // then undoing that call would be undistinguishable to an out-of-log error.
-        todo!("let logged_at = GetLoggedAt::from(0);"); // 0 nicht mehr besonders bei wrapping logik
-
         VerifyingRevMetaState {
-            meta,
-            frame_log: todo!(),
+            meta: Res::<RevMeta>::init_state(world, system_meta),
+            frame_log: default(),
             meta_at_err: None,
         }
     }
