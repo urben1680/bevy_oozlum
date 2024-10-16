@@ -41,6 +41,9 @@ Enhancements:
 ----- alternative: log range ist capped by PackedTime::MAX / 2
 --- verringert API, macht logs auch ohne RevMeta stabiler
 - forward/backward keine schedules sondern system sets mit run_if, benötigt dann kein RevSchedule
+- InitiallyNoneStateLog / InitiallyNoneRareStateLog
+-- Rare variant
+-- tests, serde_with
 
 Docs
 - examples
@@ -110,20 +113,20 @@ impl Into<usize> for RevFrame {
 
 impl RevFrame {
     const fn new(value: usize) -> Self {
-        debug_assert!(value <= PackedRevFrame::MAX_USIZE);
+        debug_assert!(value <= PackedRevFrame::MAX_AS_USIZE);
         Self(value)
     }
     const fn wrapping_add(self, value: usize) -> Self {
         let mut value = self.0.wrapping_add(value);
-        if value > PackedRevFrame::MAX_USIZE {
-            value -= PackedRevFrame::MAX_USIZE;
+        if value > PackedRevFrame::MAX_AS_USIZE {
+            value -= PackedRevFrame::MAX_AS_USIZE;
         }
         Self(value)
     }
     const fn wrapping_sub(self, value: usize) -> Self {
         let mut value = self.0.wrapping_sub(value);
-        if value > PackedRevFrame::MAX_USIZE {
-            value -= PackedRevFrame::MAX_USIZE;
+        if value > PackedRevFrame::MAX_AS_USIZE {
+            value -= PackedRevFrame::MAX_AS_USIZE;
         }
         Self(value)
     }
