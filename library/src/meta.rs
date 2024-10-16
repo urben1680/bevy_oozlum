@@ -183,10 +183,10 @@ impl Default for RevMeta {
 }
 
 impl RevMeta {
-    pub const MAX_WORLD_STATES: usize = PackedRevFrame::MAX_USIZE / 2;
+    pub const MAX_WORLD_STATES: usize = PackedRevFrame::MAX_AS_USIZE / 2;
     pub const fn new(max_len: Option<NonZeroUsize>, now: usize, paused: bool) -> Self {
-        if now > PackedRevFrame::MAX_USIZE {
-            panic!("now must not be larger than PackedTime::MAX_USIZE")
+        if now > PackedRevFrame::MAX_AS_USIZE {
+            panic!("now must not be larger than PackedRevFrame::MAX_AS_USIZE")
         }
         Self {
             max_world_states: max_len,
@@ -222,43 +222,30 @@ impl RevMeta {
         RevFrame(self.youngest_world_state)
     }
     pub fn past_world_states(&self) -> usize {
-        frame_len(self.oldest_world_state, self.present_world_state)
+        range_len(self.oldest_world_state, self.present_world_state)
     }
     pub fn future_world_states(&self) -> usize {
-        frame_len(self.present_world_state, self.youngest_world_state)
+        range_len(self.present_world_state, self.youngest_world_state)
     }
     pub fn world_states(&self) -> usize {
-        frame_len(self.oldest_world_state, self.youngest_world_state).wrapping_add(1)
-    }
-    pub fn only_present_world_state(&self) -> bool {
-        self.oldest_world_state == self.youngest_world_state
-    }
-    pub fn no_past_world_states(&self) -> bool {
-        self.oldest_world_state == self.present_world_state
-    }
-    pub fn no_future_world_states(&self) -> bool {
-        self.present_world_state == self.youngest_world_state
+        let len = range_len(self.oldest_world_state, self.youngest_world_state);
+        len + 1 // both ends are inclusive
     }
     pub fn contains(&self, value: RevFrame) -> bool {
-        frame_contains(self.oldest_world_state, value.0, self.youngest_world_state)
+        range_inclusive_contains(self.oldest_world_state, value.0, self.youngest_world_state)
     }
     pub fn past_contains(&self, value: RevFrame) -> bool {
-        frame_contains(self.oldest_world_state, value.0, self.present_world_state)
+        range_contains(self.oldest_world_state, value.0, self.present_world_state)
     }
     pub fn future_contains(&self, value: RevFrame) -> bool {
-        let nearest_future_world_state = self.present_world_state().wrapping_add(1).0;
-        frame_contains(
-            nearest_future_world_state,
-            value.0,
-            self.youngest_world_state,
-        )
+        range_contains(self.present_world_state, value.0, self.youngest_world_state)
     }
     pub(crate) fn contains_buffered(start: usize, value: &impl LoggedAt, ref_len: usize) -> bool {
-        frame_len(start, value.logged_at().0) <= ref_len
+        range_len(start, value.logged_at().0) <= ref_len
     }
     pub(crate) fn past_exclusive_oldest_contains(&self, value: RevFrame) -> bool {
         let second_oldest_world_state = self.oldest_world_state().wrapping_add(1).0;
-        frame_contains(second_oldest_world_state, value.0, self.present_world_state)
+        range_inclusive_contains(second_oldest_world_state, value.0, self.present_world_state)
     }
     pub fn clear(&mut self) {
         self.oldest_world_state = self.present_world_state;
@@ -423,7 +410,7 @@ impl RevMeta {
         self.youngest_world_state = self.present_world_state;
         matches!(
             self.present_world_state,
-            Self::MAX_WORLD_STATES | PackedRevFrame::MAX_USIZE
+            Self::MAX_WORLD_STATES | PackedRevFrame::MAX_AS_USIZE
         )
         .then_some(CheckLoggedAt(self.clone()))
     }
@@ -472,12 +459,25 @@ fn reduction_successful(updates_until_pause: &mut NonZeroUsize) -> bool {
         .is_some()
 }
 
-fn frame_len(start: usize, end: usize) -> usize {
-    (PackedRevFrame::MAX_USIZE - start).wrapping_add(end)
+/// Returns len of wrapping range `start..end`
+fn range_len(start: usize, end: usize) -> usize {
+    if PackedRevFrame::MAX_AS_USIZE != usize::MAX && start > end {
+        // 0 .. end .. start .. PackedRevFrame::MAX_AS_USIZE .. usize::MAX
+        PackedRevFrame::MAX_AS_USIZE - start + end
+    } else {
+        // 0 .. start .. end .. PackedRevFrame::MAX_AS_USIZE .. usize::MAX
+        end.wrapping_sub(start)
+    }
 }
 
-fn frame_contains(start: usize, value: usize, end: usize) -> bool {
-    frame_len(start, value) <= frame_len(start, end)
+/// Returns `true` if value is in wrapping range `start..=end`.
+fn range_inclusive_contains(start: usize, value: usize, end: usize) -> bool {
+    range_len(start, value) <= range_len(start, end)
+}
+
+/// Returns `true` if value is in wrapping range `start..end`.
+fn range_contains(start: usize, value: usize, end: usize) -> bool {
+    range_len(start, value) < range_len(start, end)
 }
 
 #[cfg(test)]
