@@ -237,6 +237,7 @@ use bevy::{reflect::Reflect, utils::all_tuples};
 #[cfg(feature = "serde")]
 use bevy::reflect::{ReflectDeserialize, ReflectSerialize};
 
+mod initially_none_state_log;
 mod rare_state;
 mod rare_states;
 mod rare_transition;
@@ -248,6 +249,7 @@ mod states;
 mod transition;
 mod transitions;
 
+pub use initially_none_state_log::InitiallyNoneStateLog;
 pub use rare_state::RareStateLog;
 pub use rare_states::RareStatesLog;
 pub use rare_transition::RareTransitionLog;
@@ -304,7 +306,7 @@ impl PackedRevFrame {
     } else {
         TIME_BYTES
     };
-    pub const MAX_USIZE: usize = {
+    pub const MAX_AS_USIZE: usize = {
         let bits = Self::BYTES as u32 * 8;
         let shift = if bits < usize::BITS {
             usize::BITS - bits
@@ -314,13 +316,12 @@ impl PackedRevFrame {
         usize::MAX >> shift
     };
     pub(crate) const MIN: Self = Self([u8::MIN; Self::BYTES]);
-    pub(crate) const MAX: Self = Self([u8::MAX; Self::BYTES]);
     fn into_usize(self) -> usize {
         let mut i = self.0.into_iter();
         usize::from_le_bytes(std::array::from_fn(|_| i.next().unwrap_or(0)))
     }
     fn try_from_usize(value: usize) -> Result<Self, ()> {
-        if value <= Self::MAX_USIZE {
+        if value <= Self::MAX_AS_USIZE {
             let mut i = value.to_le_bytes().into_iter();
             Ok(Self(std::array::from_fn(|_| i.next().unwrap_or(0))))
         } else {
@@ -356,6 +357,20 @@ impl Into<usize> for PackedRevFrame {
     fn into(self) -> usize {
         let this: RevFrame = self.into();
         this.0
+    }
+}
+
+impl PartialEq<RevFrame> for PackedRevFrame {
+    fn eq(&self, other: &RevFrame) -> bool {
+        let this: RevFrame = (*self).into();
+        this.eq(other)
+    }
+}
+
+impl PartialEq<PackedRevFrame> for RevFrame {
+    fn eq(&self, other: &PackedRevFrame) -> bool {
+        let other: RevFrame = (*other).into();
+        self.eq(&other)
     }
 }
 
