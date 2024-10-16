@@ -31,8 +31,8 @@ pub trait RevCommands {
     fn rev_trigger_targets(&mut self, event: impl Event + Clone, targets: impl TriggerTargets);
 }
 
-fn buffer_rev_command(world: &mut DeferredWorld, command: impl InitializedRevCommand) {
-    let command: Box<dyn InitializedRevCommand> = Box::new(command);
+fn buffer_rev_command(world: &mut DeferredWorld, command: impl RevCommandLog) {
+    let command: Box<dyn RevCommandLog> = Box::new(command);
     let command = SyncCell::new(command);
     world
         .get_resource_mut::<RevCommandBuffer>()
@@ -80,7 +80,7 @@ impl RevCommands for Commands<'_, '_> {
 
 struct ResourceSwap<R: Resource>(Option<R>);
 
-impl<R: Resource> InitializedRevCommand for ResourceSwap<R> {
+impl<R: Resource> RevCommandLog for ResourceSwap<R> {
     fn undo(&mut self, world: &mut World) {
         match (self.0.as_mut(), world.get_resource_mut::<R>()) {
             (Some(r1), Some(mut r2)) => core::mem::swap(r1, &mut *r2),
@@ -95,38 +95,38 @@ impl<R: Resource> InitializedRevCommand for ResourceSwap<R> {
 }
 
 pub trait RevCommand<Marker>: Send + 'static {
-    fn rev_apply(self, world: &mut World) -> Option<impl InitializedRevCommand>;
+    fn rev_apply(self, world: &mut World) -> Option<impl RevCommandLog>;
 }
 
-impl<T: InitializedRevCommand, F: FnOnce(&mut World) -> Option<T> + Send + 'static>
+impl<T: RevCommandLog, F: FnOnce(&mut World) -> Option<T> + Send + 'static>
     RevCommand<fn(&mut World) -> Option<T>> for F
 {
-    fn rev_apply(self, world: &mut World) -> Option<impl InitializedRevCommand> {
+    fn rev_apply(self, world: &mut World) -> Option<impl RevCommandLog> {
         self(world)
     }
 }
 
-impl<T: InitializedRevCommand, F: FnOnce(&mut World) -> T + Send + 'static>
-    RevCommand<fn(&mut World) -> T> for F
+impl<T: RevCommandLog, F: FnOnce(&mut World) -> T + Send + 'static> RevCommand<fn(&mut World) -> T>
+    for F
 {
-    fn rev_apply(self, world: &mut World) -> Option<impl InitializedRevCommand> {
+    fn rev_apply(self, world: &mut World) -> Option<impl RevCommandLog> {
         Some(self(world))
     }
 }
 
-impl<T: InitializedRevCommand> RevCommand<Option<T>> for Option<T> {
-    fn rev_apply(self, _world: &mut World) -> Option<impl InitializedRevCommand> {
+impl<T: RevCommandLog> RevCommand<Option<T>> for Option<T> {
+    fn rev_apply(self, _world: &mut World) -> Option<impl RevCommandLog> {
         self
     }
 }
 
-impl<T: InitializedRevCommand> RevCommand<T> for T {
-    fn rev_apply(self, _world: &mut World) -> Option<impl InitializedRevCommand> {
+impl<T: RevCommandLog> RevCommand<T> for T {
+    fn rev_apply(self, _world: &mut World) -> Option<impl RevCommandLog> {
         Some(self)
     }
 }
 
-pub trait InitializedRevCommand: Send + 'static {
+pub trait RevCommandLog: Send + 'static {
     fn undo(&mut self, world: &mut World);
     fn undone_finalize(self: Box<Self>, _world: &mut World) {}
     fn redo(&mut self, world: &mut World);
@@ -134,10 +134,10 @@ pub trait InitializedRevCommand: Send + 'static {
 }
 
 #[derive(Resource, Default)]
-pub(crate) struct RevCommandBuffer(VecDeque<SyncCell<Box<dyn InitializedRevCommand>>>);
+pub(crate) struct RevCommandBuffer(VecDeque<SyncCell<Box<dyn RevCommandLog>>>);
 
 #[derive(Default)]
-pub struct CommandsLog(TransitionsLog<SyncCell<Box<dyn InitializedRevCommand>>, PackedRevFrame>);
+pub struct CommandsLog(TransitionsLog<SyncCell<Box<dyn RevCommandLog>>, PackedRevFrame>);
 
 #[derive(Clone, Debug)]
 pub enum CommandsLogErr {
