@@ -237,7 +237,7 @@ use bevy::{reflect::Reflect, utils::all_tuples};
 #[cfg(feature = "serde")]
 use bevy::reflect::{ReflectDeserialize, ReflectSerialize};
 
-mod initially_none_state_log;
+mod initially_none_state;
 mod rare_state;
 mod rare_states;
 mod rare_transition;
@@ -249,7 +249,7 @@ mod states;
 mod transition;
 mod transitions;
 
-pub use initially_none_state_log::InitiallyNoneStateLog;
+pub use initially_none_state::InitiallyNoneStateLog;
 pub use rare_state::RareStateLog;
 pub use rare_states::RareStatesLog;
 pub use rare_transition::RareTransitionLog;
