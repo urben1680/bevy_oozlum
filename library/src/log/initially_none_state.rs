@@ -2,28 +2,15 @@ use bevy::reflect::Reflect;
 
 use super::{OutOfLog, StateLog};
 
-use sealed::{Inner, WithPreRun};
+#[derive(Debug, Clone, Reflect)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct InitiallyNoneStateLog<T>(Inner<StateLog<T>>);
 
 #[derive(Debug, Clone, Reflect)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct InitiallyNoneStateLog<T>(Inner<WithPreRun<StateLog<T>>>);
-
-mod sealed {
-    use bevy::reflect::Reflect;
-
-    #[derive(Debug, Clone, Reflect)]
-    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-    pub enum Inner<T> {
-        NeverRan { capacity: usize },
-        Ran(T),
-    }
-
-    #[derive(Debug, Clone, Reflect)]
-    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-    pub struct WithPreRun<T> {
-        log: T,
-        undone_first_run: bool
-    }
+pub(super) enum Inner<T> {
+    NeverRan { capacity: usize },
+    Ran { log: T, undone_first_run: bool },
 }
 
 #[cfg(feature = "serde")]
@@ -35,22 +22,7 @@ mod serde_with {
         StateLog,
     };
 
-    use super::{sealed::WithPreRun, InitiallyNoneStateLog, Inner};
-
-    impl<T> Inner<T> {
-        fn map_se<'se, U>(&'se self, c: impl FnOnce(&'se T) -> U) -> Inner<U> {
-            match *self {
-                Self::NeverRan { capacity } => Inner::NeverRan { capacity },
-                Self::Ran(ref inner) => Inner::Ran(c(inner)),
-            }
-        }
-        fn map_de<U>(self, c: impl FnOnce(T) -> U) -> Inner<U> {
-            match self {
-                Self::NeverRan { capacity } => Inner::NeverRan { capacity },
-                Self::Ran(inner) => Inner::Ran(c(inner)),
-            }
-        }
-    }
+    use super::{InitiallyNoneStateLog, Inner};
 
     impl<T: Serialize + for<'de> Deserialize<'de> + 'static> LoglessState for InitiallyNoneStateLog<T> {
         type Se<'se> = Option<&'se T>;
@@ -64,26 +36,58 @@ mod serde_with {
     }
 
     impl<T: Serialize + for<'de> Deserialize<'de> + 'static> WithCapacity for InitiallyNoneStateLog<T> {
-        type Se<'se> = Inner<WithPreRun<<StateLog<T> as WithCapacity>::Se<'se>>>;
-        type De = Inner<WithPreRun<<StateLog<T> as WithCapacity>::De>>;
+        type Se<'se> = Inner<<StateLog<T> as WithCapacity>::Se<'se>>;
+        type De = Inner<<StateLog<T> as WithCapacity>::De>;
         fn get_with_capacity(&self) -> Self::Se<'_> {
-            self.0.map_se(StateLog::get_with_capacity)
+            match self.0 {
+                Inner::NeverRan { capacity } => Inner::NeverRan { capacity },
+                Inner::Ran {
+                    ref log,
+                    undone_first_run,
+                } => Inner::Ran {
+                    log: log.get_with_capacity(),
+                    undone_first_run,
+                },
+            }
         }
         fn from_with_capacity(with_capacity: Self::De) -> Self {
-            Self(with_capacity.map_de(StateLog::from_with_capacity))
+            Self(match with_capacity {
+                Inner::NeverRan { capacity } => Inner::NeverRan { capacity },
+                Inner::Ran {
+                    log,
+                    undone_first_run,
+                } => Inner::Ran {
+                    log: StateLog::from_with_capacity(log),
+                    undone_first_run,
+                },
+            })
         }
     }
 
     impl<T: Serialize + for<'de> Deserialize<'de> + 'static> LoglessWithCapacity
         for InitiallyNoneStateLog<T>
     {
-        type Se<'se> = Inner<<StateLog<T> as LoglessWithCapacity>::Se<'se>>;
-        type De = Inner<<StateLog<T> as LoglessWithCapacity>::De>;
+        type Se<'se> = (Option<&'se T>, usize);
+        type De = (Option<T>, usize);
         fn get_logless_with_capacity(&self) -> Self::Se<'_> {
-            self.0.map_se(StateLog::get_logless_with_capacity)
+            match self.0 {
+                Inner::NeverRan { capacity } => (None, capacity),
+                Inner::Ran {
+                    ref log,
+                    undone_first_run,
+                } => ((!undone_first_run).then_some(&*log), log.capacity()),
+            }
         }
         fn from_logless_with_capacity(logless_with_capacity: Self::De) -> Self {
-            Self(logless_with_capacity.map_de(StateLog::from_logless_with_capacity))
+            Self(match logless_with_capacity.0 {
+                Some(present) => Inner::Ran {
+                    log: StateLog::with_capacity(present, logless_with_capacity.1),
+                    undone_first_run: false,
+                },
+                None => Inner::NeverRan {
+                    capacity: logless_with_capacity.1,
+                },
+            })
         }
     }
 }
