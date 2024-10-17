@@ -9,10 +9,12 @@ use bevy::reflect::{std_traits::ReflectDefault, Reflect};
 use crate::meta::RevMeta;
 
 use super::{
-    impl_with_amount, into_ok, AmountErr, EntryAmount, LogIter, LogMut, LoggedAt, NotUSize,
-    OutOfLog, TransitionLog, ValueEntry, WithAmount, USIZE_BYTES,
+    doc_with_amount, impl_with_amount, into_ok, AmountErr, EntryAmount, LogIter, LogMut, LoggedAt,
+    NotUSize, OutOfLog, TransitionLog, ValueEntry, WithAmount,
 };
 
+#[doc = doc_with_amount!(struct)]
+#[allow(private_bounds)]
 #[derive(Debug, Clone, Reflect)]
 #[reflect(Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -99,6 +101,8 @@ where
     }
 }
 
+#[doc = doc_with_amount!(impl)]
+#[allow(private_bounds)]
 impl<T, U, const AMOUNT_BYTES: usize> TransitionsLog<T, U, AMOUNT_BYTES>
 where
     Self: WithAmount,
@@ -247,6 +251,8 @@ where
     }
 }
 
+#[doc = doc_with_amount!(impl where Infallible)]
+#[allow(private_bounds)]
 impl<T, U, const AMOUNT_BYTES: usize> TransitionsLog<T, U, AMOUNT_BYTES>
 where
     Self: WithAmount<Err = Infallible>,
@@ -261,6 +267,8 @@ where
     }
 }
 
+#[doc = doc_with_amount!(impl where NotUsize)]
+#[allow(private_bounds)]
 impl<T, U, const AMOUNT_BYTES: usize> TransitionsLog<T, U, AMOUNT_BYTES>
 where
     Self: WithAmount<Amount: NotUSize>,
@@ -286,6 +294,8 @@ where
     }
 }
 
+#[doc = doc_with_amount!(impl)]
+#[allow(private_bounds)]
 impl<T, U: LoggedAt, const AMOUNT_BYTES: usize> TransitionsLog<T, U, AMOUNT_BYTES>
 where
     Self: WithAmount,
