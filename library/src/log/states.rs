@@ -10,10 +10,12 @@ use bevy::reflect::Reflect;
 use crate::meta::RevMeta;
 
 use super::{
-    impl_with_amount, into_ok, AmountErr, EntryAmount, LogIter, LogMut, LoggedAt, NotUSize,
-    OutOfLog, StateLog, ValueEntry, WithAmount,
+    doc_with_amount, impl_with_amount, into_ok, AmountErr, EntryAmount, LogIter, LogMut, LoggedAt,
+    NotUSize, OutOfLog, StateLog, ValueEntry, WithAmount,
 };
 
+#[doc = doc_with_amount!(struct)]
+#[allow(private_bounds)]
 #[derive(Debug, Clone, Reflect)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct StatesLog<T, U = (), const AMOUNT_BYTES: usize = 0>
@@ -161,6 +163,8 @@ where
     }
 }
 
+#[doc = doc_with_amount!(impl)]
+#[allow(private_bounds)]
 impl<T, U, const AMOUNT_BYTES: usize> StatesLog<T, U, AMOUNT_BYTES>
 where
     Self: WithAmount,
@@ -328,6 +332,8 @@ where
     }
 }
 
+#[doc = doc_with_amount!(impl where Infallible)]
+#[allow(private_bounds)]
 impl<T, U, const AMOUNT_BYTES: usize> StatesLog<T, U, AMOUNT_BYTES>
 where
     Self: WithAmount<Err = Infallible>,
@@ -378,11 +384,13 @@ where
     }
 }
 
+#[doc = doc_with_amount!(impl where NotUsize)]
+#[allow(private_bounds)]
 impl<T, U, const AMOUNT_BYTES: usize> StatesLog<T, U, AMOUNT_BYTES>
 where
-    Self: WithAmount,
+    Self: WithAmount<Amount: NotUSize>,
 {
-    fn try_new_internal(
+    pub fn try_new(
         iter: impl IntoIterator<Item = T>,
         entry: U,
     ) -> Result<Self, AmountErr<VecDeque<T>, U>> {
@@ -397,7 +405,7 @@ where
             Err(_) => Err(AmountErr::new::<Self>(states, entry, pushed_amount)),
         }
     }
-    fn try_with_capacities_internal(
+    pub fn try_with_capacities(
         iter: impl IntoIterator<Item = T>,
         entry: U,
         states_capacity: usize,
@@ -414,26 +422,6 @@ where
             }),
             Err(_) => Err(AmountErr::new::<Self>(states, entry, pushed_amount)),
         }
-    }
-}
-
-impl<T, U, const AMOUNT_BYTES: usize> StatesLog<T, U, AMOUNT_BYTES>
-where
-    Self: WithAmount<Amount: NotUSize>,
-{
-    pub fn try_new(
-        iter: impl IntoIterator<Item = T>,
-        entry: U,
-    ) -> Result<Self, AmountErr<VecDeque<T>, U>> {
-        Self::try_new_internal(iter, entry)
-    }
-    pub fn try_with_capacities(
-        iter: impl IntoIterator<Item = T>,
-        entry: U,
-        states_capacity: usize,
-        log_capacity: usize,
-    ) -> Result<Self, AmountErr<VecDeque<T>, U>> {
-        Self::try_with_capacities_internal(iter, entry, states_capacity, log_capacity)
     }
     pub fn try_push_present<Out: Into<U>>(
         &mut self,
@@ -474,6 +462,8 @@ where
     }
 }
 
+#[doc = doc_with_amount!(impl)]
+#[allow(private_bounds)]
 impl<T, U: LoggedAt, const AMOUNT_BYTES: usize> StatesLog<T, U, AMOUNT_BYTES>
 where
     Self: WithAmount,
