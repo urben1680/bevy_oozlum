@@ -10,6 +10,7 @@ use serde::{
 pub mod logless_state {
     use super::*;
 
+    #[allow(private_bounds)]
     pub fn serialize<S, T>(this: &T, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -18,6 +19,7 @@ pub mod logless_state {
         this.get_logless_state().serialize(serializer)
     }
 
+    #[allow(private_bounds)]
     pub fn deserialize<'de, D, T>(deserializer: D) -> Result<T, D::Error>
     where
         D: Deserializer<'de>,
@@ -31,6 +33,7 @@ pub mod logless_state {
 pub mod with_capacity {
     use super::*;
 
+    #[allow(private_bounds)]
     pub fn serialize<S, T>(this: &T, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -39,6 +42,7 @@ pub mod with_capacity {
         this.get_with_capacity().serialize(serializer)
     }
 
+    #[allow(private_bounds)]
     pub fn deserialize<'de, D, T>(deserializer: D) -> Result<T, D::Error>
     where
         D: Deserializer<'de>,
@@ -52,6 +56,7 @@ pub mod with_capacity {
 pub mod logless_with_capacity {
     use super::*;
 
+    #[allow(private_bounds)]
     pub fn serialize<S, T>(this: &T, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -60,6 +65,7 @@ pub mod logless_with_capacity {
         this.get_logless_with_capacity().serialize(serializer)
     }
 
+    #[allow(private_bounds)]
     pub fn deserialize<'de, D, T>(deserializer: D) -> Result<T, D::Error>
     where
         D: Deserializer<'de>,
@@ -69,7 +75,7 @@ pub mod logless_with_capacity {
     }
 }
 
-pub trait LoglessState {
+pub(super) trait LoglessState {
     type Se<'se>: Serialize
     where
         Self: 'se;
@@ -78,7 +84,7 @@ pub trait LoglessState {
     fn from_logless_state(logless_state: Self::De) -> Self;
 }
 
-pub trait WithCapacity: Sized {
+pub(super) trait WithCapacity: Sized {
     type Se<'se>: Serialize
     where
         Self: 'se;
@@ -87,7 +93,7 @@ pub trait WithCapacity: Sized {
     fn from_with_capacity(with_capacity: Self::De) -> Self;
 }
 
-pub trait LoglessWithCapacity: Sized {
+pub(super) trait LoglessWithCapacity: Sized {
     type Se<'se>: Serialize
     where
         Self: 'se;
