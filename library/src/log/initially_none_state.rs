@@ -24,7 +24,10 @@ mod serde_with {
 
     use super::{InitiallyNoneStateLog, Inner};
 
-    impl<T: Serialize + for<'de> Deserialize<'de> + 'static> LoglessState for InitiallyNoneStateLog<T> {
+    impl<T> LoglessState for InitiallyNoneStateLog<T>
+    where
+        T: Serialize + for<'de> Deserialize<'de> + 'static,
+    {
         type Se<'se> = Option<&'se T>;
         type De = Option<T>;
         fn get_logless_state(&self) -> Self::Se<'_> {
@@ -35,7 +38,10 @@ mod serde_with {
         }
     }
 
-    impl<T: Serialize + for<'de> Deserialize<'de> + 'static> WithCapacity for InitiallyNoneStateLog<T> {
+    impl<T> WithCapacity for InitiallyNoneStateLog<T>
+    where
+        T: Serialize + for<'de> Deserialize<'de> + 'static,
+    {
         type Se<'se> = Inner<<StateLog<T> as WithCapacity>::Se<'se>>;
         type De = Inner<<StateLog<T> as WithCapacity>::De>;
         fn get_with_capacity(&self) -> Self::Se<'_> {
@@ -64,8 +70,9 @@ mod serde_with {
         }
     }
 
-    impl<T: Serialize + for<'de> Deserialize<'de> + 'static> LoglessWithCapacity
-        for InitiallyNoneStateLog<T>
+    impl<T> LoglessWithCapacity for InitiallyNoneStateLog<T>
+    where
+        T: Serialize + for<'de> Deserialize<'de> + 'static,
     {
         type Se<'se> = (Option<&'se T>, usize);
         type De = (Option<T>, usize);
