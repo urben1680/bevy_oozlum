@@ -10,7 +10,7 @@ use bevy::reflect::Reflect;
 use crate::meta::RevMeta;
 
 use super::{
-    doc_with_amount, impl_with_amount, into_ok, AmountErr, EntryAmount, LogIter, LogMut, LoggedAt,
+    doc_with_amount, impl_with_amount, AmountErr, EntryAmount, LogIter, LogMut, LoggedAt,
     NotUSize, OutOfLog, RareStateLog, ValueEntry, WithAmount,
 };
 
@@ -347,7 +347,7 @@ where
     pub fn new(iter: impl IntoIterator<Item = T>, entry: U) -> Self {
         let states = VecDeque::from_iter(iter.into_iter());
         let pushed_amount = states.len();
-        let amount = into_ok(<Self as WithAmount>::usize_to_amount(pushed_amount));
+        let Ok(amount) = <Self as WithAmount>::usize_to_amount(pushed_amount);
         Self {
             amounts: RareStateLog::new(EntryAmount { entry, amount }),
             states,
@@ -363,7 +363,7 @@ where
         let mut states = VecDeque::with_capacity(states_capacity);
         states.extend(iter.into_iter());
         let pushed_amount = states.len();
-        let amount = into_ok(<Self as WithAmount>::usize_to_amount(pushed_amount));
+        let Ok(amount) = <Self as WithAmount>::usize_to_amount(pushed_amount);
         Self {
             amounts: RareStateLog::with_capacity(EntryAmount { entry, amount }, log_capacity),
             states,
@@ -378,7 +378,7 @@ where
             self.amounts.push_present(None);
             return Some(entry);
         }
-        let amount = into_ok(<Self as WithAmount>::usize_to_amount(pushed_amount));
+        let Ok(amount) = <Self as WithAmount>::usize_to_amount(pushed_amount);
         self.index = self.states.len();
         self.amounts
             .push_present(Some(EntryAmount { entry, amount }));
@@ -387,7 +387,7 @@ where
     pub fn clear_with(&mut self, iter: impl IntoIterator<Item = T>, entry: U) {
         let mut states = VecDeque::from_iter(iter.into_iter());
         let pushed_amount = states.len();
-        let amount = into_ok(<Self as WithAmount>::usize_to_amount(pushed_amount));
+        let Ok(amount) = <Self as WithAmount>::usize_to_amount(pushed_amount);
         self.states.clear();
         self.states.append(&mut states);
         self.amounts.clear_with(EntryAmount { entry, amount });

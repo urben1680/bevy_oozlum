@@ -557,14 +557,6 @@ impl<U, A: Copy> EntryAmount<U, A> {
 const INDEX_OOB: &'static str = "self.index should always be <= the deque len, so successfully reducing \
     it without underflow is expected to result in a valid index into the log which is not the case here";
 
-/// unwrap bad, https://github.com/rust-lang/rust/issues/61695
-fn into_ok<T>(result: Result<T, std::convert::Infallible>) -> T {
-    match result {
-        Ok(ok) => ok,
-        Err(err) => match err {},
-    }
-}
-
 /// Logged types that contain the information when these were logged, for example
 /// by containing [`RevFrame`] or the more compact [`PackedRevFrame`] from
 /// [`RevMeta::present_world_state`](crate::meta::RevMeta::present_world_state).

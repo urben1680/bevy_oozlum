@@ -9,7 +9,7 @@ use bevy::reflect::{std_traits::ReflectDefault, Reflect};
 use crate::meta::RevMeta;
 
 use super::{
-    doc_with_amount, impl_with_amount, into_ok, AmountErr, EntryAmount, LogIter, LogMut, LoggedAt,
+    doc_with_amount, impl_with_amount, AmountErr, EntryAmount, LogIter, LogMut, LoggedAt,
     NotUSize, OutOfLog, RareTransitionLog, ValueEntry, WithAmount,
 };
 
@@ -288,7 +288,7 @@ where
             self.amounts.push_present(None);
             return Some(entry);
         }
-        let amount = into_ok(<Self as WithAmount>::usize_to_amount(pushed_amount));
+        let Ok(amount) = <Self as WithAmount>::usize_to_amount(pushed_amount);
         self.amounts
             .push_present(Some(EntryAmount { entry, amount }));
         self.index += pushed_amount;
