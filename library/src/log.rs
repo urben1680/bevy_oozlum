@@ -507,10 +507,9 @@ impl<'a, T: Iterator, U> IntoIterator for &'a mut ValueEntry<T, U> {
     }
 }
 
-#[doc(hidden)]
 #[derive(Clone, PartialEq, Reflect)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct RareValue<T> {
+struct RareValue<T> {
     value: T,
     /// If `T` is a transiton, then these are the skips before the transition.
     ///
@@ -536,10 +535,9 @@ impl<T> RareValue<T> {
     }
 }
 
-#[doc(hidden)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Reflect)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct EntryAmount<U, A> {
+struct EntryAmount<U, A> {
     entry: U,
     amount: A,
 }
@@ -612,11 +610,10 @@ macro_rules! impl_logged_at {
 
 all_tuples!(impl_logged_at, 1, 20, T);
 
-#[doc(hidden)]
-pub trait NotUSize {} // remove if bounds on const generics (> 0) or type inequality (!= usize) stabilizes
+trait NotUSize {} // remove if bounds on const generics (> 0) or type inequality (!= usize) stabilizes
 impl<const AMOUNT_BYTES: usize> NotUSize for [u8; AMOUNT_BYTES] {}
 
-pub trait WithAmount {
+trait WithAmount {
     #[cfg(feature = "serde")]
     type Amount: Debug
         + Copy
@@ -635,6 +632,42 @@ pub trait WithAmount {
     fn usize_to_amount(value: usize) -> Result<Self::Amount, Self::Err>;
 }
 
+macro_rules! doc_with_amount {
+    (struct) => {
+        "
+        
+        The const generic parameter `AMOUNT_BYTES` enables reducing the memory usage of this log:
+        
+        - **unspecified or `0`**: the amount of entries per push is stored as `usize` and only infallable
+          methods can be used.
+        - **in `1..size_of::<usize>()`**: the amount of entries per push is stored as an `[u8; AMOUNT_BYTES]` and
+          only the fallible methods can be used. This has the benefit to consume less memory per push. This
+          allows storing up to `2^AMOUNT_BYTES - 1` entries per push.
+        - **in `size_of::<usize>()..=8`**: the amount of entries per push is stored as a `[u8; size_of::<usize>()]`
+          and both the infallible and fallible (which never fail) methods can be used.
+          
+        The latter two cases with an byte array have the additional benefit to have an alignment of `1` which
+        may benefitial too if the alignment of a non-ZST `U` of this struct has an alignment smaller than
+        `usize` does."
+    };
+    (impl) => {
+        doc_with_amount!(concat, "unspecified or in `0..=8`")
+    };
+    (impl where NotUsize) => {
+        doc_with_amount!(concat, "in `1..=8`")
+    };
+    (impl where Infallible) => {
+        doc_with_amount!(concat, "unspecified or `0` or in `size_of::<usize>()..=8`")
+    };
+    (concat, $text: literal) => {
+        std::concat!("These methods are implemented with the const generic `AMOUNT_BYTES` being", $text, ".
+        
+        See the struct documentation for further detail on `AMOUNT_BYTES`.")
+    };
+}
+
+use doc_with_amount;
+
 macro_rules! impl_with_amount {
     ($Log: ident) => {
         impl<T, U> crate::log::WithAmount for $Log<T, U, 0> {
@@ -646,54 +679,45 @@ macro_rules! impl_with_amount {
                 value
             }
             fn usize_to_amount(value: usize) -> Result<Self::Amount, Self::Err> {
-                return Ok(value);
-
-                // use this scope to hide the `target` module
-                // from other macro calls in the same scope
-
-                #[cfg(target_pointer_width = "16")]
-                mod target {
-                    use super::{impl_with_amount, $Log};
-
-                    impl_with_amount!($Log, 1);
-                    impl_with_amount!($Log, 2, Infallible);
-                    impl_with_amount!($Log, 3, Infallible);
-                    impl_with_amount!($Log, 4, Infallible);
-                    impl_with_amount!($Log, 5, Infallible);
-                    impl_with_amount!($Log, 6, Infallible);
-                    impl_with_amount!($Log, 7, Infallible);
-                    impl_with_amount!($Log, 8, Infallible);
-                }
-
-                #[cfg(target_pointer_width = "32")]
-                mod target {
-                    use super::{impl_with_amount, $Log};
-
-                    impl_with_amount!($Log, 1);
-                    impl_with_amount!($Log, 2);
-                    impl_with_amount!($Log, 3);
-                    impl_with_amount!($Log, 4, Infallible);
-                    impl_with_amount!($Log, 5, Infallible);
-                    impl_with_amount!($Log, 6, Infallible);
-                    impl_with_amount!($Log, 7, Infallible);
-                    impl_with_amount!($Log, 8, Infallible);
-                }
-
-                #[cfg(target_pointer_width = "64")]
-                mod target {
-                    use super::{impl_with_amount, $Log};
-
-                    impl_with_amount!($Log, 1);
-                    impl_with_amount!($Log, 2);
-                    impl_with_amount!($Log, 3);
-                    impl_with_amount!($Log, 4);
-                    impl_with_amount!($Log, 5);
-                    impl_with_amount!($Log, 6);
-                    impl_with_amount!($Log, 7);
-                    impl_with_amount!($Log, 8, Infallible);
-                }
+                Ok(value)
             }
         }
+
+        #[cfg(target_pointer_width = "16")]
+        const _: () = {
+            impl_with_amount!($Log, 1);
+            impl_with_amount!($Log, 2, Infallible);
+            impl_with_amount!($Log, 3, Infallible);
+            impl_with_amount!($Log, 4, Infallible);
+            impl_with_amount!($Log, 5, Infallible);
+            impl_with_amount!($Log, 6, Infallible);
+            impl_with_amount!($Log, 7, Infallible);
+            impl_with_amount!($Log, 8, Infallible);
+        };
+
+        #[cfg(target_pointer_width = "32")]
+        const _: () = {
+            impl_with_amount!($Log, 1);
+            impl_with_amount!($Log, 2);
+            impl_with_amount!($Log, 3);
+            impl_with_amount!($Log, 4, Infallible);
+            impl_with_amount!($Log, 5, Infallible);
+            impl_with_amount!($Log, 6, Infallible);
+            impl_with_amount!($Log, 7, Infallible);
+            impl_with_amount!($Log, 8, Infallible);
+        };
+
+        #[cfg(target_pointer_width = "64")]
+        const _: () = {
+            impl_with_amount!($Log, 1);
+            impl_with_amount!($Log, 2);
+            impl_with_amount!($Log, 3);
+            impl_with_amount!($Log, 4);
+            impl_with_amount!($Log, 5);
+            impl_with_amount!($Log, 6);
+            impl_with_amount!($Log, 7);
+            impl_with_amount!($Log, 8, Infallible);
+        };
     };
     ($Log: ident, $AMOUNT_BYTES: literal) => {
         impl<T, U> crate::log::WithAmount for $Log<T, U, $AMOUNT_BYTES> {
