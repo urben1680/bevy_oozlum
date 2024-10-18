@@ -9,8 +9,8 @@ use bevy::reflect::{std_traits::ReflectDefault, Reflect};
 use crate::meta::RevMeta;
 
 use super::{
-    doc_with_amount, impl_with_amount, AmountErr, EntryAmount, LogIter, LogMut, LoggedAt,
-    NotUSize, OutOfLog, TransitionLog, ValueEntry, WithAmount,
+    doc_with_amount, impl_with_amount, AmountErr, EntryAmount, LogIter, LogMut, LoggedAt, NotUSize,
+    OutOfLog, TransitionLog, ValueEntry, WithAmount,
 };
 
 #[doc = doc_with_amount!(struct)]
@@ -20,9 +20,9 @@ use super::{
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TransitionsLog<T, U = (), const AMOUNT_BYTES: usize = 0>
 where
-    Self: WithAmount,
+    Self: WithAmount<Entry = U>,
 {
-    amounts: TransitionLog<EntryAmount<U, <Self as WithAmount>::Amount>>,
+    amounts: TransitionLog<EntryAmount<Self>>,
     transitions: VecDeque<T>,
     index: usize,
 }
@@ -41,21 +41,15 @@ mod serde_with {
     where
         T: Serialize + for<'de> Deserialize<'de> + 'static,
         U: Serialize + for<'de> Deserialize<'de> + 'static,
-        Self: WithAmount,
+        Self: WithAmount<Entry = U>,
     {
         type Se<'se> = (
-            (
-                WithCapacityWrapper<&'se VecDeque<EntryAmount<U, <Self as WithAmount>::Amount>>>,
-                usize,
-            ),
+            <TransitionLog<EntryAmount<Self>> as WithCapacity>::Se<'se>,
             WithCapacityWrapper<&'se VecDeque<T>>,
             usize,
         );
         type De = (
-            (
-                WithCapacityWrapper<VecDeque<EntryAmount<U, <Self as WithAmount>::Amount>>>,
-                usize,
-            ),
+            <TransitionLog<EntryAmount<Self>> as WithCapacity>::De,
             WithCapacityWrapper<VecDeque<T>>,
             usize,
         );
@@ -66,26 +60,29 @@ mod serde_with {
                 self.index,
             )
         }
-        fn from_with_capacity(with_capacity: Self::De) -> Self {
-            Self {
-                amounts: TransitionLog::from_with_capacity(with_capacity.0),
-                transitions: with_capacity.1 .0,
-                index: with_capacity.2,
-            }
+        fn from_with_capacity(with_capacity: Self::De) -> Result<Self, String> {
+            TransitionLog::from_with_capacity(with_capacity.0)
+                .map(|amounts| {
+                    Self {
+                        amounts,
+                        transitions: with_capacity.1.0,
+                        index: with_capacity.2,
+                    }
+                })
         }
     }
 
     impl<T, U, const AMOUNT_BYTES: usize> LoglessWithCapacity for TransitionsLog<T, U, AMOUNT_BYTES>
     where
-        Self: WithAmount,
+        Self: WithAmount<Entry = U>,
     {
         type Se<'se> = (usize, usize) where T: 'se, U: 'se;
         type De = (usize, usize);
         fn get_logless_with_capacity(&self) -> Self::Se<'_> {
             (self.amounts.capacity(), self.transitions.capacity())
         }
-        fn from_logless_with_capacity(logless_with_capacity: Self::De) -> Self {
-            Self::with_capacities(logless_with_capacity.0, logless_with_capacity.1)
+        fn from_logless_with_capacity((log_capacity, transitions_capacity): Self::De) -> Result<Self, String> {
+            Ok(Self::with_capacities(log_capacity, transitions_capacity))
         }
     }
 }
@@ -94,7 +91,7 @@ impl_with_amount!(TransitionsLog);
 
 impl<T, U, const AMOUNT_BYTES: usize> Default for TransitionsLog<T, U, AMOUNT_BYTES>
 where
-    Self: WithAmount,
+    Self: WithAmount<Entry = U>,
 {
     fn default() -> Self {
         Self::new()
@@ -105,7 +102,7 @@ where
 #[allow(private_bounds)]
 impl<T, U, const AMOUNT_BYTES: usize> TransitionsLog<T, U, AMOUNT_BYTES>
 where
-    Self: WithAmount,
+    Self: WithAmount<Entry = U>,
 {
     pub const fn new() -> Self {
         Self {
@@ -204,7 +201,7 @@ where
     pub fn backward_log(&mut self) -> Result<ValueEntry<impl LogIter<&mut T>, &mut U>, OutOfLog> {
         let old_index = self.index;
         let entry_amount = self.amounts.backward_log()?;
-        self.index -= entry_amount.amount::<Self>();
+        self.index -= entry_amount.amount();
         let iter = self.transitions.range_mut(self.index..old_index);
         Ok(ValueEntry {
             value: iter,
@@ -214,7 +211,7 @@ where
     pub fn forward_log(&mut self) -> Result<ValueEntry<impl LogIter<&mut T>, &mut U>, OutOfLog> {
         let old_index = self.index;
         let entry_amount = self.amounts.forward_log()?;
-        self.index += entry_amount.amount::<Self>();
+        self.index += entry_amount.amount();
         let iter = self.transitions.range_mut(old_index..self.index);
         Ok(ValueEntry {
             value: iter,
@@ -233,50 +230,26 @@ where
         let amount: usize = self
             .amounts
             .drain_past_by_len(max_past_len)
-            .map(|entry_amount| entry_amount.amount::<Self>())
+            .map(|entry_amount| entry_amount.amount())
             .sum();
         self.index -= amount;
         self.transitions.drain(..amount)
     }
     fn drain_past_by_amount(
         &mut self,
-        entry_amount: EntryAmount<U, <Self as WithAmount>::Amount>,
+        entry_amount: EntryAmount<Self>,
     ) -> ValueEntry<impl LogIter<T>, U> {
-        let amount = entry_amount.amount::<Self>();
+        let amount = entry_amount.amount();
         self.index -= amount;
         ValueEntry {
             value: self.transitions.drain(..amount),
             entry: entry_amount.entry,
         }
     }
-}
-
-#[doc = doc_with_amount!(impl where Infallible)]
-#[allow(private_bounds)]
-impl<T, U, const AMOUNT_BYTES: usize> TransitionsLog<T, U, AMOUNT_BYTES>
-where
-    Self: WithAmount<Err = Infallible>,
-{
-    pub fn push_present<Out: Into<U>>(&mut self, c: impl FnOnce(LogMut<T>) -> Out) {
-        self.transitions.truncate(self.index);
-        let entry = c(LogMut(&mut self.transitions)).into();
-        let amount = self.transitions.len() - self.index;
-        let Ok(amount) = <Self as WithAmount>::usize_to_amount(amount);
-        self.index = self.transitions.len();
-        self.amounts.push_present(EntryAmount { entry, amount });
-    }
-}
-
-#[doc = doc_with_amount!(impl where NotUsize)]
-#[allow(private_bounds)]
-impl<T, U, const AMOUNT_BYTES: usize> TransitionsLog<T, U, AMOUNT_BYTES>
-where
-    Self: WithAmount<Amount: NotUSize>,
-{
-    pub fn try_push_present<Out: Into<U>>(
+    fn fallible_push_present<Out: Into<U>>(
         &mut self,
         c: impl FnOnce(LogMut<T>) -> Out,
-    ) -> Result<(), AmountErr<impl LogIter<T>, U>> {
+    ) -> Result<(), AmountErr<impl LogIter<T>, Self>> {
         self.transitions.truncate(self.index);
         let entry = c(LogMut(&mut self.transitions)).into();
         let pushed_amount = self.transitions.len() - self.index;
@@ -286,11 +259,46 @@ where
                 self.amounts.push_present(EntryAmount { entry, amount });
                 Ok(())
             }
-            Err(_) => {
+            Err(error) => {
                 let transitions = self.transitions.drain(self.index..);
-                Err(AmountErr::new::<Self>(transitions, entry, pushed_amount))
+                Err(AmountErr::new(
+                    transitions,
+                    entry,
+                    pushed_amount,
+                    error,
+                ))
             }
         }
+    }
+}
+
+#[doc = doc_with_amount!(impl where Infallible)]
+#[allow(private_bounds)]
+impl<T, U, const AMOUNT_BYTES: usize> TransitionsLog<T, U, AMOUNT_BYTES>
+where
+    Self: WithAmount<Entry = U, Err = Infallible>,
+{
+    pub fn push_present<Out: Into<U>>(&mut self, c: impl FnOnce(LogMut<T>) -> Out) {
+        // rust analyzer does not like `let Ok(ok) = result;` here
+        // https://github.com/rust-lang/rust-analyzer/issues/18334
+        match self.fallible_push_present(c) {
+            Ok(()) => (),
+            Err(err) => match err._error {}
+        }
+    }
+}
+
+#[doc = doc_with_amount!(impl where NotUsize)]
+#[allow(private_bounds)]
+impl<T, U, const AMOUNT_BYTES: usize> TransitionsLog<T, U, AMOUNT_BYTES>
+where
+    Self: WithAmount<Entry = U, Amount: NotUSize>,
+{
+    pub fn try_push_present<Out: Into<U>>(
+        &mut self,
+        c: impl FnOnce(LogMut<T>) -> Out,
+    ) -> Result<(), AmountErr<impl LogIter<T>, Self>> {
+        self.fallible_push_present(c)
     }
 }
 
@@ -298,7 +306,7 @@ where
 #[allow(private_bounds)]
 impl<T, U: LoggedAt, const AMOUNT_BYTES: usize> TransitionsLog<T, U, AMOUNT_BYTES>
 where
-    Self: WithAmount,
+    Self: WithAmount<Entry = U>,
 {
     pub fn pop_past_by_logged_at(
         &mut self,
@@ -312,7 +320,7 @@ where
         let amount: usize = self
             .amounts
             .truncate_future_drain_past_by_logged_at(meta)
-            .map(|entry_amount| entry_amount.amount::<Self>())
+            .map(|entry_amount| entry_amount.amount())
             .sum();
         self.index -= amount;
         self.transitions.drain(..amount)
