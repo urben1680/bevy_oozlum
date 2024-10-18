@@ -39,8 +39,8 @@ mod serde_with {
         fn get_logless_state(&self) -> Self::Se<'_> {
             &self.present.value
         }
-        fn from_logless_state(logless_state: Self::De) -> Self {
-            logless_state.into()
+        fn from_logless_state(logless_state: Self::De) -> Result<Self, String> {
+            Ok(logless_state.into())
         }
     }
 
@@ -68,14 +68,14 @@ mod serde_with {
                 self.len,
             )
         }
-        fn from_with_capacity(with_capacity: Self::De) -> Self {
-            Self {
+        fn from_with_capacity(with_capacity: Self::De) -> Result<Self, String> {
+            Ok(Self {
                 states: with_capacity.0 .0,
                 present: with_capacity.1,
                 index: with_capacity.2,
                 skips: with_capacity.3,
                 len: with_capacity.4,
-            }
+            })
         }
     }
 
@@ -85,8 +85,8 @@ mod serde_with {
         fn get_logless_with_capacity(&self) -> Self::Se<'_> {
             (&self.present.value, self.states_capacity())
         }
-        fn from_logless_with_capacity(logless_with_capacity: Self::De) -> Self {
-            Self::with_capacity(logless_with_capacity.0, logless_with_capacity.1)
+        fn from_logless_with_capacity(logless_with_capacity: Self::De) -> Result<Self, String> {
+            Ok(Self::with_capacity(logless_with_capacity.0, logless_with_capacity.1))
         }
     }
 }
@@ -162,9 +162,6 @@ impl<T> RareStateLog<T> {
     }
     pub fn states_shrink_to_fit(&mut self) {
         self.states.shrink_to_fit()
-    }
-    pub fn unlogged_get_mut(&mut self) -> &mut T {
-        &mut self.present.value
     }
     fn past_end_rare(&self) -> Option<&RareValue<T>> {
         self.states.front()
