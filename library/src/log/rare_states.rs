@@ -10,8 +10,8 @@ use bevy::reflect::Reflect;
 use crate::meta::RevMeta;
 
 use super::{
-    doc_with_amount, impl_with_amount, AmountErr, EntryAmount, LogIter, LogMut, LoggedAt,
-    NotUSize, OutOfLog, RareStateLog, ValueEntry, WithAmount,
+    doc_with_amount, impl_with_amount, AmountErr, EntryAmount, LogIter, LogMut, LoggedAt, NotUSize,
+    OutOfLog, RareStateLog, ValueEntry, WithAmount,
 };
 
 #[doc = doc_with_amount!(struct)]
@@ -20,9 +20,9 @@ use super::{
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct RareStatesLog<T, U = (), const AMOUNT_BYTES: usize = 0>
 where
-    Self: WithAmount,
+    Self: WithAmount<Entry = U>,
 {
-    amounts: RareStateLog<EntryAmount<U, <Self as WithAmount>::Amount>>,
+    amounts: RareStateLog<EntryAmount<Self>>,
     states: VecDeque<T>,
     index: usize,
 }
@@ -33,11 +33,8 @@ mod serde_with {
 
     use serde::{Deserialize, Serialize};
 
-    use crate::log::{
-        serde_with::{
-            LoglessState, LoglessWithCapacity, WithCapacity, WithCapacityWrapper, WithRange,
-        },
-        RareValue,
+    use crate::log::serde_with::{
+        LoglessState, LoglessWithCapacity, WithCapacity, WithCapacityWrapper, WithRange,
     };
 
     use super::{EntryAmount, RareStateLog, RareStatesLog, WithAmount};
@@ -46,33 +43,33 @@ mod serde_with {
     where
         T: Serialize + for<'de> Deserialize<'de> + 'static,
         U: Serialize + for<'de> Deserialize<'de> + 'static,
-        Self: WithAmount,
+        Self: WithAmount<Entry = U>,
     {
         type Se<'se> = (
-            &'se EntryAmount<U, <Self as WithAmount>::Amount>,
+            &'se EntryAmount<Self>,
             WithRange<'se, T>,
         );
-        type De = (EntryAmount<U, <Self as WithAmount>::Amount>, VecDeque<T>);
+        type De = (EntryAmount<Self>, VecDeque<T>);
         fn get_logless_state(&self) -> Self::Se<'_> {
-            let amounts_se = self.amounts.get_logless_state();
+            let amounts = self.amounts.get_logless_state();
             let range = self.get_range_entry().0;
             (
-                amounts_se,
+                amounts,
                 WithRange {
                     deque: &self.states,
                     range,
                 },
             )
         }
-        fn from_logless_state(logless_state: Self::De) -> Self {
-            let amounts = <
-                RareStateLog<EntryAmount<U, <Self as WithAmount>::Amount>> as LoglessState
-            >::from_logless_state(logless_state.0);
-            Self {
-                states: logless_state.1,
-                amounts,
-                index: 0,
-            }
+        fn from_logless_state(logless_state: Self::De) -> Result<Self, String> {
+            <
+                RareStateLog<EntryAmount<Self>> as LoglessState
+            >::from_logless_state(logless_state.0)
+                .map(|amounts| Self {
+                    states: logless_state.1,
+                    amounts,
+                    index: 0,
+                })
         }
     }
 
@@ -80,31 +77,15 @@ mod serde_with {
     where
         T: Serialize + for<'de> Deserialize<'de> + 'static,
         U: Serialize + for<'de> Deserialize<'de> + 'static,
-        Self: WithAmount,
+        Self: WithAmount<Entry = U>,
     {
         type Se<'se> = (
-            (
-                WithCapacityWrapper<
-                    &'se VecDeque<RareValue<EntryAmount<U, <Self as WithAmount>::Amount>>>,
-                >,
-                &'se RareValue<EntryAmount<U, <Self as WithAmount>::Amount>>,
-                usize,
-                usize,
-                usize,
-            ),
+            <RareStateLog<EntryAmount<Self>> as WithCapacity>::Se<'se>,
             WithCapacityWrapper<&'se VecDeque<T>>,
             usize,
         );
         type De = (
-            (
-                WithCapacityWrapper<
-                    VecDeque<RareValue<EntryAmount<U, <Self as WithAmount>::Amount>>>,
-                >,
-                RareValue<EntryAmount<U, <Self as WithAmount>::Amount>>,
-                usize,
-                usize,
-                usize,
-            ),
+            <RareStateLog<EntryAmount<Self>> as WithCapacity>::De,
             WithCapacityWrapper<VecDeque<T>>,
             usize,
         );
@@ -115,15 +96,13 @@ mod serde_with {
                 self.index,
             )
         }
-        fn from_with_capacity(with_capacity: Self::De) -> Self {
-            let amounts = WithCapacity::from_with_capacity(with_capacity.0);
-            let states = with_capacity.1 .0;
-            let index = with_capacity.2;
-            Self {
-                amounts,
-                states,
-                index,
-            }
+        fn from_with_capacity(with_capacity: Self::De) -> Result<Self, String> {
+            WithCapacity::from_with_capacity(with_capacity.0)
+                .map(|amounts| Self {
+                    amounts,
+                    states: with_capacity.1 .0,
+                    index: with_capacity.2,
+                })
         }
     }
 
@@ -131,14 +110,14 @@ mod serde_with {
     where
         T: Serialize + for<'de> Deserialize<'de> + 'static,
         U: Serialize + for<'de> Deserialize<'de> + 'static,
-        Self: WithAmount,
+        Self: WithAmount<Entry = U>,
     {
         type Se<'se> = (
-            (&'se EntryAmount<U, <Self as WithAmount>::Amount>, usize),
+            <RareStateLog<EntryAmount<Self>> as LoglessWithCapacity>::Se<'se>,
             WithCapacityWrapper<WithRange<'se, T>>,
         );
         type De = (
-            (EntryAmount<U, <Self as WithAmount>::Amount>, usize),
+            <RareStateLog<EntryAmount<Self>> as LoglessWithCapacity>::De,
             WithCapacityWrapper<VecDeque<T>>,
         );
         fn get_logless_with_capacity(&self) -> Self::Se<'_> {
@@ -152,13 +131,13 @@ mod serde_with {
                 }),
             )
         }
-        fn from_logless_with_capacity(logless_with_capacity: Self::De) -> Self {
-            let amounts = RareStateLog::from_logless_with_capacity(logless_with_capacity.0);
-            Self {
-                amounts,
-                states: logless_with_capacity.1 .0,
-                index: 0,
-            }
+        fn from_logless_with_capacity(logless_with_capacity: Self::De) -> Result<Self, String> {
+            RareStateLog::from_logless_with_capacity(logless_with_capacity.0)
+                .map(|amounts| Self {
+                    amounts,
+                    states: logless_with_capacity.1 .0,
+                    index: 0,
+                })
         }
     }
 }
@@ -167,7 +146,7 @@ impl_with_amount!(RareStatesLog);
 
 impl<T, U: Default, const AMOUNT_BYTES: usize> Default for RareStatesLog<T, U, AMOUNT_BYTES>
 where
-    Self: WithAmount,
+    Self: WithAmount<Entry = U>,
 {
     fn default() -> Self {
         Self::new_empty(U::default())
@@ -178,18 +157,18 @@ where
 #[allow(private_bounds)]
 impl<T, U, const AMOUNT_BYTES: usize> RareStatesLog<T, U, AMOUNT_BYTES>
 where
-    Self: WithAmount,
+    Self: WithAmount<Entry = U>,
 {
     pub fn new_empty(entry: U) -> Self {
         Self {
-            amounts: RareStateLog::new(EntryAmount::zero::<Self>(entry)),
+            amounts: RareStateLog::new(EntryAmount::zero(entry)),
             states: VecDeque::new(),
             index: 0,
         }
     }
     pub fn with_capacities_empty(entry: U, states_capacity: usize, log_capacity: usize) -> Self {
         Self {
-            amounts: RareStateLog::with_capacity(EntryAmount::zero::<Self>(entry), log_capacity),
+            amounts: RareStateLog::with_capacity(EntryAmount::zero(entry), log_capacity),
             states: VecDeque::with_capacity(states_capacity),
             index: 0,
         }
@@ -250,7 +229,7 @@ where
     }
     fn get_range_entry(&self) -> (Range<usize>, &U) {
         let entry_amount = &self.amounts;
-        let amount = entry_amount.amount::<Self>();
+        let amount = entry_amount.amount();
         let from = self.index - amount;
         (from..self.index, &entry_amount.entry)
     }
@@ -259,15 +238,9 @@ where
         let states = self.states.range(range);
         (states, entry)
     }
-    pub fn unlogged_get_mut(&mut self) -> (impl LogIter<&mut T>, &mut U) {
-        let entry_amount = self.amounts.unlogged_get_mut();
-        let from = self.index - entry_amount.amount::<Self>();
-        let states = self.states.range_mut(from..self.index);
-        (states, &mut entry_amount.entry)
-    }
     pub fn past_end(&self) -> Option<(impl LogIter<&T>, &U)> {
         let entry_amount = self.amounts.past_end()?;
-        let to = entry_amount.amount::<Self>();
+        let to = entry_amount.amount();
         let states = self.states.range(..to);
         Some((states, &entry_amount.entry))
     }
@@ -294,18 +267,18 @@ where
     }
     pub fn clear_empty(&mut self, entry: U) {
         self.states.clear();
-        self.amounts.clear_with(EntryAmount::zero::<Self>(entry));
+        self.amounts.clear_with(EntryAmount::zero(entry));
         self.index = 0;
     }
     pub fn backward_log(&mut self) -> Result<(), OutOfLog> {
-        let amount = self.amounts.amount::<Self>();
+        let amount = self.amounts.amount();
         self.amounts.backward_log()?;
         self.index -= amount;
         Ok(())
     }
     pub fn forward_log(&mut self) -> Result<(), OutOfLog> {
         self.amounts.forward_log()?;
-        self.index += self.amounts.amount::<Self>();
+        self.index += self.amounts.amount();
         Ok(())
     }
     pub fn pop_past_by_len(
@@ -320,91 +293,26 @@ where
         let amount: usize = self
             .amounts
             .drain_past_by_len(max_past_len)
-            .map(|entry_amount| entry_amount.amount::<Self>())
+            .map(|entry_amount| entry_amount.amount())
             .sum();
         self.index -= amount;
         self.states.drain(..amount)
     }
     fn drain_past_by_amount(
         &mut self,
-        entry_amount: EntryAmount<U, <Self as WithAmount>::Amount>,
+        entry_amount: EntryAmount<Self>,
     ) -> ValueEntry<impl LogIter<T>, U> {
-        let amount = entry_amount.amount::<Self>();
+        let amount = entry_amount.amount();
         self.index -= amount;
         ValueEntry {
             value: self.states.drain(..amount),
             entry: entry_amount.entry,
         }
     }
-}
-
-#[doc = doc_with_amount!(impl where Infallible)]
-#[allow(private_bounds)]
-impl<T, U, const AMOUNT_BYTES: usize> RareStatesLog<T, U, AMOUNT_BYTES>
-where
-    Self: WithAmount<Err = Infallible>,
-{
-    pub fn new(iter: impl IntoIterator<Item = T>, entry: U) -> Self {
-        let states = VecDeque::from_iter(iter.into_iter());
-        let pushed_amount = states.len();
-        let Ok(amount) = <Self as WithAmount>::usize_to_amount(pushed_amount);
-        Self {
-            amounts: RareStateLog::new(EntryAmount { entry, amount }),
-            states,
-            index: 0,
-        }
-    }
-    pub fn with_capacities(
+    fn fallible_new(
         iter: impl IntoIterator<Item = T>,
         entry: U,
-        states_capacity: usize,
-        log_capacity: usize,
-    ) -> Self {
-        let mut states = VecDeque::with_capacity(states_capacity);
-        states.extend(iter.into_iter());
-        let pushed_amount = states.len();
-        let Ok(amount) = <Self as WithAmount>::usize_to_amount(pushed_amount);
-        Self {
-            amounts: RareStateLog::with_capacity(EntryAmount { entry, amount }, log_capacity),
-            states,
-            index: 0,
-        }
-    }
-    pub fn push_present<Out: Into<U>>(&mut self, c: impl FnOnce(LogMut<T>) -> Out) -> Option<U> {
-        self.states.truncate(self.index);
-        let entry = c(LogMut(&mut self.states)).into();
-        let pushed_amount = self.states.len() - self.index;
-        if pushed_amount == 0 {
-            self.amounts.push_present(None);
-            return Some(entry);
-        }
-        let Ok(amount) = <Self as WithAmount>::usize_to_amount(pushed_amount);
-        self.index = self.states.len();
-        self.amounts
-            .push_present(Some(EntryAmount { entry, amount }));
-        None
-    }
-    pub fn clear_with(&mut self, iter: impl IntoIterator<Item = T>, entry: U) {
-        let mut states = VecDeque::from_iter(iter.into_iter());
-        let pushed_amount = states.len();
-        let Ok(amount) = <Self as WithAmount>::usize_to_amount(pushed_amount);
-        self.states.clear();
-        self.states.append(&mut states);
-        self.amounts.clear_with(EntryAmount { entry, amount });
-        self.index = 0;
-    }
-}
-
-#[doc = doc_with_amount!(impl where NotUsize)]
-#[allow(private_bounds)]
-impl<T, U, const AMOUNT_BYTES: usize> RareStatesLog<T, U, AMOUNT_BYTES>
-where
-    Self: WithAmount<Amount: NotUSize>,
-{
-    pub fn try_new(
-        iter: impl IntoIterator<Item = T>,
-        entry: U,
-    ) -> Result<Self, AmountErr<VecDeque<T>, U>> {
+    ) -> Result<Self, AmountErr<VecDeque<T>, Self>> {
         let states = VecDeque::from_iter(iter.into_iter());
         let pushed_amount = states.len();
         match <Self as WithAmount>::usize_to_amount(pushed_amount) {
@@ -413,15 +321,15 @@ where
                 states,
                 index: 0,
             }),
-            Err(_) => Err(AmountErr::new::<Self>(states, entry, pushed_amount)),
+            Err(error) => Err(AmountErr::new(states, entry, pushed_amount, error)),
         }
     }
-    pub fn try_with_capacities(
+    fn fallible_with_capacities(
         iter: impl IntoIterator<Item = T>,
         entry: U,
         states_capacity: usize,
         log_capacity: usize,
-    ) -> Result<Self, AmountErr<VecDeque<T>, U>> {
+    ) -> Result<Self, AmountErr<VecDeque<T>, Self>> {
         let mut states = VecDeque::with_capacity(states_capacity);
         states.extend(iter.into_iter());
         let pushed_amount = states.len();
@@ -431,13 +339,13 @@ where
                 states,
                 index: 0,
             }),
-            Err(_) => Err(AmountErr::new::<Self>(states, entry, pushed_amount)),
+            Err(error) => Err(AmountErr::new(states, entry, pushed_amount, error)),
         }
     }
-    pub fn try_push_present<Out: Into<U>>(
+    fn fallible_push_present<Out: Into<U>>(
         &mut self,
         c: impl FnOnce(LogMut<T>) -> Out,
-    ) -> Result<Option<U>, AmountErr<impl LogIter<T>, U>> {
+    ) -> Result<Option<U>, AmountErr<impl LogIter<T>, Self>> {
         self.states.truncate(self.index);
         let entry = c(LogMut(&mut self.states)).into();
         let pushed_amount = self.states.len() - self.index;
@@ -452,17 +360,17 @@ where
                     .push_present(Some(EntryAmount { entry, amount }));
                 Ok(None)
             }
-            Err(_) => {
+            Err(error) => {
                 let states = self.states.drain(self.index..);
-                Err(AmountErr::new::<Self>(states, entry, pushed_amount))
+                Err(AmountErr::new(states, entry, pushed_amount, error))
             }
         }
     }
-    pub fn try_clear_with(
+    fn fallible_clear_with(
         &mut self,
         iter: impl IntoIterator<Item = T>,
         entry: U,
-    ) -> Result<(), AmountErr<VecDeque<T>, U>> {
+    ) -> Result<(), AmountErr<VecDeque<T>, Self>> {
         let mut states = VecDeque::from_iter(iter.into_iter());
         let pushed_amount = states.len();
         match <Self as WithAmount>::usize_to_amount(pushed_amount) {
@@ -473,8 +381,88 @@ where
                 self.index = 0;
                 Ok(())
             }
-            Err(_) => Err(AmountErr::new::<Self>(states, entry, pushed_amount)),
+            Err(error) => Err(AmountErr::new(states, entry, pushed_amount, error)),
         }
+    }
+}
+
+#[doc = doc_with_amount!(impl where Infallible)]
+#[allow(private_bounds)]
+impl<T, U, const AMOUNT_BYTES: usize> RareStatesLog<T, U, AMOUNT_BYTES>
+where
+    Self: WithAmount<Entry = U, Err = Infallible>,
+{
+    pub fn new(iter: impl IntoIterator<Item = T>, entry: U) -> Self {
+        // rust analyzer does not like `let Ok(ok) = result;` here
+        // https://github.com/rust-lang/rust-analyzer/issues/18334
+        match Self::fallible_new(iter, entry) {
+            Ok(ok) => ok,
+            Err(err) => match err._error {}
+        }
+    }
+    pub fn with_capacities(
+        iter: impl IntoIterator<Item = T>,
+        entry: U,
+        states_capacity: usize,
+        log_capacity: usize,
+    ) -> Self {
+        // rust analyzer does not like `let Ok(ok) = result;` here
+        // https://github.com/rust-lang/rust-analyzer/issues/18334
+        match Self::fallible_with_capacities(iter, entry, states_capacity, log_capacity) {
+            Ok(ok) => ok,
+            Err(err) => match err._error {}
+        }
+    }
+    pub fn push_present<Out: Into<U>>(&mut self, c: impl FnOnce(LogMut<T>) -> Out) -> Option<U> {
+        // rust analyzer does not like `let Ok(ok) = result;` here
+        // https://github.com/rust-lang/rust-analyzer/issues/18334
+        match self.fallible_push_present(c) {
+            Ok(ok) => ok,
+            Err(err) => match err._error {}
+        }
+    }
+    pub fn clear_with(&mut self, iter: impl IntoIterator<Item = T>, entry: U) {
+        // rust analyzer does not like `let Ok(ok) = result;` here
+        // https://github.com/rust-lang/rust-analyzer/issues/18334
+        match self.fallible_clear_with(iter, entry) {
+            Ok(()) => (),
+            Err(err) => match err._error {}
+        }
+    }
+}
+
+#[doc = doc_with_amount!(impl where NotUsize)]
+#[allow(private_bounds)]
+impl<T, U, const AMOUNT_BYTES: usize> RareStatesLog<T, U, AMOUNT_BYTES>
+where
+    Self: WithAmount<Entry = U, Amount: NotUSize>,
+{
+    pub fn try_new(
+        iter: impl IntoIterator<Item = T>,
+        entry: U,
+    ) -> Result<Self, AmountErr<VecDeque<T>, Self>> {
+        Self::fallible_new(iter, entry)
+    }
+    pub fn try_with_capacities(
+        iter: impl IntoIterator<Item = T>,
+        entry: U,
+        states_capacity: usize,
+        log_capacity: usize,
+    ) -> Result<Self, AmountErr<VecDeque<T>, Self>> {
+        Self::fallible_with_capacities(iter, entry, states_capacity, log_capacity)
+    }
+    pub fn try_push_present<Out: Into<U>>(
+        &mut self,
+        c: impl FnOnce(LogMut<T>) -> Out,
+    ) -> Result<Option<U>, AmountErr<impl LogIter<T>, Self>> {
+        self.fallible_push_present(c)
+    }
+    pub fn try_clear_with(
+        &mut self,
+        iter: impl IntoIterator<Item = T>,
+        entry: U,
+    ) -> Result<(), AmountErr<VecDeque<T>, Self>> {
+        self.fallible_clear_with(iter, entry)
     }
 }
 
@@ -482,7 +470,7 @@ where
 #[allow(private_bounds)]
 impl<T, U: LoggedAt, const AMOUNT_BYTES: usize> RareStatesLog<T, U, AMOUNT_BYTES>
 where
-    Self: WithAmount,
+    Self: WithAmount<Entry = U>,
 {
     pub fn pop_past_by_logged_at(
         &mut self,
@@ -496,7 +484,7 @@ where
         let amount: usize = self
             .amounts
             .truncate_future_drain_past_by_logged_at(meta)
-            .map(|entry_amount| entry_amount.amount::<Self>())
+            .map(|entry_amount| entry_amount.amount())
             .sum();
         self.index -= amount;
         self.states.drain(..amount)
