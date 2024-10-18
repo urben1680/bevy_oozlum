@@ -23,6 +23,8 @@ pub struct StateLog<T> {
     /// The present state, easily accessible to read.
     present: T,
     /// The index of the nearest future state in `self.states`, if there is any.
+    /// 
+    /// Never larger than `self.states.len()`
     index: usize,
 }
 
@@ -44,8 +46,8 @@ mod serde_with {
         fn get_logless_state(&self) -> Self::Se<'_> {
             &self.present
         }
-        fn from_logless_state(logless_state: Self::De) -> Self {
-            logless_state.into()
+        fn from_logless_state(logless_state: Self::De) -> Result<Self, String> {
+            Ok(logless_state.into())
         }
     }
 
@@ -55,12 +57,12 @@ mod serde_with {
         fn get_with_capacity(&self) -> Self::Se<'_> {
             (WithCapacityWrapper(&self.states), &self.present, self.index)
         }
-        fn from_with_capacity(with_capacity: Self::De) -> Self {
-            Self {
+        fn from_with_capacity(with_capacity: Self::De) -> Result<Self, String> {
+            Ok(Self {
                 states: with_capacity.0 .0,
                 present: with_capacity.1,
                 index: with_capacity.2,
-            }
+            })
         }
     }
 
@@ -70,12 +72,12 @@ mod serde_with {
         fn get_logless_with_capacity(&self) -> Self::Se<'_> {
             (&self.present, self.states.capacity())
         }
-        fn from_logless_with_capacity(logless_with_capacity: Self::De) -> Self {
-            Self {
+        fn from_logless_with_capacity(logless_with_capacity: Self::De) -> Result<Self, String> {
+            Ok(Self {
                 states: VecDeque::with_capacity(logless_with_capacity.1),
                 present: logless_with_capacity.0,
                 index: 0,
-            }
+            })
         }
     }
 }
@@ -138,9 +140,6 @@ impl<T> StateLog<T> {
     pub fn shrink_to_fit(&mut self) {
         self.states.shrink_to_fit()
     }
-    pub fn unlogged_get_mut(&mut self) -> &mut T {
-        &mut self.present
-    }
     /// Most past state or `None` if the oldest state is considered to be the present state
     pub fn past_end(&self) -> Option<&T> {
         if self.index == 0 {
@@ -174,11 +173,11 @@ impl<T> StateLog<T> {
         self.index = 0;
     }
     pub fn backward_log(&mut self) -> Result<(), OutOfLog> {
-        // from:
+        // before:
         //  states:  [1, 2, 4]
         //  present: 3
         //  index:   2
-        // to:
+        // after:
         //  states:  [1, 3, 4]
         //  present: 2
         //  index:   1
@@ -189,54 +188,28 @@ impl<T> StateLog<T> {
             core::mem::swap(&mut self.present, now_future);
             return Ok(());
         }
-
-        #[derive(Debug)]
-        #[allow(dead_code)]
-        struct StateLogDebug {
-            states_len: usize,
-            index: usize,
-        }
-
-        let debug_struct = StateLogDebug {
-            states_len: self.states.len(),
-            index: self.index,
-        };
-
-        error!("{INDEX_OOB}, {debug_struct:#?}");
+        error!(
+            "{INDEX_OOB}T: {}, states.len(): {}, index: {}",
+            std::any::type_name::<T>(),
+            self.states.len(),
+            self.index
+        );
         Err(OutOfLog)
     }
     pub fn forward_log(&mut self) -> Result<(), OutOfLog> {
-        // from:
+        // before:
         //  states:  [1, 3, 4]
         //  present: 2
         //  index:   1
-        // to:
+        // after:
         //  states:  [1, 2, 4]
         //  present: 3
         //  index:   2
 
-        if let Some(now_future) = self.states.get_mut(self.index) {
-            core::mem::swap(&mut self.present, now_future);
-            self.index += 1;
-            return Ok(());
-        }
-
-        #[derive(Debug)]
-        #[allow(dead_code)]
-        struct StateLogDebug {
-            states_len: usize,
-            index: usize,
-        }
-
-        if self.index != self.states.len() {
-            let debug_struct = StateLogDebug {
-                states_len: self.states.len(),
-                index: self.index,
-            };
-            error!("{INDEX_OOB}, {debug_struct:#?}");
-        }
-
-        Err(OutOfLog)
+        let now_future = self.states.get_mut(self.index).ok_or(OutOfLog)?;
+        core::mem::swap(&mut self.present, now_future);
+        self.index += 1;
+        return Ok(());
     }
     pub fn pop_past_by_len(&mut self, max_past_len: usize) -> Option<T> {
         if self.index > max_past_len {
@@ -479,6 +452,20 @@ mod test {
                 }
             }
         }
+        fn test_drain_future(&self, expected: impl IntoIterator<Item = (u8, usize)>) -> Self {
+            let before = self.clone();
+            let mut clone = self.clone();
+            let result: Vec<_> = clone.drain_future().collect();
+            let expected: Vec<_> = expected
+                .into_iter()
+                .map(|(state, frame)| (state, RevFrame(frame)))
+                .collect();
+            assert_eq!(
+                result, expected,
+                "\nbefore: {before:#?}\nafter_drain_future: {clone:#?}"
+            );
+            clone
+        }
     }
 
     #[test]
@@ -505,7 +492,9 @@ mod test {
             log.test_backward_log(meta, Ok(2));
             log.test_backward_log(meta, Ok(1));
             // all entries are truncated as they are in the future, the new logged entry increases len to 1
+            let mut clone = log.test_drain_future([(2, 2), (3, 3)]);
             log.test_forward(meta, strategy, 4, 1, None);
+            clone.test_forward(meta, strategy, 4, 1, None);
         }
     }
 
