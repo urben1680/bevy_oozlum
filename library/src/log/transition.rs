@@ -8,7 +8,7 @@ use bevy::{
 
 use crate::meta::RevMeta;
 
-use super::{LogIter, LoggedAt, OutOfLog, PackedRevFrame, INDEX_OOB};
+use super::{LogIter, LoggedAt, OutOfLog, INDEX_OOB};
 
 #[derive(Debug, Clone, Reflect)]
 #[reflect(Default)]
@@ -34,11 +34,11 @@ mod serde_with {
         fn get_with_capacity(&self) -> Self::Se<'_> {
             (WithCapacityWrapper(&self.transitions), self.index)
         }
-        fn from_with_capacity(with_capacity: Self::De) -> Self {
-            Self {
+        fn from_with_capacity(with_capacity: Self::De) -> Result<Self, String> {
+            Ok(Self {
                 transitions: with_capacity.0 .0,
                 index: with_capacity.1,
-            }
+            })
         }
     }
 
@@ -48,8 +48,8 @@ mod serde_with {
         fn get_logless_with_capacity(&self) -> Self::Se<'_> {
             self.transitions.capacity()
         }
-        fn from_logless_with_capacity(logless_with_capacity: Self::De) -> Self {
-            Self::with_capacity(logless_with_capacity)
+        fn from_logless_with_capacity(logless_with_capacity: Self::De) -> Result<Self, String> {
+            Ok(Self::with_capacity(logless_with_capacity))
         }
     }
 }
@@ -194,7 +194,7 @@ mod test {
 
     use super::*;
 
-    use crate::{log::LoggedAt, meta::RevMeta};
+    use crate::{log::{LoggedAt, PackedRevFrame}, meta::RevMeta};
     /*
     #[derive(Clone, Debug)]
     struct MetaAndLogs {
