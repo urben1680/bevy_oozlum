@@ -8,7 +8,7 @@ use bevy::{
 
 use crate::{meta::RevMeta, RevFrame};
 
-use super::{LogIter, LoggedAt, OutOfLog, PackedRevFrame, RareValue, INDEX_OOB};
+use super::{LogIter, LoggedAt, OutOfLog, RareValue, INDEX_OOB};
 
 #[derive(Debug, Clone, Reflect)]
 #[reflect(Default)]
@@ -57,14 +57,14 @@ mod serde_with {
                 self.len,
             )
         }
-        fn from_with_capacity(with_capacity: Self::De) -> Self {
-            Self {
+        fn from_with_capacity(with_capacity: Self::De) -> Result<Self, String> {
+            Ok(Self {
                 transitions: with_capacity.0 .0,
                 index: with_capacity.1,
                 skips: with_capacity.2,
                 skips_max: with_capacity.3,
                 len: with_capacity.4,
-            }
+            })
         }
     }
 
@@ -74,8 +74,8 @@ mod serde_with {
         fn get_logless_with_capacity(&self) -> Self::Se<'_> {
             self.transitions.capacity()
         }
-        fn from_logless_with_capacity(logless_with_capacity: Self::De) -> Self {
-            Self::with_capacity(logless_with_capacity)
+        fn from_logless_with_capacity(logless_with_capacity: Self::De) -> Result<Self, String> {
+            Ok(Self::with_capacity(logless_with_capacity))
         }
     }
 }
@@ -303,6 +303,8 @@ impl<T: LoggedAt> RareTransitionLog<T> {
 #[cfg(test)]
 mod test {
     use std::num::NonZeroUsize;
+
+    use crate::log::PackedRevFrame;
 
     use super::*;
 
