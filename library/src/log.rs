@@ -229,7 +229,7 @@ methods on log that takes &mut RevMeta and...
 use std::{
     collections::{TryReserveError, VecDeque},
     fmt::Debug,
-    iter::FusedIterator,
+    iter::FusedIterator
 };
 
 use bevy::{reflect::Reflect, utils::all_tuples};
@@ -473,22 +473,26 @@ impl<'a, T> Extend<T> for LogMut<'a, T> {
 }
 
 #[derive(Debug)]
-pub struct AmountErr<I, U> {
+pub struct AmountErr<I, Log: TryWithAmount> {
     pub values: I,
-    pub entry: U,
+    pub entry: Log::Entry,
     pub pushed_amount: usize,
     pub max_amount: usize,
+    // ZST or Infallible, enabling `let Ok(ok) = result;` syntax
+    // https://github.com/rust-lang/rust-analyzer/issues/18334
+    _error: Log::Err,
 }
 
-impl<I, U> AmountErr<I, U> {
-    fn new<T: WithAmount>(values: I, entry: U, pushed_amount: usize) -> Self {
-        let max_amount = <T as WithAmount>::MAX;
-        let max_amount = <T as WithAmount>::amount_to_usize(max_amount);
+impl<I, Log: WithAmount> AmountErr<I, Log> {
+    fn new(values: I, entry: Log::Entry, pushed_amount: usize, error: Log::Err) -> Self {
+        let max_amount = Log::MAX;
+        let max_amount = Log::amount_to_usize(max_amount);
         Self {
             values,
             entry,
             pushed_amount,
             max_amount,
+            _error: error,
         }
     }
 }
@@ -517,6 +521,8 @@ struct RareValue<T> {
     skips: PackedRevFrame,
 }
 
+pub struct RareDeque<T>(VecDeque<RareValue<T>>);
+
 impl<T: Debug> Debug for RareValue<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct(std::any::type_name::<Self>())
@@ -535,27 +541,29 @@ impl<T> RareValue<T> {
     }
 }
 
+// using `Log` instead of the entry type directly makes the struct name more helpful in debug prints
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Reflect)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-struct EntryAmount<U, A> {
-    entry: U,
-    amount: A,
+struct EntryAmount<Log: WithAmount> {
+    entry: Log::Entry,
+    amount: Log::Amount,
 }
 
-impl<U, A: Copy> EntryAmount<U, A> {
-    fn zero<T: WithAmount<Amount = A>>(entry: U) -> Self {
+impl<Log: WithAmount> EntryAmount<Log> {
+    const fn zero(entry: <Log as TryWithAmount>::Entry) -> Self {
         Self {
             entry,
-            amount: <T as WithAmount>::MIN,
+            amount: <Log as WithAmount>::MIN
         }
     }
-    fn amount<T: WithAmount<Amount = A>>(&self) -> usize {
-        <T as WithAmount>::amount_to_usize(self.amount)
+    fn amount(&self) -> usize {
+        <Log as WithAmount>::amount_to_usize(self.amount)
     }
 }
 
 const INDEX_OOB: &'static str = "self.index should always be <= the deque len, so successfully reducing \
-    it without underflow is expected to result in a valid index into the log which is not the case here";
+    it without underflow is expected to result in a valid index into the log which is not the case here, \
+    the log is in an invalid state before calling the current method\n";
 
 /// Logged types that contain the information when these were logged, for example
 /// by containing [`RevFrame`] or the more compact [`PackedRevFrame`] from
@@ -576,7 +584,7 @@ impl LoggedAt for PackedRevFrame {
     }
 }
 
-impl<U: LoggedAt, A> LoggedAt for EntryAmount<U, A> {
+impl<Log: WithAmount<Entry: LoggedAt>> LoggedAt for EntryAmount<Log> {
     fn logged_at(&self) -> RevFrame {
         self.entry.logged_at()
     }
@@ -605,7 +613,7 @@ all_tuples!(impl_logged_at, 1, 20, T);
 trait NotUSize {} // remove if bounds on const generics (> 0) or type inequality (!= usize) stabilizes
 impl<const AMOUNT_BYTES: usize> NotUSize for [u8; AMOUNT_BYTES] {}
 
-trait WithAmount {
+trait WithAmount: TryWithAmount {
     #[cfg(feature = "serde")]
     type Amount: Debug
         + Copy
@@ -617,11 +625,16 @@ trait WithAmount {
         + for<'de> serde::Deserialize<'de>;
     #[cfg(not(feature = "serde"))]
     type Amount: Debug + Copy + Clone + Send + Sync + 'static;
-    type Err;
     const MIN: Self::Amount;
     const MAX: Self::Amount;
     fn amount_to_usize(value: Self::Amount) -> usize;
     fn usize_to_amount(value: usize) -> Result<Self::Amount, Self::Err>;
+}
+
+pub trait TryWithAmount {
+    type Err;
+    #[doc(hidden)]
+    type Entry;
 }
 
 macro_rules! doc_with_amount {
@@ -631,12 +644,15 @@ macro_rules! doc_with_amount {
         The const generic parameter `AMOUNT_BYTES` enables reducing the memory usage of this log:
         
         - **unspecified or `0`**: the amount of entries per push is stored as `usize` and only infallable
-          methods can be used.
+          methods and functions can be used.
         - **in `1..size_of::<usize>()`**: the amount of entries per push is stored as an `[u8; AMOUNT_BYTES]` and
-          only the fallible methods can be used. This has the benefit to consume less memory per push. This
-          allows storing up to `2^AMOUNT_BYTES - 1` entries per push.
+          only the fallible methods and functions can be used. This has the benefit to consume less memory per push.
+          This allows storing up to `2^AMOUNT_BYTES - 1` entries per push.
         - **in `size_of::<usize>()..=8`**: the amount of entries per push is stored as a `[u8; size_of::<usize>()]`
-          and both the infallible and fallible (which never fail) methods can be used.
+          and both the infallible and fallible (which never fail) methods and functions can be used. It may be
+          helpful to still use the fallible methods in case that the application runs on machines with different
+          pointer widths and only for some of them the conversation is fallible. That makes the code more agnostic
+          for the target machine.
           
         The latter two cases with an byte array have the additional benefit to have an alignment of `1` which
         may benefitial too if the alignment of a non-ZST `U` of this struct has an alignment smaller than
@@ -652,9 +668,29 @@ macro_rules! doc_with_amount {
         doc_with_amount!(concat, "unspecified or `0` or in `size_of::<usize>()..=8`")
     };
     (concat, $text: literal) => {
-        std::concat!("These methods are implemented with the const generic `AMOUNT_BYTES` being", $text, ".
+        std::concat!(
+            "These methods are implemented with the const generic `AMOUNT_BYTES` being",
+            $text,
+            doc_with_amount!(ref struct)
+        )
+    };
+    (try 0) => {
+        std::concat!(
+            "Implements only infallible methods and functions",
+            doc_with_amount!(ref struct)
+        )
+    };
+    (try) => {
+        std::concat!(
+            "Implements both fallible and infallible methods and functions. If `AMOUNT_BYTES` is not less than
+            `size_of::<usize>()`, the fallible methods and functions never return `Err`.",
+            doc_with_amount!(ref struct)
+        )
+    };
+    (ref struct) => {
+        ".
         
-        See the struct documentation for further detail on `AMOUNT_BYTES`.")
+        See the struct documentation for further detail on `AMOUNT_BYTES`."
     };
 }
 
@@ -662,9 +698,14 @@ use doc_with_amount;
 
 macro_rules! impl_with_amount {
     ($Log: ident) => {
+        #[doc = crate::log::doc_with_amount!(try 0)]
+        impl<T, U> crate::log::TryWithAmount for $Log<T, U, 0> {
+            type Err = std::convert::Infallible;
+            type Entry = U;
+        }
+
         impl<T, U> crate::log::WithAmount for $Log<T, U, 0> {
             type Amount = usize;
-            type Err = std::convert::Infallible;
             const MIN: Self::Amount = usize::MIN;
             const MAX: Self::Amount = usize::MAX;
             fn amount_to_usize(value: Self::Amount) -> usize {
@@ -712,9 +753,14 @@ macro_rules! impl_with_amount {
         };
     };
     ($Log: ident, $AMOUNT_BYTES: literal) => {
+        #[doc = crate::log::doc_with_amount!(try)]
+        impl<T, U> crate::log::TryWithAmount for $Log<T, U, $AMOUNT_BYTES> {
+            type Err = ();
+            type Entry = U;
+        }
+
         impl<T, U> crate::log::WithAmount for $Log<T, U, $AMOUNT_BYTES> {
             type Amount = [u8; $AMOUNT_BYTES];
-            type Err = ();
             const MIN: Self::Amount = [u8::MIN; $AMOUNT_BYTES];
             const MAX: Self::Amount = [u8::MAX; $AMOUNT_BYTES];
             fn amount_to_usize(value: Self::Amount) -> usize {
@@ -734,9 +780,14 @@ macro_rules! impl_with_amount {
         }
     };
     ($Log: ident, $AMOUNT_BYTES: literal, Infallible) => {
+        #[doc = crate::log::doc_with_amount!(try)]
+        impl<T, U> crate::log::TryWithAmount for $Log<T, U, $AMOUNT_BYTES> {
+            type Err = std::convert::Infallible;
+            type Entry = U;
+        }
+
         impl<T, U> crate::log::WithAmount for $Log<T, U, $AMOUNT_BYTES> {
             type Amount = [u8; crate::log::USIZE_BYTES];
-            type Err = std::convert::Infallible;
             const MIN: Self::Amount = [u8::MIN; crate::log::USIZE_BYTES];
             const MAX: Self::Amount = [u8::MAX; crate::log::USIZE_BYTES];
             fn amount_to_usize(value: Self::Amount) -> usize {
