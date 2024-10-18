@@ -404,7 +404,8 @@ impl RevMeta {
             .map(NonZeroUsize::get)
             .unwrap_or(Self::MAX_WORLD_STATES)
             .min(Self::MAX_WORLD_STATES);
-        if self.past_world_states() > max_world_states {
+        // past states equal to max states is too many as the present state has to be added to the comparision
+        if self.past_world_states() >= max_world_states {
             self.oldest_world_state = self.oldest_world_state().wrapping_add(1).0;
         }
         self.youngest_world_state = self.present_world_state;
