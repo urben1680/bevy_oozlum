@@ -2,16 +2,16 @@ use std::{
     collections::{TryReserveError, VecDeque},
     convert::Infallible,
     fmt::Debug,
-    ops::Range,
+    ops::{Deref, Range},
 };
 
-use bevy::reflect::Reflect;
+use bevy::{reflect::Reflect, utils::default};
 
 use crate::meta::RevMeta;
 
 use super::{
     doc_with_amount, impl_with_amount, AmountErr, EntryAmount, LogIter, LogMut, LoggedAt, NotUSize,
-    OutOfLog, RareStateLog, ValueEntry, WithAmount,
+    OutOfLog, RareStateLog, ValueEntry, WithAmountInternal,
 };
 
 #[doc = doc_with_amount!(struct)]
@@ -20,7 +20,7 @@ use super::{
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct RareStatesLog<T, U = (), const AMOUNT_BYTES: usize = 0>
 where
-    Self: WithAmount<Entry = U>,
+    Self: WithAmountInternal<Entry = U>,
 {
     amounts: RareStateLog<EntryAmount<Self>>,
     states: VecDeque<T>,
@@ -37,18 +37,15 @@ mod serde_with {
         LoglessState, LoglessWithCapacity, WithCapacity, WithCapacityWrapper, WithRange,
     };
 
-    use super::{EntryAmount, RareStateLog, RareStatesLog, WithAmount};
+    use super::{EntryAmount, RareStateLog, RareStatesLog, WithAmountInternal};
 
     impl<T, U, const AMOUNT_BYTES: usize> LoglessState for RareStatesLog<T, U, AMOUNT_BYTES>
     where
         T: Serialize + for<'de> Deserialize<'de> + 'static,
         U: Serialize + for<'de> Deserialize<'de> + 'static,
-        Self: WithAmount<Entry = U>,
+        Self: WithAmountInternal<Entry = U>,
     {
-        type Se<'se> = (
-            &'se EntryAmount<Self>,
-            WithRange<'se, T>,
-        );
+        type Se<'se> = (&'se EntryAmount<Self>, WithRange<'se, T>);
         type De = (EntryAmount<Self>, VecDeque<T>);
         fn get_logless_state(&self) -> Self::Se<'_> {
             let amounts = self.amounts.get_logless_state();
@@ -62,9 +59,7 @@ mod serde_with {
             )
         }
         fn from_logless_state(logless_state: Self::De) -> Result<Self, String> {
-            <
-                RareStateLog<EntryAmount<Self>> as LoglessState
-            >::from_logless_state(logless_state.0)
+            <RareStateLog<EntryAmount<Self>> as LoglessState>::from_logless_state(logless_state.0)
                 .map(|amounts| Self {
                     states: logless_state.1,
                     amounts,
@@ -77,7 +72,7 @@ mod serde_with {
     where
         T: Serialize + for<'de> Deserialize<'de> + 'static,
         U: Serialize + for<'de> Deserialize<'de> + 'static,
-        Self: WithAmount<Entry = U>,
+        Self: WithAmountInternal<Entry = U>,
     {
         type Se<'se> = (
             <RareStateLog<EntryAmount<Self>> as WithCapacity>::Se<'se>,
@@ -97,12 +92,11 @@ mod serde_with {
             )
         }
         fn from_with_capacity(with_capacity: Self::De) -> Result<Self, String> {
-            WithCapacity::from_with_capacity(with_capacity.0)
-                .map(|amounts| Self {
-                    amounts,
-                    states: with_capacity.1 .0,
-                    index: with_capacity.2,
-                })
+            WithCapacity::from_with_capacity(with_capacity.0).map(|amounts| Self {
+                amounts,
+                states: with_capacity.1 .0,
+                index: with_capacity.2,
+            })
         }
     }
 
@@ -110,7 +104,7 @@ mod serde_with {
     where
         T: Serialize + for<'de> Deserialize<'de> + 'static,
         U: Serialize + for<'de> Deserialize<'de> + 'static,
-        Self: WithAmount<Entry = U>,
+        Self: WithAmountInternal<Entry = U>,
     {
         type Se<'se> = (
             <RareStateLog<EntryAmount<Self>> as LoglessWithCapacity>::Se<'se>,
@@ -132,24 +126,55 @@ mod serde_with {
             )
         }
         fn from_logless_with_capacity(logless_with_capacity: Self::De) -> Result<Self, String> {
-            RareStateLog::from_logless_with_capacity(logless_with_capacity.0)
-                .map(|amounts| Self {
-                    amounts,
-                    states: logless_with_capacity.1 .0,
-                    index: 0,
-                })
+            RareStateLog::from_logless_with_capacity(logless_with_capacity.0).map(|amounts| Self {
+                amounts,
+                states: logless_with_capacity.1 .0,
+                index: 0,
+            })
         }
     }
 }
 
 impl_with_amount!(RareStatesLog);
 
+#[doc = doc_with_amount!(impl)]
 impl<T, U: Default, const AMOUNT_BYTES: usize> Default for RareStatesLog<T, U, AMOUNT_BYTES>
 where
-    Self: WithAmount<Entry = U>,
+    Self: WithAmountInternal<Entry = U>,
 {
     fn default() -> Self {
-        Self::new_empty(U::default())
+        Self::new_empty(default())
+    }
+}
+
+#[doc = doc_with_amount!(impl)]
+impl<T, U, const AMOUNT_BYTES: usize> From<U> for RareStatesLog<T, U, AMOUNT_BYTES>
+where
+    Self: WithAmountInternal<Entry = U>,
+{
+    fn from(entry: U) -> Self {
+        Self::new_empty(entry)
+    }
+}
+
+#[doc = doc_with_amount!(impl where Infallible)]
+impl<T, U: Default, const AMOUNT_BYTES: usize> FromIterator<T> for RareStatesLog<T, U, AMOUNT_BYTES>
+where
+    Self: WithAmountInternal<Entry = U, Err = Infallible>,
+{
+    fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
+        Self::new(iter, default())
+    }
+}
+
+#[doc = doc_with_amount!(impl)]
+impl<T, U, const AMOUNT_BYTES: usize> Deref for RareStatesLog<T, U, AMOUNT_BYTES>
+where
+    Self: WithAmountInternal<Entry = U>,
+{
+    type Target = U;
+    fn deref(&self) -> &Self::Target {
+        &self.amounts.entry
     }
 }
 
@@ -157,7 +182,7 @@ where
 #[allow(private_bounds)]
 impl<T, U, const AMOUNT_BYTES: usize> RareStatesLog<T, U, AMOUNT_BYTES>
 where
-    Self: WithAmount<Entry = U>,
+    Self: WithAmountInternal<Entry = U>,
 {
     pub fn new_empty(entry: U) -> Self {
         Self {
@@ -260,7 +285,7 @@ where
     pub fn clear(&mut self) {
         self.amounts.clear();
         let amount = self.amounts.amount;
-        let amount = <Self as WithAmount>::amount_to_usize(amount);
+        let amount = <Self as WithAmountInternal>::amount_to_usize(amount);
         self.states.drain(..self.index);
         self.states.truncate(amount);
         self.index = 0;
@@ -315,7 +340,7 @@ where
     ) -> Result<Self, AmountErr<VecDeque<T>, Self>> {
         let states = VecDeque::from_iter(iter.into_iter());
         let pushed_amount = states.len();
-        match <Self as WithAmount>::usize_to_amount(pushed_amount) {
+        match <Self as WithAmountInternal>::usize_to_amount(pushed_amount) {
             Ok(amount) => Ok(Self {
                 amounts: RareStateLog::new(EntryAmount { entry, amount }),
                 states,
@@ -333,7 +358,7 @@ where
         let mut states = VecDeque::with_capacity(states_capacity);
         states.extend(iter.into_iter());
         let pushed_amount = states.len();
-        match <Self as WithAmount>::usize_to_amount(pushed_amount) {
+        match <Self as WithAmountInternal>::usize_to_amount(pushed_amount) {
             Ok(amount) => Ok(Self {
                 amounts: RareStateLog::with_capacity(EntryAmount { entry, amount }, log_capacity),
                 states,
@@ -353,7 +378,7 @@ where
             self.amounts.push_present(None);
             return Ok(Some(entry));
         }
-        match <Self as WithAmount>::usize_to_amount(pushed_amount) {
+        match <Self as WithAmountInternal>::usize_to_amount(pushed_amount) {
             Ok(amount) => {
                 self.index = self.states.len();
                 self.amounts
@@ -373,7 +398,7 @@ where
     ) -> Result<(), AmountErr<VecDeque<T>, Self>> {
         let mut states = VecDeque::from_iter(iter.into_iter());
         let pushed_amount = states.len();
-        match <Self as WithAmount>::usize_to_amount(pushed_amount) {
+        match <Self as WithAmountInternal>::usize_to_amount(pushed_amount) {
             Ok(amount) => {
                 self.states.clear();
                 self.states.append(&mut states);
@@ -390,14 +415,14 @@ where
 #[allow(private_bounds)]
 impl<T, U, const AMOUNT_BYTES: usize> RareStatesLog<T, U, AMOUNT_BYTES>
 where
-    Self: WithAmount<Entry = U, Err = Infallible>,
+    Self: WithAmountInternal<Entry = U, Err = Infallible>,
 {
     pub fn new(iter: impl IntoIterator<Item = T>, entry: U) -> Self {
         // rust analyzer does not like `let Ok(ok) = result;` here
         // https://github.com/rust-lang/rust-analyzer/issues/18334
         match Self::fallible_new(iter, entry) {
             Ok(ok) => ok,
-            Err(err) => match err._error {}
+            Err(err) => match err._error {},
         }
     }
     pub fn with_capacities(
@@ -410,7 +435,7 @@ where
         // https://github.com/rust-lang/rust-analyzer/issues/18334
         match Self::fallible_with_capacities(iter, entry, states_capacity, log_capacity) {
             Ok(ok) => ok,
-            Err(err) => match err._error {}
+            Err(err) => match err._error {},
         }
     }
     pub fn push_present<Out: Into<U>>(&mut self, c: impl FnOnce(LogMut<T>) -> Out) -> Option<U> {
@@ -418,7 +443,7 @@ where
         // https://github.com/rust-lang/rust-analyzer/issues/18334
         match self.fallible_push_present(c) {
             Ok(ok) => ok,
-            Err(err) => match err._error {}
+            Err(err) => match err._error {},
         }
     }
     pub fn clear_with(&mut self, iter: impl IntoIterator<Item = T>, entry: U) {
@@ -426,7 +451,7 @@ where
         // https://github.com/rust-lang/rust-analyzer/issues/18334
         match self.fallible_clear_with(iter, entry) {
             Ok(()) => (),
-            Err(err) => match err._error {}
+            Err(err) => match err._error {},
         }
     }
 }
@@ -435,7 +460,7 @@ where
 #[allow(private_bounds)]
 impl<T, U, const AMOUNT_BYTES: usize> RareStatesLog<T, U, AMOUNT_BYTES>
 where
-    Self: WithAmount<Entry = U, Amount: NotUSize>,
+    Self: WithAmountInternal<Entry = U, Amount: NotUSize>,
 {
     pub fn try_new(
         iter: impl IntoIterator<Item = T>,
@@ -470,7 +495,7 @@ where
 #[allow(private_bounds)]
 impl<T, U: LoggedAt, const AMOUNT_BYTES: usize> RareStatesLog<T, U, AMOUNT_BYTES>
 where
-    Self: WithAmount<Entry = U>,
+    Self: WithAmountInternal<Entry = U>,
 {
     pub fn pop_past_by_logged_at(
         &mut self,

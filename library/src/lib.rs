@@ -77,6 +77,7 @@ use bevy::{
         },
     },
     reflect::Reflect,
+    utils::default,
 };
 
 use commands::RevCommandBuffer;
@@ -105,9 +106,9 @@ pub mod prelude {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Reflect)]
 pub struct RevFrame(usize);
 
-impl Into<usize> for RevFrame {
-    fn into(self) -> usize {
-        self.0
+impl From<RevFrame> for usize {
+    fn from(value: RevFrame) -> Self {
+        value.0
     }
 }
 
@@ -151,7 +152,7 @@ pub struct RevSystemsPlugin {
 impl Default for RevSystemsPlugin {
     fn default() -> Self {
         Self {
-            rev_meta: Some(RevMeta::default()),
+            rev_meta: Some(default()),
             add_rev_meta_sys_in: Some((FixedUpdate.intern(), None)),
         }
     }

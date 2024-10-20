@@ -194,7 +194,10 @@ mod test {
 
     use super::*;
 
-    use crate::{log::{LoggedAt, PackedRevFrame}, meta::RevMeta};
+    use crate::{
+        log::{LoggedAt, PackedRevFrame},
+        meta::RevMeta,
+    };
     /*
     #[derive(Clone, Debug)]
     struct MetaAndLogs {

@@ -17,12 +17,9 @@ pub(super) enum Inner<T> {
 mod serde_with {
     use serde::{Deserialize, Serialize};
 
-    use crate::log::{
-        serde_with::{LoglessState, LoglessWithCapacity, WithCapacity},
-        StateLog,
-    };
+    use crate::log::serde_with::{LoglessState, LoglessWithCapacity, WithCapacity};
 
-    use super::{InitiallyNoneStateLog, Inner};
+    use super::{InitiallyNoneStateLog, Inner, StateLog};
 
     impl<T> LoglessState for InitiallyNoneStateLog<T>
     where
@@ -67,8 +64,8 @@ mod serde_with {
                         log,
                         undone_first_run,
                     },
-                    Err(err) => return Err(err)
-                }
+                    Err(err) => return Err(err),
+                },
             }))
         }
     }
