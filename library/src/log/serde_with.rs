@@ -25,9 +25,9 @@ pub mod logless_state {
         D: Deserializer<'de>,
         T: LoglessState,
     {
-        Deserialize::deserialize(deserializer)
-            .and_then(|deserialized| T::from_logless_state(deserialized)
-                .map_err(|message| serde::de::Error::custom(message)))
+        Deserialize::deserialize(deserializer).and_then(|deserialized| {
+            T::from_logless_state(deserialized).map_err(|message| serde::de::Error::custom(message))
+        })
     }
 }
 
@@ -50,9 +50,9 @@ pub mod with_capacity {
         D: Deserializer<'de>,
         T: WithCapacity,
     {
-        Deserialize::deserialize(deserializer)
-            .and_then(|deserialized| T::from_with_capacity(deserialized)
-                .map_err(|message| serde::de::Error::custom(message)))
+        Deserialize::deserialize(deserializer).and_then(|deserialized| {
+            T::from_with_capacity(deserialized).map_err(|message| serde::de::Error::custom(message))
+        })
     }
 }
 
@@ -75,9 +75,10 @@ pub mod logless_with_capacity {
         D: Deserializer<'de>,
         T: LoglessWithCapacity,
     {
-        Deserialize::deserialize(deserializer)
-            .and_then(|deserialized| T::from_logless_with_capacity(deserialized)
-                .map_err(|message| serde::de::Error::custom(message)))
+        Deserialize::deserialize(deserializer).and_then(|deserialized| {
+            T::from_logless_with_capacity(deserialized)
+                .map_err(|message| serde::de::Error::custom(message))
+        })
     }
 }
 

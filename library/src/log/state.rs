@@ -23,7 +23,7 @@ pub struct StateLog<T> {
     /// The present state, easily accessible to read.
     present: T,
     /// The index of the nearest future state in `self.states`, if there is any.
-    /// 
+    ///
     /// Never larger than `self.states.len()`
     index: usize,
 }
@@ -275,16 +275,16 @@ mod test {
             logless_with_capacity: StateLog<char>,
         }
 
-        let mut log = StateLog::from('a');
-        log.push_present('b');
-        log.push_present('c');
-        log.backward_log().expect("in log");
+        let mut original = StateLog::from('a');
+        original.push_present('b');
+        original.push_present('c');
+        original.backward_log().expect("in log");
 
         let mut logs = Logs {
-            full: log.clone(),
-            logless: log.clone(),
-            full_with_capacity: log.clone(),
-            logless_with_capacity: log.clone(),
+            full: original.clone(),
+            logless: original.clone(),
+            full_with_capacity: original.clone(),
+            logless_with_capacity: original.clone(),
         };
 
         logs.full.reserve_exact(98);
@@ -300,37 +300,28 @@ mod test {
             logless_with_capacity,
         } = serde_json::from_str(&serialized).unwrap();
 
-        assert_eq!(full.len(), 2, "serialized: {serialized}");
-        assert_eq!(*full, 'b', "serialized: {serialized}");
-        assert!(
-            full.capacity() < 100,
-            "actual capacity: {}, serialized: {serialized}",
-            full.capacity()
-        );
+        let test = |log: &StateLog<char>, len, with_capacity| {
+            assert_eq!(
+                **log, 'b',
+                "before: {original:#?}\nserialized: {serialized}\nafter: {log:#?}"
+            );
+            assert_eq!(
+                log.len(),
+                len,
+                "before: {original:#?}\nserialized: {serialized}\nafter: {log:#?}"
+            );
+            assert_eq!(
+                log.capacity() >= 100,
+                with_capacity,
+                "before: {original:#?}\nserialized: {serialized}\nafter: {log:#?}\ncapacity: {}",
+                log.capacity()
+            );
+        };
 
-        assert_eq!(logless.len(), 0, "serialized: {serialized}");
-        assert_eq!(*logless, 'b', "serialized: {serialized}");
-        assert!(
-            logless.capacity() < 100,
-            "actual capacity: {}, serialized: {serialized}",
-            logless.capacity()
-        );
-
-        assert_eq!(full_with_capacity.len(), 2, "serialized: {serialized}");
-        assert_eq!(*full_with_capacity, 'b', "serialized: {serialized}");
-        assert!(
-            full_with_capacity.capacity() >= 100,
-            "actual capacity: {}, serialized: {serialized}",
-            full_with_capacity.capacity()
-        );
-
-        assert_eq!(logless_with_capacity.len(), 0, "serialized: {serialized}");
-        assert_eq!(*logless_with_capacity, 'b', "serialized: {serialized}");
-        assert!(
-            logless_with_capacity.capacity() >= 100,
-            "actual capacity: {}, serialized: {serialized}",
-            logless_with_capacity.capacity()
-        );
+        test(&full, 2, false);
+        test(&logless, 0, false);
+        test(&full_with_capacity, 2, true);
+        test(&logless_with_capacity, 0, true);
     }
 
     impl StateLog<(u8, RevFrame)> {
@@ -383,85 +374,76 @@ mod test {
             );
         }
         fn test_forward_log(&mut self, meta: &mut RevMeta, state: Result<u8, u8>) {
-            match state {
+            let before = self.clone();
+            let state = match state {
                 Ok(state) => {
                     meta.queue_log(RevFrame(meta.present_world_state().0 + 1))
                         .unwrap();
                     meta.update();
-                    let before = self.clone();
                     let result = self.forward_log();
                     assert_eq!(
                         result,
                         Ok(()),
                         "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_forward: {self:#?}",
                     );
-                    assert_eq!(
-                        **self,
-                        (state, meta.present_world_state()),
-                        "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_forward: {self:#?}",
-                    );
+                    state
                 }
                 Err(state) => {
-                    let before = self.clone();
                     let result = self.forward_log();
                     assert_eq!(
                         result,
                         Err(OutOfLog),
                         "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_forward: {self:#?}",
                     );
-                    assert_eq!(
-                        **self,
-                        (state, meta.present_world_state()),
-                        "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_forward: {self:#?}",
-                    );
+                    state
                 }
-            }
+            };
+            self.test_state(before, meta, state);
         }
         fn test_backward_log(&mut self, meta: &mut RevMeta, state: Result<u8, u8>) {
-            match state {
+            let before = self.clone();
+            let state = match state {
                 Ok(state) => {
                     meta.queue_log(RevFrame(meta.present_world_state().0 - 1))
                         .unwrap();
                     meta.update();
-                    let before = self.clone();
                     let result = self.backward_log();
                     assert_eq!(
                         result,
                         Ok(()),
                         "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_backward: {self:#?}",
                     );
-                    assert_eq!(
-                        **self,
-                        (state, meta.present_world_state()),
-                        "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_backward: {self:#?}",
-                    );
+                    state
                 }
                 Err(state) => {
-                    let before = self.clone();
                     let result = self.backward_log();
                     assert_eq!(
                         result,
                         Err(OutOfLog),
                         "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_backward: {self:#?}",
                     );
-                    assert_eq!(
-                        **self,
-                        (state, meta.present_world_state()),
-                        "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_backward: {self:#?}",
-                    );
+                    state
                 }
-            }
+            };
+            self.test_state(before, meta, state);
+        }
+        fn test_state(&self, before: Self, meta: &RevMeta, state: u8) {
+            assert_eq!(
+                **self,
+                (state, meta.present_world_state()),
+                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_backward: {self:#?}",
+            );
         }
         fn test_drain_future(&self, expected: impl IntoIterator<Item = (u8, usize)>) -> Self {
             let before = self.clone();
             let mut clone = self.clone();
-            let result: Vec<_> = clone.drain_future().collect();
+            let actual: Vec<_> = clone.drain_future().collect();
             let expected: Vec<_> = expected
                 .into_iter()
                 .map(|(state, frame)| (state, RevFrame(frame)))
                 .collect();
             assert_eq!(
-                result, expected,
+                actual, expected,
                 "\nbefore: {before:#?}\nafter_drain_future: {clone:#?}"
             );
             clone

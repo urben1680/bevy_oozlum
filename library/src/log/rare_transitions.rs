@@ -10,7 +10,7 @@ use crate::meta::RevMeta;
 
 use super::{
     doc_with_amount, impl_with_amount, AmountErr, EntryAmount, LogIter, LogMut, LoggedAt, NotUSize,
-    OutOfLog, RareTransitionLog, ValueEntry, WithAmount,
+    OutOfLog, RareTransitionLog, ValueEntry, WithAmountInternal,
 };
 
 #[doc = doc_with_amount!(struct)]
@@ -20,7 +20,7 @@ use super::{
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct RareTransitionsLog<T, U = (), const AMOUNT_BYTES: usize = 0>
 where
-    Self: WithAmount<Entry = U>,
+    Self: WithAmountInternal<Entry = U>,
 {
     amounts: RareTransitionLog<EntryAmount<Self>>,
     transitions: VecDeque<T>,
@@ -35,13 +35,13 @@ mod serde_with {
 
     use crate::log::serde_with::{LoglessWithCapacity, WithCapacity, WithCapacityWrapper};
 
-    use super::{EntryAmount, RareTransitionLog, RareTransitionsLog, WithAmount};
+    use super::{EntryAmount, RareTransitionLog, RareTransitionsLog, WithAmountInternal};
 
     impl<T, U, const AMOUNT_BYTES: usize> WithCapacity for RareTransitionsLog<T, U, AMOUNT_BYTES>
     where
         T: Serialize + for<'de> Deserialize<'de> + 'static,
         U: Serialize + for<'de> Deserialize<'de> + 'static,
-        Self: WithAmount<Entry = U>,
+        Self: WithAmountInternal<Entry = U>,
     {
         type Se<'se> = (
             <RareTransitionLog<EntryAmount<Self>> as WithCapacity>::Se<'se>,
@@ -61,28 +61,26 @@ mod serde_with {
             )
         }
         fn from_with_capacity(with_capacity: Self::De) -> Result<Self, String> {
-            RareTransitionLog::from_with_capacity(with_capacity.0)
-                .map(|amounts| Self {
-                    amounts,
-                    transitions: with_capacity.1 .0,
-                    index: with_capacity.2,
-                })
+            RareTransitionLog::from_with_capacity(with_capacity.0).map(|amounts| Self {
+                amounts,
+                transitions: with_capacity.1 .0,
+                index: with_capacity.2,
+            })
         }
     }
 
     impl<T, U, const AMOUNT_BYTES: usize> LoglessWithCapacity for RareTransitionsLog<T, U, AMOUNT_BYTES>
     where
-        Self: WithAmount<Entry = U>,
+        Self: WithAmountInternal<Entry = U>,
     {
         type Se<'se> = (usize, usize) where T: 'se, U: 'se;
         type De = (usize, usize);
         fn get_logless_with_capacity(&self) -> Self::Se<'_> {
-            (
-                self.log_capacity(),
-                self.transitions_capacity(),
-            )
+            (self.log_capacity(), self.transitions_capacity())
         }
-        fn from_logless_with_capacity((log_capacity, transitions_capacity): Self::De) -> Result<Self, String> {
+        fn from_logless_with_capacity(
+            (log_capacity, transitions_capacity): Self::De,
+        ) -> Result<Self, String> {
             Ok(Self::with_capacities(log_capacity, transitions_capacity))
         }
     }
@@ -90,9 +88,10 @@ mod serde_with {
 
 impl_with_amount!(RareTransitionsLog);
 
+#[doc = doc_with_amount!(impl)]
 impl<T, U, const AMOUNT_BYTES: usize> Default for RareTransitionsLog<T, U, AMOUNT_BYTES>
 where
-    Self: WithAmount<Entry = U>,
+    Self: WithAmountInternal<Entry = U>,
 {
     fn default() -> Self {
         Self::new()
@@ -103,7 +102,7 @@ where
 #[allow(private_bounds)]
 impl<T, U, const AMOUNT_BYTES: usize> RareTransitionsLog<T, U, AMOUNT_BYTES>
 where
-    Self: WithAmount<Entry = U>,
+    Self: WithAmountInternal<Entry = U>,
 {
     pub const fn new() -> Self {
         Self {
@@ -265,7 +264,7 @@ where
             self.amounts.push_present(None);
             return Ok(Some(entry));
         }
-        match <Self as WithAmount>::usize_to_amount(pushed_amount) {
+        match <Self as WithAmountInternal>::usize_to_amount(pushed_amount) {
             Ok(amount) => {
                 self.amounts
                     .push_present(Some(EntryAmount { entry, amount }));
@@ -274,12 +273,7 @@ where
             }
             Err(error) => {
                 let transitions = self.transitions.drain(previous_len..);
-                Err(AmountErr::new(
-                    transitions,
-                    entry,
-                    pushed_amount,
-                    error,
-                ))
+                Err(AmountErr::new(transitions, entry, pushed_amount, error))
             }
         }
     }
@@ -289,14 +283,14 @@ where
 #[allow(private_bounds)]
 impl<T, U, const AMOUNT_BYTES: usize> RareTransitionsLog<T, U, AMOUNT_BYTES>
 where
-    Self: WithAmount<Entry = U, Err = Infallible>,
+    Self: WithAmountInternal<Entry = U, Err = Infallible>,
 {
     pub fn push_present<Out: Into<U>>(&mut self, c: impl FnOnce(LogMut<T>) -> Out) -> Option<U> {
         // rust analyzer does not like `let Ok(ok) = result;` here
         // https://github.com/rust-lang/rust-analyzer/issues/18334
         match self.fallible_push_present(c) {
             Ok(ok) => ok,
-            Err(err) => match err._error {}
+            Err(err) => match err._error {},
         }
     }
 }
@@ -305,7 +299,7 @@ where
 #[allow(private_bounds)]
 impl<T, U, const AMOUNT_BYTES: usize> RareTransitionsLog<T, U, AMOUNT_BYTES>
 where
-    Self: WithAmount<Entry = U, Amount: NotUSize>,
+    Self: WithAmountInternal<Entry = U, Amount: NotUSize>,
 {
     pub fn try_push_present<Out: Into<U>>(
         &mut self,
@@ -319,7 +313,7 @@ where
 #[allow(private_bounds)]
 impl<T, U: LoggedAt, const AMOUNT_BYTES: usize> RareTransitionsLog<T, U, AMOUNT_BYTES>
 where
-    Self: WithAmount<Entry = U>,
+    Self: WithAmountInternal<Entry = U>,
 {
     pub fn pop_past_by_logged_at(
         &mut self,

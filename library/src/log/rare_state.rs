@@ -86,7 +86,10 @@ mod serde_with {
             (&self.present.value, self.states_capacity())
         }
         fn from_logless_with_capacity(logless_with_capacity: Self::De) -> Result<Self, String> {
-            Ok(Self::with_capacity(logless_with_capacity.0, logless_with_capacity.1))
+            Ok(Self::with_capacity(
+                logless_with_capacity.0,
+                logless_with_capacity.1,
+            ))
         }
     }
 }

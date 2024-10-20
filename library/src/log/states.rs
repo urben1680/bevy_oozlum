@@ -2,16 +2,16 @@ use std::{
     collections::{TryReserveError, VecDeque},
     convert::Infallible,
     fmt::Debug,
-    ops::Range,
+    ops::{Deref, Range},
 };
 
-use bevy::reflect::Reflect;
+use bevy::{prelude::default, reflect::Reflect};
 
 use crate::meta::RevMeta;
 
 use super::{
     doc_with_amount, impl_with_amount, AmountErr, EntryAmount, LogIter, LogMut, LoggedAt, NotUSize,
-    OutOfLog, StateLog, ValueEntry, WithAmount,
+    OutOfLog, StateLog, ValueEntry, WithAmountInternal,
 };
 
 #[doc = doc_with_amount!(struct)]
@@ -20,7 +20,7 @@ use super::{
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct StatesLog<T, U = (), const AMOUNT_BYTES: usize = 0>
 where
-    Self: WithAmount<Entry = U>,
+    Self: WithAmountInternal<Entry = U>,
 {
     amounts: StateLog<EntryAmount<Self>>,
     states: VecDeque<T>,
@@ -33,32 +33,35 @@ mod serde_with {
 
     use serde::{Deserialize, Serialize};
 
-    use crate::log::{serde_with::{
-        LoglessState, LoglessWithCapacity, WithCapacity, WithCapacityWrapper, WithRange,
-    }, PackedRevFrame};
+    use crate::log::{
+        serde_with::{
+            LoglessState, LoglessWithCapacity, WithCapacity, WithCapacityWrapper, WithRange,
+        },
+        PackedRevFrame,
+    };
 
-    use super::{EntryAmount, StateLog, StatesLog, WithAmount};
+    use super::{EntryAmount, StateLog, StatesLog, WithAmountInternal};
 
     impl<T, U, const AMOUNT_BYTES: usize> LoglessState for StatesLog<T, U, AMOUNT_BYTES>
     where
         T: Serialize + for<'de> Deserialize<'de> + 'static,
         U: Serialize + for<'de> Deserialize<'de> + 'static,
-        Self: WithAmount<Entry = U>,
+        Self: WithAmountInternal<Entry = U>,
     {
-        type Se<'se> = (WithRange<'se, T>, &'se U);
-        type De = (VecDeque<T>, U);
+        type Se<'se> = (&'se U, WithRange<'se, T>);
+        type De = (U, VecDeque<T>);
         fn get_logless_state(&self) -> Self::Se<'_> {
             let (range, entry) = self.get_range_entry();
             (
+                entry,
                 WithRange {
                     deque: &self.states,
                     range,
                 },
-                entry
             )
         }
-        fn from_logless_state(logless_state: Self::De) -> Result<Self, String> {
-            Self::fallible_new(logless_state.0, logless_state.1)
+        fn from_logless_state((entry, log): Self::De) -> Result<Self, String> {
+            Self::fallible_new(log, entry)
                 .map_err(|err| PackedRevFrame::from_serde_err(err.pushed_amount))
         }
     }
@@ -67,7 +70,7 @@ mod serde_with {
     where
         T: Serialize + for<'de> Deserialize<'de> + 'static,
         U: Serialize + for<'de> Deserialize<'de> + 'static,
-        Self: WithAmount<Entry = U>,
+        Self: WithAmountInternal<Entry = U>,
     {
         type Se<'se> = (
             <StateLog<EntryAmount<Self>> as WithCapacity>::Se<'se>,
@@ -81,20 +84,18 @@ mod serde_with {
         );
         fn get_with_capacity(&self) -> Self::Se<'_> {
             (
-                WithCapacity::get_with_capacity(&self.amounts),
+                self.amounts.get_with_capacity(),
                 WithCapacityWrapper(&self.states),
                 self.index,
             )
         }
-        fn from_with_capacity(with_capacity: Self::De) -> Result<Self, String> {
-            WithCapacity::from_with_capacity(with_capacity.0).map(|amounts| {
-                let states = with_capacity.1.0;
-                let index = with_capacity.2;
-                Self {
-                    amounts,
-                    states,
-                    index,
-                }
+        fn from_with_capacity(
+            (amounts, WithCapacityWrapper(states), index): Self::De,
+        ) -> Result<Self, String> {
+            WithCapacity::from_with_capacity(amounts).map(|amounts| Self {
+                amounts,
+                states,
+                index,
             })
         }
     }
@@ -103,18 +104,10 @@ mod serde_with {
     where
         T: Serialize + for<'de> Deserialize<'de> + 'static,
         U: Serialize + for<'de> Deserialize<'de> + 'static,
-        Self: WithAmount<Entry = U>,
+        Self: WithAmountInternal<Entry = U>,
     {
-        type Se<'se> = (
-            &'se U,
-            WithCapacityWrapper<WithRange<'se, T>>,
-            usize
-        );
-        type De = (
-            U,
-            WithCapacityWrapper<VecDeque<T>>,
-            usize
-        );
+        type Se<'se> = (&'se U, WithCapacityWrapper<WithRange<'se, T>>, usize);
+        type De = (U, WithCapacityWrapper<VecDeque<T>>, usize);
         fn get_logless_with_capacity(&self) -> Self::Se<'_> {
             let (range, entry) = self.get_range_entry();
             (
@@ -123,13 +116,14 @@ mod serde_with {
                     deque: &self.states,
                     range,
                 }),
-                self.log_capacity()
+                self.log_capacity(),
             )
         }
-        fn from_logless_with_capacity(logless_with_capacity: Self::De) -> Result<Self, String> {
-            let (entry, WithCapacityWrapper(log), log_capacity) = logless_with_capacity;
-            let states_capacity = log.capacity();
-            Self::fallible_with_capacities(log, entry, states_capacity, log_capacity)
+        fn from_logless_with_capacity(
+            (entry, WithCapacityWrapper(states), log_capacity): Self::De,
+        ) -> Result<Self, String> {
+            let states_capacity = states.capacity();
+            Self::fallible_with_capacities(states, entry, states_capacity, log_capacity)
                 .map_err(|err| PackedRevFrame::from_serde_err(err.pushed_amount))
         }
     }
@@ -137,12 +131,44 @@ mod serde_with {
 
 impl_with_amount!(StatesLog);
 
+#[doc = doc_with_amount!(impl)]
 impl<T, U: Default, const AMOUNT_BYTES: usize> Default for StatesLog<T, U, AMOUNT_BYTES>
 where
-    Self: WithAmount<Entry = U>,
+    Self: WithAmountInternal<Entry = U>,
 {
     fn default() -> Self {
-        Self::new_empty(U::default())
+        Self::new_empty(default())
+    }
+}
+
+#[doc = doc_with_amount!(impl)]
+impl<T, U, const AMOUNT_BYTES: usize> From<U> for StatesLog<T, U, AMOUNT_BYTES>
+where
+    Self: WithAmountInternal<Entry = U>,
+{
+    fn from(entry: U) -> Self {
+        Self::new_empty(entry)
+    }
+}
+
+#[doc = doc_with_amount!(impl where Infallible)]
+impl<T, U: Default, const AMOUNT_BYTES: usize> FromIterator<T> for StatesLog<T, U, AMOUNT_BYTES>
+where
+    Self: WithAmountInternal<Entry = U, Err = Infallible>,
+{
+    fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
+        Self::new(iter, default())
+    }
+}
+
+#[doc = doc_with_amount!(impl)]
+impl<T, U, const AMOUNT_BYTES: usize> Deref for StatesLog<T, U, AMOUNT_BYTES>
+where
+    Self: WithAmountInternal<Entry = U>,
+{
+    type Target = U;
+    fn deref(&self) -> &Self::Target {
+        &self.amounts.entry
     }
 }
 
@@ -150,7 +176,7 @@ where
 #[allow(private_bounds)]
 impl<T, U, const AMOUNT_BYTES: usize> StatesLog<T, U, AMOUNT_BYTES>
 where
-    Self: WithAmount<Entry = U>,
+    Self: WithAmountInternal<Entry = U>,
 {
     pub fn new_empty(entry: U) -> Self {
         Self {
@@ -261,7 +287,7 @@ where
         self.states.clear();
         let entry_amount = EntryAmount {
             entry,
-            amount: <Self as WithAmount>::MIN,
+            amount: <Self as WithAmountInternal>::MIN,
         };
         self.amounts.clear_with(entry_amount);
         self.index = 0;
@@ -312,11 +338,11 @@ where
     ) -> Result<Self, AmountErr<VecDeque<T>, Self>> {
         let states = VecDeque::from_iter(iter);
         let pushed_amount = states.len();
-        match <Self as WithAmount>::usize_to_amount(pushed_amount) {
+        match <Self as WithAmountInternal>::usize_to_amount(pushed_amount) {
             Ok(amount) => Ok(Self {
                 amounts: StateLog::new(EntryAmount { entry, amount }),
                 states,
-                index: 0,
+                index: pushed_amount,
             }),
             Err(error) => Err(AmountErr::new(states, entry, pushed_amount, error)),
         }
@@ -330,11 +356,11 @@ where
         let mut states = VecDeque::with_capacity(states_capacity);
         states.extend(iter);
         let pushed_amount = states.len();
-        match <Self as WithAmount>::usize_to_amount(pushed_amount) {
+        match <Self as WithAmountInternal>::usize_to_amount(pushed_amount) {
             Ok(amount) => Ok(Self {
                 amounts: StateLog::with_capacity(EntryAmount { entry, amount }, log_capacity),
                 states,
-                index: 0,
+                index: pushed_amount,
             }),
             Err(error) => Err(AmountErr::new(states, entry, pushed_amount, error)),
         }
@@ -346,7 +372,7 @@ where
         self.states.truncate(self.index);
         let entry = c(LogMut(&mut self.states)).into();
         let pushed_amount = self.states.len() - self.index;
-        match <Self as WithAmount>::usize_to_amount(pushed_amount) {
+        match <Self as WithAmountInternal>::usize_to_amount(pushed_amount) {
             Ok(amount) => {
                 self.index = self.states.len();
                 self.amounts.push_present(EntryAmount { entry, amount });
@@ -365,7 +391,7 @@ where
     ) -> Result<(), AmountErr<VecDeque<T>, Self>> {
         let mut states = VecDeque::from_iter(iter);
         let pushed_amount = states.len();
-        match <Self as WithAmount>::usize_to_amount(pushed_amount) {
+        match <Self as WithAmountInternal>::usize_to_amount(pushed_amount) {
             Ok(amount) => {
                 self.states.clear();
                 self.states.append(&mut states);
@@ -382,14 +408,14 @@ where
 #[allow(private_bounds)]
 impl<T, U, const AMOUNT_BYTES: usize> StatesLog<T, U, AMOUNT_BYTES>
 where
-    Self: WithAmount<Entry = U, Err = Infallible>,
+    Self: WithAmountInternal<Entry = U, Err = Infallible>,
 {
     pub fn new(iter: impl IntoIterator<Item = T>, entry: U) -> Self {
         // rust analyzer does not like `let Ok(ok) = result;` here
         // https://github.com/rust-lang/rust-analyzer/issues/18334
         match Self::fallible_new(iter, entry) {
             Ok(ok) => ok,
-            Err(err) => match err._error {}
+            Err(err) => match err._error {},
         }
     }
     pub fn with_capacities(
@@ -402,7 +428,7 @@ where
         // https://github.com/rust-lang/rust-analyzer/issues/18334
         match Self::fallible_with_capacities(iter, entry, states_capacity, log_capacity) {
             Ok(ok) => ok,
-            Err(err) => match err._error {}
+            Err(err) => match err._error {},
         }
     }
     pub fn push_present<Out: Into<U>>(&mut self, c: impl FnOnce(LogMut<T>) -> Out) {
@@ -410,7 +436,7 @@ where
         // https://github.com/rust-lang/rust-analyzer/issues/18334
         match self.fallible_push_present(c) {
             Ok(()) => (),
-            Err(err) => match err._error {}
+            Err(err) => match err._error {},
         }
     }
     pub fn clear_with(&mut self, iter: impl IntoIterator<Item = T>, entry: U) {
@@ -418,7 +444,7 @@ where
         // https://github.com/rust-lang/rust-analyzer/issues/18334
         match self.fallible_clear_with(iter, entry) {
             Ok(()) => (),
-            Err(err) => match err._error {}
+            Err(err) => match err._error {},
         }
     }
 }
@@ -427,7 +453,7 @@ where
 #[allow(private_bounds)]
 impl<T, U, const AMOUNT_BYTES: usize> StatesLog<T, U, AMOUNT_BYTES>
 where
-    Self: WithAmount<Entry = U, Amount: NotUSize>,
+    Self: WithAmountInternal<Entry = U, Amount: NotUSize>,
 {
     pub fn try_new(
         iter: impl IntoIterator<Item = T>,
@@ -462,7 +488,7 @@ where
 #[allow(private_bounds)]
 impl<T, U: LoggedAt, const AMOUNT_BYTES: usize> StatesLog<T, U, AMOUNT_BYTES>
 where
-    Self: WithAmount<Entry = U>,
+    Self: WithAmountInternal<Entry = U>,
 {
     pub fn pop_past_by_logged_at(
         &mut self,
@@ -485,442 +511,398 @@ where
 
 #[cfg(test)]
 mod test {
-    use std::{borrow::Borrow, num::NonZeroUsize};
+    use std::num::NonZeroUsize;
+
+    use serde::{Deserialize, Serialize};
 
     use super::*;
 
-    use crate::{log::LoggedAt, meta::RevMeta, RevFrame};
-    /*
-    #[derive(Clone, Debug)]
-    struct MetaAndLogs {
-        meta: RevMeta,
-        with_timestamp: [StatesLog<usize, LoggedAt, 1>; 2],
-        one_per_frame: [StatesLog<usize, (), 1>; 2],
-    }
+    use crate::{log::test::ForwardStrategy, meta::RevMeta, RevFrame};
 
-    fn collect(iter: impl IntoIterator<Item: Borrow<usize>>) -> Vec<usize> {
-        iter.into_iter().map(|val| val.borrow().clone()).collect()
-    }
-
-    impl MetaAndLogs {
-        fn new<const N: usize>(present: [usize; N], max_len: Option<NonZeroUsize>) -> Self {
-            let meta = RevMeta::new(max_len, 0, false);
-            let with_timestamp = StatesLog::try_new(present, meta.with_logged_at(())).unwrap();
-            let one_per_frame = StatesLog::try_new(present, ()).unwrap();
-            Self {
-                meta: RevMeta::new(max_len, 0, false),
-                with_timestamp: [with_timestamp.clone(), with_timestamp],
-                one_per_frame: [one_per_frame.clone(), one_per_frame],
-            }
+    #[test]
+    fn serde_with() {
+        #[derive(Serialize, Deserialize)]
+        struct Logs {
+            full: StatesLog<char, u8>,
+            #[serde(with = "crate::log::logless_state")]
+            logless: StatesLog<char, u8>,
+            #[serde(with = "crate::log::with_capacity")]
+            full_with_capacity: StatesLog<char, u8>,
+            #[serde(with = "crate::log::logless_with_capacity")]
+            logless_with_capacity: StatesLog<char, u8>,
         }
-        fn forward<const N: usize>(
+
+        let mut original = StatesLog::new(['a', 'b'], 1);
+        original.push_present(|mut log| {
+            log.extend(['c', 'd']);
+            2
+        });
+        original.push_present(|mut log| {
+            log.extend(['e', 'f']);
+            3
+        });
+        original.backward_log().expect("in log");
+
+        let mut logs = Logs {
+            full: original.clone(),
+            logless: original.clone(),
+            full_with_capacity: original.clone(),
+            logless_with_capacity: original.clone(),
+        };
+
+        logs.full.log_reserve_exact(98);
+        logs.logless.log_reserve_exact(98);
+        logs.full_with_capacity.log_reserve_exact(98);
+        logs.logless_with_capacity.log_reserve_exact(98);
+
+        logs.full.states_reserve_exact(194);
+        logs.logless.states_reserve_exact(194);
+        logs.full_with_capacity.states_reserve_exact(194);
+        logs.logless_with_capacity.states_reserve_exact(194);
+
+        let serialized = serde_json::to_string_pretty(&logs).unwrap();
+        let Logs {
+            full,
+            logless,
+            full_with_capacity,
+            logless_with_capacity,
+        } = serde_json::from_str(&serialized).unwrap();
+
+        let test = |log: &StatesLog<char, u8>, log_len, states_len, with_capacity| {
+            let (states, entry) = log.get();
+            let states: Vec<_> = states.cloned().collect();
+
+            assert_eq!(
+                states,
+                vec!['c', 'd'],
+                "before: {original:#?}\nserialized: {serialized}\nafter: {log:#?}"
+            );
+            assert_eq!(
+                *entry, 2,
+                "before: {original:#?}\nserialized: {serialized}\nafter: {log:#?}"
+            );
+            assert_eq!(
+                log.log_len(),
+                log_len,
+                "before: {original:#?}\nserialized: {serialized}\nafter: {log:#?}"
+            );
+            assert_eq!(
+                log.states_len(),
+                states_len,
+                "before: {original:#?}\nserialized: {serialized}\nafter: {log:#?}"
+            );
+            assert_eq!(
+                log.log_capacity() >= 100,
+                with_capacity,
+                "before: {original:#?}\nserialized: {serialized}\nafter: {log:#?}\ncapacity: {}",
+                log.log_capacity()
+            );
+            assert_eq!(
+                log.states_capacity() >= 200,
+                with_capacity,
+                "before: {original:#?}\nserialized: {serialized}\nafter: {log:#?}\ncapacity: {}",
+                log.states_capacity()
+            );
+        };
+
+        test(&full, 2, 6, false);
+        test(&logless, 0, 2, false);
+        test(&full_with_capacity, 2, 6, true);
+        test(&logless_with_capacity, 0, 2, true);
+    }
+
+    impl StatesLog<u8, RevFrame, 1> {
+        fn test_forward(
             &mut self,
-            states: Result<[usize; N], [usize; N]>,
+            meta: &mut RevMeta,
+            strategy: ForwardStrategy,
+            push: Result<[u8; 2], [u8; 256]>,
             expected_log_len: usize,
+            expected_states_len: usize,
+            popped: Option<([u8; 2], usize)>,
         ) {
-            let previous = self.clone();
-
-            self.meta.queue_forward();
-            self.meta.update();
-
-            let (states, expected_ok) = match states {
-                Ok(states) => (states, true),
-                Err(states) => (states, false),
+            let before = self.clone();
+            match push {
+                Ok(push) => {
+                    meta.queue_forward();
+                    meta.update();
+                    let result = self.try_push_present(|mut log| {
+                        log.extend(push.clone());
+                        meta.present_world_state()
+                    });
+                    let is_ok = result.is_ok();
+                    drop(result);
+                    let after_push = self.clone();
+                    assert!(
+                        is_ok,
+                        "\nstrategy: {strategy:?}\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
+                    );
+                    let (actual_states, actual_entry) = match strategy {
+                        ForwardStrategy::PopPastByLen => self
+                            .pop_past_by_len(meta.past_world_states())
+                            .map(|value_entry| {
+                                (
+                                    value_entry.value.collect::<Vec<u8>>(),
+                                    usize::from(value_entry.entry),
+                                )
+                            })
+                            .unzip(),
+                        ForwardStrategy::PopPastByLoggedAt => self
+                            .pop_past_by_logged_at(meta)
+                            .map(|value_entry| {
+                                (
+                                    value_entry.value.collect::<Vec<u8>>(),
+                                    usize::from(value_entry.entry),
+                                )
+                            })
+                            .unzip(),
+                        ForwardStrategy::DrainPastByLen | ForwardStrategy::DrainPastByLoggedAt => {
+                            let actual_states: Vec<u8> = match strategy {
+                                ForwardStrategy::DrainPastByLen => {
+                                    self.drain_past_by_len(meta.past_world_states()).collect()
+                                }
+                                ForwardStrategy::DrainPastByLoggedAt => {
+                                    self.truncate_future_drain_past_by_logged_at(meta).collect()
+                                }
+                                _ => unreachable!(),
+                            };
+                            ((!actual_states.is_empty()).then_some(actual_states), None)
+                        }
+                    };
+                    let (popped_states, popped_entry) = popped.unzip();
+                    assert_eq!(
+                        actual_states.unwrap_or_default(),
+                        popped_states.map(|popped| Vec::from_iter(popped)).unwrap_or_default(),
+                        "\nstrategy: {strategy:?}\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
+                    );
+                    if matches!(
+                        strategy,
+                        ForwardStrategy::PopPastByLen | ForwardStrategy::PopPastByLoggedAt
+                    ) {
+                        assert_eq!(
+                            actual_entry, popped_entry,
+                            "\nstrategy: {strategy:?}\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
+                        );
+                    }
+                    assert_eq!(
+                        self.log_len(),
+                        expected_log_len,
+                        "\nstrategy: {strategy:?}\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
+                    );
+                    assert_eq!(
+                        self.states_len(),
+                        expected_states_len,
+                        "\nstrategy: {strategy:?}\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
+                    );
+                    self.test_states(before, meta, push);
+                }
+                Err(push) => {
+                    let result = self.try_push_present(|mut log| {
+                        log.extend(push.clone());
+                        meta.present_world_state().wrapping_add(1)
+                    });
+                    let result = result.map_err(
+                        |AmountErr {
+                             values,
+                             entry,
+                             pushed_amount,
+                             max_amount,
+                             _error,
+                         }| AmountErr::<Vec<u8>, Self> {
+                            values: Vec::from_iter(values),
+                            entry,
+                            pushed_amount,
+                            max_amount,
+                            _error,
+                        },
+                    );
+                    match result {
+                        Ok(()) => {
+                            panic!("\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {self:#?}")
+                        }
+                        Err(AmountErr {
+                            values,
+                            pushed_amount,
+                            max_amount,
+                            ..
+                        }) => {
+                            assert_eq!(
+                                values, push,
+                                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {self:#?}",
+                            );
+                            assert_eq!(
+                                pushed_amount, 256,
+                                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {self:#?}",
+                            );
+                            assert_eq!(
+                                max_amount, 255,
+                                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {self:#?}",
+                            );
+                            assert_eq!(
+                                self.log_len(),
+                                expected_log_len,
+                                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {self:#?}",
+                            );
+                            assert_eq!(
+                                self.states_len(),
+                                expected_states_len,
+                                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {self:#?}",
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        fn test_forward_log(&mut self, meta: &mut RevMeta, states: Result<[u8; 2], [u8; 2]>) {
+            let before = self.clone();
+            let states = match states {
+                Ok(states) => {
+                    meta.queue_log(RevFrame(meta.present_world_state().0 + 1))
+                        .unwrap();
+                    meta.update();
+                    let result = self.forward_log();
+                    assert_eq!(
+                        result,
+                        Ok(()),
+                        "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_forward: {self:#?}",
+                    );
+                    states
+                }
+                Err(states) => {
+                    let result = self.forward_log();
+                    assert_eq!(
+                        result,
+                        Err(OutOfLog),
+                        "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_forward: {self:#?}",
+                    );
+                    states
+                }
             };
-
-            let is_ok = self.with_timestamp[0]
-                .try_push_present(|mut log| {
-                    log.extend(states);
-                    self.meta.with_logged_at(())
-                })
-                .is_ok();
-            let middle = self.with_timestamp[0].clone();
-            self.with_timestamp[0].pop_past_by_timestamp(*self.meta.log_range().start());
-            assert_eq!(
-                is_ok, expected_ok,
-                "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
-                self.meta, previous.with_timestamp[0], self.with_timestamp[0]
-            );
-            assert_eq!(
-                self.with_timestamp[0].log_len(),
-                expected_log_len,
-                "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
-                self.meta,
-                previous.with_timestamp[0],
-                self.with_timestamp[0]
-            );
-            if expected_ok {
-                assert_eq!(
-                    collect(self.with_timestamp[0].get().0),
-                    collect(states),
-                    "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
-                    self.meta,
-                    previous.with_timestamp[0],
-                    self.with_timestamp[0]
-                );
-            }
-
-            let is_ok = self.with_timestamp[1]
-                .try_push_present(|mut log| {
-                    log.extend(states);
-                    self.meta.with_logged_at(())
-                })
-                .is_ok();
-            let middle = self.with_timestamp[1].clone();
-            let _ = self.with_timestamp[1].drain_past_by_timestamp(*self.meta.log_range().start());
-            assert_eq!(
-                is_ok, expected_ok,
-                "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
-                self.meta, previous.with_timestamp[1], self.with_timestamp[1]
-            );
-            assert_eq!(
-                self.with_timestamp[1].log_len(),
-                expected_log_len,
-                "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
-                self.meta,
-                previous.with_timestamp[1],
-                self.with_timestamp[1]
-            );
-            if expected_ok {
-                assert_eq!(
-                    collect(self.with_timestamp[1].get().0),
-                    collect(states),
-                    "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
-                    self.meta,
-                    previous.with_timestamp[1],
-                    self.with_timestamp[1]
-                );
-            }
-
-            let is_ok = self.one_per_frame[0]
-                .try_push_present(|mut log| log.extend(states))
-                .is_ok();
-            let middle = self.one_per_frame[0].clone();
-            self.one_per_frame[0].pop_past_by_len(self.meta.past_world_states());
-            assert_eq!(
-                is_ok, expected_ok,
-                "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
-                self.meta, previous.one_per_frame[0], self.one_per_frame[0]
-            );
-            assert_eq!(
-                self.one_per_frame[0].log_len(),
-                expected_log_len,
-                "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
-                self.meta,
-                previous.one_per_frame[0],
-                self.one_per_frame[0]
-            );
-            if expected_ok {
-                assert_eq!(
-                    collect(self.one_per_frame[0].get().0),
-                    collect(states),
-                    "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
-                    self.meta,
-                    previous.one_per_frame[0],
-                    self.one_per_frame[0]
-                );
-            }
-
-            let is_ok = self.one_per_frame[1]
-                .try_push_present(|mut log| log.extend(states))
-                .is_ok();
-            let middle = self.one_per_frame[1].clone();
-            let _ = self.one_per_frame[1].drain_past_by_len(self.meta.past_world_states());
-            assert_eq!(
-                is_ok, expected_ok,
-                "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
-                self.meta, previous.one_per_frame[1], self.one_per_frame[1]
-            );
-            assert_eq!(
-                self.one_per_frame[1].log_len(),
-                expected_log_len,
-                "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
-                self.meta,
-                previous.one_per_frame[1],
-                self.one_per_frame[1]
-            );
-            if expected_ok {
-                assert_eq!(
-                    collect(self.one_per_frame[1].get().0),
-                    collect(states),
-                    "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
-                    self.meta,
-                    previous.one_per_frame[1],
-                    self.one_per_frame[1]
-                );
-            }
+            self.test_states(before, meta, states);
         }
-        fn backward_log<const N: usize>(
-            &mut self,
-            expected_states: Result<[usize; N], [OutOfLog; N]>,
-        ) {
-            let previous = self.clone();
-
-            match expected_states {
-                Ok(expected_states) => {
-                    let expected_states = collect(expected_states);
-                    assert!(
-                        self.meta
-                            .queue_log(self.meta.present_world_state() - 1)
-                            .is_ok(),
-                        "\npreviously: {previous:?}\nnow: {self:?}"
-                    );
-                    self.meta.update();
-
+        fn test_backward_log(&mut self, meta: &mut RevMeta, states: Result<[u8; 2], [u8; 2]>) {
+            let before = self.clone();
+            let states = match states {
+                Ok(states) => {
+                    meta.queue_log(RevFrame(meta.present_world_state().0 - 1))
+                        .unwrap();
+                    meta.update();
+                    let result = self.backward_log();
                     assert_eq!(
-                        self.with_timestamp[0].backward_log(),
+                        result,
                         Ok(()),
-                        "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                        self.meta,
-                        previous.with_timestamp[0],
-                        self.with_timestamp[0]
+                        "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_backward: {self:#?}",
                     );
-                    assert_eq!(
-                        collect(self.with_timestamp[0].get().0),
-                        expected_states,
-                        "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                        self.meta,
-                        previous.with_timestamp[0],
-                        self.with_timestamp[0]
-                    );
-
-                    assert_eq!(
-                        self.with_timestamp[1].backward_log(),
-                        Ok(()),
-                        "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                        self.meta,
-                        previous.with_timestamp[1],
-                        self.with_timestamp[1]
-                    );
-                    assert_eq!(
-                        collect(self.with_timestamp[1].get().0),
-                        expected_states,
-                        "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                        self.meta,
-                        previous.with_timestamp[1],
-                        self.with_timestamp[1]
-                    );
-
-                    assert_eq!(
-                        self.one_per_frame[0].backward_log(),
-                        Ok(()),
-                        "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                        self.meta,
-                        previous.one_per_frame[0],
-                        self.one_per_frame[0]
-                    );
-                    assert_eq!(
-                        collect(self.one_per_frame[0].get().0),
-                        expected_states,
-                        "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                        self.meta,
-                        previous.one_per_frame[0],
-                        self.one_per_frame[0]
-                    );
-
-                    assert_eq!(
-                        self.one_per_frame[1].backward_log(),
-                        Ok(()),
-                        "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                        self.meta,
-                        previous.one_per_frame[1],
-                        self.one_per_frame[1]
-                    );
-                    assert_eq!(
-                        collect(self.one_per_frame[1].get().0),
-                        expected_states,
-                        "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                        self.meta,
-                        previous.one_per_frame[1],
-                        self.one_per_frame[1]
-                    );
+                    states
                 }
-                Err(_) => {
+                Err(states) => {
+                    let result = self.backward_log();
                     assert_eq!(
-                        self.with_timestamp[0].backward_log(),
+                        result,
                         Err(OutOfLog),
-                        "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                        self.meta,
-                        previous.with_timestamp[0],
-                        self.with_timestamp[0]
+                        "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_backward: {self:#?}",
                     );
-                    assert_eq!(
-                        self.with_timestamp[1].backward_log(),
-                        Err(OutOfLog),
-                        "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                        self.meta,
-                        previous.with_timestamp[1],
-                        self.with_timestamp[1]
-                    );
-                    assert_eq!(
-                        self.one_per_frame[0].backward_log(),
-                        Err(OutOfLog),
-                        "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                        self.meta,
-                        previous.one_per_frame[0],
-                        self.one_per_frame[0]
-                    );
-                    assert_eq!(
-                        self.one_per_frame[1].backward_log(),
-                        Err(OutOfLog),
-                        "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                        self.meta,
-                        previous.one_per_frame[1],
-                        self.one_per_frame[1]
-                    );
+                    states
                 }
-            }
+            };
+            self.test_states(before, meta, states);
         }
-        fn forward_log<const N: usize>(
-            &mut self,
-            expected_states: Result<[usize; N], [OutOfLog; N]>,
-        ) {
-            let previous = self.clone();
-            match expected_states {
-                Ok(expected_states) => {
-                    let expected_states = collect(expected_states);
-                    assert!(
-                        self.meta
-                            .queue_log(self.meta.present_world_state() + 1)
-                            .is_ok(),
-                        "\npreviously: {previous:?}\nnow: {self:?}"
-                    );
-                    self.meta.update();
-
-                    assert_eq!(
-                        self.with_timestamp[0].forward_log(),
-                        Ok(()),
-                        "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                        self.meta,
-                        previous.with_timestamp[0],
-                        self.with_timestamp[0]
-                    );
-                    assert_eq!(
-                        collect(self.with_timestamp[0].get().0),
-                        expected_states,
-                        "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                        self.meta,
-                        previous.with_timestamp[0],
-                        self.with_timestamp[0]
-                    );
-
-                    assert_eq!(
-                        self.with_timestamp[1].forward_log(),
-                        Ok(()),
-                        "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                        self.meta,
-                        previous.with_timestamp[1],
-                        self.with_timestamp[1]
-                    );
-                    assert_eq!(
-                        collect(self.with_timestamp[1].get().0),
-                        expected_states,
-                        "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                        self.meta,
-                        previous.with_timestamp[1],
-                        self.with_timestamp[1]
-                    );
-
-                    assert_eq!(
-                        self.one_per_frame[0].forward_log(),
-                        Ok(()),
-                        "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                        self.meta,
-                        previous.one_per_frame[0],
-                        self.one_per_frame[0]
-                    );
-                    assert_eq!(
-                        collect(self.one_per_frame[0].get().0),
-                        expected_states,
-                        "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                        self.meta,
-                        previous.one_per_frame[0],
-                        self.one_per_frame[0]
-                    );
-
-                    assert_eq!(
-                        self.one_per_frame[1].forward_log(),
-                        Ok(()),
-                        "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                        self.meta,
-                        previous.one_per_frame[1],
-                        self.one_per_frame[1]
-                    );
-                    assert_eq!(
-                        collect(self.one_per_frame[1].get().0),
-                        expected_states,
-                        "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                        self.meta,
-                        previous.one_per_frame[1],
-                        self.one_per_frame[1]
-                    );
-                }
-                Err(_) => {
-                    assert_eq!(
-                        self.with_timestamp[0].forward_log(),
-                        Err(OutOfLog),
-                        "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                        self.meta,
-                        previous.with_timestamp[0],
-                        self.with_timestamp[0]
-                    );
-                    assert_eq!(
-                        self.with_timestamp[1].forward_log(),
-                        Err(OutOfLog),
-                        "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                        self.meta,
-                        previous.with_timestamp[1],
-                        self.with_timestamp[1]
-                    );
-                    assert_eq!(
-                        self.one_per_frame[0].forward_log(),
-                        Err(OutOfLog),
-                        "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                        self.meta,
-                        previous.one_per_frame[0],
-                        self.one_per_frame[0]
-                    );
-                    assert_eq!(
-                        self.one_per_frame[1].forward_log(),
-                        Err(OutOfLog),
-                        "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                        self.meta,
-                        previous.one_per_frame[1],
-                        self.one_per_frame[1]
-                    );
-                }
-            }
+        fn test_states(&self, before: Self, meta: &RevMeta, states: [u8; 2]) {
+            let (actual_states, entry) = self.get();
+            let actual_states: Vec<u8> = actual_states.cloned().collect();
+            assert_eq!(
+                actual_states, states,
+                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_forward: {self:#?}",
+            );
+            assert_eq!(
+                *entry,
+                meta.present_world_state(),
+                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_forward: {self:#?}",
+            );
+        }
+        fn test_drain_future(
+            &self,
+            expected: impl IntoIterator<Item = ([u8; 2], usize)>,
+            expected_log_len: usize,
+            expected_states_len: usize,
+        ) -> Self {
+            let before = self.clone();
+            let mut clone = self.clone();
+            let (mut states, entries) = clone.drain_future();
+            let actual: Vec<_> = entries
+                .map(|entry| {
+                    // todo: Iterator::next_chunk
+                    let states = match states.next() {
+                        Some(a) => match states.next() {
+                            Some(b) => vec![a, b],
+                            None => vec![a],
+                        },
+                        None => vec![],
+                    };
+                    (states, usize::from(entry))
+                })
+                .collect();
+            let expected: Vec<_> = expected
+                .into_iter()
+                .map(|(states, entry)| {
+                    let states = Vec::from_iter(states);
+                    (states, entry)
+                })
+                .collect();
+            drop(states);
+            assert_eq!(
+                actual, expected,
+                "\nbefore: {before:#?}\nafter_drain_future: {clone:#?}"
+            );
+            assert_eq!(
+                clone.log_len(),
+                expected_log_len,
+                "\nbefore: {before:#?}\nafter_drain_future: {clone:#?}"
+            );
+            assert_eq!(
+                clone.states_len(),
+                expected_states_len,
+                "\nbefore: {before:#?}\nafter_drain_future: {clone:#?}"
+            );
+            clone
         }
     }
 
     #[test]
-    fn test() {
-        let mut meta_and_logs = MetaAndLogs::new([], NonZeroUsize::new(3));
+    fn push_and_log_traversal() {
+        for strategy in ForwardStrategy::VARIANTS {
+            let meta = &mut RevMeta::new(NonZeroUsize::new(3), 0, false);
+            let mut log = StatesLog::try_new([0, 0], meta.present_world_state()).unwrap();
 
-        meta_and_logs.forward(Ok([1; 1]), 1);
-        meta_and_logs.forward(Ok([2; 2]), 2);
-        // pop_front called internally
-        meta_and_logs.forward(Ok([3; 3]), 2);
+            log.test_forward(meta, strategy, Ok([1, 1]), 1, 4, None);
+            log.test_forward(meta, strategy, Ok([2, 2]), 2, 6, None);
+            // shortened log
+            log.test_forward(meta, strategy, Ok([3, 3]), 2, 6, Some(([0, 0], 0)));
 
-        meta_and_logs.backward_log(Ok([2; 2]));
-        meta_and_logs.backward_log(Ok([1; 1]));
-        // out of log, no mutations happend to both meta and log here
-        meta_and_logs.backward_log(Err([OutOfLog]));
+            log.test_backward_log(meta, Ok([2, 2]));
+            log.test_backward_log(meta, Ok([1, 1]));
+            // out of log, no mutations happend to both meta and log here
+            log.test_backward_log(meta, Err([1, 1]));
 
-        meta_and_logs.forward_log(Ok([2; 2]));
-        meta_and_logs.forward_log(Ok([3; 3]));
-        // nothing ever logged past 8, no mutations happend to both meta and log here
-        meta_and_logs.forward_log(Err([OutOfLog]));
+            log.test_forward_log(meta, Ok([2, 2]));
+            log.test_forward_log(meta, Ok([3, 3]));
+            // out of log, no mutations happend to both meta and log here
+            log.test_forward_log(meta, Err([3, 3]));
 
-        meta_and_logs.backward_log(Ok([2; 2]));
-        meta_and_logs.backward_log(Ok([1; 1]));
-        // all entries are truncated as they are in the future, the new logged entry increases len to 1
-        meta_and_logs.forward(Ok([4; 4]), 1);
+            log.test_backward_log(meta, Ok([2, 2]));
+            log.test_backward_log(meta, Ok([1, 1]));
 
-        // amount of states is stored as u8, cannot store more than 255 states per push
-        meta_and_logs.forward(Err([256; 256]), 1);
+            let clone = log.test_drain_future([([2, 2], 2), ([3, 3], 3)], 0, 2);
+
+            for mut log in [log, clone] {
+                // all entries are truncated as they are in the future
+                log.test_forward(meta, strategy, Ok([4, 4]), 1, 4, None);
+
+                // storing too many states fails
+                log.test_forward(meta, strategy, Err([0; 256]), 1, 4, None);
+            }
+        }
     }
-    */
 
     #[allow(dead_code)]
     fn impls_reflect() {
