@@ -185,12 +185,10 @@ where
             .pop_past()
             .map(|entry_amount| self.drain_past_by_amount(entry_amount))
     }
-    pub fn drain_future(&mut self) -> (impl LogIter<T>, impl LogIter<U>) {
+    pub fn drain_future(&mut self) -> (impl LogIter<T>, impl LogIter<EntryAmount<Self>>) {
         (
             self.transitions.drain(self.index..),
-            self.amounts
-                .drain_future()
-                .map(|entry_amount| entry_amount.entry),
+            self.amounts.drain_future(),
         )
     }
     pub fn clear(&mut self) {
@@ -273,7 +271,12 @@ where
             }
             Err(error) => {
                 let transitions = self.transitions.drain(previous_len..);
-                Err(AmountErr::new(transitions, entry, pushed_amount, error))
+                Err(AmountErr {
+                    values: transitions,
+                    entry,
+                    pushed_amount,
+                    _error: error,
+                })
             }
         }
     }
