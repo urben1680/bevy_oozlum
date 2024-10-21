@@ -227,7 +227,7 @@ methods on log that takes &mut RevMeta and...
 */
 
 use std::{
-    collections::{vec_deque::Drain, TryReserveError, VecDeque},
+    collections::{TryReserveError, VecDeque},
     fmt::Debug,
     iter::FusedIterator,
     ops::Deref,
@@ -477,7 +477,6 @@ pub struct AmountErr<I, Log: WithAmount> {
     pub values: I,
     pub entry: Log::Entry,
     pub pushed_amount: usize,
-    pub max_amount: usize,
     // () or Infallible, enabling `let Ok(ok) = result;` syntax
     // https://github.com/rust-lang/rust-analyzer/issues/18334
     _error: Log::Err,
@@ -486,16 +485,9 @@ pub struct AmountErr<I, Log: WithAmount> {
 // `new` is not `pub` either way
 #[allow(private_bounds)]
 impl<I, Log: WithAmountInternal> AmountErr<I, Log> {
-    fn new(values: I, entry: Log::Entry, pushed_amount: usize, error: Log::Err) -> Self {
-        let max_amount = Log::MAX;
-        let max_amount = Log::amount_to_usize(max_amount);
-        Self {
-            values,
-            entry,
-            pushed_amount,
-            max_amount,
-            _error: error,
-        }
+    // taking &self makes it easier to call this method
+    pub fn max_amount(&self) -> usize {
+        Log::amount_to_usize(Log::MAX)
     }
 }
 
@@ -541,13 +533,17 @@ impl<T> RareValue<T> {
     }
 }
 
+// Bounds need no documentation because the `drain_future` methods that expose this type
+// document that bound themselves.
+#[allow(private_bounds)]
 #[derive(Debug, Clone, Reflect)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-struct EntryAmount<Log: WithAmountInternal> {
-    entry: Log::Entry,
+pub struct EntryAmount<Log: WithAmountInternal> {
+    pub entry: Log::Entry,
     amount: Log::Amount,
 }
 
+#[allow(private_bounds)]
 impl<Log: WithAmountInternal> EntryAmount<Log> {
     const fn zero(entry: <Log as WithAmount>::Entry) -> Self {
         Self {
@@ -555,8 +551,28 @@ impl<Log: WithAmountInternal> EntryAmount<Log> {
             amount: <Log as WithAmountInternal>::MIN,
         }
     }
-    fn amount(&self) -> usize {
+    pub fn amount(&self) -> usize {
         <Log as WithAmountInternal>::amount_to_usize(self.amount)
+    }
+    pub fn next_value<'a, T>(&mut self, values: &mut impl LogIter<'a, T>) -> Option<T> {
+        let amount = self.amount();
+        if amount != 0 {
+            self.amount = <Log as WithAmountInternal>::usize_to_amount(amount - 1).expect(
+                "if original amount fits into this type, then a reduced value should do so too",
+            );
+            values.next() // should be Some
+        } else {
+            None
+        }
+    }
+    pub fn collect_values<'a, T, F: FromIterator<T>>(
+        self,
+        values: &mut impl LogIter<'a, T>,
+    ) -> (F, Log::Entry) {
+        (
+            FromIterator::from_iter(values.by_ref().take(self.amount())),
+            self.entry,
+        )
     }
 }
 
@@ -634,31 +650,30 @@ trait WithAmountInternal: WithAmount {
 pub struct AmountOverflow;
 
 pub trait WithAmount {
-    type Err;
+    type Err: Debug;
     #[doc(hidden)]
-    type Entry; // including this type here simplifies `AmountErr`
+    type Entry; // including this type here simplifies `AmountErr` and `EntryAmount`
 }
 
 macro_rules! doc_with_amount {
     (struct) => {
         "
         
-        The const generic parameter `AMOUNT_BYTES` enables reducing the memory usage of this log:
+        The const generic parameter `AMOUNT_BYTES` makes it possible to reduce the memory usage of this log:
         
-        - **unspecified or `0`**: the amount of entries per push is stored as `usize` and only infallable
+        - **unspecified or `0`**: the amount of values per push is stored as `usize` and only infallable
           methods and functions can be used.
-        - **in `1..size_of::<usize>()`**: the amount of entries per push is stored as an `[u8; AMOUNT_BYTES]` and
+        - **in `1..size_of::<usize>()`**: the amount of values per push is stored as an `[u8; AMOUNT_BYTES]` and
           only the fallible methods and functions can be used. This has the benefit to consume less memory per push.
-          This allows storing up to `2^AMOUNT_BYTES - 1` entries per push.
-        - **in `size_of::<usize>()..=8`**: the amount of entries per push is stored as a `[u8; size_of::<usize>()]`
+          This allows storing up to `2^AMOUNT_BYTES - 1` values per push.
+        - **in `size_of::<usize>()..=8`**: the amount of values per push is stored as a `[u8; size_of::<usize>()]`
           and both the infallible and fallible (which never fail) methods and functions can be used. It may be
           helpful to still use the fallible methods in case that the application runs on machines with different
           pointer widths and only for some of them the conversation is fallible. That makes the code more agnostic
           for the target machine.
           
         The latter two cases have the additional benefit that the byte array has an alignment of `1` which
-        may benefitial too if the alignment of a non-ZST `U` of this struct has an alignment smaller than
-        `usize` does."
+        may add less or no padding along a non-ZST `U` of this struct."
     };
     (impl) => {
         doc_with_amount!(concat, "unspecified or in `0..=8`")
@@ -811,14 +826,14 @@ mod test {
     use crate::log::PackedRevFrame;
 
     #[derive(Debug, Clone, Copy)]
-    pub(super) enum ForwardStrategy {
+    pub(super) enum ShortenStrategy {
         PopPastByLen,
         DrainPastByLen,
         PopPastByLoggedAt,
         DrainPastByLoggedAt,
     }
 
-    impl ForwardStrategy {
+    impl ShortenStrategy {
         pub(super) const VARIANTS: [Self; 4] = [
             Self::PopPastByLen,
             Self::DrainPastByLen,
@@ -826,6 +841,66 @@ mod test {
             Self::DrainPastByLoggedAt,
         ];
     }
+
+    macro_rules! shorten_strategy {
+        // single value per log entry
+        ($log: ident, $meta: ident, $strategy: ident, $before: ident, $after_push: ident) => {
+            match $strategy {
+                ShortenStrategy::PopPastByLen => $log.pop_past_by_len($meta.past_world_states()),
+                ShortenStrategy::PopPastByLoggedAt => $log.pop_past_by_logged_at($meta),
+                ShortenStrategy::DrainPastByLen | ShortenStrategy::DrainPastByLoggedAt => {
+                    let mut actual_popped: Vec<_> = match $strategy {
+                        ShortenStrategy::DrainPastByLen => {
+                            $log.drain_past_by_len($meta.past_world_states()).collect()
+                        }
+                        ShortenStrategy::DrainPastByLoggedAt => {
+                            $log.truncate_future_drain_past_by_logged_at($meta).collect()
+                        }
+                        _ => unreachable!(),
+                    };
+                    assert!(
+                        actual_popped.len() <= 1,
+                        "\nmeta: {:#?}\nbefore: {:#?}\nafter_push: {:#?}\nafter_pop: {:#?}\npopped: {actual_popped:#?}",
+                        $meta, $before, $after_push, $log
+                    );
+                    actual_popped.pop()
+                }
+            }.map(|(value, logged_at)| (value, logged_at.into()))
+        };
+        // multiple values per log entry
+        ($log: ident, $meta: ident, $strategy: ident) => {
+            match $strategy {
+                ShortenStrategy::PopPastByLen => $log
+                    .pop_past_by_len($meta.past_world_states())
+                    .map(|value_entry| (
+                        value_entry.value.collect::<Vec<_>>(),
+                        usize::from(value_entry.entry),
+                    ))
+                    .unzip(),
+                ShortenStrategy::PopPastByLoggedAt => $log
+                    .pop_past_by_logged_at($meta)
+                    .map(|value_entry| (
+                        value_entry.value.collect::<Vec<_>>(),
+                        usize::from(value_entry.entry),
+                    ))
+                    .unzip(),
+                ShortenStrategy::DrainPastByLen | ShortenStrategy::DrainPastByLoggedAt => {
+                    let actual_popped: Vec<_> = match $strategy {
+                        ShortenStrategy::DrainPastByLen => {
+                            $log.drain_past_by_len($meta.past_world_states()).collect()
+                        }
+                        ShortenStrategy::DrainPastByLoggedAt => {
+                            $log.truncate_future_drain_past_by_logged_at($meta).collect()
+                        }
+                        _ => unreachable!(),
+                    };
+                    ((!actual_popped.is_empty()).then_some(actual_popped), None)
+                }
+            }
+        };
+    }
+
+    pub(super) use shorten_strategy;
 
     #[test]
     fn test_packed_time() {
