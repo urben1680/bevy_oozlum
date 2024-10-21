@@ -257,7 +257,10 @@ mod test {
     use super::*;
 
     use crate::{
-        log::{test::ForwardStrategy, PackedRevFrame},
+        log::{
+            test::{shorten_strategy, ShortenStrategy},
+            PackedRevFrame,
+        },
         meta::RevMeta,
         RevFrame,
     };
@@ -328,10 +331,10 @@ mod test {
         fn test_forward(
             &mut self,
             meta: &mut RevMeta,
-            strategy: ForwardStrategy,
+            strategy: ShortenStrategy,
             push: u8,
             expected_log_len: usize,
-            popped: Option<(u8, usize)>,
+            expected_popped: Option<(u8, usize)>,
         ) {
             meta.queue_forward();
             meta.update();
@@ -339,28 +342,9 @@ mod test {
             let push = (push, meta.present_world_state());
             self.push_present(push);
             let after_push = self.clone();
-            let actual = match strategy {
-                ForwardStrategy::PopPastByLen => self.pop_past_by_len(meta.past_world_states()),
-                ForwardStrategy::PopPastByLoggedAt => self.pop_past_by_logged_at(meta),
-                ForwardStrategy::DrainPastByLen | ForwardStrategy::DrainPastByLoggedAt => {
-                    let mut actual: Vec<_> = match strategy {
-                        ForwardStrategy::DrainPastByLen => {
-                            self.drain_past_by_len(meta.past_world_states()).collect()
-                        }
-                        ForwardStrategy::DrainPastByLoggedAt => {
-                            self.truncate_future_drain_past_by_logged_at(meta).collect()
-                        }
-                        _ => unreachable!(),
-                    };
-                    assert!(
-                        actual.len() <= 1,
-                        "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}\npopped: {actual:#?}",                
-                    );
-                    actual.pop()
-                }
-            }.map(|(value, logged_at)| (value, logged_at.into()));
+            let actual_popped = shorten_strategy!(self, meta, strategy, before, after_push);
             assert_eq!(
-                actual, popped,
+                actual_popped, expected_popped,
                 "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
             );
             assert_eq!(
@@ -373,12 +357,12 @@ mod test {
                 "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
             );
         }
-        fn test_forward_log(&mut self, meta: &mut RevMeta, state: Result<u8, u8>) {
+        fn test_forward_log(&mut self, meta: &mut RevMeta, expected_state: Result<u8, u8>) {
             let before = self.clone();
-            let state = match state {
-                Ok(state) => {
-                    meta.queue_log(RevFrame(meta.present_world_state().0 + 1))
-                        .unwrap();
+            let expected_state = match expected_state {
+                Ok(expected_state) => {
+                    let frame = meta.present_world_state().wrapping_add(1);
+                    meta.queue_log(frame).unwrap();
                     meta.update();
                     let result = self.forward_log();
                     assert_eq!(
@@ -386,26 +370,26 @@ mod test {
                         Ok(()),
                         "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_forward: {self:#?}",
                     );
-                    state
+                    expected_state
                 }
-                Err(state) => {
+                Err(expected_state) => {
                     let result = self.forward_log();
                     assert_eq!(
                         result,
                         Err(OutOfLog),
                         "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_forward: {self:#?}",
                     );
-                    state
+                    expected_state
                 }
             };
-            self.test_state(before, meta, state);
+            self.test_state(before, meta, expected_state);
         }
-        fn test_backward_log(&mut self, meta: &mut RevMeta, state: Result<u8, u8>) {
+        fn test_backward_log(&mut self, meta: &mut RevMeta, expected_state: Result<u8, u8>) {
             let before = self.clone();
-            let state = match state {
-                Ok(state) => {
-                    meta.queue_log(RevFrame(meta.present_world_state().0 - 1))
-                        .unwrap();
+            let expected_state = match expected_state {
+                Ok(expected_state) => {
+                    let frame = meta.present_world_state().wrapping_sub(1);
+                    meta.queue_log(frame).unwrap();
                     meta.update();
                     let result = self.backward_log();
                     assert_eq!(
@@ -413,19 +397,19 @@ mod test {
                         Ok(()),
                         "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_backward: {self:#?}",
                     );
-                    state
+                    expected_state
                 }
-                Err(state) => {
+                Err(expected_state) => {
                     let result = self.backward_log();
                     assert_eq!(
                         result,
                         Err(OutOfLog),
                         "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_backward: {self:#?}",
                     );
-                    state
+                    expected_state
                 }
             };
-            self.test_state(before, meta, state);
+            self.test_state(before, meta, expected_state);
         }
         fn test_state(&self, before: Self, meta: &RevMeta, state: u8) {
             assert_eq!(
@@ -434,16 +418,19 @@ mod test {
                 "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_backward: {self:#?}",
             );
         }
-        fn test_drain_future(&self, expected: impl IntoIterator<Item = (u8, usize)>) -> Self {
+        fn test_drain_future(
+            &self,
+            expected_future: impl IntoIterator<Item = (u8, usize)>,
+        ) -> Self {
             let before = self.clone();
             let mut clone = self.clone();
-            let actual: Vec<_> = clone.drain_future().collect();
-            let expected: Vec<_> = expected
+            let actual_future: Vec<_> = clone.drain_future().collect();
+            let expected_future: Vec<_> = expected_future
                 .into_iter()
                 .map(|(state, frame)| (state, RevFrame(frame)))
                 .collect();
             assert_eq!(
-                actual, expected,
+                actual_future, expected_future,
                 "\nbefore: {before:#?}\nafter_drain_future: {clone:#?}"
             );
             clone
@@ -452,7 +439,7 @@ mod test {
 
     #[test]
     fn push_and_log_traversal() {
-        for strategy in ForwardStrategy::VARIANTS {
+        for strategy in ShortenStrategy::VARIANTS {
             let meta = &mut RevMeta::new(NonZeroUsize::new(3), 0, false);
             let mut log = StateLog::new((0, meta.present_world_state()));
 
@@ -473,8 +460,10 @@ mod test {
 
             log.test_backward_log(meta, Ok(2));
             log.test_backward_log(meta, Ok(1));
-            // all entries are truncated as they are in the future, the new logged entry increases len to 1
+
             let mut clone = log.test_drain_future([(2, 2), (3, 3)]);
+
+            // all entries are truncated as they are in the future
             log.test_forward(meta, strategy, 4, 1, None);
             clone.test_forward(meta, strategy, 4, 1, None);
         }
