@@ -274,13 +274,8 @@ where
             .pop_past()
             .map(|entry_amount| self.drain_past_by_amount(entry_amount))
     }
-    pub fn drain_future(&mut self) -> (impl LogIter<T>, impl LogIter<U>) {
-        (
-            self.states.drain(self.index..),
-            self.amounts
-                .drain_future()
-                .map(|entry_amount| entry_amount.entry),
-        )
+    pub fn drain_future(&mut self) -> (impl LogIter<T>, impl LogIter<EntryAmount<Self>>) {
+        (self.states.drain(self.index..), self.amounts.drain_future())
     }
     pub fn clear(&mut self) {
         self.amounts.clear();
@@ -346,7 +341,12 @@ where
                 states,
                 index: 0,
             }),
-            Err(error) => Err(AmountErr::new(states, entry, pushed_amount, error)),
+            Err(error) => Err(AmountErr {
+                values: states,
+                entry,
+                pushed_amount,
+                _error: error,
+            }),
         }
     }
     fn fallible_with_capacities(
@@ -364,7 +364,12 @@ where
                 states,
                 index: 0,
             }),
-            Err(error) => Err(AmountErr::new(states, entry, pushed_amount, error)),
+            Err(error) => Err(AmountErr {
+                values: states,
+                entry,
+                pushed_amount,
+                _error: error,
+            }),
         }
     }
     fn fallible_push_present<Out: Into<U>>(
@@ -387,7 +392,12 @@ where
             }
             Err(error) => {
                 let states = self.states.drain(self.index..);
-                Err(AmountErr::new(states, entry, pushed_amount, error))
+                Err(AmountErr {
+                    values: states,
+                    entry,
+                    pushed_amount,
+                    _error: error,
+                })
             }
         }
     }
@@ -406,7 +416,12 @@ where
                 self.index = 0;
                 Ok(())
             }
-            Err(error) => Err(AmountErr::new(states, entry, pushed_amount, error)),
+            Err(error) => Err(AmountErr {
+                values: states,
+                entry,
+                pushed_amount,
+                _error: error,
+            }),
         }
     }
 }
