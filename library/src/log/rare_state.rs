@@ -68,13 +68,15 @@ mod serde_with {
                 self.len,
             )
         }
-        fn from_with_capacity(with_capacity: Self::De) -> Result<Self, String> {
+        fn from_with_capacity(
+            (WithCapacityWrapper(states), present, index, skips, len): Self::De,
+        ) -> Result<Self, String> {
             Ok(Self {
-                states: with_capacity.0 .0,
-                present: with_capacity.1,
-                index: with_capacity.2,
-                skips: with_capacity.3,
-                len: with_capacity.4,
+                states,
+                present,
+                index,
+                skips,
+                len,
             })
         }
     }
@@ -85,11 +87,10 @@ mod serde_with {
         fn get_logless_with_capacity(&self) -> Self::Se<'_> {
             (&self.present.value, self.states_capacity())
         }
-        fn from_logless_with_capacity(logless_with_capacity: Self::De) -> Result<Self, String> {
-            Ok(Self::with_capacity(
-                logless_with_capacity.0,
-                logless_with_capacity.1,
-            ))
+        fn from_logless_with_capacity(
+            (present, states_capacity): Self::De,
+        ) -> Result<Self, String> {
+            Ok(Self::with_capacity(present, states_capacity))
         }
     }
 }
