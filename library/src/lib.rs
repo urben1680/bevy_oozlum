@@ -44,6 +44,7 @@ Enhancements:
 - InitiallyNoneStateLog / InitiallyNoneRareStateLog
 -- Rare variant
 -- tests, serde_with
+- drain_future: (LogIter<T>, LogIter<U>) -> (LogIter<T>, LogIter<(U, usize)>) or make EntryAmount pub
 
 Docs
 - examples
