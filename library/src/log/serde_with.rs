@@ -115,7 +115,7 @@ pub(super) struct WithRange<'a, T> {
     pub(super) range: Range<usize>,
 }
 
-/// If htis serializes to a sequence, the result is deserializable to a VecDeque.
+/// Serializes and Deserializes into one usize and a sequence `T`. The usize contains the capacity of `T`.
 pub(super) struct WithCapacityWrapper<T>(pub(super) T);
 
 impl<'a, T: Serialize> Serialize for WithRange<'a, T> {
@@ -176,7 +176,7 @@ where
 
             fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
                 let Some(capacity) = seq.next_element()? else {
-                    return Err(serde::de::Error::custom("expected capacity"));
+                    return Err(serde::de::Error::custom("expected usize for capacity"));
                 };
 
                 let mut values = VecDeque::<T>::with_capacity(capacity);
