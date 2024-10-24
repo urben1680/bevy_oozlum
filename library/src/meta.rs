@@ -240,8 +240,8 @@ impl RevMeta {
     pub fn future_contains(&self, value: RevFrame) -> bool {
         range_contains(self.present_world_state, value.0, self.youngest_world_state)
     }
-    pub(crate) fn contains_buffered(start: usize, value: &impl LoggedAt, ref_len: usize) -> bool {
-        range_len(start, value.logged_at().0) <= ref_len
+    pub(crate) fn contains_buffered(start: RevFrame, value: &impl LoggedAt, ref_len: usize) -> bool {
+        range_len(start.0, value.logged_at().0) <= ref_len
     }
     pub(crate) fn past_exclusive_oldest_contains(&self, value: RevFrame) -> bool {
         let second_oldest_world_state = self.oldest_world_state().wrapping_add(1).0;
