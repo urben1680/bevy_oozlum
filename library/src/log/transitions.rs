@@ -81,7 +81,10 @@ mod serde_with {
         fn from_logless_with_capacity(
             (entries_capacity, transitions_capacity): Self::De,
         ) -> Result<Self, String> {
-            Ok(Self::with_capacities(entries_capacity, transitions_capacity))
+            Ok(Self::with_capacities(
+                entries_capacity,
+                transitions_capacity,
+            ))
         }
     }
 }
@@ -485,7 +488,7 @@ mod test {
                     );
                     match result {
                         Ok(()) => {
-                            panic!("\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {self:#?}")
+                            panic!("\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}")
                         }
                         Err(AmountErr {
                             values,
@@ -494,21 +497,21 @@ mod test {
                         }) => {
                             assert_eq!(
                                 values, push,
-                                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {self:#?}",
+                                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
                             );
                             assert_eq!(
                                 pushed_amount, 256,
-                                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {self:#?}",
+                                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
                             );
                             assert_eq!(
                                 self.entries_len(),
                                 expected_entries_len,
-                                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {self:#?}",
+                                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
                             );
                             assert_eq!(
                                 self.transitions_len(),
                                 expected_transitions_len,
-                                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {self:#?}",
+                                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
                             );
                         }
                     }
@@ -538,7 +541,7 @@ mod test {
             });
             assert_eq!(
                 actual_transitions, expected_transitions,
-                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_forward: {self:#?}",
+                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
             )
         }
         fn test_backward_log(
@@ -564,7 +567,7 @@ mod test {
             });
             assert_eq!(
                 actual_transitions, expected_transitions,
-                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_backward: {self:#?}",
+                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
             )
         }
         fn test_drain_future(
@@ -592,17 +595,17 @@ mod test {
             drop(states);
             assert_eq!(
                 actual_future, expected_future,
-                "\nbefore: {before:#?}\nafter_drain_future: {clone:#?}"
+                "\nbefore: {before:#?}\nafter: {clone:#?}"
             );
             assert_eq!(
                 clone.entries_len(),
                 expected_entries_len,
-                "\nbefore: {before:#?}\nafter_drain_future: {clone:#?}"
+                "\nbefore: {before:#?}\nafter: {clone:#?}"
             );
             assert_eq!(
                 clone.transitions_len(),
                 expected_transitions_len,
-                "\nbefore: {before:#?}\nafter_drain_future: {clone:#?}"
+                "\nbefore: {before:#?}\nafter: {clone:#?}"
             );
             clone
         }

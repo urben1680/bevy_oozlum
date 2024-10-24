@@ -59,15 +59,16 @@ mod serde_with {
             )
         }
         fn from_logless_state((amounts, states): Self::De) -> Result<Self, String> {
-            <RareStateLog<EntryAmount<Self>> as LoglessState>::from_logless_state(amounts)
-                .map(|amounts| {
+            <RareStateLog<EntryAmount<Self>> as LoglessState>::from_logless_state(amounts).map(
+                |amounts| {
                     let index = amounts.amount();
                     Self {
                         amounts,
                         states,
                         index,
                     }
-                })
+                },
+            )
         }
     }
 
@@ -94,7 +95,9 @@ mod serde_with {
                 self.index,
             )
         }
-        fn from_with_capacity((amounts, WithCapacityWrapper(states), index): Self::De) -> Result<Self, String> {
+        fn from_with_capacity(
+            (amounts, WithCapacityWrapper(states), index): Self::De,
+        ) -> Result<Self, String> {
             WithCapacity::from_with_capacity(amounts).map(|amounts| Self {
                 amounts,
                 states,
@@ -128,7 +131,9 @@ mod serde_with {
                 }),
             )
         }
-        fn from_logless_with_capacity((amounts, WithCapacityWrapper(states)): Self::De) -> Result<Self, String> {
+        fn from_logless_with_capacity(
+            (amounts, WithCapacityWrapper(states)): Self::De,
+        ) -> Result<Self, String> {
             RareStateLog::from_logless_with_capacity(amounts).map(|amounts| {
                 let index = amounts.amount();
                 Self {
@@ -197,7 +202,11 @@ where
             index: 0,
         }
     }
-    pub fn with_capacities_empty(entry: U, states_capacity: usize, entries_capacity: usize) -> Self {
+    pub fn with_capacities_empty(
+        entry: U,
+        states_capacity: usize,
+        entries_capacity: usize,
+    ) -> Self {
         Self {
             amounts: RareStateLog::with_capacity(EntryAmount::zero(entry), entries_capacity),
             states: VecDeque::with_capacity(states_capacity),
@@ -366,7 +375,10 @@ where
         let pushed_amount = states.len();
         match <Self as WithAmountInternal>::usize_to_amount(pushed_amount) {
             Ok(amount) => Ok(Self {
-                amounts: RareStateLog::with_capacity(EntryAmount { entry, amount }, entries_capacity),
+                amounts: RareStateLog::with_capacity(
+                    EntryAmount { entry, amount },
+                    entries_capacity,
+                ),
                 states,
                 index: pushed_amount,
             }),

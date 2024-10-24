@@ -8,7 +8,7 @@ use bevy::{
 
 use crate::{meta::RevMeta, RevFrame};
 
-use super::{LogIter, LoggedAt, OutOfLog, RareValue, INDEX_OOB};
+use super::{LogIter, LoggedAt, OutOfLog, PackedRevFrame, RareValue, INDEX_OOB};
 
 #[derive(Debug, Clone, Reflect)]
 #[reflect(Default)]
@@ -20,7 +20,7 @@ pub struct RareTransitionLog<T> {
     skips: usize,
     /// Used to check for OutOfLog error when calling `self.forward_log`
     skips_max: usize,
-    len: usize,
+    past_len: usize,
 }
 
 #[cfg(feature = "serde")]
@@ -54,16 +54,18 @@ mod serde_with {
                 self.index,
                 self.skips,
                 self.skips_max,
-                self.len,
+                self.past_len,
             )
         }
-        fn from_with_capacity(with_capacity: Self::De) -> Result<Self, String> {
+        fn from_with_capacity(
+            (WithCapacityWrapper(transitions), index, skips, skips_max, past_len): Self::De,
+        ) -> Result<Self, String> {
             Ok(Self {
-                transitions: with_capacity.0 .0,
-                index: with_capacity.1,
-                skips: with_capacity.2,
-                skips_max: with_capacity.3,
-                len: with_capacity.4,
+                transitions,
+                index,
+                skips,
+                skips_max,
+                past_len,
             })
         }
     }
@@ -93,7 +95,7 @@ impl<T> RareTransitionLog<T> {
             index: 0,
             skips: 0,
             skips_max: 0,
-            len: 0,
+            past_len: 0,
         }
     }
     pub fn with_capacity(transitions_capacity: usize) -> Self {
@@ -102,7 +104,7 @@ impl<T> RareTransitionLog<T> {
             index: 0,
             skips: 0,
             skips_max: 0,
-            len: 0,
+            past_len: 0,
         }
     }
     pub fn transitions_len(&self) -> usize {
@@ -148,7 +150,7 @@ impl<T> RareTransitionLog<T> {
         }
         self.transitions.pop_front().map(|rare| {
             self.index -= 1;
-            self.len -= rare.len();
+            self.past_len -= rare.len();
             rare.value
         })
     }
@@ -159,33 +161,34 @@ impl<T> RareTransitionLog<T> {
     pub fn clear(&mut self) {
         self.transitions.clear();
         self.index = 0;
-        self.len = 0;
+        self.past_len = 0;
         self.skips = 0;
         self.skips_max = 0;
     }
     pub fn push_present(&mut self, transition: Option<T>) {
         self.transitions.truncate(self.index);
         match transition {
-            None => {
+            None if self.skips < PackedRevFrame::MAX_AS_USIZE => {
                 self.skips += 1;
+                self.past_len += 1;
             }
             Some(transition) => {
-                let skips = RevFrame::new(self.skips).into();
                 self.transitions.push_back(RareValue {
                     value: transition,
-                    skips,
+                    skips: RevFrame::new(self.skips).into(),
                 });
-                self.skips = 0;
                 self.index += 1;
+                self.skips = 0;
+                self.past_len += 1;
             }
+            None => {}
         }
         self.skips_max = self.skips;
-        self.len += 1;
     }
     pub fn backward_log(&mut self) -> Result<Option<&mut T>, OutOfLog> {
         if self.skips > 0 {
             self.skips -= 1;
-            self.len -= 1;
+            self.past_len -= 1;
             Ok(None)
         } else {
             let index = self.index.checked_sub(1).ok_or(OutOfLog)?;
@@ -193,7 +196,7 @@ impl<T> RareTransitionLog<T> {
             if let Some(entry) = self.transitions.get_mut(index) {
                 self.index = index;
                 self.skips = entry.skips.into();
-                self.len -= 1;
+                self.past_len -= 1;
                 return Ok(Some(&mut entry.value));
             }
 
@@ -212,7 +215,7 @@ impl<T> RareTransitionLog<T> {
                 index: self.index,
                 skips: self.skips,
                 skips_max: self.skips_max,
-                len: self.len,
+                len: self.past_len,
             };
 
             error!("{INDEX_OOB}, {debug_struct:#?}");
@@ -221,7 +224,7 @@ impl<T> RareTransitionLog<T> {
     }
     pub fn forward_log(&mut self) -> Result<Option<&mut T>, OutOfLog> {
         if let Some(entry) = self.transitions.get_mut(self.index) {
-            self.len += 1;
+            self.past_len += 1;
             if self.skips < entry.skips.into() {
                 self.skips += 1;
                 Ok(None)
@@ -231,7 +234,7 @@ impl<T> RareTransitionLog<T> {
                 Ok(Some(&mut entry.value))
             }
         } else if self.skips < self.skips_max {
-            self.len += 1;
+            self.past_len += 1;
             self.skips += 1;
             Ok(None)
         } else {
@@ -239,7 +242,7 @@ impl<T> RareTransitionLog<T> {
         }
     }
     pub fn pop_past_by_len(&mut self, max_past_len: usize) -> Option<T> {
-        let excessive_len = self.len.checked_sub(max_past_len)?;
+        let excessive_len = self.past_len.checked_sub(max_past_len)?;
         let past_end = self.past_end_rare()?;
         if excessive_len >= past_end.len() {
             self.pop_past()
@@ -250,11 +253,11 @@ impl<T> RareTransitionLog<T> {
     pub fn drain_past_by_len(&mut self, max_past_len: usize) -> impl LogIter<T> {
         let mut drain_amount = 0;
         for entry in self.transitions.iter() {
-            let less = self.len - entry.len();
+            let less = self.past_len - entry.len();
             if less < max_past_len {
                 break;
             }
-            self.len = less;
+            self.past_len = less;
             drain_amount += 1;
         }
         self.index -= drain_amount;
@@ -283,7 +286,7 @@ impl<T: LoggedAt> RareTransitionLog<T> {
         let to = self
             .transitions
             .partition_point(|entry| RevMeta::contains_buffered(start, entry, ref_len));
-        self.len -= to // sum of to-be-drained transitions, because of this mapping RareValue::len below is not needed, only skips_before_value
+        self.past_len -= to // sum of to-be-drained transitions, because of this mapping RareValue::len below is not needed, only skips_before_value
             + self
                 .transitions
                 .range(..to)

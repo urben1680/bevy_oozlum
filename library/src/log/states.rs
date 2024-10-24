@@ -185,7 +185,11 @@ where
             index: 0,
         }
     }
-    pub fn with_capacities_empty(entry: U, states_capacity: usize, entries_capacity: usize) -> Self {
+    pub fn with_capacities_empty(
+        entry: U,
+        states_capacity: usize,
+        entries_capacity: usize,
+    ) -> Self {
         Self {
             amounts: StateLog::with_capacity(EntryAmount::zero(entry), entries_capacity),
             states: VecDeque::with_capacity(states_capacity),
@@ -700,7 +704,7 @@ mod test {
                     );
                     match result {
                         Ok(()) => {
-                            panic!("\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {self:#?}")
+                            panic!("\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}")
                         }
                         Err(AmountErr {
                             values,
@@ -709,21 +713,21 @@ mod test {
                         }) => {
                             assert_eq!(
                                 values, push,
-                                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {self:#?}",
+                                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
                             );
                             assert_eq!(
                                 pushed_amount, 256,
-                                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {self:#?}",
+                                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
                             );
                             assert_eq!(
                                 self.entries_len(),
                                 expected_entries_len,
-                                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {self:#?}",
+                                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
                             );
                             assert_eq!(
                                 self.states_len(),
                                 expected_states_len,
-                                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {self:#?}",
+                                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
                             );
                         }
                     }
@@ -734,7 +738,7 @@ mod test {
             &mut self,
             meta: &mut RevMeta,
             expected_states: [u8; 2],
-            out_of_log: bool
+            out_of_log: bool,
         ) {
             let before = self.clone();
             if out_of_log {
@@ -742,7 +746,7 @@ mod test {
                 assert_eq!(
                     result,
                     Err(OutOfLog),
-                    "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_forward: {self:#?}",
+                    "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
                 );
             } else {
                 let frame = meta.present_world_state().wrapping_add(1);
@@ -752,7 +756,7 @@ mod test {
                 assert_eq!(
                     result,
                     Ok(()),
-                    "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_forward: {self:#?}",
+                    "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
                 );
             }
             self.test_states(before, meta, expected_states);
@@ -761,7 +765,7 @@ mod test {
             &mut self,
             meta: &mut RevMeta,
             expected_states: [u8; 2],
-            out_of_log: bool
+            out_of_log: bool,
         ) {
             let before = self.clone();
             if out_of_log {
@@ -769,7 +773,7 @@ mod test {
                 assert_eq!(
                     result,
                     Err(OutOfLog),
-                    "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_backward: {self:#?}",
+                    "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
                 );
             } else {
                 let frame = meta.present_world_state().wrapping_sub(1);
@@ -779,7 +783,7 @@ mod test {
                 assert_eq!(
                     result,
                     Ok(()),
-                    "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_backward: {self:#?}",
+                    "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
                 );
             }
             self.test_states(before, meta, expected_states);
@@ -789,12 +793,12 @@ mod test {
             let actual_states: Vec<u8> = actual_states.cloned().collect();
             assert_eq!(
                 actual_states, states,
-                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_forward: {self:#?}",
+                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
             );
             assert_eq!(
                 *entry,
                 meta.present_world_state(),
-                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_forward: {self:#?}",
+                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
             );
         }
         fn test_drain_future(
@@ -822,17 +826,17 @@ mod test {
             drop(states);
             assert_eq!(
                 actual_future, expected_future,
-                "\nbefore: {before:#?}\nafter_drain_future: {clone:#?}"
+                "\nbefore: {before:#?}\nafter: {clone:#?}"
             );
             assert_eq!(
                 clone.entries_len(),
                 expected_entries_len,
-                "\nbefore: {before:#?}\nafter_drain_future: {clone:#?}"
+                "\nbefore: {before:#?}\nafter: {clone:#?}"
             );
             assert_eq!(
                 clone.states_len(),
                 expected_states_len,
-                "\nbefore: {before:#?}\nafter_drain_future: {clone:#?}"
+                "\nbefore: {before:#?}\nafter: {clone:#?}"
             );
             clone
         }

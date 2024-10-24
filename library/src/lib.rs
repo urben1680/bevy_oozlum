@@ -114,23 +114,15 @@ impl From<RevFrame> for usize {
 }
 
 impl RevFrame {
+    pub const MAX_AS_USIZE: usize = PackedRevFrame::MAX_AS_USIZE;
     const fn new(value: usize) -> Self {
-        debug_assert!(value <= PackedRevFrame::MAX_AS_USIZE);
-        Self(value)
+        Self(value & Self::MAX_AS_USIZE)
     }
     const fn wrapping_add(self, value: usize) -> Self {
-        let mut value = self.0.wrapping_add(value);
-        if value > PackedRevFrame::MAX_AS_USIZE {
-            value -= PackedRevFrame::MAX_AS_USIZE;
-        }
-        Self(value)
+        Self::new(self.0.wrapping_add(value))
     }
     const fn wrapping_sub(self, value: usize) -> Self {
-        let mut value = self.0.wrapping_sub(value);
-        if value > PackedRevFrame::MAX_AS_USIZE {
-            value -= PackedRevFrame::MAX_AS_USIZE;
-        }
-        Self(value)
+        Self::new(self.0.wrapping_sub(value))
     }
 }
 
