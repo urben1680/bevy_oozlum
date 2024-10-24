@@ -116,14 +116,14 @@ mod serde_with {
                     deque: &self.states,
                     range,
                 }),
-                self.log_capacity(),
+                self.entries_capacity(),
             )
         }
         fn from_logless_with_capacity(
-            (entry, WithCapacityWrapper(states), log_capacity): Self::De,
+            (entry, WithCapacityWrapper(states), entries_capacity): Self::De,
         ) -> Result<Self, String> {
             let states_capacity = states.capacity();
-            Self::fallible_with_capacities(states, entry, states_capacity, log_capacity)
+            Self::fallible_with_capacities(states, entry, states_capacity, entries_capacity)
                 .map_err(|err| PackedRevFrame::from_serde_err(err.pushed_amount))
         }
     }
@@ -185,62 +185,62 @@ where
             index: 0,
         }
     }
-    pub fn with_capacities_empty(entry: U, states_capacity: usize, log_capacity: usize) -> Self {
+    pub fn with_capacities_empty(entry: U, states_capacity: usize, entries_capacity: usize) -> Self {
         Self {
-            amounts: StateLog::with_capacity(EntryAmount::zero(entry), log_capacity),
+            amounts: StateLog::with_capacity(EntryAmount::zero(entry), entries_capacity),
             states: VecDeque::with_capacity(states_capacity),
             index: 0,
         }
     }
-    pub fn log_len(&self) -> usize {
+    pub fn entries_len(&self) -> usize {
         self.amounts.len()
     }
     pub fn states_len(&self) -> usize {
         self.states.len()
     }
-    pub fn log_capacity(&self) -> usize {
+    pub fn entries_capacity(&self) -> usize {
         self.amounts.capacity()
     }
     pub fn states_capacity(&self) -> usize {
         self.states.capacity()
     }
-    pub fn log_is_empty(&self) -> bool {
+    pub fn entries_is_empty(&self) -> bool {
         self.amounts.is_empty()
     }
     pub fn states_is_empty(&self) -> bool {
         self.states.is_empty()
     }
-    pub fn log_reserve(&mut self, additional: usize) {
+    pub fn entries_reserve(&mut self, additional: usize) {
         self.amounts.reserve(additional)
     }
     pub fn states_reserve(&mut self, additional: usize) {
         self.states.reserve(additional)
     }
-    pub fn log_reserve_exact(&mut self, additional: usize) {
+    pub fn entries_reserve_exact(&mut self, additional: usize) {
         self.amounts.reserve_exact(additional)
     }
     pub fn states_reserve_exact(&mut self, additional: usize) {
         self.states.reserve_exact(additional)
     }
-    pub fn log_try_reserve(&mut self, additional: usize) -> Result<(), TryReserveError> {
+    pub fn entries_try_reserve(&mut self, additional: usize) -> Result<(), TryReserveError> {
         self.amounts.try_reserve(additional)
     }
     pub fn states_try_reserve(&mut self, additional: usize) -> Result<(), TryReserveError> {
         self.states.try_reserve(additional)
     }
-    pub fn log_try_reserve_exact(&mut self, additional: usize) -> Result<(), TryReserveError> {
+    pub fn entries_try_reserve_exact(&mut self, additional: usize) -> Result<(), TryReserveError> {
         self.amounts.try_reserve_exact(additional)
     }
     pub fn states_try_reserve_exact(&mut self, additional: usize) -> Result<(), TryReserveError> {
         self.states.try_reserve_exact(additional)
     }
-    pub fn log_shrink_to(&mut self, min_capacity: usize) {
+    pub fn entries_shrink_to(&mut self, min_capacity: usize) {
         self.amounts.shrink_to(min_capacity)
     }
     pub fn states_shrink_to(&mut self, min_capacity: usize) {
         self.states.shrink_to(min_capacity)
     }
-    pub fn log_shrink_to_fit(&mut self) {
+    pub fn entries_shrink_to_fit(&mut self) {
         self.amounts.shrink_to_fit()
     }
     pub fn states_shrink_to_fit(&mut self) {
@@ -276,15 +276,11 @@ where
         let amount = self.amounts.amount();
         self.states.drain(..self.index);
         self.states.truncate(amount);
-        self.index = 0;
+        self.index = amount;
     }
     pub fn clear_empty(&mut self, entry: U) {
         self.states.clear();
-        let entry_amount = EntryAmount {
-            entry,
-            amount: <Self as WithAmountInternal>::MIN,
-        };
-        self.amounts.clear_with(entry_amount);
+        self.amounts.clear_with(EntryAmount::zero(entry));
         self.index = 0;
     }
     pub fn backward_log(&mut self) -> Result<(), OutOfLog> {
@@ -351,14 +347,14 @@ where
         iter: impl IntoIterator<Item = T>,
         entry: U,
         states_capacity: usize,
-        log_capacity: usize,
+        entries_capacity: usize,
     ) -> Result<Self, AmountErr<VecDeque<T>, Self>> {
         let mut states = VecDeque::with_capacity(states_capacity);
         states.extend(iter);
         let pushed_amount = states.len();
         match <Self as WithAmountInternal>::usize_to_amount(pushed_amount) {
             Ok(amount) => Ok(Self {
-                amounts: StateLog::with_capacity(EntryAmount { entry, amount }, log_capacity),
+                amounts: StateLog::with_capacity(EntryAmount { entry, amount }, entries_capacity),
                 states,
                 index: pushed_amount,
             }),
@@ -406,7 +402,7 @@ where
                 self.states.clear();
                 self.states.append(&mut states);
                 self.amounts.clear_with(EntryAmount { entry, amount });
-                self.index = 0;
+                self.index = pushed_amount;
                 Ok(())
             }
             Err(error) => Err(AmountErr {
@@ -437,11 +433,11 @@ where
         iter: impl IntoIterator<Item = T>,
         entry: U,
         states_capacity: usize,
-        log_capacity: usize,
+        entries_capacity: usize,
     ) -> Self {
         // rust analyzer does not like `let Ok(ok) = result;` here
         // https://github.com/rust-lang/rust-analyzer/issues/18334
-        match Self::fallible_with_capacities(iter, entry, states_capacity, log_capacity) {
+        match Self::fallible_with_capacities(iter, entry, states_capacity, entries_capacity) {
             Ok(ok) => ok,
             Err(err) => match err._error {},
         }
@@ -480,9 +476,9 @@ where
         iter: impl IntoIterator<Item = T>,
         entry: U,
         states_capacity: usize,
-        log_capacity: usize,
+        entries_capacity: usize,
     ) -> Result<Self, AmountErr<VecDeque<T>, Self>> {
-        Self::fallible_with_capacities(iter, entry, states_capacity, log_capacity)
+        Self::fallible_with_capacities(iter, entry, states_capacity, entries_capacity)
     }
     pub fn try_push_present<Out: Into<U>>(
         &mut self,
@@ -569,10 +565,10 @@ mod test {
             logless_with_capacity: original.clone(),
         };
 
-        logs.full.log_reserve_exact(98);
-        logs.logless.log_reserve_exact(98);
-        logs.full_with_capacity.log_reserve_exact(98);
-        logs.logless_with_capacity.log_reserve_exact(98);
+        logs.full.entries_reserve_exact(98);
+        logs.logless.entries_reserve_exact(98);
+        logs.full_with_capacity.entries_reserve_exact(98);
+        logs.logless_with_capacity.entries_reserve_exact(98);
 
         logs.full.states_reserve_exact(194);
         logs.logless.states_reserve_exact(194);
@@ -587,7 +583,7 @@ mod test {
             logless_with_capacity,
         } = serde_json::from_str(&serialized).unwrap();
 
-        let test = |log: &StatesLog<char, u8>, log_len, states_len, with_capacity| {
+        let test = |log: &StatesLog<char, u8>, entries_len, states_len, with_capacity| {
             let (states, entry) = log.get();
             let states: Vec<_> = states.cloned().collect();
 
@@ -601,8 +597,8 @@ mod test {
                 "before: {original:#?}\nserialized: {serialized}\nafter: {log:#?}"
             );
             assert_eq!(
-                log.log_len(),
-                log_len,
+                log.entries_len(),
+                entries_len,
                 "before: {original:#?}\nserialized: {serialized}\nafter: {log:#?}"
             );
             assert_eq!(
@@ -611,10 +607,10 @@ mod test {
                 "before: {original:#?}\nserialized: {serialized}\nafter: {log:#?}"
             );
             assert_eq!(
-                log.log_capacity() >= 100,
+                log.entries_capacity() >= 100,
                 with_capacity,
                 "before: {original:#?}\nserialized: {serialized}\nafter: {log:#?}\ncapacity: {}",
-                log.log_capacity()
+                log.entries_capacity()
             );
             assert_eq!(
                 log.states_capacity() >= 200,
@@ -636,7 +632,7 @@ mod test {
             meta: &mut RevMeta,
             strategy: ShortenStrategy,
             push: Result<[u8; 2], [u8; 256]>,
-            expected_log_len: usize,
+            expected_entries_len: usize,
             expected_states_len: usize,
             expected_popped: Option<([u8; 2], usize)>,
         ) {
@@ -673,8 +669,8 @@ mod test {
                         );
                     }
                     assert_eq!(
-                        self.log_len(),
-                        expected_log_len,
+                        self.entries_len(),
+                        expected_entries_len,
                         "\nstrategy: {strategy:?}\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
                     );
                     assert_eq!(
@@ -720,8 +716,8 @@ mod test {
                                 "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {self:#?}",
                             );
                             assert_eq!(
-                                self.log_len(),
-                                expected_log_len,
+                                self.entries_len(),
+                                expected_entries_len,
                                 "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {self:#?}",
                             );
                             assert_eq!(
@@ -737,63 +733,55 @@ mod test {
         fn test_forward_log(
             &mut self,
             meta: &mut RevMeta,
-            expected_states: Result<[u8; 2], [u8; 2]>,
+            expected_states: [u8; 2],
+            out_of_log: bool
         ) {
             let before = self.clone();
-            let expected_states = match expected_states {
-                Ok(states) => {
-                    let frame = meta.present_world_state().wrapping_add(1);
-                    meta.queue_log(frame).unwrap();
-                    meta.update();
-                    let result = self.forward_log();
-                    assert_eq!(
-                        result,
-                        Ok(()),
-                        "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_forward: {self:#?}",
-                    );
-                    states
-                }
-                Err(expected_states) => {
-                    let result = self.forward_log();
-                    assert_eq!(
-                        result,
-                        Err(OutOfLog),
-                        "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_forward: {self:#?}",
-                    );
-                    expected_states
-                }
-            };
+            if out_of_log {
+                let result = self.forward_log();
+                assert_eq!(
+                    result,
+                    Err(OutOfLog),
+                    "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_forward: {self:#?}",
+                );
+            } else {
+                let frame = meta.present_world_state().wrapping_add(1);
+                meta.queue_log(frame).unwrap();
+                meta.update();
+                let result = self.forward_log();
+                assert_eq!(
+                    result,
+                    Ok(()),
+                    "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_forward: {self:#?}",
+                );
+            }
             self.test_states(before, meta, expected_states);
         }
         fn test_backward_log(
             &mut self,
             meta: &mut RevMeta,
-            expected_states: Result<[u8; 2], [u8; 2]>,
+            expected_states: [u8; 2],
+            out_of_log: bool
         ) {
             let before = self.clone();
-            let expected_states = match expected_states {
-                Ok(expected_states) => {
-                    let frame = meta.present_world_state().wrapping_sub(1);
-                    meta.queue_log(frame).unwrap();
-                    meta.update();
-                    let result = self.backward_log();
-                    assert_eq!(
-                        result,
-                        Ok(()),
-                        "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_backward: {self:#?}",
-                    );
-                    expected_states
-                }
-                Err(expected_states) => {
-                    let result = self.backward_log();
-                    assert_eq!(
-                        result,
-                        Err(OutOfLog),
-                        "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_backward: {self:#?}",
-                    );
-                    expected_states
-                }
-            };
+            if out_of_log {
+                let result = self.backward_log();
+                assert_eq!(
+                    result,
+                    Err(OutOfLog),
+                    "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_backward: {self:#?}",
+                );
+            } else {
+                let frame = meta.present_world_state().wrapping_sub(1);
+                meta.queue_log(frame).unwrap();
+                meta.update();
+                let result = self.backward_log();
+                assert_eq!(
+                    result,
+                    Ok(()),
+                    "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_backward: {self:#?}",
+                );
+            }
             self.test_states(before, meta, expected_states);
         }
         fn test_states(&self, before: Self, meta: &RevMeta, states: [u8; 2]) {
@@ -812,7 +800,7 @@ mod test {
         fn test_drain_future(
             &self,
             expected_future: impl IntoIterator<Item = ([u8; 2], usize)>,
-            expected_log_len: usize,
+            expected_entries_len: usize,
             expected_states_len: usize,
         ) -> Self {
             let before = self.clone();
@@ -820,8 +808,8 @@ mod test {
             let (mut states, entries) = clone.drain_future();
             let actual_future: Vec<_> = entries
                 .map(|entry_amount| {
-                    let (states, entry) = entry_amount.collect_values(&mut states);
-                    (states, usize::from(entry))
+                    let states = states.by_ref().take(entry_amount.amount()).collect();
+                    (states, usize::from(entry_amount.entry))
                 })
                 .collect();
             let expected_future: Vec<_> = expected_future
@@ -837,8 +825,8 @@ mod test {
                 "\nbefore: {before:#?}\nafter_drain_future: {clone:#?}"
             );
             assert_eq!(
-                clone.log_len(),
-                expected_log_len,
+                clone.entries_len(),
+                expected_entries_len,
                 "\nbefore: {before:#?}\nafter_drain_future: {clone:#?}"
             );
             assert_eq!(
@@ -861,18 +849,18 @@ mod test {
             // shortened log
             log.test_forward(meta, strategy, Ok([3, 3]), 2, 6, Some(([0, 0], 0)));
 
-            log.test_backward_log(meta, Ok([2, 2]));
-            log.test_backward_log(meta, Ok([1, 1]));
+            log.test_backward_log(meta, [2, 2], false);
+            log.test_backward_log(meta, [1, 1], false);
             // out of log, no mutations happend to both meta and log here
-            log.test_backward_log(meta, Err([1, 1]));
+            log.test_backward_log(meta, [1, 1], true);
 
-            log.test_forward_log(meta, Ok([2, 2]));
-            log.test_forward_log(meta, Ok([3, 3]));
+            log.test_forward_log(meta, [2, 2], false);
+            log.test_forward_log(meta, [3, 3], false);
             // out of log, no mutations happend to both meta and log here
-            log.test_forward_log(meta, Err([3, 3]));
+            log.test_forward_log(meta, [3, 3], true);
 
-            log.test_backward_log(meta, Ok([2, 2]));
-            log.test_backward_log(meta, Ok([1, 1]));
+            log.test_backward_log(meta, [2, 2], false);
+            log.test_backward_log(meta, [1, 1], false);
 
             let clone = log.test_drain_future([([2, 2], 2), ([3, 3], 3)], 0, 2);
 
