@@ -76,12 +76,12 @@ mod serde_with {
         type Se<'se> = (usize, usize) where T: 'se, U: 'se;
         type De = (usize, usize);
         fn get_logless_with_capacity(&self) -> Self::Se<'_> {
-            (self.log_capacity(), self.transitions_capacity())
+            (self.entries_capacity(), self.transitions_capacity())
         }
         fn from_logless_with_capacity(
-            (log_capacity, transitions_capacity): Self::De,
+            (entries_capacity, transitions_capacity): Self::De,
         ) -> Result<Self, String> {
-            Ok(Self::with_capacities(log_capacity, transitions_capacity))
+            Ok(Self::with_capacities(entries_capacity, transitions_capacity))
         }
     }
 }
@@ -111,50 +111,50 @@ where
             index: 0,
         }
     }
-    pub fn with_capacities(log_capacity: usize, transitions_capacity: usize) -> Self {
+    pub fn with_capacities(entries_capacity: usize, transitions_capacity: usize) -> Self {
         Self {
-            amounts: TransitionLog::with_capacity(log_capacity),
+            amounts: TransitionLog::with_capacity(entries_capacity),
             transitions: VecDeque::with_capacity(transitions_capacity),
             index: 0,
         }
     }
-    pub fn log_len(&self) -> usize {
+    pub fn entries_len(&self) -> usize {
         self.amounts.len()
     }
     pub fn transitions_len(&self) -> usize {
         self.transitions.len()
     }
-    pub fn log_capacity(&self) -> usize {
+    pub fn entries_capacity(&self) -> usize {
         self.amounts.capacity()
     }
     pub fn transitions_capacity(&self) -> usize {
         self.transitions.capacity()
     }
-    pub fn log_is_empty(&self) -> bool {
+    pub fn entries_is_empty(&self) -> bool {
         self.amounts.is_empty()
     }
     pub fn transitions_is_empty(&self) -> bool {
         self.transitions.is_empty()
     }
-    pub fn log_reserve(&mut self, additional: usize) {
+    pub fn entries_reserve(&mut self, additional: usize) {
         self.amounts.reserve(additional)
     }
     pub fn transitions_reserve(&mut self, additional: usize) {
         self.transitions.reserve(additional)
     }
-    pub fn log_reserve_exact(&mut self, additional: usize) {
+    pub fn entries_reserve_exact(&mut self, additional: usize) {
         self.amounts.reserve_exact(additional)
     }
     pub fn transitions_reserve_exact(&mut self, additional: usize) {
         self.transitions.reserve_exact(additional)
     }
-    pub fn log_try_reserve(&mut self, additional: usize) -> Result<(), TryReserveError> {
+    pub fn entries_try_reserve(&mut self, additional: usize) -> Result<(), TryReserveError> {
         self.amounts.try_reserve(additional)
     }
     pub fn transitions_try_reserve(&mut self, additional: usize) -> Result<(), TryReserveError> {
         self.transitions.try_reserve(additional)
     }
-    pub fn log_try_reserve_exact(&mut self, additional: usize) -> Result<(), TryReserveError> {
+    pub fn entries_try_reserve_exact(&mut self, additional: usize) -> Result<(), TryReserveError> {
         self.amounts.try_reserve_exact(additional)
     }
     pub fn transitions_try_reserve_exact(
@@ -163,13 +163,13 @@ where
     ) -> Result<(), TryReserveError> {
         self.transitions.try_reserve_exact(additional)
     }
-    pub fn log_shrink_to(&mut self, min_capacity: usize) {
+    pub fn entries_shrink_to(&mut self, min_capacity: usize) {
         self.amounts.shrink_to(min_capacity)
     }
     pub fn transitions_shrink_to(&mut self, min_capacity: usize) {
         self.transitions.shrink_to(min_capacity)
     }
-    pub fn log_shrink_to_fit(&mut self) {
+    pub fn entries_shrink_to_fit(&mut self) {
         self.amounts.shrink_to_fit()
     }
     pub fn transitions_shrink_to_fit(&mut self) {
@@ -367,9 +367,9 @@ mod test {
             logless_with_capacity: original.clone(),
         };
 
-        logs.full.log_reserve_exact(98);
-        logs.full_with_capacity.log_reserve_exact(98);
-        logs.logless_with_capacity.log_reserve_exact(98);
+        logs.full.entries_reserve_exact(98);
+        logs.full_with_capacity.entries_reserve_exact(98);
+        logs.logless_with_capacity.entries_reserve_exact(98);
 
         logs.full.transitions_reserve_exact(196);
         logs.full_with_capacity.transitions_reserve_exact(196);
@@ -382,10 +382,10 @@ mod test {
             logless_with_capacity,
         } = serde_json::from_str(&serialized).unwrap();
 
-        let test = |log: &TransitionsLog<char, u8>, log_len, transitions_len, with_capacity| {
+        let test = |log: &TransitionsLog<char, u8>, entries_len, transitions_len, with_capacity| {
             assert_eq!(
-                log.log_len(),
-                log_len,
+                log.entries_len(),
+                entries_len,
                 "before: {original:#?}\nserialized: {serialized}\nafter: {log:#?}"
             );
             assert_eq!(
@@ -394,10 +394,10 @@ mod test {
                 "before: {original:#?}\nserialized: {serialized}\nafter: {log:#?}"
             );
             assert_eq!(
-                log.log_capacity() >= 100,
+                log.entries_capacity() >= 100,
                 with_capacity,
                 "before: {original:#?}\nserialized: {serialized}\nafter: {log:#?}\ncapacity: {}",
-                log.log_capacity()
+                log.entries_capacity()
             );
             assert_eq!(
                 log.transitions_capacity() >= 200,
@@ -418,7 +418,7 @@ mod test {
             meta: &mut RevMeta,
             strategy: ShortenStrategy,
             push: Result<[u8; 2], [u8; 256]>,
-            expected_log_len: usize,
+            expected_entries_len: usize,
             expected_transitions_len: usize,
             expected_popped: Option<([u8; 2], usize)>,
         ) {
@@ -455,8 +455,8 @@ mod test {
                         );
                     }
                     assert_eq!(
-                        self.log_len(),
-                        expected_log_len,
+                        self.entries_len(),
+                        expected_entries_len,
                         "\nstrategy: {strategy:?}\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
                     );
                     assert_eq!(
@@ -501,8 +501,8 @@ mod test {
                                 "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {self:#?}",
                             );
                             assert_eq!(
-                                self.log_len(),
-                                expected_log_len,
+                                self.entries_len(),
+                                expected_entries_len,
                                 "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {self:#?}",
                             );
                             assert_eq!(
@@ -570,7 +570,7 @@ mod test {
         fn test_drain_future(
             &self,
             expected_future: impl IntoIterator<Item = ([u8; 2], usize)>,
-            expected_log_len: usize,
+            expected_entries_len: usize,
             expected_transitions_len: usize,
         ) -> Self {
             let before = self.clone();
@@ -578,8 +578,8 @@ mod test {
             let (mut states, entries) = clone.drain_future();
             let actual_future: Vec<_> = entries
                 .map(|entry_amount| {
-                    let (states, entry) = entry_amount.collect_values(&mut states);
-                    (states, usize::from(entry))
+                    let states = states.by_ref().take(entry_amount.amount()).collect();
+                    (states, usize::from(entry_amount.entry))
                 })
                 .collect();
             let expected_future: Vec<_> = expected_future
@@ -595,8 +595,8 @@ mod test {
                 "\nbefore: {before:#?}\nafter_drain_future: {clone:#?}"
             );
             assert_eq!(
-                clone.log_len(),
-                expected_log_len,
+                clone.entries_len(),
+                expected_entries_len,
                 "\nbefore: {before:#?}\nafter_drain_future: {clone:#?}"
             );
             assert_eq!(
