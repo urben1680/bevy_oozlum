@@ -58,12 +58,15 @@ mod serde_with {
                 },
             )
         }
-        fn from_logless_state(logless_state: Self::De) -> Result<Self, String> {
-            <RareStateLog<EntryAmount<Self>> as LoglessState>::from_logless_state(logless_state.0)
-                .map(|amounts| Self {
-                    states: logless_state.1,
-                    amounts,
-                    index: 0,
+        fn from_logless_state((amounts, states): Self::De) -> Result<Self, String> {
+            <RareStateLog<EntryAmount<Self>> as LoglessState>::from_logless_state(amounts)
+                .map(|amounts| {
+                    let index = amounts.amount();
+                    Self {
+                        amounts,
+                        states,
+                        index,
+                    }
                 })
         }
     }
@@ -91,11 +94,11 @@ mod serde_with {
                 self.index,
             )
         }
-        fn from_with_capacity(with_capacity: Self::De) -> Result<Self, String> {
-            WithCapacity::from_with_capacity(with_capacity.0).map(|amounts| Self {
+        fn from_with_capacity((amounts, WithCapacityWrapper(states), index): Self::De) -> Result<Self, String> {
+            WithCapacity::from_with_capacity(amounts).map(|amounts| Self {
                 amounts,
-                states: with_capacity.1 .0,
-                index: with_capacity.2,
+                states,
+                index,
             })
         }
     }
@@ -125,11 +128,14 @@ mod serde_with {
                 }),
             )
         }
-        fn from_logless_with_capacity(logless_with_capacity: Self::De) -> Result<Self, String> {
-            RareStateLog::from_logless_with_capacity(logless_with_capacity.0).map(|amounts| Self {
-                amounts,
-                states: logless_with_capacity.1 .0,
-                index: 0,
+        fn from_logless_with_capacity((amounts, WithCapacityWrapper(states)): Self::De) -> Result<Self, String> {
+            RareStateLog::from_logless_with_capacity(amounts).map(|amounts| {
+                let index = amounts.amount();
+                Self {
+                    amounts,
+                    states,
+                    index,
+                }
             })
         }
     }
@@ -191,62 +197,62 @@ where
             index: 0,
         }
     }
-    pub fn with_capacities_empty(entry: U, states_capacity: usize, log_capacity: usize) -> Self {
+    pub fn with_capacities_empty(entry: U, states_capacity: usize, entries_capacity: usize) -> Self {
         Self {
-            amounts: RareStateLog::with_capacity(EntryAmount::zero(entry), log_capacity),
+            amounts: RareStateLog::with_capacity(EntryAmount::zero(entry), entries_capacity),
             states: VecDeque::with_capacity(states_capacity),
             index: 0,
         }
     }
-    pub fn log_len(&self) -> usize {
-        self.amounts.log_len()
+    pub fn entries_len(&self) -> usize {
+        self.amounts.states_len()
     }
     pub fn states_len(&self) -> usize {
         self.states.len()
     }
-    pub fn log_capacity(&self) -> usize {
+    pub fn entries_capacity(&self) -> usize {
         self.amounts.states_capacity()
     }
     pub fn states_capacity(&self) -> usize {
         self.states.capacity()
     }
-    pub fn log_is_empty(&self) -> bool {
+    pub fn entries_is_empty(&self) -> bool {
         self.amounts.states_is_empty()
     }
     pub fn states_is_empty(&self) -> bool {
         self.states.is_empty()
     }
-    pub fn log_reserve(&mut self, additional: usize) {
+    pub fn entries_reserve(&mut self, additional: usize) {
         self.amounts.states_reserve(additional)
     }
     pub fn states_reserve(&mut self, additional: usize) {
         self.states.reserve(additional)
     }
-    pub fn log_reserve_exact(&mut self, additional: usize) {
+    pub fn entries_reserve_exact(&mut self, additional: usize) {
         self.amounts.states_reserve_exact(additional)
     }
     pub fn states_reserve_exact(&mut self, additional: usize) {
         self.states.reserve_exact(additional)
     }
-    pub fn log_try_reserve(&mut self, additional: usize) -> Result<(), TryReserveError> {
+    pub fn entries_try_reserve(&mut self, additional: usize) -> Result<(), TryReserveError> {
         self.amounts.states_try_reserve(additional)
     }
     pub fn states_try_reserve(&mut self, additional: usize) -> Result<(), TryReserveError> {
         self.states.try_reserve(additional)
     }
-    pub fn log_try_reserve_exact(&mut self, additional: usize) -> Result<(), TryReserveError> {
+    pub fn entries_try_reserve_exact(&mut self, additional: usize) -> Result<(), TryReserveError> {
         self.amounts.states_try_reserve_exact(additional)
     }
     pub fn states_try_reserve_exact(&mut self, additional: usize) -> Result<(), TryReserveError> {
         self.states.try_reserve_exact(additional)
     }
-    pub fn log_shrink_to(&mut self, min_capacity: usize) {
+    pub fn entries_shrink_to(&mut self, min_capacity: usize) {
         self.amounts.states_shrink_to(min_capacity)
     }
     pub fn states_shrink_to(&mut self, min_capacity: usize) {
         self.states.shrink_to(min_capacity)
     }
-    pub fn log_shrink_to_fit(&mut self) {
+    pub fn entries_shrink_to_fit(&mut self) {
         self.amounts.states_shrink_to_fit()
     }
     pub fn states_shrink_to_fit(&mut self) {
@@ -283,7 +289,7 @@ where
         let amount = <Self as WithAmountInternal>::amount_to_usize(amount);
         self.states.drain(..self.index);
         self.states.truncate(amount);
-        self.index = 0;
+        self.index = amount;
     }
     pub fn clear_empty(&mut self, entry: U) {
         self.states.clear();
@@ -339,7 +345,7 @@ where
             Ok(amount) => Ok(Self {
                 amounts: RareStateLog::new(EntryAmount { entry, amount }),
                 states,
-                index: 0,
+                index: pushed_amount,
             }),
             Err(error) => Err(AmountErr {
                 values: states,
@@ -353,16 +359,16 @@ where
         iter: impl IntoIterator<Item = T>,
         entry: U,
         states_capacity: usize,
-        log_capacity: usize,
+        entries_capacity: usize,
     ) -> Result<Self, AmountErr<VecDeque<T>, Self>> {
         let mut states = VecDeque::with_capacity(states_capacity);
         states.extend(iter.into_iter());
         let pushed_amount = states.len();
         match <Self as WithAmountInternal>::usize_to_amount(pushed_amount) {
             Ok(amount) => Ok(Self {
-                amounts: RareStateLog::with_capacity(EntryAmount { entry, amount }, log_capacity),
+                amounts: RareStateLog::with_capacity(EntryAmount { entry, amount }, entries_capacity),
                 states,
-                index: 0,
+                index: pushed_amount,
             }),
             Err(error) => Err(AmountErr {
                 values: states,
@@ -413,7 +419,7 @@ where
                 self.states.clear();
                 self.states.append(&mut states);
                 self.amounts.clear_with(EntryAmount { entry, amount });
-                self.index = 0;
+                self.index = pushed_amount;
                 Ok(())
             }
             Err(error) => Err(AmountErr {
@@ -444,11 +450,11 @@ where
         iter: impl IntoIterator<Item = T>,
         entry: U,
         states_capacity: usize,
-        log_capacity: usize,
+        entries_capacity: usize,
     ) -> Self {
         // rust analyzer does not like `let Ok(ok) = result;` here
         // https://github.com/rust-lang/rust-analyzer/issues/18334
-        match Self::fallible_with_capacities(iter, entry, states_capacity, log_capacity) {
+        match Self::fallible_with_capacities(iter, entry, states_capacity, entries_capacity) {
             Ok(ok) => ok,
             Err(err) => match err._error {},
         }
@@ -487,9 +493,9 @@ where
         iter: impl IntoIterator<Item = T>,
         entry: U,
         states_capacity: usize,
-        log_capacity: usize,
+        entries_capacity: usize,
     ) -> Result<Self, AmountErr<VecDeque<T>, Self>> {
-        Self::fallible_with_capacities(iter, entry, states_capacity, log_capacity)
+        Self::fallible_with_capacities(iter, entry, states_capacity, entries_capacity)
     }
     pub fn try_push_present<Out: Into<U>>(
         &mut self,
@@ -528,5 +534,104 @@ where
             .sum();
         self.index -= amount;
         self.states.drain(..amount)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use serde::{Deserialize, Serialize};
+
+    use super::*;
+
+    #[test]
+    fn serde_with() {
+        #[derive(Serialize, Deserialize)]
+        struct Logs {
+            full: RareStatesLog<char, u8>,
+            #[serde(with = "crate::log::logless_state")]
+            logless: RareStatesLog<char, u8>,
+            #[serde(with = "crate::log::with_capacity")]
+            full_with_capacity: RareStatesLog<char, u8>,
+            #[serde(with = "crate::log::logless_with_capacity")]
+            logless_with_capacity: RareStatesLog<char, u8>,
+        }
+
+        let mut original = RareStatesLog::new(['a', 'b'], 1);
+        original.push_present(|mut log| {
+            log.extend(['c', 'd']);
+            2
+        });
+        original.push_present(|mut log| {
+            log.extend(['e', 'f']);
+            3
+        });
+        original.backward_log().expect("in log");
+
+        let mut logs = Logs {
+            full: original.clone(),
+            logless: original.clone(),
+            full_with_capacity: original.clone(),
+            logless_with_capacity: original.clone(),
+        };
+
+        logs.full.entries_reserve_exact(98);
+        logs.logless.entries_reserve_exact(98);
+        logs.full_with_capacity.entries_reserve_exact(98);
+        logs.logless_with_capacity.entries_reserve_exact(98);
+
+        logs.full.states_reserve_exact(194);
+        logs.logless.states_reserve_exact(194);
+        logs.full_with_capacity.states_reserve_exact(194);
+        logs.logless_with_capacity.states_reserve_exact(194);
+
+        let serialized = serde_json::to_string_pretty(&logs).unwrap();
+        let Logs {
+            full,
+            logless,
+            full_with_capacity,
+            logless_with_capacity,
+        } = serde_json::from_str(&serialized).unwrap();
+
+        let test = |log: &RareStatesLog<char, u8>, entries_len, states_len, with_capacity| {
+            let (states, entry) = log.get();
+            let states: Vec<_> = states.cloned().collect();
+
+            assert_eq!(
+                states,
+                vec!['c', 'd'],
+                "before: {original:#?}\nserialized: {serialized}\nafter: {log:#?}"
+            );
+            assert_eq!(
+                *entry, 2,
+                "before: {original:#?}\nserialized: {serialized}\nafter: {log:#?}"
+            );
+            assert_eq!(
+                log.entries_len(),
+                entries_len,
+                "before: {original:#?}\nserialized: {serialized}\nafter: {log:#?}"
+            );
+            assert_eq!(
+                log.states_len(),
+                states_len,
+                "before: {original:#?}\nserialized: {serialized}\nafter: {log:#?}"
+            );
+            assert_eq!(
+                log.entries_capacity() >= 100,
+                with_capacity,
+                "before: {original:#?}\nserialized: {serialized}\nafter: {log:#?}\ncapacity: {}",
+                log.entries_capacity()
+            );
+            assert_eq!(
+                log.states_capacity() >= 200,
+                with_capacity,
+                "before: {original:#?}\nserialized: {serialized}\nafter: {log:#?}\ncapacity: {}",
+                log.states_capacity()
+            );
+        };
+
+        test(&full, 2, 6, false);
+        test(&logless, 0, 2, false);
+        test(&full_with_capacity, 2, 6, true);
+        test(&logless_with_capacity, 0, 2, true);
     }
 }
