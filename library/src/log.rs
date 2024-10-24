@@ -316,7 +316,7 @@ impl PackedRevFrame {
         };
         usize::MAX >> shift
     };
-    pub(crate) const MIN: Self = Self([u8::MIN; Self::BYTES]);
+    const MIN: Self = Self([u8::MIN; Self::BYTES]);
     fn into_usize(self) -> usize {
         let mut i = self.0.into_iter();
         usize::from_le_bytes(std::array::from_fn(|_| i.next().unwrap_or(0)))
@@ -533,8 +533,9 @@ impl<T> RareValue<T> {
     }
 }
 
-// Bounds need no documentation because the `drain_future` methods that expose this type
-// document that bound themselves.
+
+// Private bounds need no documentation because the `drain_future`
+// methods which return this type document these bounds themselves.
 #[allow(private_bounds)]
 #[derive(Debug, Clone, Reflect)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -551,28 +552,9 @@ impl<Log: WithAmountInternal> EntryAmount<Log> {
             amount: <Log as WithAmountInternal>::MIN,
         }
     }
+    // todo: doc example with Iterator::take
     pub fn amount(&self) -> usize {
         <Log as WithAmountInternal>::amount_to_usize(self.amount)
-    }
-    pub fn next_value<'a, T>(&mut self, values: &mut impl LogIter<'a, T>) -> Option<T> {
-        let amount = self.amount();
-        if amount != 0 {
-            self.amount = <Log as WithAmountInternal>::usize_to_amount(amount - 1).expect(
-                "if original amount fits into this type, then a reduced value should do so too",
-            );
-            values.next() // should be Some
-        } else {
-            None
-        }
-    }
-    pub fn collect_values<'a, T, F: FromIterator<T>>(
-        self,
-        values: &mut impl LogIter<'a, T>,
-    ) -> (F, Log::Entry) {
-        (
-            FromIterator::from_iter(values.by_ref().take(self.amount())),
-            self.entry,
-        )
     }
 }
 
@@ -903,7 +885,7 @@ mod test {
     pub(super) use shorten_strategy;
 
     #[test]
-    fn test_packed_time() {
+    fn test_packed_frame() {
         let x = PackedRevFrame::try_from_usize(10).unwrap();
         let x: usize = x.into();
         assert_eq!(x, 10);
