@@ -179,7 +179,7 @@ impl<T: LoggedAt> TransitionLog<T> {
         self.transitions.truncate(self.index);
 
         let ref_len = meta.past_world_states() - 1;
-        let start = meta.oldest_world_state().wrapping_add(1).0;
+        let start = meta.oldest_world_state().wrapping_add(1);
         let to = self
             .transitions
             .partition_point(|entry| !RevMeta::contains_buffered(start, entry, ref_len));
@@ -263,7 +263,7 @@ mod test {
             meta: &mut RevMeta,
             strategy: ShortenStrategy,
             push: u8,
-            expected_log_len: usize,
+            expected_transitions_len: usize,
             popped: Option<(u8, usize)>,
         ) {
             meta.queue_forward();
@@ -279,7 +279,7 @@ mod test {
             );
             assert_eq!(
                 self.len(),
-                expected_log_len,
+                expected_transitions_len,
                 "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
             );
         }
