@@ -239,7 +239,7 @@ impl<T: LoggedAt> StateLog<T> {
         self.states.truncate(self.index);
 
         let ref_len = meta.past_world_states();
-        let start = meta.oldest_world_state().0;
+        let start = meta.oldest_world_state();
         let to = self
             .states
             .partition_point(|entry| !RevMeta::contains_buffered(start, entry, ref_len));
@@ -333,7 +333,7 @@ mod test {
             meta: &mut RevMeta,
             strategy: ShortenStrategy,
             push: u8,
-            expected_log_len: usize,
+            expected_states_len: usize,
             expected_popped: Option<(u8, usize)>,
         ) {
             meta.queue_forward();
@@ -349,7 +349,7 @@ mod test {
             );
             assert_eq!(
                 self.len(),
-                expected_log_len,
+                expected_states_len,
                 "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
             );
             assert_eq!(
@@ -357,58 +357,48 @@ mod test {
                 "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
             );
         }
-        fn test_forward_log(&mut self, meta: &mut RevMeta, expected_state: Result<u8, u8>) {
+        fn test_forward_log(&mut self, meta: &mut RevMeta, expected_state: u8, out_of_log: bool) {
             let before = self.clone();
-            let expected_state = match expected_state {
-                Ok(expected_state) => {
-                    let frame = meta.present_world_state().wrapping_add(1);
-                    meta.queue_log(frame).unwrap();
-                    meta.update();
-                    let result = self.forward_log();
-                    assert_eq!(
-                        result,
-                        Ok(()),
-                        "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_forward: {self:#?}",
-                    );
-                    expected_state
-                }
-                Err(expected_state) => {
-                    let result = self.forward_log();
-                    assert_eq!(
-                        result,
-                        Err(OutOfLog),
-                        "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_forward: {self:#?}",
-                    );
-                    expected_state
-                }
-            };
+            if out_of_log {
+                let result = self.forward_log();
+                assert_eq!(
+                    result,
+                    Err(OutOfLog),
+                    "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_forward: {self:#?}",
+                );
+            } else {
+                let frame = meta.present_world_state().wrapping_add(1);
+                meta.queue_log(frame).unwrap();
+                meta.update();
+                let result = self.forward_log();
+                assert_eq!(
+                    result,
+                    Ok(()),
+                    "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_forward: {self:#?}",
+                );
+            }
             self.test_state(before, meta, expected_state);
         }
-        fn test_backward_log(&mut self, meta: &mut RevMeta, expected_state: Result<u8, u8>) {
+        fn test_backward_log(&mut self, meta: &mut RevMeta, expected_state: u8, out_of_log: bool) {
             let before = self.clone();
-            let expected_state = match expected_state {
-                Ok(expected_state) => {
-                    let frame = meta.present_world_state().wrapping_sub(1);
-                    meta.queue_log(frame).unwrap();
-                    meta.update();
-                    let result = self.backward_log();
-                    assert_eq!(
-                        result,
-                        Ok(()),
-                        "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_backward: {self:#?}",
-                    );
-                    expected_state
-                }
-                Err(expected_state) => {
-                    let result = self.backward_log();
-                    assert_eq!(
-                        result,
-                        Err(OutOfLog),
-                        "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_backward: {self:#?}",
-                    );
-                    expected_state
-                }
-            };
+            if out_of_log {
+                let result = self.backward_log();
+                assert_eq!(
+                    result,
+                    Err(OutOfLog),
+                    "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_backward: {self:#?}",
+                );
+            } else {
+                let frame = meta.present_world_state().wrapping_sub(1);
+                meta.queue_log(frame).unwrap();
+                meta.update();
+                let result = self.backward_log();
+                assert_eq!(
+                    result,
+                    Ok(()),
+                    "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_backward: {self:#?}",
+                );
+            }
             self.test_state(before, meta, expected_state);
         }
         fn test_state(&self, before: Self, meta: &RevMeta, state: u8) {
@@ -448,18 +438,18 @@ mod test {
             // shortened log
             log.test_forward(meta, strategy, 3, 2, Some((0, 0)));
 
-            log.test_backward_log(meta, Ok(2));
-            log.test_backward_log(meta, Ok(1));
+            log.test_backward_log(meta, 2, false);
+            log.test_backward_log(meta, 1, false);
             // out of log, no mutations happend to both meta and log here
-            log.test_backward_log(meta, Err(1));
+            log.test_backward_log(meta, 1, true);
 
-            log.test_forward_log(meta, Ok(2));
-            log.test_forward_log(meta, Ok(3));
+            log.test_forward_log(meta, 2, false);
+            log.test_forward_log(meta, 3, false);
             // nothing ever logged past 3, no mutations happend to both meta and log here
-            log.test_forward_log(meta, Err(3));
+            log.test_forward_log(meta, 3, true);
 
-            log.test_backward_log(meta, Ok(2));
-            log.test_backward_log(meta, Ok(1));
+            log.test_backward_log(meta, 2, false);
+            log.test_backward_log(meta, 1, false);
 
             let mut clone = log.test_drain_future([(2, 2), (3, 3)]);
 
