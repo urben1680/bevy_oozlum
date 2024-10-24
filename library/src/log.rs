@@ -321,12 +321,18 @@ impl PackedRevFrame {
         let mut i = self.0.into_iter();
         usize::from_le_bytes(std::array::from_fn(|_| i.next().unwrap_or(0)))
     }
-    fn try_from_usize(value: usize) -> Result<Self, ()> {
+    #[cfg(feature = "serde")]
+    fn try_from_usize(value: usize) -> Result<Self, String> {
         if value <= Self::MAX_AS_USIZE {
             let mut i = value.to_le_bytes().into_iter();
             Ok(Self(std::array::from_fn(|_| i.next().unwrap_or(0))))
         } else {
-            Err(())
+            Err(format!(
+                "{value} does not fit into {} bytes, cannot map this value to `PackedTime` \
+                on this machine, increase the `time_bytes_*` feature of the reversible_systems \
+                crate to the value of the source where this value was serialized",
+                Self::BYTES,
+            ))
         }
     }
     #[cfg(feature = "serde")]
@@ -394,7 +400,7 @@ impl<'de> serde::Deserialize<'de> for PackedRevFrame {
         match usize::deserialize(deserializer) {
             Ok(time) => match Self::try_from_usize(time) {
                 Ok(this) => Ok(this),
-                Err(()) => Err(serde::de::Error::custom(Self::from_serde_err(time))),
+                Err(msg) => Err(serde::de::Error::custom(msg)),
             },
             Err(err) => Err(err),
         }
@@ -532,7 +538,6 @@ impl<T> RareValue<T> {
         self.skips.into()
     }
 }
-
 
 // Private bounds need no documentation because the `drain_future`
 // methods which return this type document these bounds themselves.

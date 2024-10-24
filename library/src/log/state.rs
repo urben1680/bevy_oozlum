@@ -364,7 +364,7 @@ mod test {
                 assert_eq!(
                     result,
                     Err(OutOfLog),
-                    "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_forward: {self:#?}",
+                    "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
                 );
             } else {
                 let frame = meta.present_world_state().wrapping_add(1);
@@ -374,7 +374,7 @@ mod test {
                 assert_eq!(
                     result,
                     Ok(()),
-                    "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_forward: {self:#?}",
+                    "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
                 );
             }
             self.test_state(before, meta, expected_state);
@@ -386,7 +386,7 @@ mod test {
                 assert_eq!(
                     result,
                     Err(OutOfLog),
-                    "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_backward: {self:#?}",
+                    "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
                 );
             } else {
                 let frame = meta.present_world_state().wrapping_sub(1);
@@ -396,7 +396,7 @@ mod test {
                 assert_eq!(
                     result,
                     Ok(()),
-                    "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_backward: {self:#?}",
+                    "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
                 );
             }
             self.test_state(before, meta, expected_state);
@@ -405,7 +405,7 @@ mod test {
             assert_eq!(
                 **self,
                 (state, meta.present_world_state()),
-                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_backward: {self:#?}",
+                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
             );
         }
         fn test_drain_future(

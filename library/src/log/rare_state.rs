@@ -18,7 +18,7 @@ pub struct RareStateLog<T> {
     present: RareValue<T>,
     index: usize,
     skips: usize,
-    len: usize,
+    past_len: usize,
 }
 
 #[cfg(feature = "serde")]
@@ -65,7 +65,7 @@ mod serde_with {
                 &self.present,
                 self.index,
                 self.skips,
-                self.len,
+                self.past_len,
             )
         }
         fn from_with_capacity(
@@ -76,7 +76,7 @@ mod serde_with {
                 present,
                 index,
                 skips,
-                len,
+                past_len: len,
             })
         }
     }
@@ -118,7 +118,7 @@ impl<T> RareStateLog<T> {
             },
             index: 0,
             skips: 0,
-            len: 0,
+            past_len: 0,
         }
     }
 
@@ -131,7 +131,7 @@ impl<T> RareStateLog<T> {
             },
             index: 0,
             skips: 0,
-            len: 0,
+            past_len: 0,
         }
     }
     pub fn into_inner(self) -> T {
@@ -180,7 +180,7 @@ impl<T> RareStateLog<T> {
         }
         self.states.pop_front().map(|rare| {
             self.index -= 1;
-            self.len -= rare.len();
+            self.past_len -= rare.len();
             rare.value
         })
     }
@@ -191,7 +191,7 @@ impl<T> RareStateLog<T> {
         self.states.clear();
         self.present.skips = PackedRevFrame::MIN;
         self.index = 0;
-        self.len = 0;
+        self.past_len = 0;
         self.skips = 0;
     }
     pub fn clear_with(&mut self, present: T) {
@@ -201,14 +201,14 @@ impl<T> RareStateLog<T> {
             skips: PackedRevFrame::MIN,
         };
         self.index = 0;
-        self.len = 0;
+        self.past_len = 0;
         self.skips = 0;
     }
     pub fn push_present(&mut self, state: Option<T>) {
         self.states.truncate(self.index);
-        self.len += 1;
+        self.past_len += 1;
         match state {
-            None => {
+            None if self.skips < PackedRevFrame::MAX_AS_USIZE => {
                 self.skips += 1;
                 self.present.skips = RevFrame::new(self.skips).into();
             }
@@ -225,12 +225,13 @@ impl<T> RareStateLog<T> {
                 self.skips = 0;
                 self.index += 1;
             }
+            None => {}
         }
     }
     pub fn backward_log(&mut self) -> Result<(), OutOfLog> {
         if self.skips > 0 {
             self.skips -= 1;
-            self.len -= 1;
+            self.past_len -= 1;
             return Ok(());
         }
         let index = self.index.checked_sub(1).ok_or(OutOfLog)?;
@@ -238,7 +239,7 @@ impl<T> RareStateLog<T> {
             self.index = index;
             core::mem::swap(&mut self.present, entry);
             self.skips = self.present.skips.into();
-            self.len -= 1;
+            self.past_len -= 1;
             return Ok(());
         }
 
@@ -257,7 +258,7 @@ impl<T> RareStateLog<T> {
             present_skips: self.present.skips.into(),
             index: self.index,
             skips: self.skips,
-            len: self.len,
+            len: self.past_len,
         };
 
         error!("{INDEX_OOB}, {debug_struct:#?}");
@@ -265,11 +266,11 @@ impl<T> RareStateLog<T> {
     }
     pub fn forward_log(&mut self) -> Result<(), OutOfLog> {
         if self.skips < self.present.skips.into() {
-            self.len += 1;
+            self.past_len += 1;
             self.skips += 1;
             Ok(())
         } else if let Some(entry) = self.states.get_mut(self.index) {
-            self.len += 1;
+            self.past_len += 1;
             self.index += 1;
             self.skips = 0;
             core::mem::swap(&mut self.present, entry);
@@ -279,7 +280,7 @@ impl<T> RareStateLog<T> {
         }
     }
     pub fn pop_past_by_len(&mut self, max_past_len: usize) -> Option<T> {
-        let excessive_len = self.len.checked_sub(max_past_len)?;
+        let excessive_len = self.past_len.checked_sub(max_past_len)?;
         let past_end = self.past_end_rare()?;
         if excessive_len >= past_end.len() {
             self.pop_past()
@@ -290,11 +291,11 @@ impl<T> RareStateLog<T> {
     pub fn drain_past_by_len(&mut self, max_past_len: usize) -> impl LogIter<T> {
         let mut drain_amount = 0;
         for entry in self.states.iter() {
-            let less = self.len - entry.len();
+            let less = self.past_len - entry.len();
             if less < max_past_len {
                 break;
             }
-            self.len = less;
+            self.past_len = less;
             drain_amount += 1;
         }
         self.index -= drain_amount;
@@ -321,7 +322,7 @@ impl<T: LoggedAt> RareStateLog<T> {
         let to = self
             .states
             .partition_point(|entry| !RevMeta::contains_buffered(start, entry, ref_len));
-        self.len -= to // sum of to-be-drained states, because of this mapping RareValue::len below is not needed, only skips_before_state
+        self.past_len -= to // sum of to-be-drained states, because of this mapping RareValue::len below is not needed, only skips_before_state
             + self
                 .states
                 .range(..to)
@@ -338,7 +339,7 @@ mod test {
 
     use serde::{Deserialize, Serialize};
 
-    use crate::log::test::{ShortenStrategy, shorten_strategy};
+    use crate::log::test::{shorten_strategy, ShortenStrategy};
 
     use super::*;
 
@@ -417,8 +418,7 @@ mod test {
             meta.queue_forward();
             meta.update();
             let before = self.clone();
-            let state = (state, meta.present_world_state());
-            let push = state_is_pushed.then_some(state);
+            let push = state_is_pushed.then_some((state, meta.present_world_state()));
             self.push_present(push);
             let after_push = self.clone();
             let actual_popped = shorten_strategy!(self, meta, strategy, before, after_push);
@@ -431,15 +431,17 @@ mod test {
                 expected_states_len,
                 "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
             );
-            assert_eq!(
-                **self, state,
-                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
-            );
+            self.test_state(before, meta, state);
         }
-        fn test_forward_log(&mut self, meta: &mut RevMeta, expected_state: u8, possibly_out_of_log: bool) {
+        fn test_forward_log(
+            &mut self,
+            meta: &mut RevMeta,
+            expected_state: u8,
+            possibly_out_of_log: bool,
+        ) {
             if possibly_out_of_log {
-                // Depending on skips before the current state, it is impossible to force an OutOfLog error.
-                // Instead, it is only asserted here that the method call does not panic.
+                // Depending on skips before the current state, no OutOfLog occurs here.
+                // Instead, it is only asserted that the method call does not panic.
                 let _ = self.clone().forward_log();
                 return;
             }
@@ -451,18 +453,65 @@ mod test {
             assert_eq!(
                 result,
                 Ok(()),
-                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_forward: {self:#?}",
+                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
             );
             self.test_state(before, meta, expected_state);
         }
-
-
+        fn test_backward_log(
+            &mut self,
+            meta: &mut RevMeta,
+            expected_state: u8,
+            possibly_out_of_log: bool,
+        ) {
+            if possibly_out_of_log {
+                // Depending on skips before the current state, no OutOfLog occurs here.
+                // Instead, it is only asserted that the method call does not panic.
+                let _ = self.clone().backward_log();
+                return;
+            }
+            let before = self.clone();
+            let frame = meta.present_world_state().wrapping_sub(1);
+            meta.queue_log(frame).unwrap();
+            meta.update();
+            let result = self.backward_log();
+            assert_eq!(
+                result,
+                Ok(()),
+                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
+            );
+            self.test_state(before, meta, expected_state);
+        }
         fn test_state(&self, before: Self, meta: &RevMeta, state: u8) {
             assert_eq!(
                 **self,
                 (state, meta.present_world_state()),
-                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_backward: {self:#?}",
+                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
             );
+        }
+        fn test_drain_future(
+            &self,
+            expected_future: impl IntoIterator<Item = (u8, usize)>,
+        ) -> Self {
+            let before = self.clone();
+            let mut clone = self.clone();
+            let actual_future: Vec<_> = clone.drain_future().collect();
+            let expected_future: Vec<_> = expected_future
+                .into_iter()
+                .map(|(state, frame)| (state, RevFrame(frame)))
+                .collect();
+            assert_eq!(
+                actual_future, expected_future,
+                "\nbefore: {before:#?}\nafter: {clone:#?}"
+            );
+            clone
+        }
+    }
+
+    #[test]
+    fn push_and_log_traversal() {
+        for strategy in ShortenStrategy::VARIANTS {
+            let meta = &mut RevMeta::new(NonZeroUsize::new(3), 0, false);
+            let mut log = RareStateLog::new((0, meta.present_world_state()));
         }
     }
 

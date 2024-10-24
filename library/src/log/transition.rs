@@ -294,7 +294,7 @@ mod test {
             let result = self.forward_log().map(|transition| *transition);
             assert_eq!(
                 result, transition,
-                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_forward: {self:#?}",
+                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
             )
         }
         fn test_backward_log(&mut self, meta: &mut RevMeta, transition: Result<u8, OutOfLog>) {
@@ -308,7 +308,7 @@ mod test {
             let result = self.backward_log().map(|transition| *transition);
             assert_eq!(
                 result, transition,
-                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_backward: {self:#?}",
+                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
             )
         }
         fn test_drain_future(
@@ -324,7 +324,7 @@ mod test {
                 .collect();
             assert_eq!(
                 actual_future, expected_future,
-                "\nbefore: {before:#?}\nafter_drain_future: {clone:#?}"
+                "\nbefore: {before:#?}\nafter: {clone:#?}"
             );
             clone
         }

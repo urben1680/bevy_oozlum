@@ -81,7 +81,10 @@ mod serde_with {
         fn from_logless_with_capacity(
             (entries_capacity, transitions_capacity): Self::De,
         ) -> Result<Self, String> {
-            Ok(Self::with_capacities(entries_capacity, transitions_capacity))
+            Ok(Self::with_capacities(
+                entries_capacity,
+                transitions_capacity,
+            ))
         }
     }
 }
@@ -390,30 +393,31 @@ mod test {
             logless_with_capacity,
         } = serde_json::from_str(&serialized).unwrap();
 
-        let test = |log: &RareTransitionsLog<char, u8>, entries_len, transitions_len, with_capacity| {
-            assert_eq!(
-                log.entries_len(),
-                entries_len,
-                "before: {original:#?}\nserialized: {serialized}\nafter: {log:#?}"
-            );
-            assert_eq!(
-                log.transitions_len(),
-                transitions_len,
-                "before: {original:#?}\nserialized: {serialized}\nafter: {log:#?}"
-            );
-            assert_eq!(
+        let test =
+            |log: &RareTransitionsLog<char, u8>, entries_len, transitions_len, with_capacity| {
+                assert_eq!(
+                    log.entries_len(),
+                    entries_len,
+                    "before: {original:#?}\nserialized: {serialized}\nafter: {log:#?}"
+                );
+                assert_eq!(
+                    log.transitions_len(),
+                    transitions_len,
+                    "before: {original:#?}\nserialized: {serialized}\nafter: {log:#?}"
+                );
+                assert_eq!(
                 log.entries_capacity() >= 100,
                 with_capacity,
                 "before: {original:#?}\nserialized: {serialized}\nafter: {log:#?}\ncapacity: {}",
                 log.entries_capacity()
             );
-            assert_eq!(
+                assert_eq!(
                 log.transitions_capacity() >= 200,
                 with_capacity,
                 "before: {original:#?}\nserialized: {serialized}\nafter: {log:#?}\ncapacity: {}",
                 log.transitions_capacity()
             );
-        };
+            };
 
         test(&full, 2, 4, false);
         test(&full_with_capacity, 2, 4, true);
