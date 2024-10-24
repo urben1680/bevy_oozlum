@@ -76,12 +76,12 @@ mod serde_with {
         type Se<'se> = (usize, usize) where T: 'se, U: 'se;
         type De = (usize, usize);
         fn get_logless_with_capacity(&self) -> Self::Se<'_> {
-            (self.log_capacity(), self.transitions_capacity())
+            (self.entries_capacity(), self.transitions_capacity())
         }
         fn from_logless_with_capacity(
-            (log_capacity, transitions_capacity): Self::De,
+            (entries_capacity, transitions_capacity): Self::De,
         ) -> Result<Self, String> {
-            Ok(Self::with_capacities(log_capacity, transitions_capacity))
+            Ok(Self::with_capacities(entries_capacity, transitions_capacity))
         }
     }
 }
@@ -111,50 +111,50 @@ where
             index: 0,
         }
     }
-    pub fn with_capacities(log_capacity: usize, transitions_capacity: usize) -> Self {
+    pub fn with_capacities(entries_capacity: usize, transitions_capacity: usize) -> Self {
         Self {
-            amounts: RareTransitionLog::with_capacity(log_capacity),
+            amounts: RareTransitionLog::with_capacity(entries_capacity),
             transitions: VecDeque::with_capacity(transitions_capacity),
             index: 0,
         }
     }
-    pub fn log_len(&self) -> usize {
-        self.amounts.log_len()
+    pub fn entries_len(&self) -> usize {
+        self.amounts.transitions_len()
     }
     pub fn transitions_len(&self) -> usize {
         self.transitions.len()
     }
-    pub fn log_capacity(&self) -> usize {
+    pub fn entries_capacity(&self) -> usize {
         self.amounts.transitions_capacity()
     }
     pub fn transitions_capacity(&self) -> usize {
         self.transitions.capacity()
     }
-    pub fn log_is_empty(&self) -> bool {
-        self.amounts.log_is_empty()
+    pub fn entries_is_empty(&self) -> bool {
+        self.amounts.transitions_is_empty()
     }
     pub fn transitions_is_empty(&self) -> bool {
         self.transitions.is_empty()
     }
-    pub fn log_reserve(&mut self, additional: usize) {
+    pub fn entries_reserve(&mut self, additional: usize) {
         self.amounts.transitions_reserve(additional)
     }
     pub fn transitions_reserve(&mut self, additional: usize) {
         self.transitions.reserve(additional)
     }
-    pub fn log_reserve_exact(&mut self, additional: usize) {
+    pub fn entries_reserve_exact(&mut self, additional: usize) {
         self.amounts.transitions_reserve_exact(additional)
     }
     pub fn transitions_reserve_exact(&mut self, additional: usize) {
         self.transitions.reserve_exact(additional)
     }
-    pub fn log_try_reserve(&mut self, additional: usize) -> Result<(), TryReserveError> {
+    pub fn entries_try_reserve(&mut self, additional: usize) -> Result<(), TryReserveError> {
         self.amounts.transitions_try_reserve(additional)
     }
     pub fn transitions_try_reserve(&mut self, additional: usize) -> Result<(), TryReserveError> {
         self.transitions.try_reserve(additional)
     }
-    pub fn log_try_reserve_exact(&mut self, additional: usize) -> Result<(), TryReserveError> {
+    pub fn entries_try_reserve_exact(&mut self, additional: usize) -> Result<(), TryReserveError> {
         self.amounts.transitions_try_reserve_exact(additional)
     }
     pub fn transitions_try_reserve_exact(
@@ -163,13 +163,13 @@ where
     ) -> Result<(), TryReserveError> {
         self.transitions.try_reserve_exact(additional)
     }
-    pub fn log_shrink_to(&mut self, min_capacity: usize) {
+    pub fn entries_shrink_to(&mut self, min_capacity: usize) {
         self.amounts.transitions_shrink_to(min_capacity)
     }
     pub fn transitions_shrink_to(&mut self, min_capacity: usize) {
         self.transitions.shrink_to(min_capacity)
     }
-    pub fn log_shrink_to_fit(&mut self) {
+    pub fn entries_shrink_to_fit(&mut self) {
         self.amounts.transitions_shrink_to_fit()
     }
     pub fn transitions_shrink_to_fit(&mut self) {
@@ -341,364 +341,115 @@ where
 mod test {
     use std::{borrow::Borrow, num::NonZeroUsize};
 
+    use serde::{Deserialize, Serialize};
+
     use crate::log::PackedRevFrame;
 
     use super::*;
+
+    #[test]
+    fn serde_with() {
+        #[derive(Serialize, Deserialize)]
+        struct Logs {
+            full: RareTransitionsLog<char, u8>,
+            #[serde(with = "crate::log::with_capacity")]
+            full_with_capacity: RareTransitionsLog<char, u8>,
+            #[serde(with = "crate::log::logless_with_capacity")]
+            logless_with_capacity: RareTransitionsLog<char, u8>,
+        }
+
+        let mut original = RareTransitionsLog::new();
+        original.push_present(|mut log| {
+            log.extend(['a', 'b']);
+            1
+        });
+        original.push_present(|mut log| {
+            log.extend(['c', 'd']);
+            2
+        });
+        original.backward_log().expect("in log");
+
+        let mut logs = Logs {
+            full: original.clone(),
+            full_with_capacity: original.clone(),
+            logless_with_capacity: original.clone(),
+        };
+
+        logs.full.entries_reserve_exact(98);
+        logs.full_with_capacity.entries_reserve_exact(98);
+        logs.logless_with_capacity.entries_reserve_exact(98);
+
+        logs.full.transitions_reserve_exact(196);
+        logs.full_with_capacity.transitions_reserve_exact(196);
+        logs.logless_with_capacity.transitions_reserve_exact(196);
+
+        let serialized = serde_json::to_string_pretty(&logs).unwrap();
+        let Logs {
+            full,
+            full_with_capacity,
+            logless_with_capacity,
+        } = serde_json::from_str(&serialized).unwrap();
+
+        let test = |log: &RareTransitionsLog<char, u8>, entries_len, transitions_len, with_capacity| {
+            assert_eq!(
+                log.entries_len(),
+                entries_len,
+                "before: {original:#?}\nserialized: {serialized}\nafter: {log:#?}"
+            );
+            assert_eq!(
+                log.transitions_len(),
+                transitions_len,
+                "before: {original:#?}\nserialized: {serialized}\nafter: {log:#?}"
+            );
+            assert_eq!(
+                log.entries_capacity() >= 100,
+                with_capacity,
+                "before: {original:#?}\nserialized: {serialized}\nafter: {log:#?}\ncapacity: {}",
+                log.entries_capacity()
+            );
+            assert_eq!(
+                log.transitions_capacity() >= 200,
+                with_capacity,
+                "before: {original:#?}\nserialized: {serialized}\nafter: {log:#?}\ncapacity: {}",
+                log.transitions_capacity()
+            );
+        };
+
+        test(&full, 2, 4, false);
+        test(&full_with_capacity, 2, 4, true);
+        test(&logless_with_capacity, 0, 0, true);
+    }
+
     /*
-        use crate::{log::GetLoggedAt, meta::RevMeta};
+    #[test]
+    fn test() {
+        let mut meta_and_logs = MetaAndLogs::new(NonZeroUsize::new(3));
 
-        #[derive(Clone, Debug)]
-        struct MetaAndLogs {
-            meta: RevMeta,
-            with_timestamp: [RareTransitionsLog<usize, GetLoggedAt, 1>; 2],
-            one_per_frame: [RareTransitionsLog<usize, (), 1>; 2],
-        }
+        meta_and_logs.forward(Ok([]), 1, 0);
+        meta_and_logs.forward(Ok([1]), 2, 1);
+        // pop_front called internally
+        meta_and_logs.forward(Ok([2, 3]), 2, 3);
+        meta_and_logs.forward(Ok([]), 2, 2);
+        meta_and_logs.forward(Ok([4, 5, 6, 7]), 2, 4);
 
-        fn collect(iter: impl IntoIterator<Item: Borrow<usize>>) -> Vec<usize> {
-            iter.into_iter().map(|val| val.borrow().clone()).collect()
-        }
+        meta_and_logs.backward_log(Ok(Some([4, 5, 6, 7])));
+        meta_and_logs.backward_log::<0>(Ok(None));
+        // out of log, no mutations happend to both meta and log here
+        meta_and_logs.backward_log::<0>(Err(OutOfLog));
 
-        impl MetaAndLogs {
-            fn new(max_len: Option<NonZeroUsize>) -> Self {
-                Self {
-                    meta: RevMeta::new(max_len, 0, false),
-                    with_timestamp: Default::default(),
-                    one_per_frame: Default::default(),
-                }
-            }
-            fn forward<const N: usize>(
-                &mut self,
-                transitions: Result<[usize; N], [usize; N]>,
-                minimum_log_len: usize,
-                expected_transitions_len: usize,
-            ) {
-                let previous = self.clone();
+        meta_and_logs.forward_log::<0>(Ok(None));
+        meta_and_logs.forward_log(Ok(Some([4, 5, 6, 7])));
+        // nothing ever logged past 8, no mutations happend to both meta and log here
+        meta_and_logs.forward_log::<0>(Err(OutOfLog));
 
-                self.meta.queue_forward();
-                self.meta.update();
+        meta_and_logs.backward_log(Ok(Some([4, 5, 6, 7])));
+        meta_and_logs.backward_log::<0>(Ok(None));
+        // all entries are truncated as they are in the future, the new logged entry increases len to 1
+        meta_and_logs.forward(Ok([]), 1, 0);
 
-                let (transitions, expected_ok) = match transitions {
-                    Ok(transitions) => (transitions, true),
-                    Err(transitions) => (transitions, false),
-                };
-
-                self.with_timestamp[0].pop_past_by_timestamp(*self.meta.log_range().start());
-                let middle = self.with_timestamp[0].clone();
-                let is_ok = self.with_timestamp[0]
-                    .try_push_present(|mut log| {
-                        log.extend(transitions);
-                        self.meta.with_logged_at(())
-                    })
-                    .is_ok();
-                assert_eq!(
-                    is_ok, expected_ok,
-                    "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
-                    self.meta, previous.with_timestamp[0], self.with_timestamp[0]
-                );
-                assert!(
-                    self.with_timestamp[0].log_len() >= minimum_log_len,
-                    "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
-                    self.meta,
-                    previous.with_timestamp[0],
-                    self.with_timestamp[0]
-                );
-                assert_eq!(
-                    self.with_timestamp[0].transitions_len(),
-                    expected_transitions_len,
-                    "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
-                    self.meta,
-                    previous.with_timestamp[0],
-                    self.with_timestamp[0]
-                );
-
-                let _ = self.with_timestamp[1].drain_past_by_timestamp(*self.meta.log_range().start());
-                let middle = self.with_timestamp[1].clone();
-                let is_ok = self.with_timestamp[1]
-                    .try_push_present(|mut log| {
-                        log.extend(transitions);
-                        self.meta.with_logged_at(())
-                    })
-                    .is_ok();
-                assert_eq!(
-                    is_ok, expected_ok,
-                    "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
-                    self.meta, previous.with_timestamp[1], self.with_timestamp[1]
-                );
-                assert!(
-                    self.with_timestamp[1].log_len() >= minimum_log_len,
-                    "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
-                    self.meta,
-                    previous.with_timestamp[1],
-                    self.with_timestamp[1]
-                );
-                assert_eq!(
-                    self.with_timestamp[1].transitions_len(),
-                    expected_transitions_len,
-                    "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
-                    self.meta,
-                    previous.with_timestamp[1],
-                    self.with_timestamp[1]
-                );
-
-                let is_ok = self.one_per_frame[0]
-                    .try_push_present(|mut log| {
-                        log.extend(transitions);
-                    })
-                    .is_ok();
-                let middle = self.one_per_frame[0].clone();
-                self.one_per_frame[0].pop_past_by_len(self.meta.past_world_states());
-                assert_eq!(
-                    is_ok, expected_ok,
-                    "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
-                    self.meta, previous.with_timestamp[0], self.with_timestamp[0]
-                );
-                assert!(
-                    self.one_per_frame[0].log_len() >= minimum_log_len,
-                    "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
-                    self.meta,
-                    previous.one_per_frame[0],
-                    self.one_per_frame[0]
-                );
-                assert_eq!(
-                    self.one_per_frame[0].transitions_len(),
-                    expected_transitions_len,
-                    "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
-                    self.meta,
-                    previous.one_per_frame[0],
-                    self.one_per_frame[0]
-                );
-
-                let is_ok = self.one_per_frame[1]
-                    .try_push_present(|mut log| {
-                        log.extend(transitions);
-                    })
-                    .is_ok();
-                let middle = self.one_per_frame[1].clone();
-                let _ = self.one_per_frame[1].drain_past_by_len(self.meta.past_world_states());
-                assert_eq!(
-                    is_ok, expected_ok,
-                    "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
-                    self.meta, previous.with_timestamp[0], self.with_timestamp[0]
-                );
-                assert!(
-                    self.one_per_frame[1].log_len() >= minimum_log_len,
-                    "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
-                    self.meta,
-                    previous.one_per_frame[1],
-                    self.one_per_frame[1]
-                );
-                assert_eq!(
-                    self.one_per_frame[1].transitions_len(),
-                    expected_transitions_len,
-                    "\nmeta: {:#?}\npreviously: {:#?}\nmiddle: {middle:#?}\nnow: {:#?}",
-                    self.meta,
-                    previous.one_per_frame[1],
-                    self.one_per_frame[1]
-                );
-            }
-            fn backward_log<const N: usize>(
-                &mut self,
-                expected_transitions: Result<Option<[usize; N]>, OutOfLog>,
-            ) {
-                let previous = self.clone();
-                match expected_transitions {
-                    Ok(expected_transitions) => {
-                        assert!(
-                            self.meta
-                                .queue_log(self.meta.present_world_state() - 1)
-                                .is_ok(),
-                            "\npreviously: {previous:?}\nnow: {self:?}"
-                        );
-                        self.meta.update();
-
-                        let expected_transitions =
-                            Ok(expected_transitions.map(|transitions| collect(transitions)));
-
-                        let transitions = self.with_timestamp[0]
-                            .backward_log()
-                            .map(|ok| ok.map(|with_timestamp| collect(with_timestamp.value)));
-                        assert_eq!(
-                            transitions, expected_transitions,
-                            "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                            self.meta, previous.with_timestamp[0], self.with_timestamp[0]
-                        );
-
-                        let transitions = self.with_timestamp[1]
-                            .backward_log()
-                            .map(|ok| ok.map(|with_timestamp| collect(with_timestamp.value)));
-                        assert_eq!(
-                            transitions, expected_transitions,
-                            "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                            self.meta, previous.with_timestamp[1], self.with_timestamp[1]
-                        );
-
-                        let transitions = self.one_per_frame[0]
-                            .backward_log()
-                            .map(|ok| ok.map(|value| collect(value.value)));
-                        assert_eq!(
-                            transitions, expected_transitions,
-                            "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                            self.meta, previous.one_per_frame[0], self.one_per_frame[0]
-                        );
-
-                        let transitions = self.one_per_frame[1]
-                            .backward_log()
-                            .map(|ok| ok.map(|value| collect(value.value)));
-                        assert_eq!(
-                            transitions, expected_transitions,
-                            "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                            self.meta, previous.one_per_frame[1], self.one_per_frame[1]
-                        );
-                    }
-                    Err(OutOfLog) => {
-                        assert!(
-                            self.with_timestamp[0].backward_log().is_err(),
-                            "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                            self.meta,
-                            previous.with_timestamp[0],
-                            self.with_timestamp[0]
-                        );
-                        assert!(
-                            self.with_timestamp[1].backward_log().is_err(),
-                            "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                            self.meta,
-                            previous.with_timestamp[1],
-                            self.with_timestamp[1]
-                        );
-                        assert!(
-                            self.one_per_frame[0].backward_log().is_err(),
-                            "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                            self.meta,
-                            previous.one_per_frame[0],
-                            self.one_per_frame[0]
-                        );
-                        assert!(
-                            self.one_per_frame[1].backward_log().is_err(),
-                            "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                            self.meta,
-                            previous.one_per_frame[1],
-                            self.one_per_frame[1]
-                        );
-                    }
-                }
-            }
-            fn forward_log<const N: usize>(
-                &mut self,
-                expected_transitions: Result<Option<[usize; N]>, OutOfLog>,
-            ) {
-                let previous = self.clone();
-                match expected_transitions {
-                    Ok(expected_transitions) => {
-                        assert!(
-                            self.meta
-                                .queue_log(self.meta.present_world_state() + 1)
-                                .is_ok(),
-                            "\npreviously: {previous:?}\nnow: {self:?}"
-                        );
-                        self.meta.update();
-
-                        let expected_transitions =
-                            Ok(expected_transitions.map(|transitions| collect(transitions)));
-
-                        let transitions = self.with_timestamp[0]
-                            .forward_log()
-                            .map(|ok| ok.map(|with_timestamp| collect(with_timestamp.value)));
-                        assert_eq!(
-                            transitions, expected_transitions,
-                            "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                            self.meta, previous.with_timestamp[0], self.with_timestamp[0]
-                        );
-
-                        let transitions = self.with_timestamp[1]
-                            .forward_log()
-                            .map(|ok| ok.map(|with_timestamp| collect(with_timestamp.value)));
-                        assert_eq!(
-                            transitions, expected_transitions,
-                            "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                            self.meta, previous.with_timestamp[1], self.with_timestamp[1]
-                        );
-
-                        let transitions = self.one_per_frame[0]
-                            .forward_log()
-                            .map(|ok| ok.map(|value| collect(value.value)));
-                        assert_eq!(
-                            transitions, expected_transitions,
-                            "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                            self.meta, previous.one_per_frame[0], self.one_per_frame[0]
-                        );
-
-                        let transitions = self.one_per_frame[1]
-                            .forward_log()
-                            .map(|ok| ok.map(|value| collect(value.value)));
-                        assert_eq!(
-                            transitions, expected_transitions,
-                            "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                            self.meta, previous.one_per_frame[1], self.one_per_frame[1]
-                        );
-                    }
-                    Err(OutOfLog) => {
-                        assert!(
-                            self.with_timestamp[0].forward_log().is_err(),
-                            "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                            self.meta,
-                            previous.with_timestamp[0],
-                            self.with_timestamp[0]
-                        );
-                        assert!(
-                            self.with_timestamp[1].forward_log().is_err(),
-                            "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                            self.meta,
-                            previous.with_timestamp[1],
-                            self.with_timestamp[1]
-                        );
-                        assert!(
-                            self.one_per_frame[0].forward_log().is_err(),
-                            "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                            self.meta,
-                            previous.one_per_frame[0],
-                            self.one_per_frame[0]
-                        );
-                        assert!(
-                            self.one_per_frame[1].forward_log().is_err(),
-                            "\nmeta: {:#?}\npreviously: {:#?}\nnow: {:#?}",
-                            self.meta,
-                            previous.one_per_frame[1],
-                            self.one_per_frame[1]
-                        );
-                    }
-                }
-            }
-        }
-
-        #[test]
-        fn test() {
-            let mut meta_and_logs = MetaAndLogs::new(NonZeroUsize::new(3));
-
-            meta_and_logs.forward(Ok([]), 1, 0);
-            meta_and_logs.forward(Ok([1]), 2, 1);
-            // pop_front called internally
-            meta_and_logs.forward(Ok([2, 3]), 2, 3);
-            meta_and_logs.forward(Ok([]), 2, 2);
-            meta_and_logs.forward(Ok([4, 5, 6, 7]), 2, 4);
-
-            meta_and_logs.backward_log(Ok(Some([4, 5, 6, 7])));
-            meta_and_logs.backward_log::<0>(Ok(None));
-            // out of log, no mutations happend to both meta and log here
-            meta_and_logs.backward_log::<0>(Err(OutOfLog));
-
-            meta_and_logs.forward_log::<0>(Ok(None));
-            meta_and_logs.forward_log(Ok(Some([4, 5, 6, 7])));
-            // nothing ever logged past 8, no mutations happend to both meta and log here
-            meta_and_logs.forward_log::<0>(Err(OutOfLog));
-
-            meta_and_logs.backward_log(Ok(Some([4, 5, 6, 7])));
-            meta_and_logs.backward_log::<0>(Ok(None));
-            // all entries are truncated as they are in the future, the new logged entry increases len to 1
-            meta_and_logs.forward(Ok([]), 1, 0);
-
-            // amount of transitions is stored as u8, cannot store more than 255 transitions per push
-            meta_and_logs.forward(Err([11; 256]), 1, 0);
-        }
+        // amount of transitions is stored as u8, cannot store more than 255 transitions per push
+        meta_and_logs.forward(Err([11; 256]), 1, 0);
+    }
     */
     #[allow(dead_code)]
     fn impls_reflect() {
