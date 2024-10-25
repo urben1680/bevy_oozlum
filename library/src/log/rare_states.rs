@@ -48,27 +48,21 @@ mod serde_with {
         type Se<'se> = (&'se EntryAmount<Self>, WithRange<'se, T>);
         type De = (EntryAmount<Self>, VecDeque<T>);
         fn get_logless_state(&self) -> Self::Se<'_> {
-            let amounts = self.amounts.get_logless_state();
-            let range = self.get_range_entry().0;
             (
-                amounts,
+                self.amounts.get_logless_state(),
                 WithRange {
                     deque: &self.states,
-                    range,
+                    range: self.get_range_entry().0,
                 },
             )
         }
-        fn from_logless_state((amounts, states): Self::De) -> Result<Self, String> {
-            <RareStateLog<EntryAmount<Self>> as LoglessState>::from_logless_state(amounts).map(
-                |amounts| {
-                    let index = amounts.amount();
-                    Self {
-                        amounts,
-                        states,
-                        index,
-                    }
-                },
-            )
+        fn from_logless_state((amounts, states): Self::De) -> Self {
+            let index = states.len();
+            Self {
+                amounts: amounts.into(),
+                states,
+                index
+            }
         }
     }
 
@@ -95,14 +89,12 @@ mod serde_with {
                 self.index,
             )
         }
-        fn from_with_capacity(
-            (amounts, WithCapacityWrapper(states), index): Self::De,
-        ) -> Result<Self, String> {
-            WithCapacity::from_with_capacity(amounts).map(|amounts| Self {
-                amounts,
+        fn from_with_capacity((amounts, WithCapacityWrapper(states), index): Self::De) -> Self {
+            Self {
+                amounts: WithCapacity::from_with_capacity(amounts),
                 states,
-                index,
-            })
+                index
+            }
         }
     }
 
@@ -121,27 +113,21 @@ mod serde_with {
             WithCapacityWrapper<VecDeque<T>>,
         );
         fn get_logless_with_capacity(&self) -> Self::Se<'_> {
-            let amounts_se = self.amounts.get_logless_with_capacity();
-            let range = self.get_range_entry().0;
             (
-                amounts_se,
+                self.amounts.get_logless_with_capacity(),
                 WithCapacityWrapper(WithRange {
                     deque: &self.states,
-                    range,
+                    range: self.get_range_entry().0,
                 }),
             )
         }
-        fn from_logless_with_capacity(
-            (amounts, WithCapacityWrapper(states)): Self::De,
-        ) -> Result<Self, String> {
-            RareStateLog::from_logless_with_capacity(amounts).map(|amounts| {
-                let index = amounts.amount();
-                Self {
-                    amounts,
-                    states,
-                    index,
-                }
-            })
+        fn from_logless_with_capacity((amounts, WithCapacityWrapper(states)): Self::De) -> Self {
+            let index = states.len();
+            Self {
+                amounts: RareStateLog::from_logless_with_capacity(amounts),
+                states,
+                index
+            }
         }
     }
 }
@@ -278,17 +264,6 @@ where
         let states = self.states.range(range);
         (states, entry)
     }
-    pub fn past_end(&self) -> Option<(impl LogIter<&T>, &U)> {
-        let entry_amount = self.amounts.past_end()?;
-        let to = entry_amount.amount();
-        let states = self.states.range(..to);
-        Some((states, &entry_amount.entry))
-    }
-    pub fn pop_past(&mut self) -> Option<ValueEntry<impl LogIter<T>, U>> {
-        self.amounts
-            .pop_past()
-            .map(|entry_amount| self.drain_past_by_amount(entry_amount))
-    }
     pub fn drain_future(&mut self) -> (impl LogIter<T>, impl LogIter<EntryAmount<Self>>) {
         (self.states.drain(self.index..), self.amounts.drain_future())
     }
@@ -408,15 +383,12 @@ where
                     .push_present(Some(EntryAmount { entry, amount }));
                 Ok(None)
             }
-            Err(error) => {
-                let states = self.states.drain(self.index..);
-                Err(AmountErr {
-                    values: states,
-                    entry,
-                    pushed_amount,
-                    _error: error,
-                })
-            }
+            Err(error) => Err(AmountErr {
+                values: self.states.drain(self.index..),
+                entry,
+                pushed_amount,
+                _error: error,
+            }),
         }
     }
     fn fallible_clear_with(
