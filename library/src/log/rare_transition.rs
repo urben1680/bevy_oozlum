@@ -29,7 +29,7 @@ mod serde_with {
 
     use serde::{Deserialize, Serialize};
 
-    use crate::log::serde_with::{LoglessWithCapacity, WithCapacity, WithCapacityWrapper};
+    use crate::{log::serde_with::{LoglessWithCapacity, WithCapacity, WithCapacityWrapper}, RevFrame};
 
     use super::{RareTransitionLog, RareValue};
 
@@ -45,7 +45,7 @@ mod serde_with {
             WithCapacityWrapper<VecDeque<RareValue<T>>>,
             usize,
             usize,
-            usize,
+            RevFrame, // deserializes from usize and asserts value in range
             usize,
         );
         fn get_with_capacity(&self) -> Self::Se<'_> {
@@ -58,15 +58,15 @@ mod serde_with {
             )
         }
         fn from_with_capacity(
-            (WithCapacityWrapper(transitions), index, skips, skips_max, past_len): Self::De,
-        ) -> Result<Self, String> {
-            Ok(Self {
+            (WithCapacityWrapper(transitions), index, skips, RevFrame(skips_max), past_len): Self::De,
+        ) -> Self {
+            Self {
                 transitions,
                 index,
                 skips,
                 skips_max,
                 past_len,
-            })
+            }
         }
     }
 
@@ -76,8 +76,8 @@ mod serde_with {
         fn get_logless_with_capacity(&self) -> Self::Se<'_> {
             self.transitions.capacity()
         }
-        fn from_logless_with_capacity(logless_with_capacity: Self::De) -> Result<Self, String> {
-            Ok(Self::with_capacity(logless_with_capacity))
+        fn from_logless_with_capacity(logless_with_capacity: Self::De) -> Self {
+            Self::with_capacity(logless_with_capacity)
         }
     }
 }
@@ -137,23 +137,6 @@ impl<T> RareTransitionLog<T> {
     pub fn transitions_shrink_to_fit(&mut self) {
         self.transitions.shrink_to_fit()
     }
-    fn past_end_rare(&self) -> Option<&RareValue<T>> {
-        self.transitions.front()
-    }
-    pub fn past_end(&self) -> Option<&T> {
-        self.past_end_rare().map(|rare| &rare.value)
-    }
-    pub fn pop_past(&mut self) -> Option<T> {
-        if self.index == 0 {
-            // if the current log position is at the past end, transitions.front() is not a past value but a future value
-            return None;
-        }
-        self.transitions.pop_front().map(|rare| {
-            self.index -= 1;
-            self.past_len -= rare.len();
-            rare.value
-        })
-    }
     pub fn drain_future(&mut self) -> impl LogIter<T> {
         self.skips_max = self.skips;
         self.transitions.drain(self.index..).map(|rare| rare.value)
@@ -181,7 +164,7 @@ impl<T> RareTransitionLog<T> {
                 self.skips = 0;
                 self.past_len += 1;
             }
-            None => {}
+            None => {} // assume user will not go back before current entry
         }
         self.skips_max = self.skips;
     }
@@ -242,8 +225,12 @@ impl<T> RareTransitionLog<T> {
         }
     }
     pub fn pop_past_by_len(&mut self, max_past_len: usize) -> Option<T> {
+        if self.index == 0 {
+            // if the current log position is at the past end, transitions.front() is not a past value but a future value
+            return None;
+        }
         let excessive_len = self.past_len.checked_sub(max_past_len)?;
-        let past_end = self.past_end_rare()?;
+        let past_end = self.transitions.front()?;
         if excessive_len >= past_end.len() {
             self.pop_past()
         } else {
@@ -265,11 +252,22 @@ impl<T> RareTransitionLog<T> {
             .drain(..drain_amount)
             .map(|rare| rare.value)
     }
+    fn pop_past(&mut self) -> Option<T> {
+        self.transitions.pop_front().map(|rare| {
+            self.index -= 1;
+            self.past_len -= rare.len();
+            rare.value
+        })
+    }
 }
 
 impl<T: LoggedAt> RareTransitionLog<T> {
     pub fn pop_past_by_logged_at(&mut self, meta: &RevMeta) -> Option<T> {
-        let logged_at = self.past_end()?.logged_at();
+        if self.index == 0 {
+            // if the current log position is at the past end, transitions.front() is not a past value but a future value
+            return None;
+        }
+        let logged_at = self.transitions.front()?.logged_at();
         if !meta.past_exclusive_oldest_contains(logged_at) {
             self.pop_past()
         } else {
@@ -281,11 +279,10 @@ impl<T: LoggedAt> RareTransitionLog<T> {
         self.transitions.truncate(self.index);
         self.skips_max = self.skips;
 
-        let ref_len = meta.past_world_states() - 1;
-        let start = meta.oldest_world_state().wrapping_add(1);
+        let ref_len = meta.past_world_states();
         let to = self
             .transitions
-            .partition_point(|entry| RevMeta::contains_buffered(start, entry, ref_len));
+            .partition_point(|entry| meta.before_past_buffered(entry, ref_len));
         self.past_len -= to // sum of to-be-drained transitions, because of this mapping RareValue::len below is not needed, only skips_before_value
             + self
                 .transitions
