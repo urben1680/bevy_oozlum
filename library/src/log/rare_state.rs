@@ -15,9 +15,10 @@ use super::{LogIter, LoggedAt, OutOfLog, PackedRevFrame, RareValue, INDEX_OOB};
 pub struct RareStateLog<T> {
     /// RareValue.skips represents the number of None pushes after the state in the struct
     states: VecDeque<RareValue<T>>,
-    present: RareValue<T>,
+    present: T,
     index: usize,
     skips: usize,
+    skips_max: usize,
     past_len: usize,
 }
 
@@ -27,9 +28,9 @@ mod serde_with {
 
     use serde::{Deserialize, Serialize};
 
-    use crate::log::serde_with::{
+    use crate::{log::serde_with::{
         LoglessState, LoglessWithCapacity, WithCapacity, WithCapacityWrapper,
-    };
+    }, RevFrame};
 
     use super::{RareStateLog, RareValue};
 
@@ -37,26 +38,28 @@ mod serde_with {
         type Se<'se> = &'se T;
         type De = T;
         fn get_logless_state(&self) -> Self::Se<'_> {
-            &self.present.value
+            &self.present
         }
-        fn from_logless_state(logless_state: Self::De) -> Result<Self, String> {
-            Ok(logless_state.into())
+        fn from_logless_state(logless_state: Self::De) -> Self {
+            logless_state.into()
         }
     }
 
     impl<T: Serialize + for<'de> Deserialize<'de> + 'static> WithCapacity for RareStateLog<T> {
         type Se<'se> = (
             WithCapacityWrapper<&'se VecDeque<RareValue<T>>>,
-            &'se RareValue<T>,
+            &'se T,
+            usize,
             usize,
             usize,
             usize,
         );
         type De = (
             WithCapacityWrapper<VecDeque<RareValue<T>>>,
-            RareValue<T>,
+            T,
             usize,
             usize,
+            RevFrame, // deserializes from usize and asserts value in range
             usize,
         );
         fn get_with_capacity(&self) -> Self::Se<'_> {
@@ -65,19 +68,21 @@ mod serde_with {
                 &self.present,
                 self.index,
                 self.skips,
+                self.skips_max,
                 self.past_len,
             )
         }
         fn from_with_capacity(
-            (WithCapacityWrapper(states), present, index, skips, len): Self::De,
-        ) -> Result<Self, String> {
-            Ok(Self {
+            (WithCapacityWrapper(states), present, index, skips, RevFrame(skips_max), past_len): Self::De,
+        ) -> Self {
+            Self {
                 states,
                 present,
                 index,
                 skips,
-                past_len: len,
-            })
+                skips_max,
+                past_len,
+            }
         }
     }
 
@@ -85,12 +90,10 @@ mod serde_with {
         type Se<'se> = (&'se T, usize);
         type De = (T, usize);
         fn get_logless_with_capacity(&self) -> Self::Se<'_> {
-            (&self.present.value, self.states_capacity())
+            (&self.present, self.states_capacity())
         }
-        fn from_logless_with_capacity(
-            (present, states_capacity): Self::De,
-        ) -> Result<Self, String> {
-            Ok(Self::with_capacity(present, states_capacity))
+        fn from_logless_with_capacity((present, states_capacity): Self::De) -> Self {
+            Self::with_capacity(present, states_capacity)
         }
     }
 }
@@ -104,7 +107,7 @@ impl<T> From<T> for RareStateLog<T> {
 impl<T> Deref for RareStateLog<T> {
     type Target = T;
     fn deref(&self) -> &Self::Target {
-        &self.present.value
+        &self.present
     }
 }
 
@@ -112,30 +115,21 @@ impl<T> RareStateLog<T> {
     pub const fn new(present: T) -> Self {
         Self {
             states: VecDeque::new(),
-            present: RareValue {
-                value: present,
-                skips: PackedRevFrame::MIN,
-            },
+            present,
             index: 0,
             skips: 0,
+            skips_max: 0,
             past_len: 0,
         }
     }
-
     pub fn with_capacity(present: T, states_capacity: usize) -> Self {
         Self {
             states: VecDeque::with_capacity(states_capacity),
-            present: RareValue {
-                value: present,
-                skips: PackedRevFrame::MIN,
-            },
-            index: 0,
-            skips: 0,
-            past_len: 0,
+            ..Self::new(present)
         }
     }
     pub fn into_inner(self) -> T {
-        self.present.value
+        self.present
     }
     pub fn states_len(&self) -> usize {
         self.states.len()
@@ -164,69 +158,40 @@ impl<T> RareStateLog<T> {
     pub fn states_shrink_to_fit(&mut self) {
         self.states.shrink_to_fit()
     }
-    fn past_end_rare(&self) -> Option<&RareValue<T>> {
-        self.states.front()
-    }
-    /// Most past state or `None` if the oldest state is considered to be the present state
-    pub fn past_end(&self) -> Option<&T> {
-        if self.index == 0 {
-            return None;
-        }
-        self.past_end_rare().map(|rare| &rare.value)
-    }
-    pub fn pop_past(&mut self) -> Option<T> {
-        if self.index == 0 {
-            return None;
-        }
-        self.states.pop_front().map(|rare| {
-            self.index -= 1;
-            self.past_len -= rare.len();
-            rare.value
-        })
-    }
     pub fn drain_future(&mut self) -> impl LogIter<T> {
         self.states.drain(self.index..).map(|rare| rare.value)
     }
     pub fn clear(&mut self) {
         self.states.clear();
-        self.present.skips = PackedRevFrame::MIN;
         self.index = 0;
-        self.past_len = 0;
         self.skips = 0;
+        self.skips_max = 0;
+        self.past_len = 0;
     }
     pub fn clear_with(&mut self, present: T) {
-        self.states.clear();
-        self.present = RareValue {
-            value: present,
-            skips: PackedRevFrame::MIN,
-        };
-        self.index = 0;
-        self.past_len = 0;
-        self.skips = 0;
+        self.present = present;
+        self.clear();
     }
     pub fn push_present(&mut self, state: Option<T>) {
         self.states.truncate(self.index);
-        self.past_len += 1;
         match state {
             None if self.skips < PackedRevFrame::MAX_AS_USIZE => {
                 self.skips += 1;
-                self.present.skips = RevFrame::new(self.skips).into();
+                self.past_len += 1;
             }
             Some(state) => {
-                self.present.skips = RevFrame::new(self.skips).into();
-                let previous = core::mem::replace(
-                    &mut self.present,
-                    RareValue {
-                        value: state,
-                        skips: PackedRevFrame::MIN,
-                    },
-                );
-                self.states.push_back(previous);
+                let previous = core::mem::replace(&mut self.present, state);
+                self.states.push_back(RareValue {
+                    value: previous,
+                    skips: RevFrame::new(self.skips).into(),
+                });
                 self.skips = 0;
                 self.index += 1;
+                self.past_len += 1;
             }
-            None => {}
+            None => {} // assume user will not go back before current entry
         }
+        self.skips_max = self.skips;
     }
     pub fn backward_log(&mut self) -> Result<(), OutOfLog> {
         if self.skips > 0 {
@@ -235,53 +200,46 @@ impl<T> RareStateLog<T> {
             return Ok(());
         }
         let index = self.index.checked_sub(1).ok_or(OutOfLog)?;
-        if let Some(entry) = self.states.get_mut(index) {
-            self.index = index;
-            core::mem::swap(&mut self.present, entry);
-            self.skips = self.present.skips.into();
-            self.past_len -= 1;
-            return Ok(());
+        if !self.swap_state_and_skips_max(index) {
+            error!("{INDEX_OOB}");
+            return Err(OutOfLog);
         }
-
-        #[derive(Debug)]
-        #[allow(dead_code)]
-        struct RareStateLogDebug {
-            states_len: usize,
-            present_skips: usize,
-            index: usize,
-            skips: usize,
-            len: usize,
-        }
-
-        let debug_struct = RareStateLogDebug {
-            states_len: self.states.len(),
-            present_skips: self.present.skips.into(),
-            index: self.index,
-            skips: self.skips,
-            len: self.past_len,
-        };
-
-        error!("{INDEX_OOB}, {debug_struct:#?}");
-        Err(OutOfLog)
+        self.index = index;
+        self.skips = self.skips_max;
+        self.past_len -= 1;
+        Ok(())
     }
     pub fn forward_log(&mut self) -> Result<(), OutOfLog> {
-        if self.skips < self.present.skips.into() {
+        if self.skips < self.skips_max {
             self.past_len += 1;
             self.skips += 1;
             Ok(())
-        } else if let Some(entry) = self.states.get_mut(self.index) {
+        } else if self.swap_state_and_skips_max(self.index) {
             self.past_len += 1;
             self.index += 1;
             self.skips = 0;
-            core::mem::swap(&mut self.present, entry);
             Ok(())
         } else {
             Err(OutOfLog)
         }
     }
+    fn swap_state_and_skips_max(&mut self, index: usize) -> bool {
+        self.states
+            .get_mut(index)
+            .map(|entry| {
+                let mut skips = RevFrame::new(self.skips_max).into();
+                core::mem::swap(&mut self.present, &mut entry.value);
+                core::mem::swap(&mut skips, &mut entry.skips);
+                self.skips_max = RevFrame::from(skips).into();
+            })
+            .is_some()
+    }
     pub fn pop_past_by_len(&mut self, max_past_len: usize) -> Option<T> {
-        let excessive_len = self.past_len.checked_sub(max_past_len)?;
-        let past_end = self.past_end_rare()?;
+        if self.index == 0 {
+            return None;
+        }
+        let excessive_len = self.past_len.checked_sub(max_past_len).filter(|len| *len > 0)?;
+        let past_end = self.states.front_mut()?;
         if excessive_len >= past_end.len() {
             self.pop_past()
         } else {
@@ -301,11 +259,21 @@ impl<T> RareStateLog<T> {
         self.index -= drain_amount;
         self.states.drain(..drain_amount).map(|rare| rare.value)
     }
+    fn pop_past(&mut self) -> Option<T> {
+        self.states.pop_front().map(|rare| {
+            self.index -= 1;
+            self.past_len -= rare.len();
+            rare.value
+        })
+    }
 }
 
 impl<T: LoggedAt> RareStateLog<T> {
     pub fn pop_past_by_logged_at(&mut self, meta: &RevMeta) -> Option<T> {
-        let entry = self.past_end_rare()?;
+        if self.index == 0 {
+            return None;
+        }
+        let entry = self.states.front()?;
         let logged_at = entry.value.logged_at().wrapping_add(entry.skips());
         if !meta.past_contains(logged_at) {
             self.pop_past()
@@ -314,14 +282,20 @@ impl<T: LoggedAt> RareStateLog<T> {
         }
     }
     pub fn truncate_future_drain_past_by_logged_at(&mut self, meta: &RevMeta) -> impl LogIter<T> {
+        /*
+        Problem: entry das per partition point gefunden wird kann out of log sein, darf aber nur
+        entfernt werden wenn
+        1. es keine skips gibt oder
+        2. der darauf folgende entry ... ?
+         */
+
         // may be redundant but if not improves partition_point performance
         self.states.truncate(self.index);
 
-        let ref_len = meta.past_world_states();
-        let start = meta.oldest_world_state();
+        let ref_len = meta.past_world_states() + 1;
         let to = self
             .states
-            .partition_point(|entry| !RevMeta::contains_buffered(start, entry, ref_len));
+            .partition_point(|entry| meta.before_past_buffered(entry, ref_len));
         self.past_len -= to // sum of to-be-drained states, because of this mapping RareValue::len below is not needed, only skips_before_state
             + self
                 .states
@@ -329,6 +303,7 @@ impl<T: LoggedAt> RareStateLog<T> {
                 .map(RareValue::skips)
                 .sum::<usize>();
         self.index -= to;
+        println!("TEST: states len: {}, drain to exclusive: {to}, ref_len: {ref_len}", self.states.len());
         self.states.drain(..to).map(|rare| rare.value)
     }
 }
@@ -410,7 +385,7 @@ mod test {
             &mut self,
             meta: &mut RevMeta,
             strategy: ShortenStrategy,
-            state: u8,
+            state: (u8, usize),
             state_is_pushed: bool,
             expected_states_len: usize,
             expected_popped: Option<(u8, usize)>,
@@ -418,25 +393,29 @@ mod test {
             meta.queue_forward();
             meta.update();
             let before = self.clone();
-            let push = state_is_pushed.then_some((state, meta.present_world_state()));
+            let push = state_is_pushed.then(|| {
+                let frame = meta.present_world_state();
+                assert_eq!(state.1, usize::from(frame));
+                (state.0, frame)
+            });
             self.push_present(push);
             let after_push = self.clone();
             let actual_popped = shorten_strategy!(self, meta, strategy, before, after_push);
             assert_eq!(
                 actual_popped, expected_popped,
-                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
+                "\nstrategy: {strategy:#?}\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
             );
             assert_eq!(
                 self.states_len(),
                 expected_states_len,
-                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
+                "\nstrategy: {strategy:#?}\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
             );
             self.test_state(before, meta, state);
         }
         fn test_forward_log(
             &mut self,
             meta: &mut RevMeta,
-            expected_state: u8,
+            expected_state: (u8, usize),
             possibly_out_of_log: bool,
         ) {
             if possibly_out_of_log {
@@ -460,7 +439,7 @@ mod test {
         fn test_backward_log(
             &mut self,
             meta: &mut RevMeta,
-            expected_state: u8,
+            expected_state: (u8, usize),
             possibly_out_of_log: bool,
         ) {
             if possibly_out_of_log {
@@ -481,10 +460,11 @@ mod test {
             );
             self.test_state(before, meta, expected_state);
         }
-        fn test_state(&self, before: Self, meta: &RevMeta, state: u8) {
+        fn test_state(&self, before: Self, meta: &RevMeta, state: (u8, usize)) {
+            let state = (state.0, RevFrame::new(state.1));
             assert_eq!(
                 **self,
-                (state, meta.present_world_state()),
+                state,
                 "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
             );
         }
@@ -512,6 +492,13 @@ mod test {
         for strategy in ShortenStrategy::VARIANTS {
             let meta = &mut RevMeta::new(NonZeroUsize::new(3), 0, false);
             let mut log = RareStateLog::new((0, meta.present_world_state()));
+
+            log.test_forward(meta, strategy, (0, 0), false, 0, None);
+            log.test_forward(meta, strategy, (2, 2), true, 1, None);
+            // does not pop yet because the skip after the initial state is still in log range
+            log.test_forward(meta, strategy, (3, 3), true, 2, None);
+            // pops oldest entry as skips after it are also out of log now
+            log.test_forward(meta, strategy, (3, 3), false, 1, Some((0, 0)));
         }
     }
 
