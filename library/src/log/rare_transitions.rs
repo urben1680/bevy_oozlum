@@ -60,12 +60,12 @@ mod serde_with {
                 self.index,
             )
         }
-        fn from_with_capacity(with_capacity: Self::De) -> Result<Self, String> {
-            RareTransitionLog::from_with_capacity(with_capacity.0).map(|amounts| Self {
-                amounts,
-                transitions: with_capacity.1 .0,
-                index: with_capacity.2,
-            })
+        fn from_with_capacity((amounts, WithCapacityWrapper(transitions), index): Self::De) -> Self {
+            Self {
+                amounts: RareTransitionLog::from_with_capacity(amounts),
+                transitions,
+                index
+            }
         }
     }
 
@@ -78,13 +78,8 @@ mod serde_with {
         fn get_logless_with_capacity(&self) -> Self::Se<'_> {
             (self.entries_capacity(), self.transitions_capacity())
         }
-        fn from_logless_with_capacity(
-            (entries_capacity, transitions_capacity): Self::De,
-        ) -> Result<Self, String> {
-            Ok(Self::with_capacities(
-                entries_capacity,
-                transitions_capacity,
-            ))
+        fn from_logless_with_capacity((entries_capacity, transitions_capacity): Self::De) -> Self {
+            Self::with_capacities(entries_capacity, transitions_capacity)
         }
     }
 }
@@ -177,16 +172,6 @@ where
     }
     pub fn transitions_shrink_to_fit(&mut self) {
         self.transitions.shrink_to_fit()
-    }
-    pub fn past_end(&self) -> Option<&U> {
-        self.amounts
-            .past_end()
-            .map(|entry_amount| &entry_amount.entry)
-    }
-    pub fn pop_past(&mut self) -> Option<ValueEntry<impl LogIter<T>, U>> {
-        self.amounts
-            .pop_past()
-            .map(|entry_amount| self.drain_past_by_amount(entry_amount))
     }
     pub fn drain_future(&mut self) -> (impl LogIter<T>, impl LogIter<EntryAmount<Self>>) {
         (
