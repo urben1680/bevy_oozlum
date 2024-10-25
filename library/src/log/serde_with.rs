@@ -25,9 +25,7 @@ pub mod logless_state {
         D: Deserializer<'de>,
         T: LoglessState,
     {
-        Deserialize::deserialize(deserializer).and_then(|deserialized| {
-            T::from_logless_state(deserialized).map_err(|message| serde::de::Error::custom(message))
-        })
+        Deserialize::deserialize(deserializer).map(T::from_logless_state)
     }
 }
 
@@ -50,9 +48,7 @@ pub mod with_capacity {
         D: Deserializer<'de>,
         T: WithCapacity,
     {
-        Deserialize::deserialize(deserializer).and_then(|deserialized| {
-            T::from_with_capacity(deserialized).map_err(|message| serde::de::Error::custom(message))
-        })
+        Deserialize::deserialize(deserializer).map(T::from_with_capacity)
     }
 }
 
@@ -75,10 +71,7 @@ pub mod logless_with_capacity {
         D: Deserializer<'de>,
         T: LoglessWithCapacity,
     {
-        Deserialize::deserialize(deserializer).and_then(|deserialized| {
-            T::from_logless_with_capacity(deserialized)
-                .map_err(|message| serde::de::Error::custom(message))
-        })
+        Deserialize::deserialize(deserializer).map(T::from_logless_with_capacity)
     }
 }
 
@@ -88,7 +81,7 @@ pub(super) trait LoglessState: Sized {
         Self: 'se;
     type De: for<'de> Deserialize<'de>;
     fn get_logless_state(&self) -> Self::Se<'_>;
-    fn from_logless_state(logless_state: Self::De) -> Result<Self, String>;
+    fn from_logless_state(logless_state: Self::De) -> Self;
 }
 
 pub(super) trait WithCapacity: Sized {
@@ -97,7 +90,7 @@ pub(super) trait WithCapacity: Sized {
         Self: 'se;
     type De: for<'de> Deserialize<'de>;
     fn get_with_capacity(&self) -> Self::Se<'_>;
-    fn from_with_capacity(with_capacity: Self::De) -> Result<Self, String>;
+    fn from_with_capacity(with_capacity: Self::De) -> Self;
 }
 
 pub(super) trait LoglessWithCapacity: Sized {
@@ -106,19 +99,19 @@ pub(super) trait LoglessWithCapacity: Sized {
         Self: 'se;
     type De: for<'de> Deserialize<'de>;
     fn get_logless_with_capacity(&self) -> Self::Se<'_>;
-    fn from_logless_with_capacity(logless_with_capacity: Self::De) -> Result<Self, String>;
+    fn from_logless_with_capacity(logless_with_capacity: Self::De) -> Self;
 }
 
 /// Serializes to a sequence.
-pub(super) struct WithRange<'a, T> {
-    pub(super) deque: &'a VecDeque<T>,
+pub(super) struct WithRange<'se, T> {
+    pub(super) deque: &'se VecDeque<T>,
     pub(super) range: Range<usize>,
 }
 
 /// Serializes and Deserializes into one usize and a sequence `T`. The usize contains the capacity of `T`.
 pub(super) struct WithCapacityWrapper<T>(pub(super) T);
 
-impl<'a, T: Serialize> Serialize for WithRange<'a, T> {
+impl<'se, T: Serialize> Serialize for WithRange<'se, T> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
