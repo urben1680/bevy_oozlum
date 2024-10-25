@@ -33,11 +33,8 @@ mod serde_with {
 
     use serde::{Deserialize, Serialize};
 
-    use crate::log::{
-        serde_with::{
-            LoglessState, LoglessWithCapacity, WithCapacity, WithCapacityWrapper, WithRange,
-        },
-        PackedRevFrame,
+    use crate::log::serde_with::{
+        LoglessState, LoglessWithCapacity, WithCapacity, WithCapacityWrapper, WithRange,
     };
 
     use super::{EntryAmount, StateLog, StatesLog, WithAmountInternal};
@@ -48,10 +45,10 @@ mod serde_with {
         U: Serialize + for<'de> Deserialize<'de> + 'static,
         Self: WithAmountInternal<Entry = U>,
     {
-        type Se<'se> = (&'se U, WithRange<'se, T>);
-        type De = (U, VecDeque<T>);
+        type Se<'se> = (&'se EntryAmount<Self>, WithRange<'se, T>);
+        type De = (EntryAmount<Self>, VecDeque<T>);
         fn get_logless_state(&self) -> Self::Se<'_> {
-            let (range, entry) = self.get_range_entry();
+            let (entry, range) = self.get_entry_range();
             (
                 entry,
                 WithRange {
@@ -60,9 +57,13 @@ mod serde_with {
                 },
             )
         }
-        fn from_logless_state((entry, log): Self::De) -> Result<Self, String> {
-            Self::fallible_new(log, entry)
-                .map_err(|err| PackedRevFrame::from_serde_err(err.pushed_amount))
+        fn from_logless_state((entry, states): Self::De) -> Self {
+            let index = entry.amount();
+            Self {
+                amounts: entry.into(),
+                states,
+                index,
+            }
         }
     }
 
@@ -89,14 +90,12 @@ mod serde_with {
                 self.index,
             )
         }
-        fn from_with_capacity(
-            (amounts, WithCapacityWrapper(states), index): Self::De,
-        ) -> Result<Self, String> {
-            WithCapacity::from_with_capacity(amounts).map(|amounts| Self {
-                amounts,
+        fn from_with_capacity((amounts, WithCapacityWrapper(states), index): Self::De) -> Self {
+            Self {
+                amounts: WithCapacity::from_with_capacity(amounts),
                 states,
                 index,
-            })
+            }
         }
     }
 
@@ -106,25 +105,34 @@ mod serde_with {
         U: Serialize + for<'de> Deserialize<'de> + 'static,
         Self: WithAmountInternal<Entry = U>,
     {
-        type Se<'se> = (&'se U, WithCapacityWrapper<WithRange<'se, T>>, usize);
-        type De = (U, WithCapacityWrapper<VecDeque<T>>, usize);
+        type Se<'se> = (
+            <StateLog<EntryAmount<Self>> as LoglessWithCapacity>::Se<'se>,
+            WithCapacityWrapper<WithRange<'se, T>>,
+        );
+        type De = (
+            <StateLog<EntryAmount<Self>> as LoglessWithCapacity>::De,
+            WithCapacityWrapper<VecDeque<T>>,
+        );
         fn get_logless_with_capacity(&self) -> Self::Se<'_> {
-            let (range, entry) = self.get_range_entry();
             (
-                entry,
+                self.amounts.get_logless_with_capacity(),
                 WithCapacityWrapper(WithRange {
                     deque: &self.states,
-                    range,
+                    range: self.get_entry_range().1,
                 }),
-                self.entries_capacity(),
             )
         }
-        fn from_logless_with_capacity(
-            (entry, WithCapacityWrapper(states), entries_capacity): Self::De,
-        ) -> Result<Self, String> {
-            let states_capacity = states.capacity();
-            Self::fallible_with_capacities(states, entry, states_capacity, entries_capacity)
-                .map_err(|err| PackedRevFrame::from_serde_err(err.pushed_amount))
+        fn from_logless_with_capacity((amounts, WithCapacityWrapper(states)): Self::De) -> Self {
+            let amounts =
+            StateLog::from_logless_with_capacity(
+                    amounts,
+                );
+            let index = amounts.amount();
+            Self {
+                amounts,
+                states,
+                index,
+            }
         }
     }
 }
@@ -250,16 +258,16 @@ where
     pub fn states_shrink_to_fit(&mut self) {
         self.states.shrink_to_fit()
     }
-    fn get_range_entry(&self) -> (Range<usize>, &U) {
+    fn get_entry_range(&self) -> (&EntryAmount<Self>, Range<usize>) {
         let entry_amount = &self.amounts;
         let amount = entry_amount.amount();
         let from = self.index - amount;
-        (from..self.index, &entry_amount.entry)
+        (&entry_amount, from..self.index)
     }
     pub fn get(&self) -> (impl LogIter<&T>, &U) {
-        let (range, entry) = self.get_range_entry();
+        let (entry, range) = self.get_entry_range();
         let states = self.states.range(range);
-        (states, entry)
+        (states, &entry.entry)
     }
     pub fn past_end(&self) -> Option<(impl LogIter<&T>, &U)> {
         let entry_amount = self.amounts.past_end()?;
