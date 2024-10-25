@@ -45,6 +45,7 @@ Enhancements:
 -- Rare variant
 -- tests, serde_with
 - drain_future: (LogIter<T>, LogIter<U>) -> (LogIter<T>, LogIter<(U, usize)>) or make EntryAmount pub
+- pop_past private? only via by len or logged at
 
 Docs
 - examples
@@ -81,6 +82,9 @@ use bevy::{
     utils::default,
 };
 
+#[cfg(feature = "serde")]
+use bevy::reflect::{ReflectDeserialize, ReflectSerialize};
+
 use commands::RevCommandBuffer;
 use log::PackedRevFrame;
 use meta::RevMeta;
@@ -105,6 +109,7 @@ pub mod prelude {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Reflect)]
+#[cfg_attr(feature = "serde", reflect(Serialize, Deserialize))]
 pub struct RevFrame(usize);
 
 impl From<RevFrame> for usize {
@@ -116,13 +121,28 @@ impl From<RevFrame> for usize {
 impl RevFrame {
     pub const MAX_AS_USIZE: usize = PackedRevFrame::MAX_AS_USIZE;
     const fn new(value: usize) -> Self {
-        Self(value & Self::MAX_AS_USIZE)
+        debug_assert!(value <= Self::MAX_AS_USIZE);
+        Self(value)
     }
     const fn wrapping_add(self, value: usize) -> Self {
-        Self::new(self.0.wrapping_add(value))
+        Self(self.0.wrapping_add(value) & Self::MAX_AS_USIZE)
     }
     const fn wrapping_sub(self, value: usize) -> Self {
-        Self::new(self.0.wrapping_sub(value))
+        Self(self.0.wrapping_sub(value) & Self::MAX_AS_USIZE)
+    }
+}
+
+#[cfg(feature = "serde")]
+impl serde::Serialize for RevFrame {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        PackedRevFrame::from(*self).serialize(serializer)
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de> serde::Deserialize<'de> for RevFrame {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        PackedRevFrame::deserialize(deserializer).map(Into::into)
     }
 }
 
