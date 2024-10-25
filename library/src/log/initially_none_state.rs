@@ -15,6 +15,8 @@ pub(super) enum Inner<T> {
 
 #[cfg(feature = "serde")]
 mod serde_with {
+    use std::convert::Infallible;
+
     use serde::{Deserialize, Serialize};
 
     use crate::log::serde_with::{LoglessState, LoglessWithCapacity, WithCapacity};
@@ -30,8 +32,8 @@ mod serde_with {
         fn get_logless_state(&self) -> Self::Se<'_> {
             self.get()
         }
-        fn from_logless_state(logless_state: Self::De) -> Result<Self, String> {
-            Ok(logless_state.into())
+        fn from_logless_state(logless_state: Self::De) -> Self {
+            logless_state.into()
         }
     }
 
@@ -53,20 +55,17 @@ mod serde_with {
                 },
             }
         }
-        fn from_with_capacity(with_capacity: Self::De) -> Result<Self, String> {
-            Ok(Self(match with_capacity {
+        fn from_with_capacity(with_capacity: Self::De) -> Self {
+            Self(match with_capacity {
                 Inner::NeverRan { capacity } => Inner::NeverRan { capacity },
                 Inner::Ran {
                     log,
                     undone_first_run,
-                } => match StateLog::from_with_capacity(log) {
-                    Ok(log) => Inner::Ran {
-                        log,
-                        undone_first_run,
-                    },
-                    Err(err) => return Err(err),
+                } => Inner::Ran {
+                    log: StateLog::from_with_capacity(log),
+                    undone_first_run,
                 },
-            }))
+            })
         }
     }
 
@@ -85,16 +84,16 @@ mod serde_with {
                 } => ((!undone_first_run).then_some(&*log), log.capacity()),
             }
         }
-        fn from_logless_with_capacity(logless_with_capacity: Self::De) -> Result<Self, String> {
-            Ok(Self(match logless_with_capacity.0 {
+        fn from_logless_with_capacity((state, capacity): Self::De) -> Self {
+            Self(match state {
                 Some(present) => Inner::Ran {
-                    log: StateLog::with_capacity(present, logless_with_capacity.1),
+                    log: StateLog::with_capacity(present, capacity),
                     undone_first_run: false,
                 },
                 None => Inner::NeverRan {
-                    capacity: logless_with_capacity.1,
+                    capacity,
                 },
-            }))
+            })
         }
     }
 }
