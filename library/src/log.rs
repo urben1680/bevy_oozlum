@@ -309,40 +309,45 @@ impl PackedRevFrame {
     };
     pub const MAX_AS_USIZE: usize = {
         let bits = Self::BYTES as u32 * 8;
-        let shift = if bits < usize::BITS {
-            usize::BITS - bits
-        } else {
-            0
-        };
+        let shift = usize::BITS.saturating_sub(bits);
         usize::MAX >> shift
     };
-    const MIN: Self = Self([u8::MIN; Self::BYTES]);
     fn into_usize(self) -> usize {
         let mut i = self.0.into_iter();
         usize::from_le_bytes(std::array::from_fn(|_| i.next().unwrap_or(0)))
     }
-    #[cfg(feature = "serde")]
-    fn try_from_usize(value: usize) -> Result<Self, String> {
+}
+
+impl Debug for PackedRevFrame {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.into_usize().fmt(f)
+    }
+}
+
+#[cfg(feature = "serde")]
+impl serde::Serialize for PackedRevFrame {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.into_usize().serialize(serializer)
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de> serde::Deserialize<'de> for PackedRevFrame {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value: usize = usize::deserialize(deserializer)?;
         if value <= Self::MAX_AS_USIZE {
             let mut i = value.to_le_bytes().into_iter();
             Ok(Self(std::array::from_fn(|_| i.next().unwrap_or(0))))
         } else {
-            Err(format!(
-                "{value} does not fit into {} bytes, cannot map this value to `PackedTime` \
+            Err(serde::de::Error::custom(format!(
+                "{value} does not fit into {} bytes, cannot map this value to `PackedRevFrame` \
                 on this machine, increase the `time_bytes_*` feature of the reversible_systems \
-                crate to the value of the source where this value was serialized",
+                crate to the value of the source where this value was serialized or, if the \
+                source does not use that feature, change that to a value low enough to be \
+                supported by all machines",
                 Self::BYTES,
-            ))
+            )))
         }
-    }
-    #[cfg(feature = "serde")]
-    fn from_serde_err(value: usize) -> String {
-        format!(
-            "{value} does not fit into {} bytes, cannot map this value to `PackedTime` \
-            on this machine, increase the `time_bytes_*` feature of the reversible_systems \
-            crate to the value of the source where this value was serialized",
-            Self::BYTES,
-        )
     }
 }
 
@@ -378,38 +383,6 @@ impl PartialEq<PackedRevFrame> for RevFrame {
     fn eq(&self, other: &PackedRevFrame) -> bool {
         let other: RevFrame = (*other).into();
         self.eq(&other)
-    }
-}
-
-#[cfg(feature = "serde")]
-impl serde::Serialize for PackedRevFrame {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        Into::<usize>::into(*self).serialize(serializer)
-    }
-}
-
-#[cfg(feature = "serde")]
-impl<'de> serde::Deserialize<'de> for PackedRevFrame {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        match usize::deserialize(deserializer) {
-            Ok(time) => match Self::try_from_usize(time) {
-                Ok(this) => Ok(this),
-                Err(msg) => Err(serde::de::Error::custom(msg)),
-            },
-            Err(err) => Err(err),
-        }
-    }
-}
-
-impl Debug for PackedRevFrame {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        Debug::fmt(&self.into_usize(), f)
     }
 }
 
@@ -511,23 +484,14 @@ impl<'a, T: Iterator, U> IntoIterator for &'a mut ValueEntry<T, U> {
     }
 }
 
-#[derive(Clone, PartialEq, Reflect)]
+#[derive(Debug, Clone, PartialEq, Reflect)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 struct RareValue<T> {
     value: T,
-    /// If `T` is a transiton, then these are the skips before the transition.
+    /// If `T` is a state, then these are the skips after the value.
     ///
-    /// If `T` is a value, then these are the skips after the value.
+    /// If `T` is a transiton, then these are the skips before the transition.
     skips: PackedRevFrame,
-}
-
-impl<T: Debug> Debug for RareValue<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct(std::any::type_name::<Self>())
-            .field("value", &self.value)
-            .field("skips", &self.skips.into_usize())
-            .finish()
-    }
 }
 
 impl<T> RareValue<T> {
@@ -543,7 +507,6 @@ impl<T> RareValue<T> {
 // methods which return this type document these bounds themselves.
 #[allow(private_bounds)]
 #[derive(Debug, Clone, Reflect)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct EntryAmount<Log: WithAmountInternal> {
     pub entry: Log::Entry,
     amount: Log::Amount,
@@ -560,6 +523,27 @@ impl<Log: WithAmountInternal> EntryAmount<Log> {
     // todo: doc example with Iterator::take
     pub fn amount(&self) -> usize {
         <Log as WithAmountInternal>::amount_to_usize(self.amount)
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<Log: WithAmountInternal<Entry: serde::Serialize>> serde::Serialize for EntryAmount<Log> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        (&self.entry, self.amount()).serialize(serializer)
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de, Log: WithAmountInternal<Entry: serde::Deserialize<'de>>> serde::Deserialize<'de>
+    for EntryAmount<Log>
+{
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let (entry, amount) =
+            <(Log::Entry, usize) as serde::Deserialize<'de>>::deserialize(deserializer)?;
+        match <Log as WithAmountInternal>::usize_to_amount(amount) {
+            Ok(amount) => Ok(Self { entry, amount }),
+            Err(_) => Err(serde::de::Error::custom("todo")),
+        }
     }
 }
 
@@ -616,16 +600,6 @@ trait NotUSize {} // remove if bounds on const generics (> 0) or type inequality
 impl<const AMOUNT_BYTES: usize> NotUSize for [u8; AMOUNT_BYTES] {}
 
 trait WithAmountInternal: WithAmount {
-    #[cfg(feature = "serde")]
-    type Amount: Debug
-        + Copy
-        + Clone
-        + Send
-        + Sync
-        + 'static
-        + serde::Serialize
-        + for<'de> serde::Deserialize<'de>;
-    #[cfg(not(feature = "serde"))]
     type Amount: Debug + Copy + Clone + Send + Sync + 'static;
     const MIN: Self::Amount;
     const MAX: Self::Amount;
@@ -810,8 +784,6 @@ use crate::RevFrame;
 
 #[cfg(test)]
 mod test {
-    use crate::log::PackedRevFrame;
-
     #[derive(Debug, Clone, Copy)]
     pub(super) enum ShortenStrategy {
         PopPastByLen,
@@ -852,7 +824,7 @@ mod test {
                     );
                     actual_popped.pop()
                 }
-            }.map(|(value, logged_at)| (value, logged_at.into()))
+            }.map(|(value, logged_at)| (value, usize::from(logged_at)))
         };
         // multiple values per log entry
         ($log: ident, $meta: ident, $strategy: ident) => {
@@ -888,11 +860,4 @@ mod test {
     }
 
     pub(super) use shorten_strategy;
-
-    #[test]
-    fn test_packed_frame() {
-        let x = PackedRevFrame::try_from_usize(10).unwrap();
-        let x: usize = x.into();
-        assert_eq!(x, 10);
-    }
 }
