@@ -34,11 +34,8 @@ mod serde_with {
         fn get_with_capacity(&self) -> Self::Se<'_> {
             (WithCapacityWrapper(&self.transitions), self.index)
         }
-        fn from_with_capacity(with_capacity: Self::De) -> Result<Self, String> {
-            Ok(Self {
-                transitions: with_capacity.0 .0,
-                index: with_capacity.1,
-            })
+        fn from_with_capacity((WithCapacityWrapper(transitions), index): Self::De) -> Self {
+            Self { transitions, index }
         }
     }
 
@@ -48,8 +45,8 @@ mod serde_with {
         fn get_logless_with_capacity(&self) -> Self::Se<'_> {
             self.transitions.capacity()
         }
-        fn from_logless_with_capacity(logless_with_capacity: Self::De) -> Result<Self, String> {
-            Ok(Self::with_capacity(logless_with_capacity))
+        fn from_logless_with_capacity(logless_with_capacity: Self::De) -> Self {
+            Self::with_capacity(logless_with_capacity)
         }
     }
 }
@@ -178,11 +175,10 @@ impl<T: LoggedAt> TransitionLog<T> {
         // may be redundant but if not improves partition_point performance
         self.transitions.truncate(self.index);
 
-        let ref_len = meta.past_world_states() - 1;
-        let start = meta.oldest_world_state().wrapping_add(1);
+        let ref_len = meta.past_world_states();
         let to = self
             .transitions
-            .partition_point(|entry| !RevMeta::contains_buffered(start, entry, ref_len));
+            .partition_point(|entry| meta.before_past_buffered(entry, ref_len));
         self.index -= to;
         self.transitions.drain(..to)
     }
@@ -275,12 +271,12 @@ mod test {
             let actual = shorten_strategy!(self, meta, strategy, before, after_push);
             assert_eq!(
                 actual, popped,
-                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
+                "\nstrategy: {strategy:#?}\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
             );
             assert_eq!(
                 self.len(),
                 expected_transitions_len,
-                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
+                "\nstrategy: {strategy:#?}\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
             );
         }
         fn test_forward_log(&mut self, meta: &mut RevMeta, transition: Result<u8, OutOfLog>) {
