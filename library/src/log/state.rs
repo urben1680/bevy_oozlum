@@ -46,8 +46,8 @@ mod serde_with {
         fn get_logless_state(&self) -> Self::Se<'_> {
             &self.present
         }
-        fn from_logless_state(logless_state: Self::De) -> Result<Self, String> {
-            Ok(logless_state.into())
+        fn from_logless_state(logless_state: Self::De) -> Self {
+            logless_state.into()
         }
     }
 
@@ -57,12 +57,12 @@ mod serde_with {
         fn get_with_capacity(&self) -> Self::Se<'_> {
             (WithCapacityWrapper(&self.states), &self.present, self.index)
         }
-        fn from_with_capacity(with_capacity: Self::De) -> Result<Self, String> {
-            Ok(Self {
-                states: with_capacity.0 .0,
-                present: with_capacity.1,
-                index: with_capacity.2,
-            })
+        fn from_with_capacity((WithCapacityWrapper(states), present, index): Self::De) -> Self {
+            Self {
+                states,
+                present,
+                index,
+            }
         }
     }
 
@@ -72,12 +72,12 @@ mod serde_with {
         fn get_logless_with_capacity(&self) -> Self::Se<'_> {
             (&self.present, self.states.capacity())
         }
-        fn from_logless_with_capacity(logless_with_capacity: Self::De) -> Result<Self, String> {
-            Ok(Self {
-                states: VecDeque::with_capacity(logless_with_capacity.1),
-                present: logless_with_capacity.0,
+        fn from_logless_with_capacity((present, capacity): Self::De) -> Self {
+            Self {
+                states: VecDeque::with_capacity(capacity),
+                present,
                 index: 0,
-            })
+            }
         }
     }
 }
@@ -238,11 +238,10 @@ impl<T: LoggedAt> StateLog<T> {
         // may be redundant but if not improves partition_point performance
         self.states.truncate(self.index);
 
-        let ref_len = meta.past_world_states();
-        let start = meta.oldest_world_state();
+        let ref_len = meta.past_world_states() + 1;
         let to = self
             .states
-            .partition_point(|entry| !RevMeta::contains_buffered(start, entry, ref_len));
+            .partition_point(|entry| meta.before_past_buffered(entry, ref_len));
         self.index -= to;
         self.states.drain(..to)
     }
@@ -345,16 +344,16 @@ mod test {
             let actual_popped = shorten_strategy!(self, meta, strategy, before, after_push);
             assert_eq!(
                 actual_popped, expected_popped,
-                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
+                "\nstrategy: {strategy:#?}\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
             );
             assert_eq!(
                 self.len(),
                 expected_states_len,
-                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
+                "\nstrategy: {strategy:#?}\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
             );
             assert_eq!(
                 **self, push,
-                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
+                "\nstrategy: {strategy:#?}\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
             );
         }
         fn test_forward_log(&mut self, meta: &mut RevMeta, expected_state: u8, out_of_log: bool) {
