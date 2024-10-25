@@ -240,12 +240,13 @@ impl RevMeta {
     pub fn future_contains(&self, value: RevFrame) -> bool {
         range_contains(self.present_world_state, value.0, self.youngest_world_state)
     }
-    pub(crate) fn contains_buffered(
-        start: RevFrame,
-        value: &impl LoggedAt,
+    /// `ref_len` should be `meta.past_world_states()` for transition logs and `1` more than that for state logs.
+    pub(crate) fn before_past_buffered(
+        &self,
+        logged_at: &impl LoggedAt,
         ref_len: usize,
     ) -> bool {
-        range_len(start.0, value.logged_at().0) <= ref_len
+        range_len(logged_at.logged_at().into(), self.present_world_state) >= ref_len
     }
     pub(crate) fn past_exclusive_oldest_contains(&self, value: RevFrame) -> bool {
         let second_oldest_world_state = self.oldest_world_state().wrapping_add(1).0;
@@ -593,11 +594,11 @@ mod test {
 
         meta.update();
         assert_eq!(meta.present_world_state, 1);
-        assert_eq!(meta.world_states(), 1);
+        assert_eq!(meta.world_states(), 2);
 
         meta.update();
         assert_eq!(meta.present_world_state, 2);
-        assert_eq!(meta.world_states(), 1);
+        assert_eq!(meta.world_states(), 2);
     }
 
     #[test]
@@ -624,6 +625,6 @@ mod test {
         assert_eq!(meta.world_states(), 3);
         meta.queue_forward();
         meta.update();
-        assert_eq!(meta.world_states(), 1);
+        assert_eq!(meta.world_states(), 2);
     }
 }
