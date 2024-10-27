@@ -123,10 +123,7 @@ mod serde_with {
             )
         }
         fn from_logless_with_capacity((amounts, WithCapacityWrapper(states)): Self::De) -> Self {
-            let amounts =
-            StateLog::from_logless_with_capacity(
-                    amounts,
-                );
+            let amounts = StateLog::from_logless_with_capacity(amounts);
             let index = amounts.amount();
             Self {
                 amounts,

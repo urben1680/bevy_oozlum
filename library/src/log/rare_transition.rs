@@ -29,7 +29,10 @@ mod serde_with {
 
     use serde::{Deserialize, Serialize};
 
-    use crate::{log::serde_with::{LoglessWithCapacity, WithCapacity, WithCapacityWrapper}, RevFrame};
+    use crate::{
+        log::serde_with::{LoglessWithCapacity, WithCapacity, WithCapacityWrapper},
+        RevFrame,
+    };
 
     use super::{RareTransitionLog, RareValue};
 
@@ -277,12 +280,15 @@ impl<T: LoggedAt> RareTransitionLog<T> {
     pub fn truncate_future_drain_past_by_logged_at(&mut self, meta: &RevMeta) -> impl LogIter<T> {
         // may be redundant but if not improves partition_point performance
         self.transitions.truncate(self.index);
-        self.skips_max = self.skips;
 
-        let ref_len = meta.past_world_states();
+        #[cfg(debug_assertions)]
+        if let Some(last) = self.transitions.back() {
+            assert!(!meta.future_contains(last.logged_at()))
+        }
+        let past_len = meta.past_world_states();
         let to = self
             .transitions
-            .partition_point(|entry| meta.before_past_buffered(entry, ref_len));
+            .partition_point(|entry| meta.frames_since_present(entry.logged_at()) >= past_len);
         self.past_len -= to // sum of to-be-drained transitions, because of this mapping RareValue::len below is not needed, only skips_before_value
             + self
                 .transitions

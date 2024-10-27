@@ -241,12 +241,8 @@ impl RevMeta {
         range_contains(self.present_world_state, value.0, self.youngest_world_state)
     }
     /// `ref_len` should be `meta.past_world_states()` for transition logs and `1` more than that for state logs.
-    pub(crate) fn before_past_buffered(
-        &self,
-        logged_at: &impl LoggedAt,
-        ref_len: usize,
-    ) -> bool {
-        range_len(logged_at.logged_at().into(), self.present_world_state) >= ref_len
+    pub(crate) fn frames_since_present(&self, frame: RevFrame) -> usize {
+        range_len(frame.into(), self.present_world_state)
     }
     pub(crate) fn past_exclusive_oldest_contains(&self, value: RevFrame) -> bool {
         let second_oldest_world_state = self.oldest_world_state().wrapping_add(1).0;
