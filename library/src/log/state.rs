@@ -238,10 +238,11 @@ impl<T: LoggedAt> StateLog<T> {
         // may be redundant but if not improves partition_point performance
         self.states.truncate(self.index);
 
-        let ref_len = meta.past_world_states() + 1;
+        debug_assert!(!meta.future_contains(self.logged_at()));
+        let past_len = meta.past_world_states();
         let to = self
             .states
-            .partition_point(|entry| meta.before_past_buffered(entry, ref_len));
+            .partition_point(|entry| meta.frames_since_present(entry.logged_at()) > past_len);
         self.index -= to;
         self.states.drain(..to)
     }

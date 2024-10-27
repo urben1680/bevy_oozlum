@@ -61,7 +61,7 @@ mod serde_with {
             Self {
                 amounts: amounts.into(),
                 states,
-                index
+                index,
             }
         }
     }
@@ -93,7 +93,7 @@ mod serde_with {
             Self {
                 amounts: WithCapacity::from_with_capacity(amounts),
                 states,
-                index
+                index,
             }
         }
     }
@@ -126,7 +126,7 @@ mod serde_with {
             Self {
                 amounts: RareStateLog::from_logless_with_capacity(amounts),
                 states,
-                index
+                index,
             }
         }
     }

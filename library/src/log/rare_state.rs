@@ -28,9 +28,10 @@ mod serde_with {
 
     use serde::{Deserialize, Serialize};
 
-    use crate::{log::serde_with::{
-        LoglessState, LoglessWithCapacity, WithCapacity, WithCapacityWrapper,
-    }, RevFrame};
+    use crate::{
+        log::serde_with::{LoglessState, LoglessWithCapacity, WithCapacity, WithCapacityWrapper},
+        RevFrame,
+    };
 
     use super::{RareStateLog, RareValue};
 
@@ -238,7 +239,10 @@ impl<T> RareStateLog<T> {
         if self.index == 0 {
             return None;
         }
-        let excessive_len = self.past_len.checked_sub(max_past_len).filter(|len| *len > 0)?;
+        let excessive_len = self
+            .past_len
+            .checked_sub(max_past_len)
+            .filter(|len| *len > 0)?;
         let past_end = self.states.front_mut()?;
         if excessive_len >= past_end.len() {
             self.pop_past()
@@ -282,28 +286,22 @@ impl<T: LoggedAt> RareStateLog<T> {
         }
     }
     pub fn truncate_future_drain_past_by_logged_at(&mut self, meta: &RevMeta) -> impl LogIter<T> {
-        /*
-        Problem: entry das per partition point gefunden wird kann out of log sein, darf aber nur
-        entfernt werden wenn
-        1. es keine skips gibt oder
-        2. der darauf folgende entry ... ?
-         */
-
-        // may be redundant but if not improves partition_point performance
+        // May be redundant but if not improves partition_point performance
         self.states.truncate(self.index);
 
-        let ref_len = meta.past_world_states() + 1;
-        let to = self
-            .states
-            .partition_point(|entry| meta.before_past_buffered(entry, ref_len));
-        self.past_len -= to // sum of to-be-drained states, because of this mapping RareValue::len below is not needed, only skips_before_state
+        debug_assert!(!meta.future_contains(self.logged_at()));
+        let past_len = meta.past_world_states();
+        let to = self.states.partition_point(|entry| {
+            let ended_at = entry.logged_at().wrapping_add(entry.skips());
+            meta.frames_since_present(ended_at) > past_len
+        });
+        self.past_len -= to // sum of to-be-drained states, because of this mapping RareValue::len below is not needed, only RareValue::skips
             + self
                 .states
                 .range(..to)
                 .map(RareValue::skips)
                 .sum::<usize>();
         self.index -= to;
-        println!("TEST: states len: {}, drain to exclusive: {to}, ref_len: {ref_len}", self.states.len());
         self.states.drain(..to).map(|rare| rare.value)
     }
 }
@@ -463,8 +461,7 @@ mod test {
         fn test_state(&self, before: Self, meta: &RevMeta, state: (u8, usize)) {
             let state = (state.0, RevFrame::new(state.1));
             assert_eq!(
-                **self,
-                state,
+                **self, state,
                 "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
             );
         }

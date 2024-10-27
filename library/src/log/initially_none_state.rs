@@ -90,9 +90,7 @@ mod serde_with {
                     log: StateLog::with_capacity(present, capacity),
                     undone_first_run: false,
                 },
-                None => Inner::NeverRan {
-                    capacity,
-                },
+                None => Inner::NeverRan { capacity },
             })
         }
     }

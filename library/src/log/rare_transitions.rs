@@ -60,11 +60,13 @@ mod serde_with {
                 self.index,
             )
         }
-        fn from_with_capacity((amounts, WithCapacityWrapper(transitions), index): Self::De) -> Self {
+        fn from_with_capacity(
+            (amounts, WithCapacityWrapper(transitions), index): Self::De,
+        ) -> Self {
             Self {
                 amounts: RareTransitionLog::from_with_capacity(amounts),
                 transitions,
-                index
+                index,
             }
         }
     }
