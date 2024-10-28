@@ -176,7 +176,7 @@ impl<T> RareStateLog<T> {
     pub fn push_present(&mut self, state: Option<T>) {
         self.states.truncate(self.index);
         match state {
-            None if self.skips < PackedRevFrame::MAX_AS_USIZE => {
+            None if self.skips < RevMeta::MAX_WORLD_STATES => {
                 self.skips += 1;
                 self.past_len += 1;
             }
@@ -277,9 +277,11 @@ impl<T: LoggedAt> RareStateLog<T> {
         if self.index == 0 {
             return None;
         }
-        let entry = self.states.front()?;
-        let logged_at = entry.value.logged_at().wrapping_add(entry.skips());
-        if !meta.past_contains(logged_at) {
+        // The user might call `push_present` multiple times per frame, so `RareValue::skips`
+        // cannot be reliably interpreted as frame offsets from `RareValue::logged_at`.
+        // Instead `RareValue::skips` is ignored here and pop only happen if the next entry is also of log.
+        let logged_at = self.states.get(1)?.logged_at();
+        if !meta.contains_in_state_logged(logged_at) {
             self.pop_past()
         } else {
             None
@@ -289,12 +291,14 @@ impl<T: LoggedAt> RareStateLog<T> {
         // May be redundant but if not improves partition_point performance
         self.states.truncate(self.index);
 
-        debug_assert!(!meta.future_contains(self.logged_at()));
         let past_len = meta.past_world_states();
-        let to = self.states.partition_point(|entry| {
-            let ended_at = entry.logged_at().wrapping_add(entry.skips());
-            meta.frames_since_present(ended_at) > past_len
-        });
+        // The user might call `push_present` multiple times per frame, so `RareValue::skips`
+        // cannot be reliably interpreted as frame offsets from `RareValue::logged_at`.
+        // Instead `RareValue::skips` is ignored here and one entry less is removed.
+        let to = self
+            .states
+            .partition_point(|entry| meta.frames_since(entry.logged_at()) > past_len)
+            .saturating_sub(1);
         self.past_len -= to // sum of to-be-drained states, because of this mapping RareValue::len below is not needed, only RareValue::skips
             + self
                 .states
@@ -383,6 +387,7 @@ mod test {
             &mut self,
             meta: &mut RevMeta,
             strategy: ShortenStrategy,
+            max_past_len: usize, // control when the by-len strategies trigger pop/drain to align to the by-logged-at strategies
             state: (u8, usize),
             state_is_pushed: bool,
             expected_states_len: usize,
@@ -398,14 +403,15 @@ mod test {
             });
             self.push_present(push);
             let after_push = self.clone();
-            let actual_popped = shorten_strategy!(self, meta, strategy, before, after_push);
+            let actual_popped =
+                shorten_strategy!(self, meta, strategy, max_past_len, before, after_push);
             assert_eq!(
                 actual_popped, expected_popped,
                 "\nstrategy: {strategy:#?}\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
             );
+            let actual_states_len = self.states_len();
             assert_eq!(
-                self.states_len(),
-                expected_states_len,
+                actual_states_len, expected_states_len,
                 "\nstrategy: {strategy:#?}\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
             );
             self.test_state(before, meta, state);
@@ -490,12 +496,16 @@ mod test {
             let meta = &mut RevMeta::new(NonZeroUsize::new(3), 0, false);
             let mut log = RareStateLog::new((0, meta.present_world_state()));
 
-            log.test_forward(meta, strategy, (0, 0), false, 0, None);
-            log.test_forward(meta, strategy, (2, 2), true, 1, None);
+            log.test_forward(meta, strategy, 0, (0, 0), false, 0, None);
+            log.test_forward(meta, strategy, 1, (2, 2), true, 1, None);
             // does not pop yet because the skip after the initial state is still in log range
-            log.test_forward(meta, strategy, (3, 3), true, 2, None);
-            // pops oldest entry as skips after it are also out of log now
-            log.test_forward(meta, strategy, (3, 3), false, 1, Some((0, 0)));
+            log.test_forward(meta, strategy, 2, (3, 3), true, 2, None);
+            // does not pop yet because while the skip after the initial state is no longer in log range,
+            // multiple uses of `push_present` by the user at the same frame makes the skips as frame offset
+            // an unreliable indicator to pop here
+            log.test_forward(meta, strategy, 3, (3, 3), false, 2, None);
+            // pops oldest entry as the second-oldest entry is also out of log now
+            log.test_forward(meta, strategy, 3, (3, 3), false, 1, Some((0, 0)));
         }
     }
 
