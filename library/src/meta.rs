@@ -486,6 +486,10 @@ impl RevMeta {
         )
         .then_some(CheckLoggedAt(self.clone()))
     }
+    #[cfg(test)]
+    pub(crate) fn set_oldest_frame(&mut self, oldest_frame: usize) {
+        self.oldest_frame = RevFrame::new(oldest_frame);
+    }
     pub(crate) fn add_read_if_no_write(
         world: &mut World,
         component_access: &mut Access<ComponentId>,
