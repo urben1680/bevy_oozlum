@@ -97,16 +97,6 @@ impl<T> TransitionLog<T> {
     pub fn shrink_to_fit(&mut self) {
         self.transitions.shrink_to_fit()
     }
-    pub fn past_end(&self) -> Option<&T> {
-        self.transitions.front()
-    }
-    pub fn pop_past(&mut self) -> Option<T> {
-        if self.index == 0 {
-            // if the current log position is at the past end, transitions.front() is not a past value but a future value
-            return None;
-        }
-        self.transitions.pop_front().inspect(|_| self.index -= 1)
-    }
     pub fn push_present(&mut self, transition: T) {
         self.transitions.truncate(self.index);
         self.transitions.push_back(transition);
@@ -149,8 +139,13 @@ impl<T> TransitionLog<T> {
             .ok_or(OutOfLog)
     }
     pub fn pop_past_by_len(&mut self, max_past_len: usize) -> Option<T> {
+        if self.index == 0 {
+            // if the current log position is at the past end, transitions.front() is not a past value but a future value
+            return None;
+        }
         if self.index > max_past_len {
-            self.pop_past()
+            self.index -= 1;
+            self.transitions.pop_front()
         } else {
             None
         }
@@ -164,9 +159,14 @@ impl<T> TransitionLog<T> {
 
 impl<T: LoggedAt> TransitionLog<T> {
     pub fn pop_past_by_logged_at(&mut self, meta: &RevMeta) -> Option<T> {
-        let logged_at = self.past_end()?.logged_at();
-        if !meta.past_exclusive_oldest_contains(logged_at) {
-            self.pop_past()
+        if self.index == 0 {
+            // if the current log position is at the past end, transitions.front() is not a past value but a future value
+            return None;
+        }
+        let logged_at = self.transitions.front()?.logged_at();
+        if !meta.contains_in_transition_logged(logged_at) {
+            self.index -= 1;
+            self.transitions.pop_front()
         } else {
             None
         }
@@ -175,14 +175,10 @@ impl<T: LoggedAt> TransitionLog<T> {
         // may be redundant but if not improves partition_point performance
         self.transitions.truncate(self.index);
 
-        #[cfg(debug_assertions)]
-        if let Some(last) = self.transitions.back() {
-            assert!(!meta.future_contains(last.logged_at()))
-        }
         let past_len = meta.past_world_states();
         let to = self
             .transitions
-            .partition_point(|entry| meta.frames_since_present(entry.logged_at()) >= past_len);
+            .partition_point(|entry| meta.frames_since(entry.logged_at()) >= past_len);
         self.index -= to;
         self.transitions.drain(..to)
     }
@@ -272,7 +268,14 @@ mod test {
             let push = (push, meta.present_world_state());
             self.push_present(push);
             let after_push = self.clone();
-            let actual = shorten_strategy!(self, meta, strategy, before, after_push);
+            let actual = shorten_strategy!(
+                self,
+                meta,
+                strategy,
+                meta.past_world_states(),
+                before,
+                after_push
+            );
             assert_eq!(
                 actual, popped,
                 "\nstrategy: {strategy:#?}\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
