@@ -46,6 +46,14 @@ Enhancements:
 -- tests, serde_with
 - drain_future: (LogIter<T>, LogIter<U>) -> (LogIter<T>, LogIter<(U, usize)>) or make EntryAmount pub
 - pop_past private? only via by len or logged at
+- can oldest log of rate logs underflow into future?
+- pop/drain in meta contains consistency
+-- drain by logged at does truncate so it is expected all entries are in the past or present
+-- pop   by logged at also only past or present or whole log?
+--- past because the index check ensures that the checked entry is not in the future
+--- is index check enough if more then one entry is pushed per frame? needs to include present
+- rare logs with logged at should not be pushed into more than once per frame because skips are used for offsets
+-- or always keep one entry more in the log
 
 Docs
 - examples
@@ -68,7 +76,7 @@ UNSUPPORTED:
 -- missing features on bevy's side
 */
 
-use std::hash::Hash;
+use std::{fmt::Debug, hash::Hash};
 
 use bevy::{
     app::{FixedUpdate, Plugin},
@@ -108,7 +116,7 @@ pub mod prelude {
     pub use crate::world::RevWorld as _;
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Reflect)]
+#[derive(Clone, Copy, PartialEq, Eq, Reflect)]
 #[cfg_attr(feature = "serde", reflect(Serialize, Deserialize))]
 pub struct RevFrame(usize);
 
@@ -129,6 +137,12 @@ impl RevFrame {
     }
     const fn wrapping_sub(self, value: usize) -> Self {
         Self(self.0.wrapping_sub(value) & Self::MAX_AS_USIZE)
+    }
+}
+
+impl Debug for RevFrame {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
     }
 }
 
