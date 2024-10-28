@@ -147,13 +147,6 @@ impl<T> StateLog<T> {
         }
         self.states.front()
     }
-    pub fn pop_past(&mut self) -> Option<T> {
-        if self.index == 0 {
-            return None;
-        }
-        self.index -= 1;
-        self.states.pop_front()
-    }
     pub fn push_present(&mut self, state: T) {
         self.states.truncate(self.index);
         let before = core::mem::replace(&mut self.present, state);
@@ -212,8 +205,12 @@ impl<T> StateLog<T> {
         return Ok(());
     }
     pub fn pop_past_by_len(&mut self, max_past_len: usize) -> Option<T> {
+        if self.index == 0 {
+            return None;
+        }
         if self.index > max_past_len {
-            self.pop_past()
+            self.index -= 1;
+            self.states.pop_front()
         } else {
             None
         }
@@ -227,9 +224,13 @@ impl<T> StateLog<T> {
 
 impl<T: LoggedAt> StateLog<T> {
     pub fn pop_past_by_logged_at(&mut self, meta: &RevMeta) -> Option<T> {
-        let logged_at = self.past_end()?.logged_at();
-        if !meta.contains(logged_at) {
-            self.pop_past()
+        if self.index == 0 {
+            return None;
+        }
+        let logged_at = self.states.front()?.logged_at();
+        if !meta.contains_in_state_logged(logged_at) {
+            self.index -= 1;
+            self.states.pop_front()
         } else {
             None
         }
@@ -238,11 +239,10 @@ impl<T: LoggedAt> StateLog<T> {
         // may be redundant but if not improves partition_point performance
         self.states.truncate(self.index);
 
-        debug_assert!(!meta.future_contains(self.logged_at()));
         let past_len = meta.past_world_states();
         let to = self
             .states
-            .partition_point(|entry| meta.frames_since_present(entry.logged_at()) > past_len);
+            .partition_point(|entry| meta.frames_since(entry.logged_at()) > past_len);
         self.index -= to;
         self.states.drain(..to)
     }
@@ -342,7 +342,14 @@ mod test {
             let push = (push, meta.present_world_state());
             self.push_present(push);
             let after_push = self.clone();
-            let actual_popped = shorten_strategy!(self, meta, strategy, before, after_push);
+            let actual_popped = shorten_strategy!(
+                self,
+                meta,
+                strategy,
+                meta.past_world_states(),
+                before,
+                after_push
+            );
             assert_eq!(
                 actual_popped, expected_popped,
                 "\nstrategy: {strategy:#?}\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
