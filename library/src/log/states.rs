@@ -266,17 +266,6 @@ where
         let states = self.states.range(range);
         (states, &entry.entry)
     }
-    pub fn past_end(&self) -> Option<(impl LogIter<&T>, &U)> {
-        let entry_amount = self.amounts.past_end()?;
-        let to = entry_amount.amount();
-        let states = self.states.range(..to);
-        Some((states, &entry_amount.entry))
-    }
-    pub fn pop_past(&mut self) -> Option<ValueEntry<impl LogIter<T>, U>> {
-        self.amounts
-            .pop_past()
-            .map(|entry_amount| self.drain_past_by_amount(entry_amount))
-    }
     pub fn drain_future(&mut self) -> (impl LogIter<T>, impl LogIter<EntryAmount<Self>>) {
         (self.states.drain(self.index..), self.amounts.drain_future())
     }
@@ -661,7 +650,8 @@ mod test {
                         is_ok,
                         "\nstrategy: {strategy:?}\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
                     );
-                    let (actual_states, actual_entry) = shorten_strategy!(self, meta, strategy);
+                    let (actual_states, actual_entry) =
+                        shorten_strategy!(self, meta, strategy, meta.past_world_states());
                     let (expected_states, expected_entry) = expected_popped.unzip();
                     assert_eq!(
                         actual_states.unwrap_or_default(),
