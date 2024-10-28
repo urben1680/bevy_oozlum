@@ -803,14 +803,14 @@ mod test {
 
     macro_rules! shorten_strategy {
         // single value per log entry
-        ($log: ident, $meta: ident, $strategy: ident, $before: ident, $after_push: ident) => {
+        ($log: expr, $meta: expr, $strategy: expr, $len: expr, $before: expr, $after_push: expr) => {
             match $strategy {
-                ShortenStrategy::PopPastByLen => $log.pop_past_by_len($meta.past_world_states()),
+                ShortenStrategy::PopPastByLen => $log.pop_past_by_len($len),
                 ShortenStrategy::PopPastByLoggedAt => $log.pop_past_by_logged_at($meta),
                 ShortenStrategy::DrainPastByLen | ShortenStrategy::DrainPastByLoggedAt => {
                     let mut actual_popped: Vec<_> = match $strategy {
                         ShortenStrategy::DrainPastByLen => {
-                            $log.drain_past_by_len($meta.past_world_states()).collect()
+                            $log.drain_past_by_len($len).collect()
                         }
                         ShortenStrategy::DrainPastByLoggedAt => {
                             $log.truncate_future_drain_past_by_logged_at($meta).collect()
@@ -827,10 +827,10 @@ mod test {
             }.map(|(value, logged_at)| (value, usize::from(logged_at)))
         };
         // multiple values per log entry
-        ($log: ident, $meta: ident, $strategy: ident) => {
+        ($log: expr, $meta: expr, $strategy: expr, $len: expr) => {
             match $strategy {
                 ShortenStrategy::PopPastByLen => $log
-                    .pop_past_by_len($meta.past_world_states())
+                    .pop_past_by_len($len)
                     .map(|value_entry| (
                         value_entry.value.collect::<Vec<_>>(),
                         usize::from(value_entry.entry),
@@ -846,7 +846,7 @@ mod test {
                 ShortenStrategy::DrainPastByLen | ShortenStrategy::DrainPastByLoggedAt => {
                     let actual_popped: Vec<_> = match $strategy {
                         ShortenStrategy::DrainPastByLen => {
-                            $log.drain_past_by_len($meta.past_world_states()).collect()
+                            $log.drain_past_by_len($len).collect()
                         }
                         ShortenStrategy::DrainPastByLoggedAt => {
                             $log.truncate_future_drain_past_by_logged_at($meta).collect()
