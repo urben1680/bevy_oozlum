@@ -420,22 +420,20 @@ mod test {
             &mut self,
             meta: &mut RevMeta,
             expected_state: (u8, usize),
-            possibly_out_of_log: bool,
+            out_of_log: bool,
         ) {
-            if possibly_out_of_log {
-                // Depending on skips before the current state, no OutOfLog occurs here.
-                // Instead, it is only asserted that the method call does not panic.
-                let _ = self.clone().forward_log();
-                return;
-            }
             let before = self.clone();
-            let frame = meta.present_world_state().wrapping_add(1);
-            meta.queue_log(frame).unwrap();
-            meta.update();
             let result = self.forward_log();
+            let expected = if out_of_log {
+                Err(OutOfLog)
+            } else {
+                let frame = meta.present_world_state().wrapping_add(1);
+                meta.queue_log(frame).unwrap();
+                meta.update();
+                Ok(())
+            };
             assert_eq!(
-                result,
-                Ok(()),
+                result, expected,
                 "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
             );
             self.test_state(before, meta, expected_state);
@@ -444,22 +442,20 @@ mod test {
             &mut self,
             meta: &mut RevMeta,
             expected_state: (u8, usize),
-            possibly_out_of_log: bool,
+            out_of_log: bool,
         ) {
-            if possibly_out_of_log {
-                // Depending on skips before the current state, no OutOfLog occurs here.
-                // Instead, it is only asserted that the method call does not panic.
-                let _ = self.clone().backward_log();
-                return;
-            }
             let before = self.clone();
-            let frame = meta.present_world_state().wrapping_sub(1);
-            meta.queue_log(frame).unwrap();
-            meta.update();
             let result = self.backward_log();
+            let expected = if out_of_log {
+                Err(OutOfLog)
+            } else {
+                let frame = meta.present_world_state().wrapping_sub(1);
+                meta.queue_log(frame).unwrap();
+                meta.update();
+                Ok(())
+            };
             assert_eq!(
-                result,
-                Ok(()),
+                result, expected,
                 "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
             );
             self.test_state(before, meta, expected_state);
@@ -491,7 +487,7 @@ mod test {
     }
 
     #[test]
-    fn push_and_log_traversal() {
+    fn push() {
         for strategy in ShortenStrategy::VARIANTS {
             let meta = &mut RevMeta::new(NonZeroUsize::new(3), 0, false);
             let mut log = RareStateLog::new((0, meta.present_world_state()));
@@ -505,45 +501,35 @@ mod test {
             // an unreliable indicator to pop here
             log.test_forward(meta, strategy, 3, (3, 3), false, 2, None);
             // pops oldest entry as the second-oldest entry is also out of log now
-            log.test_forward(meta, strategy, 3, (3, 3), false, 1, Some((0, 0)));
+            log.test_forward(meta, strategy, 3, (5, 5), true, 2, Some((0, 0)));
+
+            meta.set_oldest_frame(0); // make log start accessible again to test out-of-log
+
+            log.test_backward_log(meta, (3, 3), false);
+            log.test_backward_log(meta, (3, 3), false);
+            log.test_backward_log(meta, (2, 2), false);
+            // out of log, no mutations happend to both meta and log here
+            log.test_backward_log(meta, (2, 2), true);
+
+            log.test_forward_log(meta, (3, 3), false);
+            log.test_forward_log(meta, (3, 3), false);
+            log.test_forward_log(meta, (5, 5), false);
+            // out of log, no mutations happend to both meta and log here
+            log.test_forward_log(meta, (5, 5), true);
+
+            log.test_backward_log(meta, (3, 3), false);
+            log.test_backward_log(meta, (3, 3), false);
+            log.test_backward_log(meta, (2, 2), false);
+
+            let log_clone = log.test_drain_future([(3, 3), (5, 5)]);
+            let meta_clone = &mut meta.clone();
+
+            for (mut log, meta) in [(log, meta), (log_clone, meta_clone)] {
+                // all entries are truncated as they are in the future
+                log.test_forward(meta, strategy, 3, (4, 3), true, 1, None);
+            }
         }
     }
-
-    /*
-    #[test]
-    fn test() {
-        let mut meta_and_logs = MetaAndLogs::new(0, NonZeroUsize::new(3));
-
-        // minimum_log_len remains < max_len because the current state is not considered to be part of the log
-        meta_and_logs.forward(0, false, 0, 0);
-        meta_and_logs.forward(0, false, 1, 0);
-        meta_and_logs.forward(0, false, 2, 0);
-        meta_and_logs.forward(0, false, 2, 0);
-
-        // states_len is reduced by max_len
-        meta_and_logs.forward(1, true, 2, 1);
-        meta_and_logs.forward(1, false, 2, 1);
-        meta_and_logs.forward(1, false, 2, 0);
-
-        meta_and_logs.forward(2, true, 2, 1);
-        meta_and_logs.forward(2, false, 2, 1);
-
-        meta_and_logs.backward_log(Ok(2));
-        meta_and_logs.backward_log(Ok(1));
-        //meta_and_logs.backward_log(Err(OutOfLog)); // todo:
-        // - panics because T from before log start is still in the log because the entry's skips is needed
-        // - the log cannot determine the log end
-        // - this is not an issue for usage as pop_front_by_... does not guarantee a minimal log len, just minimal states len
-
-        meta_and_logs.forward_log(Ok(2));
-        meta_and_logs.forward_log(Ok(2));
-        meta_and_logs.forward_log(Err(OutOfLog));
-
-        meta_and_logs.backward_log(Ok(2));
-        meta_and_logs.backward_log(Ok(1));
-        meta_and_logs.forward(1, false, 2, 0);
-    }
-    */
 
     #[allow(dead_code)]
     fn impls_reflect() {
