@@ -175,16 +175,6 @@ where
     pub fn transitions_shrink_to_fit(&mut self) {
         self.transitions.shrink_to_fit()
     }
-    pub fn past_end(&self) -> Option<&U> {
-        self.amounts
-            .past_end()
-            .map(|entry_amount| &entry_amount.entry)
-    }
-    pub fn pop_past(&mut self) -> Option<ValueEntry<impl LogIter<T>, U>> {
-        self.amounts
-            .pop_past()
-            .map(|entry_amount| self.drain_past_by_amount(entry_amount))
-    }
     pub fn drain_future(&mut self) -> (impl LogIter<T>, impl LogIter<EntryAmount<Self>>) {
         (
             self.transitions.drain(self.index..),
@@ -438,7 +428,8 @@ mod test {
                         is_ok,
                         "\nstrategy: {strategy:?}\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
                     );
-                    let (actual_states, actual_entry) = shorten_strategy!(self, meta, strategy);
+                    let (actual_states, actual_entry) =
+                        shorten_strategy!(self, meta, strategy, meta.past_world_states());
                     let (expected_states, expected_entry) = expected_popped.unzip();
                     assert_eq!(
                         actual_states.unwrap_or_default(),
