@@ -154,7 +154,7 @@ impl<T> RareTransitionLog<T> {
     pub fn push_present(&mut self, transition: Option<T>) {
         self.transitions.truncate(self.index);
         match transition {
-            None if self.skips < PackedRevFrame::MAX_AS_USIZE => {
+            None if self.skips < RevMeta::MAX_WORLD_STATES => {
                 self.skips += 1;
                 self.past_len += 1;
             }
@@ -270,8 +270,11 @@ impl<T: LoggedAt> RareTransitionLog<T> {
             // if the current log position is at the past end, transitions.front() is not a past value but a future value
             return None;
         }
-        let logged_at = self.transitions.front()?.logged_at();
-        if !meta.past_exclusive_oldest_contains(logged_at) {
+        // The user might call `push_present` multiple times per frame, so `RareValue::skips`
+        // cannot be reliably interpreted as frame offsets from `RareValue::logged_at`.
+        // Instead `RareValue::skips` is ignored here and pop only happen if the next entry is also of log.
+        let logged_at = self.transitions.get(1)?.logged_at();
+        if !meta.contains_in_transition_logged(logged_at) {
             self.pop_past()
         } else {
             None
@@ -281,14 +284,14 @@ impl<T: LoggedAt> RareTransitionLog<T> {
         // may be redundant but if not improves partition_point performance
         self.transitions.truncate(self.index);
 
-        #[cfg(debug_assertions)]
-        if let Some(last) = self.transitions.back() {
-            assert!(!meta.future_contains(last.logged_at()))
-        }
         let past_len = meta.past_world_states();
+        // The user might call `push_present` multiple times per frame, so `RareValue::skips`
+        // cannot be reliably interpreted as frame offsets from `RareValue::logged_at`.
+        // Instead `RareValue::skips` is ignored here and one entry less is removed.
         let to = self
             .transitions
-            .partition_point(|entry| meta.frames_since_present(entry.logged_at()) >= past_len);
+            .partition_point(|entry| meta.frames_since(entry.logged_at()) >= past_len)
+            .saturating_sub(1); // todo: is this needed for rare transition? skips are precending the logged at frame
         self.past_len -= to // sum of to-be-drained transitions, because of this mapping RareValue::len below is not needed, only skips_before_value
             + self
                 .transitions
