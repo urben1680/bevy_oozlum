@@ -254,10 +254,9 @@ where
         self.states.shrink_to_fit()
     }
     fn get_range_entry(&self) -> (Range<usize>, &U) {
-        let entry_amount = &self.amounts;
-        let amount = entry_amount.amount();
+        let amount = self.amounts.amount();
         let from = self.index - amount;
-        (from..self.index, &entry_amount.entry)
+        (from..self.index, &self.amounts.entry)
     }
     pub fn get(&self) -> (impl LogIter<&T>, &U) {
         let (range, entry) = self.get_range_entry();
@@ -280,16 +279,22 @@ where
         self.amounts.clear_with(EntryAmount::zero(entry));
         self.index = 0;
     }
-    pub fn backward_log(&mut self) -> Result<(), OutOfLog> {
+    pub fn backward_log(&mut self) -> Result<bool, OutOfLog> {
         let amount = self.amounts.amount();
-        self.amounts.backward_log()?;
-        self.index -= amount;
-        Ok(())
+        if self.amounts.backward_log()? {
+            self.index -= amount;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
     }
-    pub fn forward_log(&mut self) -> Result<(), OutOfLog> {
-        self.amounts.forward_log()?;
-        self.index += self.amounts.amount();
-        Ok(())
+    pub fn forward_log(&mut self) -> Result<bool, OutOfLog> {
+        if self.amounts.forward_log()? {
+            self.index += self.amounts.amount();
+            Ok(true)
+        } else {
+            Ok(false)
+        }
     }
     pub fn pop_past_by_len(
         &mut self,
@@ -523,7 +528,14 @@ where
 
 #[cfg(test)]
 mod test {
+    use std::num::NonZeroUsize;
+
     use serde::{Deserialize, Serialize};
+
+    use crate::{
+        log::test::{shorten_strategy, ShortenStrategy},
+        RevFrame,
+    };
 
     use super::*;
 
@@ -617,5 +629,292 @@ mod test {
         test(&logless, 0, 2, false);
         test(&full_with_capacity, 2, 6, true);
         test(&logless_with_capacity, 0, 2, true);
+    }
+
+    enum Push {
+        States,
+        Empty,
+        TooMany,
+    }
+
+    impl RareStatesLog<u8, RevFrame, 1> {
+        fn test_forward(
+            &mut self,
+            meta: &mut RevMeta,
+            strategy: ShortenStrategy,
+            max_past_len: usize, // control when the by-len strategies trigger pop/drain to align to the by-logged-at strategies
+            states: [u8; 2],
+            entry: usize,
+            push: Push,
+            expected_entries_len: usize,
+            expected_states_len: usize,
+            expected_popped: Option<([u8; 2], usize)>,
+        ) {
+            let before = self.clone();
+            match push {
+                Push::States | Push::Empty => {
+                    meta.queue_forward();
+                    meta.update();
+                    let result = self
+                        .try_push_present(|mut log| {
+                            if matches!(push, Push::States) {
+                                log.extend(states);
+                            }
+                            RevFrame::new(entry)
+                        })
+                        .ok();
+                    let expected = matches!(push, Push::Empty).then_some(RevFrame::new(entry));
+                    let after_push = self.clone();
+                    assert_eq!(
+                        result,
+                        Some(expected),
+                        "\nstrategy: {strategy:?}\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
+                    );
+                    let (actual_states, actual_entry) =
+                        shorten_strategy!(self, meta, strategy, max_past_len);
+                    let (expected_states, expected_entry) = expected_popped.unzip();
+                    assert_eq!(
+                        actual_states.unwrap_or_default(),
+                        expected_states.map(|popped| Vec::from_iter(popped)).unwrap_or_default(),
+                        "\nstrategy: {strategy:?}\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
+                    );
+                    if matches!(
+                        strategy,
+                        ShortenStrategy::PopPastByLen | ShortenStrategy::PopPastByLoggedAt
+                    ) {
+                        assert_eq!(
+                            actual_entry, expected_entry,
+                            "\nstrategy: {strategy:?}\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
+                        );
+                    }
+                    assert_eq!(
+                        self.entries_len(),
+                        expected_entries_len,
+                        "\nstrategy: {strategy:?}\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
+                    );
+                    assert_eq!(
+                        self.states_len(),
+                        expected_states_len,
+                        "\nstrategy: {strategy:?}\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
+                    );
+                    self.test_states(before, meta, states, entry);
+                }
+                Push::TooMany => {
+                    let frame = meta.present_world_state().wrapping_add(1);
+                    let result = self.try_push_present(|mut log| {
+                        log.extend([0; 256]);
+                        frame
+                    });
+                    let result = result.map_err(
+                        |AmountErr {
+                             values,
+                             entry,
+                             pushed_amount,
+                             _error: error,
+                         }| AmountErr::<Vec<u8>, Self> {
+                            values: Vec::from_iter(values),
+                            entry,
+                            pushed_amount,
+                            _error: error,
+                        },
+                    );
+                    match result {
+                        Ok(_) => {
+                            panic!("\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}")
+                        }
+                        Err(AmountErr {
+                            values,
+                            entry: actual_entry,
+                            pushed_amount,
+                            ..
+                        }) => {
+                            assert_eq!(
+                                values, [0; 256],
+                                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
+                            );
+                            assert_eq!(
+                                actual_entry, frame,
+                                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
+                            );
+                            assert_eq!(
+                                pushed_amount, 256,
+                                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
+                            );
+                            assert_eq!(
+                                self.entries_len(),
+                                expected_entries_len,
+                                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
+                            );
+                            assert_eq!(
+                                self.states_len(),
+                                expected_states_len,
+                                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
+                            );
+                            self.test_states(before, meta, states, entry);
+                        }
+                    }
+                }
+            }
+        }
+        fn test_forward_log(
+            &mut self,
+            meta: &mut RevMeta,
+            expected_states: [u8; 2],
+            expected_entry: usize,
+            expected_result: Result<bool, OutOfLog>,
+        ) {
+            let before = self.clone();
+            if expected_result.is_ok() {
+                let frame = meta.present_world_state().wrapping_add(1);
+                meta.queue_log(frame).unwrap();
+                meta.update();
+            }
+            let actual_result = self.forward_log();
+            assert_eq!(
+                actual_result, expected_result,
+                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
+            );
+            self.test_states(before, meta, expected_states, expected_entry);
+        }
+        fn test_backward_log(
+            &mut self,
+            meta: &mut RevMeta,
+            expected_states: [u8; 2],
+            expected_entry: usize,
+            expected_result: Result<bool, OutOfLog>,
+        ) {
+            let before = self.clone();
+            if expected_result.is_ok() {
+                let frame = meta.present_world_state().wrapping_sub(1);
+                meta.queue_log(frame).unwrap();
+                meta.update();
+            }
+            let actual_result = self.backward_log();
+            assert_eq!(
+                actual_result, expected_result,
+                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
+            );
+            self.test_states(before, meta, expected_states, expected_entry);
+        }
+        fn test_states(
+            &self,
+            before: Self,
+            meta: &RevMeta,
+            expected_states: [u8; 2],
+            expected_entry: usize,
+        ) {
+            let (actual_states, entry) = self.get();
+            let actual_states: Vec<u8> = actual_states.cloned().collect();
+            assert_eq!(
+                actual_states, expected_states,
+                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
+            );
+            assert_eq!(
+                *entry,
+                RevFrame::new(expected_entry),
+                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
+            );
+        }
+        fn test_drain_future(
+            &self,
+            expected_future: impl IntoIterator<Item = ([u8; 2], usize)>,
+            expected_entries_len: usize,
+            expected_states_len: usize,
+        ) -> Self {
+            let before = self.clone();
+            let mut clone = self.clone();
+            let (mut states, entries) = clone.drain_future();
+            let actual_future: Vec<_> = entries
+                .map(|entry_amount| {
+                    let states = states.by_ref().take(entry_amount.amount()).collect();
+                    (states, usize::from(entry_amount.entry))
+                })
+                .collect();
+            let expected_future: Vec<_> = expected_future
+                .into_iter()
+                .map(|(states, entry)| {
+                    let states = Vec::from_iter(states);
+                    (states, entry)
+                })
+                .collect();
+            drop(states);
+            assert_eq!(
+                actual_future, expected_future,
+                "\nbefore: {before:#?}\nafter: {clone:#?}"
+            );
+            assert_eq!(
+                clone.entries_len(),
+                expected_entries_len,
+                "\nbefore: {before:#?}\nafter: {clone:#?}"
+            );
+            assert_eq!(
+                clone.states_len(),
+                expected_states_len,
+                "\nbefore: {before:#?}\nafter: {clone:#?}"
+            );
+            clone
+        }
+    }
+
+    #[test]
+    fn push_and_log_traversal() {
+        for strategy in ShortenStrategy::VARIANTS {
+            let meta = &mut RevMeta::new(NonZeroUsize::new(3), 0, false);
+            let mut log = RareStatesLog::try_new([0, 0], meta.present_world_state()).unwrap();
+
+            log.test_forward(meta, strategy, 0, [0, 0], 0, Push::Empty, 0, 2, None);
+            log.test_forward(meta, strategy, 1, [2, 2], 2, Push::States, 1, 4, None);
+            // does not pop yet because the skip after the initial state is still in log range
+            log.test_forward(meta, strategy, 2, [3, 3], 3, Push::States, 2, 6, None);
+            // does not pop yet because while the skip after the initial state is no longer in log range,
+            // multiple uses of `push_present` by the user at the same frame makes the skips as frame offset
+            // an unreliable indicator to pop here
+            log.test_forward(meta, strategy, 3, [3, 3], 3, Push::Empty, 2, 6, None);
+            // pops oldest entry as the second-oldest entry is also out of log now
+            log.test_forward(
+                meta,
+                strategy,
+                3,
+                [5, 5],
+                5,
+                Push::States,
+                2,
+                6,
+                Some(([0, 0], 0)),
+            );
+
+            meta.set_oldest_frame(1); // make log start accessible again to test out-of-log
+
+            log.test_backward_log(meta, [3, 3], 3, Ok(true));
+            log.test_backward_log(meta, [3, 3], 3, Ok(false));
+            log.test_backward_log(meta, [2, 2], 2, Ok(true));
+            // out of log, no mutations happend to both meta and log here
+            log.test_backward_log(meta, [2, 2], 2, Err(OutOfLog));
+
+            log.test_forward_log(meta, [3, 3], 3, Ok(true));
+            log.test_forward_log(meta, [3, 3], 3, Ok(false));
+            log.test_forward_log(meta, [5, 5], 5, Ok(true));
+            // out of log, no mutations happend to both meta and log here
+            log.test_forward_log(meta, [5, 5], 5, Err(OutOfLog));
+
+            log.test_backward_log(meta, [3, 3], 3, Ok(true));
+            log.test_backward_log(meta, [3, 3], 3, Ok(false));
+            log.test_backward_log(meta, [2, 2], 2, Ok(true));
+
+            let log_clone = log.test_drain_future([([3, 3], 3), ([5, 5], 5)], 0, 2);
+
+            for mut log in [log, log_clone] {
+                // all entries are truncated as they are in the future
+                log.test_forward(meta, strategy, 3, [4, 4], 3, Push::States, 1, 4, None);
+
+                // storing too many states fails
+                log.test_forward(meta, strategy, 3, [4, 4], 3, Push::TooMany, 1, 4, None);
+            }
+        }
+    }
+
+    #[allow(dead_code)]
+    fn impls_reflect() {
+        bevy::reflect::TypeRegistry::empty().register::<RareStatesLog<usize, RevFrame, 1>>();
     }
 }
