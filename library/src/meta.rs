@@ -201,7 +201,7 @@ pub struct RevMeta {
     ///
     /// Changing this value is always possible but only comes into effect when updating the world during [`RevDirection::NotLog`].
     ///
-    /// **Note** that there is a hard limit of [`Self::MAX_WORLD_STATES`].
+    /// **Note** that there is a hard limit of [`Self::MAX_WORLD_STATES`] this value is clamped to when read internally.
     pub max_world_states: Option<NonZeroUsize>,
     oldest_frame: RevFrame,
     present_frame: RevFrame,
@@ -332,10 +332,10 @@ impl RevMeta {
     pub fn queue_log(&mut self, to: RevFrame) -> Result<usize, OutOfLog> {
         let to_past = range_len(to, self.present_frame);
         let to_future = range_len(self.present_frame, to);
-        let from_present = to_past.min(to_future);
         if to_past > self.past_world_states() && to_future > self.future_world_states() {
             return Err(OutOfLog);
         }
+        let from_present = to_past.min(to_future);
         self.queue = NonZeroUsize::new(from_present).map(|updates_until_pause| {
             if to_past == from_present {
                 InternalDirection::RunningBackwardLog {
@@ -489,6 +489,13 @@ impl RevMeta {
     #[cfg(test)]
     pub(crate) fn set_oldest_frame(&mut self, oldest_frame: usize) {
         self.oldest_frame = RevFrame::new(oldest_frame);
+        let past_world_states = self.past_world_states();
+        if self
+            .max_world_states
+            .is_some_and(|max_world_states| max_world_states.get() < past_world_states)
+        {
+            self.max_world_states = NonZeroUsize::new(past_world_states);
+        }
     }
     pub(crate) fn add_read_if_no_write(
         world: &mut World,
@@ -538,10 +545,10 @@ fn reduction_successful(updates_until_pause: &mut NonZeroUsize) -> bool {
 /// Returns len of wrapping range `start..end`
 fn range_len(start: RevFrame, end: RevFrame) -> usize {
     if PackedRevFrame::MAX_AS_USIZE != usize::MAX && start.0 > end.0 {
-        // 0 .. end .. start .. PackedRevFrame::MAX_AS_USIZE .. usize::MAX
+        // 0 ## end .. start ## PackedRevFrame::MAX_AS_USIZE .. usize::MAX
         PackedRevFrame::MAX_AS_USIZE - start.0 + end.0
     } else {
-        // 0 .. start .. end .. PackedRevFrame::MAX_AS_USIZE .. usize::MAX
+        // 0 .. start ## end .. PackedRevFrame::MAX_AS_USIZE .. usize::MAX
         end.0.wrapping_sub(start.0)
     }
 }
