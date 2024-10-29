@@ -629,102 +629,100 @@ mod test {
             &mut self,
             meta: &mut RevMeta,
             strategy: ShortenStrategy,
-            push: Result<[u8; 2], [u8; 256]>,
+            states: [u8; 2],
+            push_ok: bool,
             expected_entries_len: usize,
             expected_states_len: usize,
             expected_popped: Option<([u8; 2], usize)>,
         ) {
             let before = self.clone();
-            match push {
-                Ok(push) => {
-                    meta.queue_forward();
-                    meta.update();
-                    let result = self.try_push_present(|mut log| {
-                        log.extend(push.clone());
-                        meta.present_world_state()
-                    });
-                    let is_ok = result.is_ok();
-                    drop(result);
-                    let after_push = self.clone();
-                    assert!(
-                        is_ok,
-                        "\nstrategy: {strategy:?}\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
-                    );
-                    let (actual_states, actual_entry) =
-                        shorten_strategy!(self, meta, strategy, meta.past_world_states());
-                    let (expected_states, expected_entry) = expected_popped.unzip();
+            if push_ok {
+                meta.queue_forward();
+                meta.update();
+                let result = self.try_push_present(|mut log| {
+                    log.extend(states.clone());
+                    meta.present_world_state()
+                });
+                let is_ok = result.is_ok();
+                drop(result);
+                let after_push = self.clone();
+                assert!(
+                    is_ok,
+                    "\nstrategy: {strategy:?}\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
+                );
+                let (actual_states, actual_entry) =
+                    shorten_strategy!(self, meta, strategy, meta.past_world_states());
+                let (expected_states, expected_entry) = expected_popped.unzip();
+                assert_eq!(
+                    actual_states.unwrap_or_default(),
+                    expected_states.map(|popped| Vec::from_iter(popped)).unwrap_or_default(),
+                    "\nstrategy: {strategy:?}\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
+                );
+                if matches!(
+                    strategy,
+                    ShortenStrategy::PopPastByLen | ShortenStrategy::PopPastByLoggedAt
+                ) {
                     assert_eq!(
-                        actual_states.unwrap_or_default(),
-                        expected_states.map(|popped| Vec::from_iter(popped)).unwrap_or_default(),
+                        actual_entry, expected_entry,
                         "\nstrategy: {strategy:?}\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
                     );
-                    if matches!(
-                        strategy,
-                        ShortenStrategy::PopPastByLen | ShortenStrategy::PopPastByLoggedAt
-                    ) {
-                        assert_eq!(
-                            actual_entry, expected_entry,
-                            "\nstrategy: {strategy:?}\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
-                        );
-                    }
-                    assert_eq!(
-                        self.entries_len(),
-                        expected_entries_len,
-                        "\nstrategy: {strategy:?}\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
-                    );
-                    assert_eq!(
-                        self.states_len(),
-                        expected_states_len,
-                        "\nstrategy: {strategy:?}\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
-                    );
-                    self.test_states(before, meta, push);
                 }
-                Err(push) => {
-                    let result = self.try_push_present(|mut log| {
-                        log.extend(push.clone());
-                        meta.present_world_state().wrapping_add(1)
-                    });
-                    let result = result.map_err(
-                        |AmountErr {
-                             values,
-                             entry,
-                             pushed_amount,
-                             _error: error,
-                         }| AmountErr::<Vec<u8>, Self> {
-                            values: Vec::from_iter(values),
-                            entry,
-                            pushed_amount,
-                            _error: error,
-                        },
-                    );
-                    match result {
-                        Ok(()) => {
-                            panic!("\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}")
-                        }
-                        Err(AmountErr {
-                            values,
-                            pushed_amount,
-                            ..
-                        }) => {
-                            assert_eq!(
-                                values, push,
-                                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
-                            );
-                            assert_eq!(
-                                pushed_amount, 256,
-                                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
-                            );
-                            assert_eq!(
-                                self.entries_len(),
-                                expected_entries_len,
-                                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
-                            );
-                            assert_eq!(
-                                self.states_len(),
-                                expected_states_len,
-                                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
-                            );
-                        }
+                assert_eq!(
+                    self.entries_len(),
+                    expected_entries_len,
+                    "\nstrategy: {strategy:?}\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
+                );
+                assert_eq!(
+                    self.states_len(),
+                    expected_states_len,
+                    "\nstrategy: {strategy:?}\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
+                );
+                self.test_states(before, meta, states);
+            } else {
+                let result = self.try_push_present(|mut log| {
+                    log.extend([0; 256]);
+                    meta.present_world_state().wrapping_add(1)
+                });
+                let result = result.map_err(
+                    |AmountErr {
+                         values,
+                         entry,
+                         pushed_amount,
+                         _error: error,
+                     }| AmountErr::<Vec<u8>, Self> {
+                        values: Vec::from_iter(values),
+                        entry,
+                        pushed_amount,
+                        _error: error,
+                    },
+                );
+                match result {
+                    Ok(()) => {
+                        panic!("\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}")
+                    }
+                    Err(AmountErr {
+                        values,
+                        pushed_amount,
+                        ..
+                    }) => {
+                        assert_eq!(
+                            values, [0; 256],
+                            "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
+                        );
+                        assert_eq!(
+                            pushed_amount, 256,
+                            "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
+                        );
+                        assert_eq!(
+                            self.entries_len(),
+                            expected_entries_len,
+                            "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
+                        );
+                        assert_eq!(
+                            self.states_len(),
+                            expected_states_len,
+                            "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
+                        );
                     }
                 }
             }
@@ -843,10 +841,10 @@ mod test {
             let meta = &mut RevMeta::new(NonZeroUsize::new(3), 0, false);
             let mut log = StatesLog::try_new([0, 0], meta.present_world_state()).unwrap();
 
-            log.test_forward(meta, strategy, Ok([1, 1]), 1, 4, None);
-            log.test_forward(meta, strategy, Ok([2, 2]), 2, 6, None);
+            log.test_forward(meta, strategy, [1, 1], true, 1, 4, None);
+            log.test_forward(meta, strategy, [2, 2], true, 2, 6, None);
             // shortened log
-            log.test_forward(meta, strategy, Ok([3, 3]), 2, 6, Some(([0, 0], 0)));
+            log.test_forward(meta, strategy, [3, 3], true, 2, 6, Some(([0, 0], 0)));
 
             log.test_backward_log(meta, [2, 2], false);
             log.test_backward_log(meta, [1, 1], false);
@@ -865,10 +863,10 @@ mod test {
 
             for mut log in [log, clone] {
                 // all entries are truncated as they are in the future
-                log.test_forward(meta, strategy, Ok([4, 4]), 1, 4, None);
+                log.test_forward(meta, strategy, [4, 4], true, 1, 4, None);
 
                 // storing too many states fails
-                log.test_forward(meta, strategy, Err([0; 256]), 1, 4, None);
+                log.test_forward(meta, strategy, [4, 4], false, 1, 4, None);
             }
         }
     }
