@@ -6,9 +6,9 @@ use std::{
 
 use bevy::{reflect::Reflect, utils::tracing::error};
 
-use crate::{meta::RevMeta, RevFrame};
+use crate::meta::RevMeta;
 
-use super::{LogIter, LoggedAt, OutOfLog, PackedRevFrame, RareValue, INDEX_OOB};
+use super::{LogIter, LoggedAt, OutOfLog, RareValue, INDEX_OOB};
 
 #[derive(Debug, Clone, Reflect)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -184,7 +184,7 @@ impl<T> RareStateLog<T> {
                 let previous = core::mem::replace(&mut self.present, state);
                 self.states.push_back(RareValue {
                     value: previous,
-                    skips: RevFrame::new(self.skips).into(),
+                    skips: self.skips.to_ne_bytes(),
                 });
                 self.skips = 0;
                 self.index += 1;
@@ -194,11 +194,11 @@ impl<T> RareStateLog<T> {
         }
         self.skips_max = self.skips;
     }
-    pub fn backward_log(&mut self) -> Result<(), OutOfLog> {
+    pub fn backward_log(&mut self) -> Result<bool, OutOfLog> {
         if self.skips > 0 {
             self.skips -= 1;
             self.past_len -= 1;
-            return Ok(());
+            return Ok(false);
         }
         let index = self.index.checked_sub(1).ok_or(OutOfLog)?;
         if !self.swap_state_and_skips_max(index) {
@@ -208,18 +208,18 @@ impl<T> RareStateLog<T> {
         self.index = index;
         self.skips = self.skips_max;
         self.past_len -= 1;
-        Ok(())
+        Ok(true)
     }
-    pub fn forward_log(&mut self) -> Result<(), OutOfLog> {
+    pub fn forward_log(&mut self) -> Result<bool, OutOfLog> {
         if self.skips < self.skips_max {
             self.past_len += 1;
             self.skips += 1;
-            Ok(())
+            Ok(false)
         } else if self.swap_state_and_skips_max(self.index) {
             self.past_len += 1;
             self.index += 1;
             self.skips = 0;
-            Ok(())
+            Ok(true)
         } else {
             Err(OutOfLog)
         }
@@ -228,10 +228,10 @@ impl<T> RareStateLog<T> {
         self.states
             .get_mut(index)
             .map(|entry| {
-                let mut skips = RevFrame::new(self.skips_max).into();
+                let mut skips_max = self.skips_max.to_ne_bytes();
                 core::mem::swap(&mut self.present, &mut entry.value);
-                core::mem::swap(&mut skips, &mut entry.skips);
-                self.skips_max = RevFrame::from(skips).into();
+                core::mem::swap(&mut skips_max, &mut entry.skips);
+                self.skips_max = usize::from_ne_bytes(skips_max);
             })
             .is_some()
     }
@@ -279,7 +279,9 @@ impl<T: LoggedAt> RareStateLog<T> {
         }
         // The user might call `push_present` multiple times per frame, so `RareValue::skips`
         // cannot be reliably interpreted as frame offsets from `RareValue::logged_at`.
-        // Instead `RareValue::skips` is ignored here and pop only happen if the next entry is also of log.
+        // Instead `RareValue::skips` is ignored here and pop only happen if the next entry is out of log too.
+        // It might be possible to ignore this issue if the oldest entry has no skips,
+        // but simplicity is favored here to keep lookups, operations and maintenance burden lower.
         let logged_at = self.states.get(1)?.logged_at();
         if !meta.contains_in_state_logged(logged_at) {
             self.pop_past()
@@ -295,11 +297,13 @@ impl<T: LoggedAt> RareStateLog<T> {
         // The user might call `push_present` multiple times per frame, so `RareValue::skips`
         // cannot be reliably interpreted as frame offsets from `RareValue::logged_at`.
         // Instead `RareValue::skips` is ignored here and one entry less is removed.
+        // It might be possible to ignore this issue if the entry at the partition point has no skips,
+        // but simplicity is favored here to keep lookups, operations and maintenance burden lower.
         let to = self
             .states
             .partition_point(|entry| meta.frames_since(entry.logged_at()) > past_len)
             .saturating_sub(1);
-        self.past_len -= to // sum of to-be-drained states, because of this mapping RareValue::len below is not needed, only RareValue::skips
+        self.past_len -= to // `to` plus sum of `RareValue::skips` == sum of `RareValue::len` but with less operations 
             + self
                 .states
                 .range(..to)
@@ -316,7 +320,10 @@ mod test {
 
     use serde::{Deserialize, Serialize};
 
-    use crate::log::test::{shorten_strategy, ShortenStrategy};
+    use crate::{
+        log::test::{shorten_strategy, ShortenStrategy},
+        RevFrame,
+    };
 
     use super::*;
 
@@ -396,11 +403,7 @@ mod test {
             meta.queue_forward();
             meta.update();
             let before = self.clone();
-            let push = state_is_pushed.then(|| {
-                let frame = meta.present_world_state();
-                assert_eq!(state.1, usize::from(frame));
-                (state.0, frame)
-            });
+            let push = state_is_pushed.then(|| (state.0, RevFrame::new(state.1)));
             self.push_present(push);
             let after_push = self.clone();
             let actual_popped =
@@ -420,20 +423,17 @@ mod test {
             &mut self,
             meta: &mut RevMeta,
             expected_state: (u8, usize),
-            out_of_log: bool,
+            expected_result: Result<bool, OutOfLog>,
         ) {
             let before = self.clone();
-            let result = self.forward_log();
-            let expected = if out_of_log {
-                Err(OutOfLog)
-            } else {
+            let actual_result = self.forward_log();
+            if expected_result.is_ok() {
                 let frame = meta.present_world_state().wrapping_add(1);
                 meta.queue_log(frame).unwrap();
                 meta.update();
-                Ok(())
-            };
+            }
             assert_eq!(
-                result, expected,
+                actual_result, expected_result,
                 "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
             );
             self.test_state(before, meta, expected_state);
@@ -442,20 +442,17 @@ mod test {
             &mut self,
             meta: &mut RevMeta,
             expected_state: (u8, usize),
-            out_of_log: bool,
+            expected_result: Result<bool, OutOfLog>,
         ) {
             let before = self.clone();
-            let result = self.backward_log();
-            let expected = if out_of_log {
-                Err(OutOfLog)
-            } else {
+            let actual_result = self.backward_log();
+            if expected_result.is_ok() {
                 let frame = meta.present_world_state().wrapping_sub(1);
                 meta.queue_log(frame).unwrap();
                 meta.update();
-                Ok(())
-            };
+            }
             assert_eq!(
-                result, expected,
+                actual_result, expected_result,
                 "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
             );
             self.test_state(before, meta, expected_state);
@@ -470,6 +467,7 @@ mod test {
         fn test_drain_future(
             &self,
             expected_future: impl IntoIterator<Item = (u8, usize)>,
+            expected_states_len: usize,
         ) -> Self {
             let before = self.clone();
             let mut clone = self.clone();
@@ -480,6 +478,11 @@ mod test {
                 .collect();
             assert_eq!(
                 actual_future, expected_future,
+                "\nbefore: {before:#?}\nafter: {clone:#?}"
+            );
+            assert_eq!(
+                clone.states_len(),
+                expected_states_len,
                 "\nbefore: {before:#?}\nafter: {clone:#?}"
             );
             clone
@@ -503,28 +506,27 @@ mod test {
             // pops oldest entry as the second-oldest entry is also out of log now
             log.test_forward(meta, strategy, 3, (5, 5), true, 2, Some((0, 0)));
 
-            meta.set_oldest_frame(0); // make log start accessible again to test out-of-log
+            meta.set_oldest_frame(1); // make log start accessible again to test out-of-log
 
-            log.test_backward_log(meta, (3, 3), false);
-            log.test_backward_log(meta, (3, 3), false);
-            log.test_backward_log(meta, (2, 2), false);
+            log.test_backward_log(meta, (3, 3), Ok(true));
+            log.test_backward_log(meta, (3, 3), Ok(false));
+            log.test_backward_log(meta, (2, 2), Ok(true));
             // out of log, no mutations happend to both meta and log here
-            log.test_backward_log(meta, (2, 2), true);
+            log.test_backward_log(meta, (2, 2), Err(OutOfLog));
 
-            log.test_forward_log(meta, (3, 3), false);
-            log.test_forward_log(meta, (3, 3), false);
-            log.test_forward_log(meta, (5, 5), false);
+            log.test_forward_log(meta, (3, 3), Ok(true));
+            log.test_forward_log(meta, (3, 3), Ok(false));
+            log.test_forward_log(meta, (5, 5), Ok(true));
             // out of log, no mutations happend to both meta and log here
-            log.test_forward_log(meta, (5, 5), true);
+            log.test_forward_log(meta, (5, 5), Err(OutOfLog));
 
-            log.test_backward_log(meta, (3, 3), false);
-            log.test_backward_log(meta, (3, 3), false);
-            log.test_backward_log(meta, (2, 2), false);
+            log.test_backward_log(meta, (3, 3), Ok(true));
+            log.test_backward_log(meta, (3, 3), Ok(false));
+            log.test_backward_log(meta, (2, 2), Ok(true));
 
-            let log_clone = log.test_drain_future([(3, 3), (5, 5)]);
-            let meta_clone = &mut meta.clone();
+            let log_clone = log.test_drain_future([(3, 3), (5, 5)], 0);
 
-            for (mut log, meta) in [(log, meta), (log_clone, meta_clone)] {
+            for mut log in [log, log_clone] {
                 // all entries are truncated as they are in the future
                 log.test_forward(meta, strategy, 3, (4, 3), true, 1, None);
             }
@@ -533,6 +535,6 @@ mod test {
 
     #[allow(dead_code)]
     fn impls_reflect() {
-        bevy::reflect::TypeRegistry::empty().register::<RareStateLog<PackedRevFrame>>();
+        bevy::reflect::TypeRegistry::empty().register::<RareStateLog<RevFrame>>();
     }
 }
