@@ -461,7 +461,6 @@ pub struct AmountErr<I, Log: WithAmount> {
     _error: Log::Err,
 }
 
-// `new` is not `pub` either way
 #[allow(private_bounds)]
 impl<I, Log: WithAmountInternal> AmountErr<I, Log> {
     // taking &self makes it easier to call this method
@@ -491,7 +490,10 @@ struct RareValue<T> {
     /// If `T` is a state, then these are the skips after the value.
     ///
     /// If `T` is a transiton, then these are the skips before the transition.
-    skips: PackedRevFrame,
+    ///
+    /// This is not a `PackedRevFrame` because skips may be sub-frames and sum up to larger values.
+    /// Instead, this is usize's native byte representation to reduce the alignment of this field.
+    skips: [u8; USIZE_BYTES],
 }
 
 impl<T> RareValue<T> {
@@ -499,7 +501,7 @@ impl<T> RareValue<T> {
         self.skips() + 1 // `self.data` adds to the len
     }
     fn skips(&self) -> usize {
-        self.skips.into()
+        usize::from_ne_bytes(self.skips)
     }
 }
 
