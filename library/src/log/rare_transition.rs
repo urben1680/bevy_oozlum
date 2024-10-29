@@ -6,9 +6,9 @@ use bevy::{
     utils::tracing::error,
 };
 
-use crate::{meta::RevMeta, RevFrame};
+use crate::meta::RevMeta;
 
-use super::{LogIter, LoggedAt, OutOfLog, PackedRevFrame, RareValue, INDEX_OOB};
+use super::{LogIter, LoggedAt, OutOfLog, RareValue, INDEX_OOB};
 
 #[derive(Debug, Clone, Reflect)]
 #[reflect(Default)]
@@ -161,7 +161,7 @@ impl<T> RareTransitionLog<T> {
             Some(transition) => {
                 self.transitions.push_back(RareValue {
                     value: transition,
-                    skips: RevFrame::new(self.skips).into(),
+                    skips: self.skips.to_ne_bytes(),
                 });
                 self.index += 1;
                 self.skips = 0;
@@ -181,7 +181,7 @@ impl<T> RareTransitionLog<T> {
             let transitions_len = self.transitions.len();
             if let Some(entry) = self.transitions.get_mut(index) {
                 self.index = index;
-                self.skips = entry.skips.into();
+                self.skips = entry.skips();
                 self.past_len -= 1;
                 return Ok(Some(&mut entry.value));
             }
@@ -211,7 +211,7 @@ impl<T> RareTransitionLog<T> {
     pub fn forward_log(&mut self) -> Result<Option<&mut T>, OutOfLog> {
         if let Some(entry) = self.transitions.get_mut(self.index) {
             self.past_len += 1;
-            if self.skips < entry.skips.into() {
+            if self.skips < entry.skips() {
                 self.skips += 1;
                 Ok(None)
             } else {
@@ -272,7 +272,7 @@ impl<T: LoggedAt> RareTransitionLog<T> {
         }
         // The user might call `push_present` multiple times per frame, so `RareValue::skips`
         // cannot be reliably interpreted as frame offsets from `RareValue::logged_at`.
-        // Instead `RareValue::skips` is ignored here and pop only happen if the next entry is also of log.
+        // Instead `RareValue::skips` is ignored here and pop only happen if the next entry is out of log too.
         let logged_at = self.transitions.get(1)?.logged_at();
         if !meta.contains_in_transition_logged(logged_at) {
             self.pop_past()
@@ -292,7 +292,7 @@ impl<T: LoggedAt> RareTransitionLog<T> {
             .transitions
             .partition_point(|entry| meta.frames_since(entry.logged_at()) >= past_len)
             .saturating_sub(1); // todo: is this needed for rare transition? skips are precending the logged at frame
-        self.past_len -= to // sum of to-be-drained transitions, because of this mapping RareValue::len below is not needed, only skips_before_value
+        self.past_len -= to // `to` plus sum of `RareValue::skips` == sum of `RareValue::len` but with less operations 
             + self
                 .transitions
                 .range(..to)
