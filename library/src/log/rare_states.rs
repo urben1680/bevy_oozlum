@@ -654,7 +654,7 @@ mod test {
             match push {
                 Push::States | Push::Empty => {
                     meta.queue_forward();
-                    meta.update();
+                    meta.update(|_, _| {});
                     let result = self
                         .try_push_present(|mut log| {
                             if matches!(push, Push::States) {
@@ -767,7 +767,7 @@ mod test {
             if expected_result.is_ok() {
                 let frame = meta.present_world_state().wrapping_add(1);
                 meta.queue_log(frame).unwrap();
-                meta.update();
+                meta.update(|_, _| {});
             }
             let actual_result = self.forward_log();
             assert_eq!(
@@ -787,7 +787,7 @@ mod test {
             if expected_result.is_ok() {
                 let frame = meta.present_world_state().wrapping_sub(1);
                 meta.queue_log(frame).unwrap();
-                meta.update();
+                meta.update(|_, _| {});
             }
             let actual_result = self.backward_log();
             assert_eq!(
