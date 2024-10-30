@@ -119,43 +119,43 @@ where
         }
     }
     pub fn entries_len(&self) -> usize {
-        self.amounts.len()
+        self.amounts.transitions_len()
     }
     pub fn transitions_len(&self) -> usize {
         self.transitions.len()
     }
     pub fn entries_capacity(&self) -> usize {
-        self.amounts.capacity()
+        self.amounts.transitions_capacity()
     }
     pub fn transitions_capacity(&self) -> usize {
         self.transitions.capacity()
     }
     pub fn entries_is_empty(&self) -> bool {
-        self.amounts.is_empty()
+        self.amounts.transitions_is_empty()
     }
     pub fn transitions_is_empty(&self) -> bool {
         self.transitions.is_empty()
     }
     pub fn entries_reserve(&mut self, additional: usize) {
-        self.amounts.reserve(additional)
+        self.amounts.transitions_reserve(additional)
     }
     pub fn transitions_reserve(&mut self, additional: usize) {
         self.transitions.reserve(additional)
     }
     pub fn entries_reserve_exact(&mut self, additional: usize) {
-        self.amounts.reserve_exact(additional)
+        self.amounts.transitions_reserve_exact(additional)
     }
     pub fn transitions_reserve_exact(&mut self, additional: usize) {
         self.transitions.reserve_exact(additional)
     }
     pub fn entries_try_reserve(&mut self, additional: usize) -> Result<(), TryReserveError> {
-        self.amounts.try_reserve(additional)
+        self.amounts.transitions_try_reserve(additional)
     }
     pub fn transitions_try_reserve(&mut self, additional: usize) -> Result<(), TryReserveError> {
         self.transitions.try_reserve(additional)
     }
     pub fn entries_try_reserve_exact(&mut self, additional: usize) -> Result<(), TryReserveError> {
-        self.amounts.try_reserve_exact(additional)
+        self.amounts.transitions_try_reserve_exact(additional)
     }
     pub fn transitions_try_reserve_exact(
         &mut self,
@@ -164,13 +164,13 @@ where
         self.transitions.try_reserve_exact(additional)
     }
     pub fn entries_shrink_to(&mut self, min_capacity: usize) {
-        self.amounts.shrink_to(min_capacity)
+        self.amounts.transitions_shrink_to(min_capacity)
     }
     pub fn transitions_shrink_to(&mut self, min_capacity: usize) {
         self.transitions.shrink_to(min_capacity)
     }
     pub fn entries_shrink_to_fit(&mut self) {
-        self.amounts.shrink_to_fit()
+        self.amounts.transitions_shrink_to_fit()
     }
     pub fn transitions_shrink_to_fit(&mut self) {
         self.transitions.shrink_to_fit()
@@ -416,7 +416,7 @@ mod test {
             match push {
                 Ok(push) => {
                     meta.queue_forward();
-                    meta.update();
+                    meta.update(|_, _| {});
                     let result = self.try_push_present(|mut log| {
                         log.extend(push.clone());
                         meta.present_world_state()
@@ -515,7 +515,7 @@ mod test {
             let expected_transitions = expected_transitions.map(|transitions| {
                 let frame = meta.present_world_state().wrapping_add(1);
                 meta.queue_log(frame).unwrap();
-                meta.update();
+                meta.update(|_, _| {});
                 (Vec::from_iter(transitions), frame)
             });
             let actual_transitions = self.forward_log().map(|value_entry| {
@@ -541,7 +541,7 @@ mod test {
             let expected_transitions = expected_transitions.map(|transitions| {
                 let frame = meta.present_world_state();
                 meta.queue_log(frame.wrapping_sub(1)).unwrap();
-                meta.update();
+                meta.update(|_, _| {});
                 (Vec::from_iter(transitions), frame)
             });
             let actual_transitions = self.backward_log().map(|value_entry| {
