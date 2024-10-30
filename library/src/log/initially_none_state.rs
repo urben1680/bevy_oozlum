@@ -81,7 +81,7 @@ mod serde_with {
                 Inner::Ran {
                     ref log,
                     undone_first_run,
-                } => ((!undone_first_run).then_some(&*log), log.capacity()),
+                } => ((!undone_first_run).then_some(&*log), log.states_capacity()),
             }
         }
         fn from_logless_with_capacity((state, capacity): Self::De) -> Self {
