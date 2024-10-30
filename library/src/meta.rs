@@ -12,6 +12,7 @@ use bevy::{
         world::World,
     },
     log::warn_once,
+    prelude::Mut,
     reflect::{std_traits::ReflectDefault, Reflect},
     utils::tracing::info,
 };
@@ -21,7 +22,6 @@ use bevy::reflect::{ReflectDeserialize, ReflectSerialize};
 
 use crate::{
     log::{OutOfLog, PackedRevFrame},
-    world::RevWorld,
     RevFrame, RevUpdate,
 };
 
@@ -31,35 +31,43 @@ pub use verifying::{VerifyError, VerifyingRevMeta};
 
 #[derive(Clone, Debug)]
 pub enum RevTryRunScheduleError {
+    RevMetaMissingFirstCall,
     RevMetaMissing {
         existed_previously: bool,
-        first_call: bool,
+    },
+    RevMetaRemovedInSchedule {
+        meta: RevMeta,
     },
     NoRevScheduleRunning {
+        // todo: deprecate
+        meta: RevMeta,
+    },
+    UnexpectedInitialRunning {
         meta: RevMeta,
     },
     ScheduleMissing {
+        // todo: simplify for only RevUpdate
         meta: RevMeta,
         schedule: InternedScheduleLabel,
     },
 }
 
 #[derive(Clone, Debug)]
-pub struct GetFromWorldError {
-    pub existed_previously: bool,
-    pub first_call: bool,
+pub enum GetFromWorldError {
+    // todo: deprecate if unneeded
+    RevMetaMissingFirstCall,
+    RevMetaMissing { existed_previously: bool },
 }
 
 impl From<GetFromWorldError> for RevTryRunScheduleError {
-    fn from(
-        GetFromWorldError {
-            existed_previously,
-            first_call,
-        }: GetFromWorldError,
-    ) -> Self {
-        Self::RevMetaMissing {
-            existed_previously,
-            first_call,
+    fn from(value: GetFromWorldError) -> Self {
+        match value {
+            GetFromWorldError::RevMetaMissingFirstCall => {
+                RevTryRunScheduleError::RevMetaMissingFirstCall
+            }
+            GetFromWorldError::RevMetaMissing { existed_previously } => {
+                RevTryRunScheduleError::RevMetaMissing { existed_previously }
+            }
         }
     }
 }
@@ -76,7 +84,7 @@ pub enum RevDirection {
     BackwardLog,
 }
 
-#[allow(non_upper_case_globals)] // every crate need a little crime
+#[allow(non_upper_case_globals)] // every crate needs a little crime
 impl RevDirection {
     pub const NotLog: Self = Self::Forward { log: false };
     pub const ForwardLog: Self = Self::Forward { log: true };
@@ -89,7 +97,7 @@ impl RevDirection {
     derive(serde::Serialize, serde::Deserialize),
     reflect(Serialize, Deserialize)
 )]
-pub enum InternalDirection {
+enum InternalDirection {
     RunningForward,
     RunningForwardLog { updates_until_pause: NonZeroUsize },
     RunningBackwardLog { updates_until_pause: NonZeroUsize },
@@ -132,19 +140,13 @@ impl InternalDirection {
             _ => *self,
         }
     }
-    pub fn get_direction(self) -> Option<RevDirection> {
+    fn get_direction(self) -> Option<RevDirection> {
         match self {
             Self::RunningForward => Some(RevDirection::NotLog),
             Self::RunningForwardLog { .. } => Some(RevDirection::ForwardLog),
             Self::RunningBackwardLog { .. } => Some(RevDirection::BackwardLog),
             _ => None,
         }
-    }
-    pub fn running_rev_schedule(self) -> bool {
-        matches!(
-            self,
-            Self::RunningForward | Self::RunningForwardLog { .. } | Self::RunningBackwardLog { .. }
-        )
     }
 }
 
@@ -206,6 +208,7 @@ pub struct RevMeta {
     oldest_frame: RevFrame,
     present_frame: RevFrame,
     youngest_frame: RevFrame,
+    /// If Some, is either a Running* variant or Pause
     queue: Option<InternalDirection>,
     direction: InternalDirection,
 }
@@ -241,11 +244,10 @@ impl RevMeta {
     pub fn get_direction(&self) -> Option<RevDirection> {
         self.direction.get_direction()
     }
-    pub fn internal_direction(&self) -> InternalDirection {
-        self.direction
-    }
-    pub fn running_rev_schedule(&self) -> bool {
-        self.direction.running_rev_schedule()
+    pub fn get_direction_after_run(&self) -> Option<RevDirection> {
+        let mut direction = self.direction;
+        direction.end_running();
+        direction.get_direction()
     }
     pub fn present_world_state(&self) -> RevFrame {
         self.present_frame
@@ -352,10 +354,8 @@ impl RevMeta {
     pub fn queue_pause(&mut self) {
         self.queue = Some(InternalDirection::Pause);
     }
-    pub fn end_running(&mut self) {
-        self.direction.end_running();
-    }
     pub(crate) fn get_from_world(world: &mut World) -> Result<&mut Self, GetFromWorldError> {
+        // todo deprecate
         #[derive(Resource, Clone)]
         struct Existed(bool);
 
@@ -364,65 +364,82 @@ impl RevMeta {
             Ok(world.resource_mut::<Self>().into_inner())
         } else {
             let err = match world.get_resource::<Existed>().cloned() {
-                None => GetFromWorldError {
-                    existed_previously: false,
-                    first_call: true,
-                },
-                Some(Existed(existed_previously)) => GetFromWorldError {
-                    existed_previously,
-                    first_call: false,
-                },
+                None => GetFromWorldError::RevMetaMissingFirstCall,
+                Some(Existed(existed_previously)) => {
+                    GetFromWorldError::RevMetaMissing { existed_previously }
+                }
             };
             world.insert_resource(Existed(false));
             Err(err)
         }
     }
     pub fn try_update_world(world: &mut World) -> Result<(), RevTryRunScheduleError> {
-        let meta = Self::get_from_world(world)?;
-        let previous = meta.clone();
-        let reduce_logged_at = meta.update();
-        let meta = meta.clone();
+        #[derive(Resource, Clone, Copy)]
+        struct Existed(bool);
 
-        let Some(direction) = meta.get_direction() else {
-            if let Some(mut this) = world.get_resource_mut::<Self>() {
-                this.end_running()
+        if world.contains_resource::<Self>() {
+            world.insert_resource(Existed(true));
+        } else {
+            let err = match world.get_resource::<Existed>().cloned() {
+                None => RevTryRunScheduleError::RevMetaMissingFirstCall,
+                Some(Existed(existed_previously)) => {
+                    RevTryRunScheduleError::RevMetaMissing { existed_previously }
+                }
+            };
+            world.insert_resource(Existed(false));
+            return Err(err);
+        }
+
+        world.resource_scope(|world: &mut World, mut meta: Mut<Self>| {
+            if meta.get_direction().is_some() {
+                return Err(RevTryRunScheduleError::UnexpectedInitialRunning {
+                    meta: meta.clone(),
+                });
             }
-            return Err(RevTryRunScheduleError::NoRevScheduleRunning { meta });
-        };
+            let previous = meta.clone();
+            let result = meta.update(|meta, reduce_logged_at| {
+                world.insert_resource(meta.clone());
 
-        let result = world
-            .rev_try_schedule_scope(RevUpdate, |world, schedule| {
                 if let Some(reduce_logged_at) = reduce_logged_at {
                     world.trigger(reduce_logged_at);
                     if let Some(reducings) = world.remove_resource::<CommandsLogReducings>() {
                         for reducing in &reducings.0 {
-                            reducing(&meta, world);
+                            reducing(meta, world);
                         }
                         world.insert_resource(reducings);
                     }
                 }
-                match direction {
-                    RevDirection::Forward { .. } => schedule.run_forward(world),
-                    RevDirection::BackwardLog => schedule.run_backward(world),
-                }
-            })
-            .map_err(|_| RevTryRunScheduleError::ScheduleMissing {
-                meta,
-                schedule: RevUpdate.intern(),
+
+                world.try_run_schedule(RevUpdate).map_err(|_| {
+                    RevTryRunScheduleError::ScheduleMissing {
+                        meta: meta.clone(),
+                        schedule: RevUpdate.intern(),
+                    }
+                })
             });
 
-        if let Some(mut meta) = world.get_resource_mut::<Self>() {
-            match result {
-                Ok(()) => meta.end_running(),
-                Err(_) => *meta = previous,
+            match result.transpose() {
+                Ok(_) => {
+                    let Some(updated) = world.remove_resource::<Self>() else {
+                        return Err(RevTryRunScheduleError::RevMetaRemovedInSchedule {
+                            meta: meta.clone(),
+                        });
+                    };
+                    meta.max_world_states = updated.max_world_states;
+                    meta.queue = updated.queue;
+                    Ok(())
+                }
+                Err(err) => {
+                    world.remove_resource::<Self>();
+                    *meta = previous;
+                    Err(err)
+                }
             }
-        }
-
-        result
+        })
     }
     pub fn update_world(world: &mut World) {
         match Self::try_update_world(world) {
-            Err(RevTryRunScheduleError::RevMetaMissing { first_call: true, .. }) => info!(
+            Err(RevTryRunScheduleError::RevMetaMissingFirstCall) => info!(
                 "RevMeta does not exist yet, reversible schedule RevUpdate will not be called until it is inserted."
             ),
             Err(RevTryRunScheduleError::RevMetaMissing { existed_previously: true, .. }) => info!(
@@ -435,7 +452,41 @@ impl RevMeta {
             _ => {}
         }
     }
-    pub fn update(&mut self) -> Option<CheckLoggedAt> {
+    /// Updates `RevMeta`. The closure is called if the updated direction is not paused.
+    ///
+    /// The given `&mut RevMeta` in the closure has the following characteristics:
+    ///
+    /// - the mutable reference allows to queue the next direction
+    /// - [`get_direction`](Self::get_direction) always returns `Some`, therefore [`direction`](Self::direction) can be used instead
+    /// - the value behind it should not be swaped with another instance of `RevMeta`
+    ///
+    /// If the second closure argument is `Some`, logs that track their entries via [`LoggedAt`](crate::log::LoggedAt)
+    /// and are not calling their `pop_past_by_logged_at` every time in this closure, trigger their
+    /// `truncate_future_drain_past_by_logged_at` method instead then.
+    ///
+    /// If this method is not manually called and instead ([`try_`](Self::try_update_world))[`update_world`](Self::update_world)
+    /// is used as a system to call the [`RevUpdate`] schedule, the above mechanism is triggered via an observer.
+    /// See [`CheckLoggedAt`]
+    ///
+    /// # Panics
+    ///
+    /// If this is caled recursively in the closure and the closure is called because the updated direction is not paused,
+    /// this will panic. The same can happen if `RevMeta` is in an invalid state, cloned from inside the closure for example.
+    pub fn update<Out>(
+        &mut self,
+        c: impl FnOnce(&mut Self, Option<CheckLoggedAt>) -> Out,
+    ) -> Option<Out> {
+        if self.get_direction().is_some() {
+            panic!("unexpected initial direction, expected pause or ran variant, do not call this method recursively\n{self:#?}");
+        }
+        let reduce_logged_at = self.update_internal();
+        self.get_direction().map(|_| {
+            let out = c(self, reduce_logged_at);
+            self.direction.end_running();
+            out
+        })
+    }
+    fn update_internal(&mut self) -> Option<CheckLoggedAt> {
         match self.queue.take() {
             Some(queue) => {
                 self.direction = queue;
@@ -448,7 +499,7 @@ impl RevMeta {
             }
             None => {
                 self.direction.start_running();
-                let updated = match &mut self.direction {
+                let updated_at_log = match &mut self.direction {
                     InternalDirection::RunningForward => return self.update_forward(),
                     InternalDirection::RunningForwardLog {
                         updates_until_pause,
@@ -458,9 +509,9 @@ impl RevMeta {
                         updates_until_pause,
                     } => reduction_successful(updates_until_pause)
                         .then(|| self.present_frame.wrapping_sub(1)),
-                    _ => return None,
+                    _ /* Pause */ => None,
                 };
-                match updated {
+                match updated_at_log {
                     Some(updated) => self.present_frame = updated,
                     None => self.direction = InternalDirection::Pause,
                 }
@@ -619,16 +670,16 @@ mod test {
             },
         );
 
-        meta.update();
+        meta.update_internal();
         assert_eq!(
-            meta.internal_direction(),
+            meta.direction,
             InternalDirection::RunningForwardLog {
                 updates_until_pause: ONE
             }
         );
         assert_eq!(meta.present_frame.0, 1);
 
-        meta.update();
+        meta.update_internal();
         assert_eq!(meta.get_direction(), None);
         assert_eq!(meta.present_frame.0, 1);
     }
@@ -644,16 +695,16 @@ mod test {
             },
         );
 
-        meta.update();
+        meta.update_internal();
         assert_eq!(
-            meta.internal_direction(),
+            meta.direction,
             InternalDirection::RunningBackwardLog {
                 updates_until_pause: ONE
             }
         );
         assert_eq!(meta.present_frame.0, 0);
 
-        meta.update();
+        meta.update_internal();
         assert_eq!(meta.get_direction(), None);
         assert_eq!(meta.present_frame.0, 0);
     }
@@ -662,11 +713,11 @@ mod test {
     fn start_grows_according_to_max_len() {
         let mut meta = RevMeta::new(Some(TWO), 0, false);
 
-        meta.update();
+        meta.update_internal();
         assert_eq!(meta.present_frame.0, 1);
         assert_eq!(meta.world_states(), 2);
 
-        meta.update();
+        meta.update_internal();
         assert_eq!(meta.present_frame.0, 2);
         assert_eq!(meta.world_states(), 2);
     }
@@ -690,11 +741,11 @@ mod test {
             },
         );
 
-        meta.update();
-        meta.update();
+        meta.update_internal();
+        meta.update_internal();
         assert_eq!(meta.world_states(), 3);
         meta.queue_forward();
-        meta.update();
+        meta.update_internal();
         assert_eq!(meta.world_states(), 2);
     }
 }
