@@ -4,9 +4,9 @@ use std::{
     ops::Deref,
 };
 
-use bevy::{reflect::Reflect, utils::tracing::error};
+use bevy::reflect::Reflect;
 
-use crate::{log::INDEX_OOB, meta::RevMeta};
+use crate::{log::index_oob, meta::RevMeta};
 
 use super::{LogIter, LoggedAt, OutOfLog};
 
@@ -103,9 +103,9 @@ impl<T> StateLog<T> {
             index: 0,
         }
     }
-    pub fn with_capacity(present: T, capacity: usize) -> Self {
+    pub fn with_capacity(present: T, states_capacity: usize) -> Self {
         Self {
-            states: VecDeque::with_capacity(capacity),
+            states: VecDeque::with_capacity(states_capacity),
             present,
             index: 0,
         }
@@ -113,39 +113,32 @@ impl<T> StateLog<T> {
     pub fn into_inner(self) -> T {
         self.present
     }
-    pub fn len(&self) -> usize {
+    pub fn states_len(&self) -> usize {
         self.states.len()
     }
-    pub fn capacity(&self) -> usize {
+    pub fn states_capacity(&self) -> usize {
         self.states.capacity()
     }
-    pub fn is_empty(&self) -> bool {
+    pub fn states_is_empty(&self) -> bool {
         self.states.is_empty()
     }
-    pub fn reserve(&mut self, additional: usize) {
+    pub fn states_reserve(&mut self, additional: usize) {
         self.states.reserve(additional)
     }
-    pub fn reserve_exact(&mut self, additional: usize) {
+    pub fn states_reserve_exact(&mut self, additional: usize) {
         self.states.reserve_exact(additional)
     }
-    pub fn try_reserve(&mut self, additional: usize) -> Result<(), TryReserveError> {
+    pub fn states_try_reserve(&mut self, additional: usize) -> Result<(), TryReserveError> {
         self.states.try_reserve(additional)
     }
-    pub fn try_reserve_exact(&mut self, additional: usize) -> Result<(), TryReserveError> {
+    pub fn states_try_reserve_exact(&mut self, additional: usize) -> Result<(), TryReserveError> {
         self.states.try_reserve_exact(additional)
     }
-    pub fn shrink_to(&mut self, min_capacity: usize) {
+    pub fn states_shrink_to(&mut self, min_capacity: usize) {
         self.states.shrink_to(min_capacity)
     }
-    pub fn shrink_to_fit(&mut self) {
+    pub fn states_shrink_to_fit(&mut self) {
         self.states.shrink_to_fit()
-    }
-    /// Most past state or `None` if the oldest state is considered to be the present state
-    pub fn past_end(&self) -> Option<&T> {
-        if self.index == 0 {
-            return None;
-        }
-        self.states.front()
     }
     pub fn push_present(&mut self, state: T) {
         self.states.truncate(self.index);
@@ -176,18 +169,10 @@ impl<T> StateLog<T> {
         //  index:   1
 
         let index = self.index.checked_sub(1).ok_or(OutOfLog)?;
-        if let Some(now_future) = self.states.get_mut(index) {
-            self.index = index;
-            core::mem::swap(&mut self.present, now_future);
-            return Ok(());
-        }
-        error!(
-            "{INDEX_OOB}T: {}, states.len(): {}, index: {}",
-            std::any::type_name::<T>(),
-            self.states.len(),
-            self.index
-        );
-        Err(OutOfLog)
+        let now_future = self.states.get_mut(index).ok_or_else(index_oob)?;
+        self.index = index;
+        core::mem::swap(&mut self.present, now_future);
+        Ok(())
     }
     pub fn forward_log(&mut self) -> Result<(), OutOfLog> {
         // before:
@@ -257,10 +242,7 @@ mod test {
     use super::*;
 
     use crate::{
-        log::{
-            test::{shorten_strategy, ShortenStrategy},
-            PackedRevFrame,
-        },
+        log::test::{shorten_strategy, ShortenStrategy},
         meta::RevMeta,
         RevFrame,
     };
@@ -290,10 +272,10 @@ mod test {
             logless_with_capacity: original.clone(),
         };
 
-        logs.full.reserve_exact(98);
-        logs.logless.reserve_exact(98);
-        logs.full_with_capacity.reserve_exact(98);
-        logs.logless_with_capacity.reserve_exact(98);
+        logs.full.states_reserve_exact(98);
+        logs.logless.states_reserve_exact(98);
+        logs.full_with_capacity.states_reserve_exact(98);
+        logs.logless_with_capacity.states_reserve_exact(98);
 
         let serialized = serde_json::to_string_pretty(&logs).unwrap();
         let Logs {
@@ -309,15 +291,15 @@ mod test {
                 "before: {original:#?}\nserialized: {serialized}\nafter: {log:#?}"
             );
             assert_eq!(
-                log.len(),
+                log.states_len(),
                 len,
                 "before: {original:#?}\nserialized: {serialized}\nafter: {log:#?}"
             );
             assert_eq!(
-                log.capacity() >= 100,
+                log.states_capacity() >= 100,
                 with_capacity,
                 "before: {original:#?}\nserialized: {serialized}\nafter: {log:#?}\ncapacity: {}",
-                log.capacity()
+                log.states_capacity()
             );
         };
 
@@ -337,7 +319,7 @@ mod test {
             expected_popped: Option<(u8, usize)>,
         ) {
             meta.queue_forward();
-            meta.update();
+            meta.update(|_, _| {});
             let before = self.clone();
             let push = (push, meta.present_world_state());
             self.push_present(push);
@@ -355,7 +337,7 @@ mod test {
                 "\nstrategy: {strategy:#?}\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
             );
             assert_eq!(
-                self.len(),
+                self.states_len(),
                 expected_states_len,
                 "\nstrategy: {strategy:#?}\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
             );
@@ -376,7 +358,7 @@ mod test {
             } else {
                 let frame = meta.present_world_state().wrapping_add(1);
                 meta.queue_log(frame).unwrap();
-                meta.update();
+                meta.update(|_, _| {});
                 let result = self.forward_log();
                 assert_eq!(
                     result,
@@ -398,7 +380,7 @@ mod test {
             } else {
                 let frame = meta.present_world_state().wrapping_sub(1);
                 meta.queue_log(frame).unwrap();
-                meta.update();
+                meta.update(|_, _| {});
                 let result = self.backward_log();
                 assert_eq!(
                     result,
@@ -418,6 +400,7 @@ mod test {
         fn test_drain_future(
             &self,
             expected_future: impl IntoIterator<Item = (u8, usize)>,
+            expected_states_len: usize,
         ) -> Self {
             let before = self.clone();
             let mut clone = self.clone();
@@ -428,6 +411,11 @@ mod test {
                 .collect();
             assert_eq!(
                 actual_future, expected_future,
+                "\nbefore: {before:#?}\nafter_drain_future: {clone:#?}"
+            );
+            assert_eq!(
+                clone.states_len(),
+                expected_states_len,
                 "\nbefore: {before:#?}\nafter_drain_future: {clone:#?}"
             );
             clone
@@ -458,16 +446,17 @@ mod test {
             log.test_backward_log(meta, 2, false);
             log.test_backward_log(meta, 1, false);
 
-            let mut clone = log.test_drain_future([(2, 2), (3, 3)]);
+            let clone = log.test_drain_future([(2, 2), (3, 3)], 0);
 
-            // all entries are truncated as they are in the future
-            log.test_forward(meta, strategy, 4, 1, None);
-            clone.test_forward(meta, strategy, 4, 1, None);
+            for mut log in [log, clone] {
+                // all entries are truncated as they are in the future
+                log.test_forward(meta, strategy, 4, 1, None);
+            }
         }
     }
 
     #[allow(dead_code)]
     fn impls_reflect() {
-        bevy::reflect::TypeRegistry::empty().register::<StateLog<PackedRevFrame>>();
+        bevy::reflect::TypeRegistry::empty().register::<StateLog<RevFrame>>();
     }
 }
