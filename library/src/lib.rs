@@ -9,24 +9,19 @@ Features:
 
 Enhancements:
 - reduce todo!() and //todo
-- RareStates tests
-- longer log tests for RareTransition and RareState
 - tests of other log methods like clear variants
 - config tests
 - make doctests work
 - mod/use/pub cleanup
-- serde-with tests
 - observer tests
 - commands -> hook -> observer -> reversible order test
 -- a second sync point aftwerwards should be scheduled to assert nothing ist postponed into it
 -- test uses masks for systems that are const generic
 - use serde from bevy reexport
-- seal log structs (pub after appearing in pub interface)
 - reflect behind feature flag
 - use upcoming param verification for system (params)
 - RevMetaWithVerify
 -- tests
-- LoggedAt module
 - Andere Observer Strategie:
 -- Wrapping Logik
 --- die Timestamps werden nicht reduziert, nur bei jeden bevorstehenden overflow
@@ -44,16 +39,6 @@ Enhancements:
 - InitiallyNoneStateLog / InitiallyNoneRareStateLog
 -- Rare variant
 -- tests, serde_with
-- drain_future: (LogIter<T>, LogIter<U>) -> (LogIter<T>, LogIter<(U, usize)>) or make EntryAmount pub
-- pop_past private? only via by len or logged at
-- can oldest log of rate logs underflow into future?
-- pop/drain in meta contains consistency
--- drain by logged at does truncate so it is expected all entries are in the past or present
--- pop   by logged at also only past or present or whole log?
---- past because the index check ensures that the checked entry is not in the future
---- is index check enough if more then one entry is pushed per frame? needs to include present
-- rare logs with logged at should not be pushed into more than once per frame because skips are used for offsets
--- or always keep one entry more in the log
 
 Docs
 - examples
