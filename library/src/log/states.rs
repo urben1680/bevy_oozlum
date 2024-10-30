@@ -202,55 +202,55 @@ where
         }
     }
     pub fn entries_len(&self) -> usize {
-        self.amounts.len()
+        self.amounts.states_len()
     }
     pub fn states_len(&self) -> usize {
         self.states.len()
     }
     pub fn entries_capacity(&self) -> usize {
-        self.amounts.capacity()
+        self.amounts.states_capacity()
     }
     pub fn states_capacity(&self) -> usize {
         self.states.capacity()
     }
     pub fn entries_is_empty(&self) -> bool {
-        self.amounts.is_empty()
+        self.amounts.states_is_empty()
     }
     pub fn states_is_empty(&self) -> bool {
         self.states.is_empty()
     }
     pub fn entries_reserve(&mut self, additional: usize) {
-        self.amounts.reserve(additional)
+        self.amounts.states_reserve(additional)
     }
     pub fn states_reserve(&mut self, additional: usize) {
         self.states.reserve(additional)
     }
     pub fn entries_reserve_exact(&mut self, additional: usize) {
-        self.amounts.reserve_exact(additional)
+        self.amounts.states_reserve_exact(additional)
     }
     pub fn states_reserve_exact(&mut self, additional: usize) {
         self.states.reserve_exact(additional)
     }
     pub fn entries_try_reserve(&mut self, additional: usize) -> Result<(), TryReserveError> {
-        self.amounts.try_reserve(additional)
+        self.amounts.states_try_reserve(additional)
     }
     pub fn states_try_reserve(&mut self, additional: usize) -> Result<(), TryReserveError> {
         self.states.try_reserve(additional)
     }
     pub fn entries_try_reserve_exact(&mut self, additional: usize) -> Result<(), TryReserveError> {
-        self.amounts.try_reserve_exact(additional)
+        self.amounts.states_try_reserve_exact(additional)
     }
     pub fn states_try_reserve_exact(&mut self, additional: usize) -> Result<(), TryReserveError> {
         self.states.try_reserve_exact(additional)
     }
     pub fn entries_shrink_to(&mut self, min_capacity: usize) {
-        self.amounts.shrink_to(min_capacity)
+        self.amounts.states_shrink_to(min_capacity)
     }
     pub fn states_shrink_to(&mut self, min_capacity: usize) {
         self.states.shrink_to(min_capacity)
     }
     pub fn entries_shrink_to_fit(&mut self) {
-        self.amounts.shrink_to_fit()
+        self.amounts.states_shrink_to_fit()
     }
     pub fn states_shrink_to_fit(&mut self) {
         self.states.shrink_to_fit()
@@ -638,7 +638,7 @@ mod test {
             let before = self.clone();
             if push_ok {
                 meta.queue_forward();
-                meta.update();
+                meta.update(|_, _| {});
                 let result = self.try_push_present(|mut log| {
                     log.extend(states.clone());
                     meta.present_world_state()
@@ -744,7 +744,7 @@ mod test {
             } else {
                 let frame = meta.present_world_state().wrapping_add(1);
                 meta.queue_log(frame).unwrap();
-                meta.update();
+                meta.update(|_, _| {});
                 let result = self.forward_log();
                 assert_eq!(
                     result,
@@ -771,7 +771,7 @@ mod test {
             } else {
                 let frame = meta.present_world_state().wrapping_sub(1);
                 meta.queue_log(frame).unwrap();
-                meta.update();
+                meta.update(|_, _| {});
                 let result = self.backward_log();
                 assert_eq!(
                     result,
