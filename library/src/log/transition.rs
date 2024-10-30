@@ -1,14 +1,11 @@
 use core::fmt::Debug;
 use std::collections::{TryReserveError, VecDeque};
 
-use bevy::{
-    reflect::{std_traits::ReflectDefault, Reflect},
-    utils::tracing::error,
-};
+use bevy::reflect::{std_traits::ReflectDefault, Reflect};
 
 use crate::meta::RevMeta;
 
-use super::{LogIter, LoggedAt, OutOfLog, INDEX_OOB};
+use super::{index_oob, LogIter, LoggedAt, OutOfLog};
 
 #[derive(Debug, Clone, Reflect)]
 #[reflect(Default)]
@@ -64,37 +61,40 @@ impl<T> TransitionLog<T> {
             index: 0,
         }
     }
-    pub fn with_capacity(capacity: usize) -> Self {
+    pub fn with_capacity(transitions_capacity: usize) -> Self {
         Self {
-            transitions: VecDeque::with_capacity(capacity),
+            transitions: VecDeque::with_capacity(transitions_capacity),
             index: 0,
         }
     }
-    pub fn len(&self) -> usize {
+    pub fn transitions_len(&self) -> usize {
         self.transitions.len()
     }
-    pub fn capacity(&self) -> usize {
+    pub fn transitions_capacity(&self) -> usize {
         self.transitions.capacity()
     }
-    pub fn is_empty(&self) -> bool {
+    pub fn transitions_is_empty(&self) -> bool {
         self.transitions.is_empty()
     }
-    pub fn reserve(&mut self, additional: usize) {
+    pub fn transitions_reserve(&mut self, additional: usize) {
         self.transitions.reserve(additional)
     }
-    pub fn reserve_exact(&mut self, additional: usize) {
+    pub fn transitions_reserve_exact(&mut self, additional: usize) {
         self.transitions.reserve_exact(additional)
     }
-    pub fn try_reserve(&mut self, additional: usize) -> Result<(), TryReserveError> {
+    pub fn transitions_try_reserve(&mut self, additional: usize) -> Result<(), TryReserveError> {
         self.transitions.try_reserve(additional)
     }
-    pub fn try_reserve_exact(&mut self, additional: usize) -> Result<(), TryReserveError> {
+    pub fn transitions_try_reserve_exact(
+        &mut self,
+        additional: usize,
+    ) -> Result<(), TryReserveError> {
         self.transitions.try_reserve_exact(additional)
     }
-    pub fn shrink_to(&mut self, min_capacity: usize) {
+    pub fn transitions_shrink_to(&mut self, min_capacity: usize) {
         self.transitions.shrink_to(min_capacity)
     }
-    pub fn shrink_to_fit(&mut self) {
+    pub fn transitions_shrink_to_fit(&mut self) {
         self.transitions.shrink_to_fit()
     }
     pub fn push_present(&mut self, transition: T) {
@@ -111,26 +111,9 @@ impl<T> TransitionLog<T> {
     }
     pub fn backward_log(&mut self) -> Result<&mut T, OutOfLog> {
         let index = self.index.checked_sub(1).ok_or(OutOfLog)?;
-        let transitions_len = self.transitions.len();
-        if let Some(transition) = self.transitions.get_mut(index) {
-            self.index = index;
-            return Ok(transition);
-        }
-
-        #[derive(Debug)]
-        #[allow(dead_code)]
-        struct TransitionLogDebug {
-            transitions_len: usize,
-            index: usize,
-        }
-
-        let debug_struct = TransitionLogDebug {
-            transitions_len,
-            index: self.index,
-        };
-
-        error!("{INDEX_OOB}, {debug_struct:#?}");
-        Err(OutOfLog)
+        let transition = self.transitions.get_mut(index).ok_or_else(index_oob)?;
+        self.index = index;
+        Ok(transition)
     }
     pub fn forward_log(&mut self) -> Result<&mut T, OutOfLog> {
         self.transitions
@@ -193,10 +176,7 @@ mod test {
     use super::*;
 
     use crate::{
-        log::{
-            test::{shorten_strategy, ShortenStrategy},
-            PackedRevFrame,
-        },
+        log::test::{shorten_strategy, ShortenStrategy},
         meta::RevMeta,
         RevFrame,
     };
@@ -223,9 +203,9 @@ mod test {
             logless_with_capacity: original.clone(),
         };
 
-        logs.full.reserve_exact(98);
-        logs.full_with_capacity.reserve_exact(98);
-        logs.logless_with_capacity.reserve_exact(98);
+        logs.full.transitions_reserve_exact(98);
+        logs.full_with_capacity.transitions_reserve_exact(98);
+        logs.logless_with_capacity.transitions_reserve_exact(98);
 
         let serialized = serde_json::to_string_pretty(&logs).unwrap();
         let Logs {
@@ -236,15 +216,15 @@ mod test {
 
         let test = |log: &TransitionLog<char>, len, with_capacity| {
             assert_eq!(
-                log.len(),
+                log.transitions_len(),
                 len,
                 "before: {original:#?}\nserialized: {serialized}\nafter: {log:#?}"
             );
             assert_eq!(
-                log.capacity() >= 100,
+                log.transitions_capacity() >= 100,
                 with_capacity,
                 "before: {original:#?}\nserialized: {serialized}\nafter: {log:#?}\ncapacity: {}",
-                log.capacity()
+                log.transitions_capacity()
             );
         };
 
@@ -260,15 +240,15 @@ mod test {
             strategy: ShortenStrategy,
             push: u8,
             expected_transitions_len: usize,
-            popped: Option<(u8, usize)>,
+            expected_popped: Option<(u8, usize)>,
         ) {
             meta.queue_forward();
-            meta.update();
+            meta.update(|_, _| {});
             let before = self.clone();
             let push = (push, meta.present_world_state());
             self.push_present(push);
             let after_push = self.clone();
-            let actual = shorten_strategy!(
+            let actual_popped = shorten_strategy!(
                 self,
                 meta,
                 strategy,
@@ -277,46 +257,55 @@ mod test {
                 after_push
             );
             assert_eq!(
-                actual, popped,
+                actual_popped, expected_popped,
                 "\nstrategy: {strategy:#?}\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
             );
             assert_eq!(
-                self.len(),
+                self.transitions_len(),
                 expected_transitions_len,
                 "\nstrategy: {strategy:#?}\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
             );
         }
-        fn test_forward_log(&mut self, meta: &mut RevMeta, transition: Result<u8, OutOfLog>) {
+        fn test_forward_log(
+            &mut self,
+            meta: &mut RevMeta,
+            expected_transition: Result<u8, OutOfLog>,
+        ) {
             let before = self.clone();
-            let transition = transition.map(|transition| {
+            let expected_transition = expected_transition.map(|transition| {
                 let frame = meta.present_world_state().wrapping_add(1);
                 meta.queue_log(frame).unwrap();
-                meta.update();
+                meta.update(|_, _| {});
                 (transition, frame)
             });
-            let result = self.forward_log().map(|transition| *transition);
+            let actual_transition = self.forward_log().map(|transition| *transition);
             assert_eq!(
-                result, transition,
+                actual_transition, expected_transition,
                 "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
             )
         }
-        fn test_backward_log(&mut self, meta: &mut RevMeta, transition: Result<u8, OutOfLog>) {
+        fn test_backward_log(
+            &mut self,
+            meta: &mut RevMeta,
+            expected_transition: Result<u8, OutOfLog>,
+        ) {
             let before = self.clone();
-            let transition = transition.map(|transition| {
+            let expected_transition = expected_transition.map(|transition| {
                 let frame = meta.present_world_state();
                 meta.queue_log(frame.wrapping_sub(1)).unwrap();
-                meta.update();
+                meta.update(|_, _| {});
                 (transition, frame)
             });
-            let result = self.backward_log().map(|transition| *transition);
+            let actual_transition = self.backward_log().map(|transition| *transition);
             assert_eq!(
-                result, transition,
+                actual_transition, expected_transition,
                 "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
             )
         }
         fn test_drain_future(
             &self,
             expected_future: impl IntoIterator<Item = (u8, usize)>,
+            expected_transitions_len: usize,
         ) -> Self {
             let before = self.clone();
             let mut clone = self.clone();
@@ -327,6 +316,11 @@ mod test {
                 .collect();
             assert_eq!(
                 actual_future, expected_future,
+                "\nbefore: {before:#?}\nafter: {clone:#?}"
+            );
+            assert_eq!(
+                clone.transitions_len(),
+                expected_transitions_len,
                 "\nbefore: {before:#?}\nafter: {clone:#?}"
             );
             clone
@@ -357,16 +351,17 @@ mod test {
             log.test_backward_log(meta, Ok(3));
             log.test_backward_log(meta, Ok(2));
 
-            let mut clone = log.test_drain_future([(2, 2), (3, 3)]);
+            let clone = log.test_drain_future([(2, 2), (3, 3)], 0);
 
-            // all entries are truncated as they are in the future
-            log.test_forward(meta, strategy, 4, 1, None);
-            clone.test_forward(meta, strategy, 4, 1, None);
+            for mut log in [log, clone] {
+                // all entries are truncated as they are in the future
+                log.test_forward(meta, strategy, 4, 1, None);
+            }
         }
     }
 
     #[allow(dead_code)]
     fn impls_reflect() {
-        bevy::reflect::TypeRegistry::empty().register::<TransitionLog<PackedRevFrame>>();
+        bevy::reflect::TypeRegistry::empty().register::<TransitionLog<RevFrame>>();
     }
 }
