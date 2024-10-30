@@ -4,11 +4,11 @@ use std::{
     ops::Deref,
 };
 
-use bevy::{reflect::Reflect, utils::tracing::error};
+use bevy::reflect::Reflect;
 
 use crate::meta::RevMeta;
 
-use super::{LogIter, LoggedAt, OutOfLog, RareValue, INDEX_OOB};
+use super::{index_oob, LogIter, LoggedAt, OutOfLog, RareValue};
 
 #[derive(Debug, Clone, Reflect)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -182,10 +182,7 @@ impl<T> RareStateLog<T> {
             }
             Some(state) => {
                 let previous = core::mem::replace(&mut self.present, state);
-                self.states.push_back(RareValue {
-                    value: previous,
-                    skips: self.skips.to_ne_bytes(),
-                });
+                self.states.push_back(RareValue::new(previous, self.skips));
                 self.skips = 0;
                 self.index += 1;
                 self.past_len += 1;
@@ -202,8 +199,7 @@ impl<T> RareStateLog<T> {
         }
         let index = self.index.checked_sub(1).ok_or(OutOfLog)?;
         if !self.swap_state_and_skips_max(index) {
-            error!("{INDEX_OOB}");
-            return Err(OutOfLog);
+            return Err(index_oob());
         }
         self.index = index;
         self.skips = self.skips_max;
@@ -230,7 +226,7 @@ impl<T> RareStateLog<T> {
             .map(|entry| {
                 let mut skips_max = self.skips_max.to_ne_bytes();
                 core::mem::swap(&mut self.present, &mut entry.value);
-                core::mem::swap(&mut skips_max, &mut entry.skips);
+                core::mem::swap(&mut skips_max, &mut entry.skips_ne);
                 self.skips_max = usize::from_ne_bytes(skips_max);
             })
             .is_some()
@@ -401,7 +397,7 @@ mod test {
             expected_popped: Option<(u8, usize)>,
         ) {
             meta.queue_forward();
-            meta.update();
+            meta.update(|_, _| {});
             let before = self.clone();
             let push = state_is_pushed.then(|| (state.0, RevFrame::new(state.1)));
             self.push_present(push);
@@ -430,7 +426,7 @@ mod test {
             if expected_result.is_ok() {
                 let frame = meta.present_world_state().wrapping_add(1);
                 meta.queue_log(frame).unwrap();
-                meta.update();
+                meta.update(|_, _| {});
             }
             assert_eq!(
                 actual_result, expected_result,
@@ -449,7 +445,7 @@ mod test {
             if expected_result.is_ok() {
                 let frame = meta.present_world_state().wrapping_sub(1);
                 meta.queue_log(frame).unwrap();
-                meta.update();
+                meta.update(|_, _| {});
             }
             assert_eq!(
                 actual_result, expected_result,
