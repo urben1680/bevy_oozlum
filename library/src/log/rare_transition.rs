@@ -1,14 +1,11 @@
 use core::fmt::Debug;
 use std::collections::{TryReserveError, VecDeque};
 
-use bevy::{
-    reflect::{std_traits::ReflectDefault, Reflect},
-    utils::tracing::error,
-};
+use bevy::reflect::{std_traits::ReflectDefault, Reflect};
 
 use crate::meta::RevMeta;
 
-use super::{LogIter, LoggedAt, OutOfLog, RareValue, INDEX_OOB};
+use super::{index_oob, LogIter, LoggedAt, OutOfLog, RareValue};
 
 #[derive(Debug, Clone, Reflect)]
 #[reflect(Default)]
@@ -159,10 +156,8 @@ impl<T> RareTransitionLog<T> {
                 self.past_len += 1;
             }
             Some(transition) => {
-                self.transitions.push_back(RareValue {
-                    value: transition,
-                    skips: self.skips.to_ne_bytes(),
-                });
+                self.transitions
+                    .push_back(RareValue::new(transition, self.skips));
                 self.index += 1;
                 self.skips = 0;
                 self.past_len += 1;
@@ -178,34 +173,13 @@ impl<T> RareTransitionLog<T> {
             Ok(None)
         } else {
             let index = self.index.checked_sub(1).ok_or(OutOfLog)?;
-            let transitions_len = self.transitions.len();
-            if let Some(entry) = self.transitions.get_mut(index) {
-                self.index = index;
-                self.skips = entry.skips();
-                self.past_len -= 1;
-                return Ok(Some(&mut entry.value));
-            }
-
-            #[derive(Debug)]
-            #[allow(dead_code)]
-            struct RareTransitionLogDebug {
-                transitions_len: usize,
-                index: usize,
-                skips: usize,
-                skips_max: usize,
-                len: usize,
-            }
-
-            let debug_struct = RareTransitionLogDebug {
-                transitions_len,
-                index: self.index,
-                skips: self.skips,
-                skips_max: self.skips_max,
-                len: self.past_len,
+            let Some(entry) = self.transitions.get_mut(index) else {
+                return Err(index_oob());
             };
-
-            error!("{INDEX_OOB}, {debug_struct:#?}");
-            Err(OutOfLog)
+            self.index = index;
+            self.skips = entry.skips();
+            self.past_len -= 1;
+            Ok(Some(&mut entry.value))
         }
     }
     pub fn forward_log(&mut self) -> Result<Option<&mut T>, OutOfLog> {
@@ -270,10 +244,7 @@ impl<T: LoggedAt> RareTransitionLog<T> {
             // if the current log position is at the past end, transitions.front() is not a past value but a future value
             return None;
         }
-        // The user might call `push_present` multiple times per frame, so `RareValue::skips`
-        // cannot be reliably interpreted as frame offsets from `RareValue::logged_at`.
-        // Instead `RareValue::skips` is ignored here and pop only happen if the next entry is out of log too.
-        let logged_at = self.transitions.get(1)?.logged_at();
+        let logged_at = self.transitions.front()?.logged_at();
         if !meta.contains_in_transition_logged(logged_at) {
             self.pop_past()
         } else {
@@ -285,13 +256,9 @@ impl<T: LoggedAt> RareTransitionLog<T> {
         self.transitions.truncate(self.index);
 
         let past_len = meta.past_world_states();
-        // The user might call `push_present` multiple times per frame, so `RareValue::skips`
-        // cannot be reliably interpreted as frame offsets from `RareValue::logged_at`.
-        // Instead `RareValue::skips` is ignored here and one entry less is removed.
         let to = self
             .transitions
-            .partition_point(|entry| meta.frames_since(entry.logged_at()) >= past_len)
-            .saturating_sub(1); // todo: is this needed for rare transition? skips are precending the logged at frame
+            .partition_point(|entry| meta.frames_since(entry.logged_at()) >= past_len);
         self.past_len -= to // `to` plus sum of `RareValue::skips` == sum of `RareValue::len` but with less operations 
             + self
                 .transitions
@@ -309,7 +276,10 @@ mod test {
 
     use serde::{Deserialize, Serialize};
 
-    use crate::log::PackedRevFrame;
+    use crate::{
+        log::test::{shorten_strategy, ShortenStrategy},
+        RevFrame,
+    };
 
     use super::*;
 
@@ -365,37 +335,135 @@ mod test {
         test(&logless_with_capacity, 0, true);
     }
 
-    /*
-    #[test]
-    fn test() {
-        let mut meta_and_logs = MetaAndLogs::new(NonZeroUsize::new(3));
-
-        meta_and_logs.forward(None, 1, 0);
-        meta_and_logs.forward(Some(1), 2, 1);
-        // pop_front called internally
-        meta_and_logs.forward(Some(2), 2, 2);
-        meta_and_logs.forward(None, 2, 1);
-
-        meta_and_logs.backward_log(Ok(None));
-        meta_and_logs.backward_log(Ok(Some(2)));
-        // out of log, no mutations happend to both meta and log here
-        meta_and_logs.backward_log(Err(OutOfLog));
-
-        meta_and_logs.forward_log(Ok(Some(2)));
-        meta_and_logs.forward_log(Ok(None));
-        // nothing ever logged past 8, no mutations happend to both meta and log here
-        // todo: would this test fail if no value was pushed at the second forward? same situation as RareValueLog
-        meta_and_logs.forward_log(Err(OutOfLog));
-
-        meta_and_logs.backward_log(Ok(None));
-        meta_and_logs.backward_log(Ok(Some(2)));
-        // all entries are truncated as they are in the future, the new logged entry increases len to 1
-        meta_and_logs.forward(Some(3), 1, 1);
+    impl RareTransitionLog<(u8, RevFrame)> {
+        fn test_forward(
+            &mut self,
+            meta: &mut RevMeta,
+            strategy: ShortenStrategy,
+            push: Option<u8>,
+            expected_transitions_len: usize,
+            expected_popped: Option<(u8, usize)>,
+        ) {
+            meta.queue_forward();
+            meta.update(|_, _| {});
+            let before = self.clone();
+            let push = push.map(|transition| (transition, meta.present_world_state()));
+            self.push_present(push);
+            let after_push = self.clone();
+            let actual_popped = shorten_strategy!(
+                self,
+                meta,
+                strategy,
+                meta.past_world_states(),
+                before,
+                after_push
+            );
+            assert_eq!(
+                actual_popped, expected_popped,
+                "\nstrategy: {strategy:#?}\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
+            );
+            assert_eq!(
+                self.transitions_len(),
+                expected_transitions_len,
+                "\nstrategy: {strategy:#?}\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
+            );
+        }
+        fn test_forward_log(
+            &mut self,
+            meta: &mut RevMeta,
+            expected_transition: Result<Option<u8>, OutOfLog>,
+        ) {
+            let before = self.clone();
+            let expected_transition = expected_transition.map(|transition| {
+                let frame = meta.present_world_state().wrapping_add(1);
+                meta.queue_log(frame).unwrap();
+                meta.update(|_, _| {});
+                transition.map(|transition| (transition, frame))
+            });
+            let actual_transition = self.forward_log().map(|transition| transition.cloned());
+            assert_eq!(
+                actual_transition, expected_transition,
+                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
+            )
+        }
+        fn test_backward_log(
+            &mut self,
+            meta: &mut RevMeta,
+            expected_transition: Result<Option<u8>, OutOfLog>,
+        ) {
+            let before = self.clone();
+            let expected_transition = expected_transition.map(|transition| {
+                let frame = meta.present_world_state();
+                meta.queue_log(frame.wrapping_sub(1)).unwrap();
+                meta.update(|_, _| {});
+                transition.map(|transition| (transition, frame))
+            });
+            let actual_transition = self.backward_log().map(|transition| transition.cloned());
+            assert_eq!(
+                actual_transition, expected_transition,
+                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
+            )
+        }
+        fn test_drain_future(
+            &self,
+            expected_future: impl IntoIterator<Item = (u8, usize)>,
+            expected_transitions_len: usize,
+        ) -> Self {
+            let before = self.clone();
+            let mut clone = self.clone();
+            let actual_future: Vec<_> = clone.drain_future().collect();
+            let expected_future: Vec<_> = expected_future
+                .into_iter()
+                .map(|(state, frame)| (state, RevFrame(frame)))
+                .collect();
+            assert_eq!(
+                actual_future, expected_future,
+                "\nbefore: {before:#?}\nafter: {clone:#?}"
+            );
+            assert_eq!(
+                clone.transitions_len(),
+                expected_transitions_len,
+                "\nbefore: {before:#?}\nafter: {clone:#?}"
+            );
+            clone
+        }
     }
-    */
+
+    #[test]
+    fn push_and_log_traversal() {
+        for strategy in ShortenStrategy::VARIANTS {
+            let meta = &mut RevMeta::new(NonZeroUsize::new(3), 0, false);
+            let mut log = RareTransitionLog::new();
+
+            log.test_forward(meta, strategy, Some(1), 1, None);
+            log.test_forward(meta, strategy, None, 1, None);
+            // shortened log
+            log.test_forward(meta, strategy, Some(3), 1, Some((1, 1)));
+
+            log.test_backward_log(meta, Ok(Some(3)));
+            log.test_backward_log(meta, Ok(None));
+            // out of log, no mutations happend to both meta and log here
+            log.test_backward_log(meta, Err(OutOfLog));
+
+            log.test_forward_log(meta, Ok(None));
+            log.test_forward_log(meta, Ok(Some(3)));
+            // out of log, no mutations happend to both meta and log here
+            log.test_forward_log(meta, Err(OutOfLog));
+
+            log.test_backward_log(meta, Ok(Some(3)));
+            log.test_backward_log(meta, Ok(None));
+
+            let clone = log.test_drain_future([(3, 3)], 0);
+
+            for mut log in [log, clone] {
+                // all entries are truncated as they are in the future
+                log.test_forward(meta, strategy, None, 0, None);
+            }
+        }
+    }
 
     #[allow(dead_code)]
     fn impls_reflect() {
-        bevy::reflect::TypeRegistry::empty().register::<RareTransitionLog<PackedRevFrame>>();
+        bevy::reflect::TypeRegistry::empty().register::<RareTransitionLog<RevFrame>>();
     }
 }
