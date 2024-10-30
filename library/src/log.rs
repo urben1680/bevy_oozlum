@@ -233,7 +233,7 @@ use std::{
     ops::Deref,
 };
 
-use bevy::{reflect::Reflect, utils::all_tuples};
+use bevy::{log::error, reflect::Reflect, utils::all_tuples};
 
 #[cfg(feature = "serde")]
 use bevy::reflect::{ReflectDeserialize, ReflectSerialize};
@@ -483,8 +483,8 @@ impl<'a, T: Iterator, U> IntoIterator for &'a mut ValueEntry<T, U> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Reflect)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Clone, PartialEq, Reflect)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] // todo: manual impl with usize as intermediate skips value
 struct RareValue<T> {
     value: T,
     /// If `T` is a state, then these are the skips after the value.
@@ -493,15 +493,30 @@ struct RareValue<T> {
     ///
     /// This is not a `PackedRevFrame` because skips may be sub-frames and sum up to larger values.
     /// Instead, this is usize's native byte representation to reduce the alignment of this field.
-    skips: [u8; USIZE_BYTES],
+    skips_ne: [u8; USIZE_BYTES],
+}
+
+impl<T: Debug> Debug for RareValue<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct(std::any::type_name::<Self>())
+            .field("value", &self.value)
+            .field("skips", &self.skips())
+            .finish()
+    }
 }
 
 impl<T> RareValue<T> {
+    fn new(value: T, skips: usize) -> Self {
+        Self {
+            value,
+            skips_ne: usize::to_ne_bytes(skips),
+        }
+    }
     fn len(&self) -> usize {
         self.skips() + 1 // `self.data` adds to the len
     }
     fn skips(&self) -> usize {
-        usize::from_ne_bytes(self.skips)
+        usize::from_ne_bytes(self.skips_ne)
     }
 }
 
@@ -549,9 +564,13 @@ impl<'de, Log: WithAmountInternal<Entry: serde::Deserialize<'de>>> serde::Deseri
     }
 }
 
-const INDEX_OOB: &'static str = "self.index should always be <= the deque len, so successfully reducing \
-    it without underflow is expected to result in a valid index into the log which is not the case here, \
-    the log is in an invalid state before calling the current method\n";
+fn index_oob() -> OutOfLog {
+    error!("self.index should always be <= the deque len, so successfully reducing \
+        it without underflow is expected to result in a valid index into the log which is not the case here, \
+        the log is in an invalid state before calling the current method, this is a crate bug"
+    );
+    OutOfLog
+}
 
 /// Logged types that contain the information when these were logged, for example
 /// by containing [`RevFrame`] or the more compact [`PackedRevFrame`] from
