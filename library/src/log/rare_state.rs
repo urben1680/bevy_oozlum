@@ -385,6 +385,33 @@ mod test {
         test(&logless_with_capacity, 0, true);
     }
 
+    #[test]
+    fn clear() {
+        let mut original = RareStateLog::new(1);
+        original.push_present(Some(2));
+        original.push_present(None);
+        original.push_present(Some(3));
+        original.backward_log().expect("in log");
+
+        let mut log = original.clone();
+        log.clear();
+        assert_eq!(*log, 2, "log: {log:#?}\noriginal: {original:#?}");
+        assert_eq!(
+            log.states_len(),
+            0,
+            "log: {log:#?}\noriginal: {original:#?}"
+        );
+
+        let mut log = original.clone();
+        log.clear_with(4);
+        assert_eq!(*log, 4, "log: {log:#?}\noriginal: {original:#?}");
+        assert_eq!(
+            log.states_len(),
+            0,
+            "log: {log:#?}\noriginal: {original:#?}"
+        );
+    }
+
     impl RareStateLog<(u8, RevFrame)> {
         fn test_forward(
             &mut self,
