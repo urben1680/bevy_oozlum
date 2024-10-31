@@ -9,10 +9,10 @@ Features:
 
 Enhancements:
 - reduce todo!() and //todo
-- tests of other log methods like clear variants
 - config tests
 - make doctests work
 - mod/use/pub cleanup
+-- system (set) submodules of schedule
 - observer tests
 - commands -> hook -> observer -> reversible order test
 -- a second sync point aftwerwards should be scheduled to assert nothing ist postponed into it
@@ -22,20 +22,9 @@ Enhancements:
 - use upcoming param verification for system (params)
 - RevMetaWithVerify
 -- tests
-- Andere Observer Strategie:
--- Wrapping Logik
---- die Timestamps werden nicht reduziert, nur bei jeden bevorstehenden overflow
-    ruft der observer drain_past_by_timestamp auf damit ältere logs nicht wieder im
-    log range auftauchen
---- ermöglicht den ganzen PackedTime range zu nutzen ohne jeden tick reduzieren zu müssen
----- stimmt nicht, wenn end_inclusive+1==start ist, muss weiterhin ticklich reduziert werden
------ neue strategie: log.drain_past_by_logged_at achtet auch auf now, wenn das kleiner als
------ das ende vom log ist, aber größer als der anfang, wird das ganze log geleert
------ funktioniert das denn? start kann 1 sein, end max-1, wenn das event nur bei 0 gefeuert
------ wird, passiert hier nichts
------ alternative: log range ist capped by PackedTime::MAX / 2
---- verringert API, macht logs auch ohne RevMeta stabiler
 - forward/backward keine schedules sondern system sets mit run_if, benötigt dann kein RevSchedule
+-- how to handle set_apply_final_deferred(false)?
+
 - InitiallyNoneStateLog / InitiallyNoneRareStateLog
 -- Rare variant
 -- tests, serde_with
@@ -96,6 +85,7 @@ pub mod prelude {
     pub use crate::app::RevApp as _;
     pub use crate::commands::RevCommands as _;
     pub use crate::meta::{RevDirection, RevMeta};
+    pub use crate::schedule::RevSchedule as _;
     pub use crate::set_configs::IntoRevSystemSetConfigs as _;
     pub use crate::system_configs::IntoRevSystemConfigs as _;
     pub use crate::world::RevWorld as _;
@@ -145,14 +135,6 @@ impl<'de> serde::Deserialize<'de> for RevFrame {
     }
 }
 
-/// Should not be pub to not add invalid settings (see unsupported Schedule settings)
-#[derive(ScheduleLabel, Copy, Clone, Debug, Hash, PartialEq, Eq)]
-struct ForwardSchedule(InternedScheduleLabel);
-
-/// Should not be pub to not add invalid settings (see unsupported Schedule settings)
-#[derive(ScheduleLabel, Copy, Clone, Debug, Hash, PartialEq, Eq)]
-struct BackwardSchedule(InternedScheduleLabel);
-
 #[derive(ScheduleLabel, Copy, Clone, Debug, Hash, PartialEq, Eq)]
 pub struct RevUpdate;
 
@@ -180,21 +162,24 @@ impl Plugin for RevSystemsPlugin {
             app.insert_resource(rev_meta.clone());
         }
 
-        match self.add_rev_meta_sys_in {
-            Some((schedule, None)) => app.add_systems(schedule, RevMeta::update_world),
-            Some((schedule, Some(set))) => {
-                app.add_systems(schedule, RevMeta::update_world.in_set(set))
-            }
-            None => app,
+        let Some((schedule, set)) = self.add_rev_meta_sys_in else {
+            return;
         };
+
+        match set {
+            Some(set) => app.add_systems(schedule, RevMeta::update_world.in_set(set)),
+            None => app.add_systems(schedule, RevMeta::update_world),
+        };
+
+        println!("plugin built");
     }
 }
 
 #[derive(SystemSet, Copy, Clone, Debug, Hash, PartialEq, Eq)]
-struct BackwardCmdsSys(InternedSystemSet);
+struct BackwardCmdsSys(InternedSystemSet); // todo: move to schedule module
 
 #[derive(SystemSet, Copy, Clone, Debug, Hash, PartialEq, Eq)]
-struct BackwardSys(InternedSystemSet);
+struct BackwardSys(InternedSystemSet); // todo: nove to schedule module
 
 /// reference: Tick::check_tick
 fn check_tick(this: &mut Tick, change_tick: Tick) {
