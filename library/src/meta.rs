@@ -7,7 +7,6 @@ use bevy::{
         component::ComponentId,
         event::Event,
         query::Access,
-        schedule::{InternedScheduleLabel, ScheduleLabel},
         system::{IntoSystem, Res, Resource, System},
         world::World,
     },
@@ -32,24 +31,10 @@ pub use verifying::{VerifyError, VerifyingRevMeta};
 #[derive(Clone, Debug)]
 pub enum RevTryRunScheduleError {
     RevMetaMissingFirstCall,
-    RevMetaMissing {
-        existed_previously: bool,
-    },
-    RevMetaRemovedInSchedule {
-        meta: RevMeta,
-    },
-    NoRevScheduleRunning {
-        // todo: deprecate
-        meta: RevMeta,
-    },
-    UnexpectedInitialRunning {
-        meta: RevMeta,
-    },
-    ScheduleMissing {
-        // todo: simplify for only RevUpdate
-        meta: RevMeta,
-        schedule: InternedScheduleLabel,
-    },
+    RevMetaMissing { existed_previously: bool },
+    RevMetaRemovedInSchedule { meta: RevMeta },
+    UnexpectedInitialRunning { meta: RevMeta },
+    RevUpdateMissing { meta: RevMeta },
 }
 
 #[derive(Clone, Debug)]
@@ -354,25 +339,6 @@ impl RevMeta {
     pub fn queue_pause(&mut self) {
         self.queue = Some(InternalDirection::Pause);
     }
-    pub(crate) fn get_from_world(world: &mut World) -> Result<&mut Self, GetFromWorldError> {
-        // todo deprecate
-        #[derive(Resource, Clone)]
-        struct Existed(bool);
-
-        if world.contains_resource::<Self>() {
-            world.insert_resource(Existed(true));
-            Ok(world.resource_mut::<Self>().into_inner())
-        } else {
-            let err = match world.get_resource::<Existed>().cloned() {
-                None => GetFromWorldError::RevMetaMissingFirstCall,
-                Some(Existed(existed_previously)) => {
-                    GetFromWorldError::RevMetaMissing { existed_previously }
-                }
-            };
-            world.insert_resource(Existed(false));
-            Err(err)
-        }
-    }
     pub fn try_update_world(world: &mut World) -> Result<(), RevTryRunScheduleError> {
         #[derive(Resource, Clone, Copy)]
         struct Existed(bool);
@@ -409,13 +375,12 @@ impl RevMeta {
                         world.insert_resource(reducings);
                     }
                 }
+                
+                println!("meta: {meta:#?}");
 
-                world.try_run_schedule(RevUpdate).map_err(|_| {
-                    RevTryRunScheduleError::ScheduleMissing {
-                        meta: meta.clone(),
-                        schedule: RevUpdate.intern(),
-                    }
-                })
+                world
+                    .try_run_schedule(RevUpdate)
+                    .map_err(|_| RevTryRunScheduleError::RevUpdateMissing { meta: meta.clone() })
             });
 
             match result.transpose() {
@@ -445,7 +410,7 @@ impl RevMeta {
             Err(RevTryRunScheduleError::RevMetaMissing { existed_previously: true, .. }) => info!(
                 "RevMeta was removed, reversible schedule RevUpdate will not be called until it is inserted again."
             ),
-            Err(RevTryRunScheduleError::ScheduleMissing { meta, .. }) => warn_once!(
+            Err(RevTryRunScheduleError::RevUpdateMissing { meta }) => warn_once!(
                 "RevMeta cannot find reversible schedule RevUpdate, make sure to not \
                 run it recursively or call RevMeta::update_world recursively.\n{meta:?}"
             ),
