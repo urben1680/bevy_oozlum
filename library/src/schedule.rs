@@ -1,151 +1,153 @@
 use bevy::ecs::{
-    schedule::{
-        ExecutorKind, IntoSystemSet, LogLevel, Schedule, ScheduleBuildError, ScheduleBuildSettings,
-        ScheduleGraph, ScheduleLabel, SystemSet,
-    },
-    world::World,
+    change_detection::Res,
+    schedule::{IntoSystemSetConfigs, Schedule, SystemSet},
 };
 
 use crate::{
-    meta::{CommandsLogReducingBox, RevDirection, RevMeta},
-    BackwardSchedule, BackwardSys, ForwardSchedule,
+    meta::{RevDirection, RevMeta},
+    set_configs::RevSystemSetConfigs,
+    system_configs::RevSystemConfigs,
 };
 
 use super::{set_configs::IntoRevSystemSetConfigs, system_configs::IntoRevSystemConfigs};
 
-pub struct RevSchedule {
-    pub(crate) forward: Schedule,
-    pub(crate) backward: Schedule,
-    pub(crate) commands_logged_at_reductions: Vec<CommandsLogReducingBox>,
+pub trait RevSchedule {
+    fn rev_add_systems<Marker>(&mut self, systems: impl IntoRevSystemConfigs<Marker>) -> &mut Self;
+    fn rev_configure_sets<Marker>(
+        &mut self,
+        sets: impl IntoRevSystemSetConfigs<Marker>,
+    ) -> &mut Self;
 }
 
-pub struct RevScheduleBuildSettings {
-    pub ambiguity_detection: LogLevel,
-    pub hierarchy_detection: LogLevel,
-    pub use_shortnames: bool,
-    pub report_sets: bool,
-}
-
-pub enum TryRunError {
-    RevMetaMissing,
-    RevMetaWrongDirection(RevMeta),
-}
-
-impl RevSchedule {
-    pub fn new(label: impl ScheduleLabel) -> Self {
-        let label = label.intern();
-        Self {
-            forward: Schedule::new(ForwardSchedule(label)),
-            backward: Schedule::new(BackwardSchedule(label)),
-            commands_logged_at_reductions: Vec::new(),
-        }
+impl RevSchedule for Schedule {
+    fn rev_add_systems<Marker>(&mut self, systems: impl IntoRevSystemConfigs<Marker>) -> &mut Self {
+        let RevSystemConfigs {
+            forward,
+            backward,
+            set_configs,
+        } = systems.into_rev_configs();
+        self.add_systems((forward, backward))
+            .rev_configure_sets(set_configs)
     }
-    pub fn add_systems<Marker>(&mut self, systems: impl IntoRevSystemConfigs<Marker>) -> &mut Self {
-        let configs = systems.into_rev_configs();
-        self.forward.add_systems(configs.forward);
-        self.backward.add_systems(configs.backward);
-        self.configure_sets(configs.set_configs);
-        self
-    }
-    pub fn configure_sets<Marker>(
+    fn rev_configure_sets<Marker>(
         &mut self,
         sets: impl IntoRevSystemSetConfigs<Marker>,
     ) -> &mut Self {
-        let configs = sets.into_rev_configs();
-        self.forward.configure_sets(configs.forward_sys);
-        self.backward
-            .configure_sets((configs.backward_cmds_sys, configs.backward_sys));
-        self
-    }
-    pub fn set_build_setting(&mut self, settings: RevScheduleBuildSettings) -> &mut Self {
-        let RevScheduleBuildSettings {
-            ambiguity_detection,
-            hierarchy_detection,
-            use_shortnames,
-            report_sets,
-        } = settings;
-        let settings = ScheduleBuildSettings {
-            ambiguity_detection,
-            hierarchy_detection,
-            auto_insert_apply_deferred: true,
-            use_shortnames,
-            report_sets,
-        };
-        self.forward.set_build_settings(settings.clone());
-        self.backward.set_build_settings(settings);
-        self
-    }
-    pub fn get_build_settings(&self) -> RevScheduleBuildSettings {
-        let ScheduleBuildSettings {
-            ambiguity_detection,
-            hierarchy_detection,
-            use_shortnames,
-            report_sets,
-            ..
-        } = self.forward.get_build_settings();
-        RevScheduleBuildSettings {
-            ambiguity_detection,
-            hierarchy_detection,
-            use_shortnames,
-            report_sets,
+        if forward_backward_sets_unknown(self) {
+            fn run_forward(meta: Res<RevMeta>) -> bool {
+                matches!(meta.get_direction(), Some(RevDirection::Forward { .. }))
+            }
+            fn run_backward(meta: Res<RevMeta>) -> bool {
+                matches!(meta.get_direction(), Some(RevDirection::BackwardLog))
+            }
+            self.configure_sets((
+                ForwardSet.run_if(run_forward),
+                BackwardSet.run_if(run_backward),
+            ));
         }
+        let RevSystemSetConfigs {
+            forward_sys,
+            backward_cmds_sys,
+            backward_sys,
+        } = sets.into_rev_configs();
+        self.configure_sets((
+            forward_sys.in_set(ForwardSet),
+            (backward_cmds_sys, backward_sys).in_set(BackwardSet),
+        ))
     }
-    pub fn get_executor_kind(&self) -> ExecutorKind {
-        self.forward.get_executor_kind()
+}
+
+#[derive(SystemSet, Copy, Clone, Debug, Hash, PartialEq, Eq)]
+struct ForwardSet;
+
+#[derive(SystemSet, Copy, Clone, Debug, Hash, PartialEq, Eq)]
+struct BackwardSet;
+
+fn forward_backward_sets_unknown(schedule: &mut Schedule) -> bool {
+    // ScheduleGraph::system_sets() does not return an `impl ExactSizeIterator` but it is one actually.
+    // Manually searching the sets for `ForwardSet`/`BackwardSet` would be O(n) per call of this method,
+    // which itself is assumed to be called many times. So instead this impl relies on `size_hint` being
+    // accurate to see if adding one of the two sets increases the size.
+    // todo: upstream a `ScheduleGraph::contains_system_set` method
+    let (lower_bound_before, upper_bound_before) = schedule.graph().system_sets().size_hint();
+    schedule.configure_sets(ForwardSet);
+    let (lower_bound_after, upper_bound_after) = schedule.graph().system_sets().size_hint();
+
+    if cfg!(debug_assertions) {
+        const EXPECT: &'static str =
+            "ScheduleGraph::system_sets() expected to be ExactSizeIterator";
+        let upper_bound_before = upper_bound_before.expect(EXPECT);
+        let upper_bound_after = upper_bound_after.expect(EXPECT);
+        assert_eq!(lower_bound_before, upper_bound_before, "{EXPECT}");
+        assert_eq!(lower_bound_after, upper_bound_after, "{EXPECT}");
     }
-    pub fn set_executor_kind(&mut self, executor: ExecutorKind) -> &mut Self {
-        self.forward.set_executor_kind(executor);
-        self.backward.set_executor_kind(executor);
-        self
+
+    upper_bound_before < upper_bound_after
+}
+
+#[cfg(test)]
+mod test {
+    use std::num::NonZeroUsize;
+
+    use bevy::{
+        app::{App, Update}, ecs::{change_detection::ResMut, schedule::ScheduleLabel, system::Resource}
+    };
+
+    use crate::{app::RevApp, RevFrame, RevSystemsPlugin, RevUpdate};
+
+    use super::*;
+
+    #[test]
+    fn forward_backward_sets_unknown_works() {
+        let schedule = &mut Schedule::new(RevUpdate);
+        assert_eq!(forward_backward_sets_unknown(schedule), true);
+        assert_eq!(forward_backward_sets_unknown(schedule), false);
     }
-    pub fn try_run(&mut self, world: &mut World) -> Result<(), TryRunError> {
-        let meta = world
-            .get_resource::<RevMeta>()
-            .ok_or(TryRunError::RevMetaMissing)?
-            .clone();
-        match meta.get_direction() {
-            Some(RevDirection::Forward { .. }) => Ok(self.forward.run(world)),
-            Some(RevDirection::BackwardLog) => Ok(self.backward.run(world)),
-            None => Err(TryRunError::RevMetaWrongDirection(meta)),
+
+    #[test]
+    fn reversible_systems_works() {
+        #[derive(PartialEq, Debug)]
+        enum Sys {
+            A,
+            B,
         }
-    }
-    pub fn run_forward(&mut self, world: &mut World) {
-        self.forward.run(world)
-    }
-    pub fn run_backward(&mut self, world: &mut World) {
-        self.backward.run(world)
-    }
-    pub fn initialize(
-        &mut self,
-        world: &mut World,
-    ) -> (
-        Result<(), ScheduleBuildError>,
-        Result<(), ScheduleBuildError>,
-    ) {
-        (
-            self.forward.initialize(world),
-            self.backward.initialize(world),
-        )
-    }
-    pub fn graphs(&self) -> (&ScheduleGraph, &ScheduleGraph) {
-        (self.forward.graph(), self.backward.graph())
-    }
-    pub fn graphs_mut(&mut self) -> (&mut ScheduleGraph, &mut ScheduleGraph) {
-        (self.forward.graph_mut(), self.backward.graph_mut())
-    }
-    pub fn ignore_ambiguity<M1, M2>(
-        &mut self,
-        a: impl IntoSystemSet<M1>,
-        b: impl IntoSystemSet<M1>,
-    ) -> &mut Self {
-        let a = a.into_system_set().intern();
-        let b = b.into_system_set().intern();
-        self.forward.ignore_ambiguity(a, b);
-        self.backward
-            .ignore_ambiguity(BackwardSys(a), BackwardSys(b));
-        self
-    }
-    pub fn systems_len(&self) -> usize {
-        self.forward.systems_len()
+
+        #[derive(Resource, Default)]
+        struct Log(Vec<Sys>);
+
+        fn sys_a(mut res: ResMut<Log>) {
+            res.0.push(Sys::A)
+        }
+
+        fn sys_b(mut res: ResMut<Log>) {
+            res.0.push(Sys::B)
+        }
+
+        let mut app = App::new();
+
+        app.add_plugins(RevSystemsPlugin {
+            rev_meta: Some(RevMeta::new(NonZeroUsize::new(2), 0, false)),
+            add_rev_meta_sys_in: Some((Update.intern(), None))
+        })
+            .init_resource::<Log>()
+            .rev_add_systems(RevUpdate, (sys_a, sys_b).rev_chain());
+
+        app.update();
+        let log = app
+            .world_mut()
+            .resource_mut::<Log>()
+            .0
+            .drain(..)
+            .collect::<Vec<_>>();
+        assert_eq!(log, [Sys::A, Sys::B]);
+
+        app.world_mut()
+            .resource_mut::<RevMeta>()
+            .queue_log(RevFrame::new(0))
+            .expect("in log");
+
+        app.update();
+        let log = app.world_mut().remove_resource::<Log>().unwrap().0;
+        assert_eq!(log, [Sys::B, Sys::A]);
     }
 }
