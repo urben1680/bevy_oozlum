@@ -19,13 +19,14 @@ use bevy::{
 };
 
 use crate::{
-    check_tick, commands::CommandsLog, error_per_flag, meta::CommandsLogReducingBox,
+    check_tick, commands::CommandsLog, error_per_flag, meta::CommandsLogReducings,
     set_configs::RevSystemSetConfigs, BackwardCmdsSys, BackwardSys,
 };
 
 use super::{IntoRevSystemConfigs, RevSystemConfigs};
 
-struct ReversibleSystem<Marker>(PhantomData<Marker>);
+#[doc(hidden)]
+pub struct ReversibleSystem<Marker>(PhantomData<Marker>);
 
 #[derive(SystemSet, Copy, Clone, Debug, Hash, PartialEq, Eq)]
 struct ArcSystemFallbackSet(TypeId);
@@ -37,10 +38,14 @@ where
     fn into_rev_configs(self) -> RevSystemConfigs {
         let system = IntoSystem::into_system(self);
 
-        let mut sets = system.default_system_sets();
+        let mut sets: Vec<InternedSystemSet> = system
+            .default_system_sets()
+            .into_iter()
+            .filter(|set| set.system_type().is_none())
+            .collect();
         let fallback_set = ArcSystemFallbackSet(system.type_id());
         if sets.is_empty() {
-            sets = vec![fallback_set.intern()];
+            sets.push(fallback_set.intern());
         }
 
         let name = |string: &str| {
@@ -57,6 +62,7 @@ where
             system,
             initialized: false,
             commands_log: default(),
+            observer_name,
         }));
 
         let forward_sys = ArcSystem {
@@ -93,14 +99,6 @@ where
         backward = config_in_sets(BackwardCmdsSys, &sets, backward);
         let set_configs = RevSystemSetConfigs::from_sets(sets).unwrap(); // sets not empty
 
-        let observer: CommandsLogReducingBox = Box::new(move |event, world| {
-            shared
-                .try_write()
-                .unwrap_or_else(expect_shared(&observer_name))
-                .commands_log
-                .reduce_logged_at(world, event);
-        });
-
         // Note that System::has_deferred may return no correct value before initializing the system.
         // Because of this and that initializing the system here might be surprising for the user
         // the CommandsBackward system is always added. it becomes noop if the system ends up having no
@@ -109,7 +107,6 @@ where
             forward,
             backward,
             set_configs,
-            commands_logged_at_reductions: vec![observer],
         }
     }
 }
@@ -118,6 +115,7 @@ struct Shared<T> {
     system: T,
     initialized: bool,
     commands_log: CommandsLog,
+    observer_name: String,
 }
 
 struct ArcSystem<T> {
@@ -342,11 +340,27 @@ fn initialize_arc_system(
     world: &mut World,
 ) {
     *tick = world.change_tick();
+    let arc = shared.clone();
     let mut shared = shared.try_write().unwrap_or_else(expect_shared(name));
-    if !shared.initialized {
-        shared.system.initialize(world);
-        shared.initialized = true;
+    if shared.initialized {
+        return;
     }
+
+    // init system
+    shared.system.initialize(world);
+    shared.initialized = true;
+
+    // add observer for reducing commands using the logged_at mechanism
+    let name = shared.observer_name.clone();
+    world
+        .get_resource_or_insert_with(CommandsLogReducings::default)
+        .0
+        .push(Box::new(move |event, world| {
+            arc.try_write()
+                .unwrap_or_else(expect_shared(&name))
+                .commands_log
+                .reduce_logged_at(world, event)
+        }));
 }
 
 fn expect_shared<T: Debug, Out>(name: &String) -> impl FnOnce(T) -> Out + '_ {
