@@ -7,12 +7,13 @@ use bevy::{
         system::{Commands, Resource},
         world::{DeferredWorld, FromWorld, World},
     },
-    utils::synccell::SyncCell,
+    utils::{default, synccell::SyncCell},
 };
 
 use crate::{
-    log::{OutOfLog, PackedRevFrame, TransitionsLog},
+    log::{OutOfLog, TransitionsLog},
     meta::{RevDirection, RevMeta},
+    RevFrame,
 };
 
 pub mod hook;
@@ -33,12 +34,11 @@ pub trait RevCommands {
 
 fn buffer_rev_command(world: &mut DeferredWorld, command: impl RevCommandLog) {
     let command: Box<dyn RevCommandLog> = Box::new(command);
-    let command = SyncCell::new(command);
-    world
+    let buffer = &mut world
         .get_resource_mut::<RevCommandBuffer>()
         .expect("todo")
-        .0
-        .push_back(command);
+        .0;
+    SyncCell::get(buffer).push_back(command);
 }
 
 impl RevCommands for Commands<'_, '_> {
@@ -133,11 +133,22 @@ pub trait RevCommandLog: Send + 'static {
     fn redone_finalize(self: Box<Self>, _world: &mut World) {}
 }
 
-#[derive(Resource, Default)]
-pub(crate) struct RevCommandBuffer(VecDeque<SyncCell<Box<dyn RevCommandLog>>>);
+#[derive(Resource)]
+pub(crate) struct RevCommandBuffer(SyncCell<VecDeque<Box<dyn RevCommandLog>>>);
 
-#[derive(Default)]
-pub struct CommandsLog(TransitionsLog<SyncCell<Box<dyn RevCommandLog>>, PackedRevFrame>);
+impl Default for RevCommandBuffer {
+    fn default() -> Self {
+        Self(SyncCell::new(default()))
+    }
+}
+
+pub struct CommandsLog(SyncCell<TransitionsLog<Box<dyn RevCommandLog>, RevFrame>>);
+
+impl Default for CommandsLog {
+    fn default() -> Self {
+        Self(SyncCell::new(default()))
+    }
+}
 
 #[derive(Clone, Debug)]
 pub enum CommandsLogErr {
@@ -152,31 +163,32 @@ impl CommandsLog {
             .get_resource::<RevMeta>()
             .ok_or(CommandsLogErr::RevMetaMissing)?
             .clone();
+        let log = SyncCell::get(&mut self.0);
         match meta.get_direction() {
             Some(RevDirection::NotLog) => {
-                for command in self.0.drain_future().0.rev() {
-                    SyncCell::to_inner(command).undone_finalize(world);
+                for command in log.drain_future().0.rev() {
+                    command.undone_finalize(world);
                 }
-                for command in self.0.truncate_future_drain_past_by_logged_at(&meta) {
-                    SyncCell::to_inner(command).redone_finalize(world);
+                for command in log.truncate_future_drain_past_by_logged_at(&meta) {
+                    command.redone_finalize(world);
                 }
                 let mut buffer = world.get_resource_or_insert_with(RevCommandBuffer::default);
-                if !buffer.0.is_empty() {
-                    self.0.push_present(|mut log| {
-                        log.append(&mut buffer.0);
+                let buffer = SyncCell::get(&mut buffer.0);
+                if !buffer.is_empty() {
+                    log.push_present(|mut log| {
+                        log.append(buffer);
                         meta.present_world_state()
                     });
                 }
                 Ok(())
             }
             Some(RevDirection::ForwardLog) => {
-                for command in self
-                    .0
+                for command in log
                     .forward_log()
                     .map_err(|OutOfLog| CommandsLogErr::OutOfLog(meta))?
                     .into_iter()
                 {
-                    command.get().redo(world);
+                    command.redo(world);
                 }
                 Ok(())
             }
@@ -190,19 +202,20 @@ impl CommandsLog {
         if meta.get_direction() != Some(RevDirection::BackwardLog) {
             return Err(CommandsLogErr::RevMetaWrongDirection(meta.clone()));
         }
-        for command in self
-            .0
+        let log = SyncCell::get(&mut self.0);
+        for command in log
             .backward_log()
             .map_err(|OutOfLog| CommandsLogErr::OutOfLog(meta.clone()))?
             .into_iter()
         {
-            command.get().undo(world);
+            command.undo(world);
         }
         Ok(())
     }
     pub fn reduce_logged_at(&mut self, world: &mut World, meta: &RevMeta) {
-        for command in self.0.truncate_future_drain_past_by_logged_at(meta) {
-            SyncCell::to_inner(command).redone_finalize(world);
+        let log = SyncCell::get(&mut self.0);
+        for command in log.truncate_future_drain_past_by_logged_at(meta) {
+            command.redone_finalize(world);
         }
     }
 }
