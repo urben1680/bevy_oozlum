@@ -270,8 +270,8 @@ where
         self.amounts.clear();
         let amount = self.amounts.amount;
         let amount = <Self as WithAmountInternal>::amount_to_usize(amount);
-        self.states.drain(..self.index);
-        self.states.truncate(amount);
+        self.states.truncate(self.index);
+        self.states.drain(..self.index - amount);
         self.index = amount;
     }
     pub fn clear_empty(&mut self, entry: U) {
@@ -629,6 +629,123 @@ mod test {
         test(&logless, 0, 2, false);
         test(&full_with_capacity, 2, 6, true);
         test(&logless_with_capacity, 0, 2, true);
+    }
+
+    #[test]
+    fn clear() {
+        let mut original = RareStatesLog::<_, _, 1>::try_new([1, 1], 'a').unwrap();
+        original
+            .try_push_present(|mut log| {
+                log.extend([2, 2]);
+                'b'
+            })
+            .unwrap();
+        original
+            .try_push_present(|mut log| {
+                log.append(&mut VecDeque::new());
+                'x'
+            })
+            .unwrap();
+        original
+            .try_push_present(|mut log| {
+                log.extend([3, 3]);
+                'c'
+            })
+            .unwrap();
+        original.backward_log().expect("in log");
+
+        let mut log = original.clone();
+        log.clear();
+        let state = log.get();
+        assert_eq!(
+            state.0.cloned().collect::<Vec<_>>(),
+            [2, 2],
+            "log: {log:#?}\noriginal: {original:#?}"
+        );
+        assert_eq!(*state.1, 'b', "log: {log:#?}\noriginal: {original:#?}");
+        assert_eq!(
+            log.states_len(),
+            2,
+            "log: {log:#?}\noriginal: {original:#?}"
+        );
+        assert_eq!(
+            log.entries_len(),
+            0,
+            "log: {log:#?}\noriginal: {original:#?}"
+        );
+
+        let mut log = original.clone();
+        log.clear_empty('d');
+        let mut state = log.get();
+        assert_eq!(
+            state.0.next(),
+            None,
+            "log: {log:#?}\noriginal: {original:#?}"
+        );
+        assert_eq!(*state.1, 'd', "log: {log:#?}\noriginal: {original:#?}");
+        assert_eq!(
+            log.states_len(),
+            0,
+            "log: {log:#?}\noriginal: {original:#?}"
+        );
+        assert_eq!(
+            log.entries_len(),
+            0,
+            "log: {log:#?}\noriginal: {original:#?}"
+        );
+
+        let mut log = original.clone();
+        let err = log
+            .try_clear_with([0; 256], 'e')
+            .expect_err("pushed too many");
+        let state = log.get();
+        assert_eq!(
+            err.values, [0; 256],
+            "log: {log:#?}\noriginal: {original:#?}"
+        );
+        assert_eq!(
+            err.pushed_amount, 256,
+            "log: {log:#?}\noriginal: {original:#?}"
+        );
+        assert_eq!(err.entry, 'e', "log: {log:#?}\noriginal: {original:#?}");
+        // unchanged
+        assert_eq!(
+            state.0.cloned().collect::<Vec<_>>(),
+            [2, 2],
+            "log: {log:#?}\noriginal: {original:#?}"
+        );
+        assert_eq!(*state.1, 'b', "log: {log:#?}\noriginal: {original:#?}");
+        assert_eq!(
+            log.states_len(),
+            6,
+            "log: {log:#?}\noriginal: {original:#?}"
+        );
+        assert_eq!(
+            log.entries_len(),
+            2,
+            "log: {log:#?}\noriginal: {original:#?}"
+        );
+
+        let mut log = original.clone();
+        let result = log.try_clear_with([4, 4], 'f');
+        let state = log.get();
+        assert!(result.is_ok(), "log: {log:#?}\noriginal: {original:#?}");
+        assert_eq!(
+            state.0.cloned().collect::<Vec<_>>(),
+            [4, 4],
+            "log: {log:#?}\noriginal: {original:#?}"
+        );
+        assert_eq!(*state.1, 'f', "log: {log:#?}\noriginal: {original:#?}");
+        assert_eq!(
+            log.states_len(),
+            2,
+            "log: {log:#?}\noriginal: {original:#?}"
+        );
+        assert_eq!(
+            log.entries_len(),
+            0,
+            "log: {log:#?}\noriginal: {original:#?}"
+        );
     }
 
     enum Push {
