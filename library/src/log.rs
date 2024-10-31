@@ -451,7 +451,6 @@ impl<'a, T> Extend<T> for LogMut<'a, T> {
     }
 }
 
-#[derive(Debug)]
 pub struct AmountErr<I, Log: WithAmount> {
     pub values: I,
     pub entry: Log::Entry,
@@ -466,6 +465,17 @@ impl<I, Log: WithAmountInternal> AmountErr<I, Log> {
     // taking &self makes it easier to call this method
     pub fn max_amount(&self) -> usize {
         Log::amount_to_usize(Log::MAX)
+    }
+}
+
+// makes unwrap possible without requiring additional Debug bounds everywhere
+#[allow(private_bounds)]
+impl<I, Log: WithAmountInternal> Debug for AmountErr<I, Log> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct(std::any::type_name::<Self>())
+            .field("pushed_amount", &self.pushed_amount)
+            .field("max_amount", &self.max_amount())
+            .finish_non_exhaustive()
     }
 }
 
