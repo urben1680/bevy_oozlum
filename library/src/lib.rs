@@ -54,21 +54,17 @@ UNSUPPORTED:
 use std::{fmt::Debug, hash::Hash};
 
 use bevy::{
-    app::{FixedUpdate, Plugin},
     ecs::{
         component::Tick,
-        schedule::{InternedScheduleLabel, InternedSystemSet, IntoSystemConfigs, ScheduleLabel},
+        schedule::ScheduleLabel,
     },
     reflect::Reflect,
-    utils::default,
 };
 
 #[cfg(feature = "serde")]
 use bevy::reflect::{ReflectDeserialize, ReflectSerialize};
 
-use commands::RevCommandBuffer;
 use log::PackedRevFrame;
-use meta::RevMeta;
 
 pub mod app;
 pub mod commands;
@@ -99,16 +95,15 @@ impl From<RevFrame> for usize {
 }
 
 impl RevFrame {
-    pub const MAX_AS_USIZE: usize = PackedRevFrame::MAX_AS_USIZE;
     const fn new(value: usize) -> Self {
-        debug_assert!(value <= Self::MAX_AS_USIZE);
+        debug_assert!(value <= PackedRevFrame::MAX_AS_USIZE);
         Self(value)
     }
     const fn wrapping_add(self, value: usize) -> Self {
-        Self(self.0.wrapping_add(value) & Self::MAX_AS_USIZE)
+        Self(self.0.wrapping_add(value) & PackedRevFrame::MAX_AS_USIZE)
     }
     const fn wrapping_sub(self, value: usize) -> Self {
-        Self(self.0.wrapping_sub(value) & Self::MAX_AS_USIZE)
+        Self(self.0.wrapping_sub(value) & PackedRevFrame::MAX_AS_USIZE)
     }
 }
 
@@ -134,43 +129,6 @@ impl<'de> serde::Deserialize<'de> for RevFrame {
 
 #[derive(ScheduleLabel, Copy, Clone, Debug, Hash, PartialEq, Eq)]
 pub struct RevUpdate;
-
-pub struct RevSystemsPlugin {
-    pub rev_meta: Option<RevMeta>,
-    pub add_rev_meta_sys_in: Option<(InternedScheduleLabel, Option<InternedSystemSet>)>,
-}
-
-impl Default for RevSystemsPlugin {
-    fn default() -> Self {
-        Self {
-            rev_meta: Some(default()),
-            add_rev_meta_sys_in: Some((FixedUpdate.intern(), None)),
-        }
-    }
-}
-
-impl Plugin for RevSystemsPlugin {
-    fn build(&self, app: &mut bevy::prelude::App) {
-        app.register_type::<RevMeta>()
-            // needs to be manually inserted because first accessor might be a hook which cannot insert it
-            .init_resource::<RevCommandBuffer>();
-
-        if let Some(rev_meta) = &self.rev_meta {
-            app.insert_resource(rev_meta.clone());
-        }
-
-        let Some((schedule, set)) = self.add_rev_meta_sys_in else {
-            return;
-        };
-
-        match set {
-            Some(set) => app.add_systems(schedule, RevMeta::update_world.in_set(set)),
-            None => app.add_systems(schedule, RevMeta::update_world),
-        };
-
-        println!("plugin built");
-    }
-}
 
 /// reference: Tick::check_tick
 fn check_tick(this: &mut Tick, change_tick: Tick) {

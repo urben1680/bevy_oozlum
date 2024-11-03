@@ -133,7 +133,7 @@ mod test {
         ecs::{change_detection::ResMut, schedule::ScheduleLabel, system::Resource},
     };
 
-    use crate::{app::RevApp, RevFrame, RevSystemsPlugin, RevUpdate};
+    use crate::{app::{RevApp, RevSystemsPlugin}, RevFrame, RevUpdate};
 
     use super::*;
 
