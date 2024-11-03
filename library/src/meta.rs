@@ -208,7 +208,7 @@ impl RevMeta {
     pub const MAX_WORLD_STATES: usize = PackedRevFrame::MAX_AS_USIZE / 2;
     pub const fn new(max_len: Option<NonZeroUsize>, now: usize, paused: bool) -> Self {
         if now > PackedRevFrame::MAX_AS_USIZE {
-            panic!("now must not be larger than PackedRevFrame::MAX_AS_USIZE")
+            panic!("now must not be larger than RevMeta::MAX_WORLD_STATES * 2")
         }
         let now = RevFrame::new(now);
         Self {
@@ -375,8 +375,6 @@ impl RevMeta {
                         world.insert_resource(reducings);
                     }
                 }
-                
-                println!("meta: {meta:#?}");
 
                 world
                     .try_run_schedule(RevUpdate)

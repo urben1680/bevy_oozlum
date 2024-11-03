@@ -238,7 +238,8 @@ use bevy::{log::error, reflect::Reflect, utils::all_tuples};
 #[cfg(feature = "serde")]
 use bevy::reflect::{ReflectDeserialize, ReflectSerialize};
 
-mod initially_none_state;
+mod init_none;
+mod rare_init_none;
 mod rare_state;
 mod rare_states;
 mod rare_transition;
@@ -250,7 +251,7 @@ mod states;
 mod transition;
 mod transitions;
 
-pub use initially_none_state::InitiallyNoneStateLog;
+pub use init_none::InitNoneLog;
 pub use rare_state::RareStateLog;
 pub use rare_states::RareStatesLog;
 pub use rare_transition::RareTransitionLog;
@@ -263,25 +264,25 @@ pub use transition::TransitionLog;
 pub use transitions::TransitionsLog;
 
 #[cfg(feature = "time_bytes_1")]
-const TIME_BYTES: usize = 1;
+const TIME_BYTES: u32 = 1;
 
 #[cfg(feature = "time_bytes_2")]
-const TIME_BYTES: usize = 2;
+const TIME_BYTES: u32 = 2;
 
 #[cfg(feature = "time_bytes_3")]
-const TIME_BYTES: usize = 3;
+const TIME_BYTES: u32 = 3;
 
 #[cfg(feature = "time_bytes_4")]
-const TIME_BYTES: usize = 4;
+const TIME_BYTES: u32 = 4;
 
 #[cfg(feature = "time_bytes_5")]
-const TIME_BYTES: usize = 5;
+const TIME_BYTES: u32 = 5;
 
 #[cfg(feature = "time_bytes_6")]
-const TIME_BYTES: usize = 6;
+const TIME_BYTES: u32 = 6;
 
 #[cfg(feature = "time_bytes_7")]
-const TIME_BYTES: usize = 7;
+const TIME_BYTES: u32 = 7;
 
 #[cfg(not(any(
     feature = "time_bytes_1",
@@ -292,23 +293,23 @@ const TIME_BYTES: usize = 7;
     feature = "time_bytes_6",
     feature = "time_bytes_7",
 )))]
-const TIME_BYTES: usize = 8;
+const TIME_BYTES: u32 = 8;
 
-const USIZE_BYTES: usize = usize::BITS as usize / 8;
+const USIZE_BYTES: u32 = usize::BITS / 8;
 
 #[derive(Clone, Copy, Reflect, PartialEq, Eq)]
 #[reflect(Debug)]
 #[cfg_attr(feature = "serde", reflect(Serialize, Deserialize))]
-pub struct PackedRevFrame([u8; Self::BYTES]);
+pub struct PackedRevFrame([u8; Self::BYTES as usize]);
 
 impl PackedRevFrame {
-    pub const BYTES: usize = if TIME_BYTES > USIZE_BYTES {
+    pub(crate) const BYTES: u32 = if TIME_BYTES > USIZE_BYTES {
         USIZE_BYTES
     } else {
         TIME_BYTES
     };
-    pub const MAX_AS_USIZE: usize = {
-        let bits = Self::BYTES as u32 * 8;
+    pub(crate) const MAX_AS_USIZE: usize = {
+        let bits = Self::BYTES * 8;
         let shift = usize::BITS.saturating_sub(bits);
         usize::MAX >> shift
     };
@@ -503,7 +504,7 @@ struct RareValue<T> {
     ///
     /// This is not a `PackedRevFrame` because skips may be sub-frames and sum up to larger values.
     /// Instead, this is usize's native byte representation to reduce the alignment of this field.
-    skips_ne: [u8; USIZE_BYTES],
+    skips_ne: [u8; USIZE_BYTES as usize],
 }
 
 impl<T: Debug> Debug for RareValue<T> {
@@ -796,9 +797,9 @@ macro_rules! impl_with_amount {
         }
 
         impl<T, U> crate::log::WithAmountInternal for $Log<T, U, $AMOUNT_BYTES> {
-            type Amount = [u8; crate::log::USIZE_BYTES];
-            const MIN: Self::Amount = [u8::MIN; crate::log::USIZE_BYTES];
-            const MAX: Self::Amount = [u8::MAX; crate::log::USIZE_BYTES];
+            type Amount = [u8; crate::log::USIZE_BYTES as usize];
+            const MIN: Self::Amount = [u8::MIN; crate::log::USIZE_BYTES as usize];
+            const MAX: Self::Amount = [u8::MAX; crate::log::USIZE_BYTES as usize];
             fn amount_to_usize(value: Self::Amount) -> usize {
                 usize::from_ne_bytes(value)
             }

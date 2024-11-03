@@ -24,6 +24,7 @@ Enhancements:
 -- tests
 - forward/backward keine schedules sondern system sets mit run_if, benötigt dann kein RevSchedule
 -- how to handle set_apply_final_deferred(false)?
+- more plugin constructors
 
 - InitiallyNoneStateLog / InitiallyNoneRareStateLog
 -- Rare variant
@@ -56,9 +57,7 @@ use bevy::{
     app::{FixedUpdate, Plugin},
     ecs::{
         component::Tick,
-        schedule::{
-            InternedScheduleLabel, InternedSystemSet, IntoSystemConfigs, ScheduleLabel, SystemSet,
-        },
+        schedule::{InternedScheduleLabel, InternedSystemSet, IntoSystemConfigs, ScheduleLabel},
     },
     reflect::Reflect,
     utils::default,
@@ -76,8 +75,6 @@ pub mod commands;
 pub mod log;
 pub mod meta;
 pub mod schedule;
-pub mod set_configs;
-pub mod system_configs;
 pub mod world;
 
 /// Contains important extension traits `as _`, [`RevMeta`] and [`RevDirection`].
@@ -85,9 +82,9 @@ pub mod prelude {
     pub use crate::app::RevApp as _;
     pub use crate::commands::RevCommands as _;
     pub use crate::meta::{RevDirection, RevMeta};
+    pub use crate::schedule::IntoRevSystemConfigs as _;
+    pub use crate::schedule::IntoRevSystemSetConfigs as _;
     pub use crate::schedule::RevSchedule as _;
-    pub use crate::set_configs::IntoRevSystemSetConfigs as _;
-    pub use crate::system_configs::IntoRevSystemConfigs as _;
     pub use crate::world::RevWorld as _;
 }
 
@@ -174,12 +171,6 @@ impl Plugin for RevSystemsPlugin {
         println!("plugin built");
     }
 }
-
-#[derive(SystemSet, Copy, Clone, Debug, Hash, PartialEq, Eq)]
-struct BackwardCmdsSys(InternedSystemSet); // todo: move to schedule module
-
-#[derive(SystemSet, Copy, Clone, Debug, Hash, PartialEq, Eq)]
-struct BackwardSys(InternedSystemSet); // todo: nove to schedule module
 
 /// reference: Tick::check_tick
 fn check_tick(this: &mut Tick, change_tick: Tick) {

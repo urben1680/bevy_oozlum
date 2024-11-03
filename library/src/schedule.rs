@@ -1,15 +1,62 @@
+use std::any::TypeId;
+
 use bevy::ecs::{
     change_detection::Res,
-    schedule::{IntoSystemSetConfigs, Schedule, SystemSet},
+    schedule::{InternedSystemSet, IntoSystemSet, IntoSystemSetConfigs, Schedule, SystemSet},
 };
 
-use crate::{
-    meta::{RevDirection, RevMeta},
-    set_configs::RevSystemSetConfigs,
-    system_configs::RevSystemConfigs,
-};
+use crate::meta::{RevDirection, RevMeta};
 
-use super::{set_configs::IntoRevSystemSetConfigs, system_configs::IntoRevSystemConfigs};
+mod set_configs;
+mod system_configs;
+
+pub use set_configs::*;
+pub use system_configs::*;
+
+#[derive(SystemSet, Copy, Clone, Debug, Hash, PartialEq, Eq)]
+struct FwdArcSet(TypeId);
+
+#[derive(SystemSet, Copy, Clone, Debug, Hash, PartialEq, Eq)]
+struct BwdArcCmdSet(TypeId);
+
+#[derive(SystemSet, Copy, Clone, Debug, Hash, PartialEq, Eq)]
+struct BwdArcSet(TypeId);
+
+#[derive(SystemSet, Copy, Clone, Debug, Hash, PartialEq, Eq)]
+struct FwdNonSys(InternedSystemSet);
+
+#[derive(SystemSet, Copy, Clone, Debug, Hash, PartialEq, Eq)]
+struct BwdNonSys(InternedSystemSet);
+
+impl FwdArcSet {
+    fn from_set<Marker>(set: impl IntoSystemSet<Marker>) -> InternedSystemSet {
+        let set = set.into_system_set().intern();
+        match set.system_type() {
+            Some(id) => Self(id).intern(),
+            None => FwdNonSys(set).intern(),
+        }
+    }
+}
+
+impl BwdArcCmdSet {
+    fn from_set<Marker>(set: impl IntoSystemSet<Marker>) -> InternedSystemSet {
+        let set = set.into_system_set().intern();
+        match set.system_type() {
+            Some(id) => Self(id).intern(),
+            None => BwdNonSys(set).intern(),
+        }
+    }
+}
+
+impl BwdArcSet {
+    fn from_set<Marker>(set: impl IntoSystemSet<Marker>) -> InternedSystemSet {
+        let set = set.into_system_set().intern();
+        match set.system_type() {
+            Some(id) => Self(id).intern(),
+            None => BwdNonSys(set).intern(),
+        }
+    }
+}
 
 pub trait RevSchedule {
     fn rev_add_systems<Marker>(&mut self, systems: impl IntoRevSystemConfigs<Marker>) -> &mut Self;
@@ -21,38 +68,35 @@ pub trait RevSchedule {
 
 impl RevSchedule for Schedule {
     fn rev_add_systems<Marker>(&mut self, systems: impl IntoRevSystemConfigs<Marker>) -> &mut Self {
-        let RevSystemConfigs {
-            forward,
-            backward,
-            set_configs,
-        } = systems.into_rev_configs();
-        self.add_systems((forward, backward))
-            .rev_configure_sets(set_configs)
+        let RevSystemConfigs { systems, sets } = systems.into_rev_configs();
+        self.add_systems(systems).rev_configure_sets(sets)
     }
     fn rev_configure_sets<Marker>(
         &mut self,
         sets: impl IntoRevSystemSetConfigs<Marker>,
     ) -> &mut Self {
         if forward_backward_sets_unknown(self) {
-            fn run_forward(meta: Res<RevMeta>) -> bool {
+            // run conditions return false if RevMeta is missing
+            fn if_forward(meta: Res<RevMeta>) -> bool {
                 matches!(meta.get_direction(), Some(RevDirection::Forward { .. }))
             }
-            fn run_backward(meta: Res<RevMeta>) -> bool {
+            fn if_backward(meta: Res<RevMeta>) -> bool {
                 matches!(meta.get_direction(), Some(RevDirection::BackwardLog))
             }
             self.configure_sets((
-                ForwardSet.run_if(run_forward),
-                BackwardSet.run_if(run_backward),
+                ForwardSet.run_if(if_forward),
+                BackwardSet.run_if(if_backward),
             ));
         }
         let RevSystemSetConfigs {
-            forward_sys,
-            backward_cmds_sys,
-            backward_sys,
+            fwd_arc_sets,
+            bwd_cmd_arc_sets,
+            bwd_arc_sets,
         } = sets.into_rev_configs();
         self.configure_sets((
-            forward_sys.in_set(ForwardSet),
-            (backward_cmds_sys, backward_sys).in_set(BackwardSet),
+            fwd_arc_sets.in_set(ForwardSet),
+            bwd_cmd_arc_sets.in_set(BackwardSet),
+            bwd_arc_sets, // subsets of bwd_cmd_arc_sets
         ))
     }
 }
@@ -68,21 +112,16 @@ fn forward_backward_sets_unknown(schedule: &mut Schedule) -> bool {
     // Manually searching the sets for `ForwardSet`/`BackwardSet` would be O(n) per call of this method,
     // which itself is assumed to be called many times. So instead this impl relies on `size_hint` being
     // accurate to see if adding one of the two sets increases the size.
-    // todo: upstream a `ScheduleGraph::contains_system_set` method
+    // todo: https://github.com/bevyengine/bevy/pull/16206
     let (lower_bound_before, upper_bound_before) = schedule.graph().system_sets().size_hint();
     schedule.configure_sets(ForwardSet);
     let (lower_bound_after, upper_bound_after) = schedule.graph().system_sets().size_hint();
 
-    if cfg!(debug_assertions) {
-        const EXPECT: &'static str =
-            "ScheduleGraph::system_sets() expected to be ExactSizeIterator";
-        let upper_bound_before = upper_bound_before.expect(EXPECT);
-        let upper_bound_after = upper_bound_after.expect(EXPECT);
-        assert_eq!(lower_bound_before, upper_bound_before, "{EXPECT}");
-        assert_eq!(lower_bound_after, upper_bound_after, "{EXPECT}");
-    }
+    const EXPECT: &'static str = "ScheduleGraph::system_sets() expected to impl ExactSizeIterator";
+    debug_assert_eq!(Some(lower_bound_before), upper_bound_before, "{EXPECT}");
+    debug_assert_eq!(Some(lower_bound_after), upper_bound_after, "{EXPECT}");
 
-    upper_bound_before < upper_bound_after
+    lower_bound_before < lower_bound_after
 }
 
 #[cfg(test)]
@@ -90,7 +129,8 @@ mod test {
     use std::num::NonZeroUsize;
 
     use bevy::{
-        app::{App, Update}, ecs::{change_detection::ResMut, schedule::ScheduleLabel, system::Resource}
+        app::{App, Update},
+        ecs::{change_detection::ResMut, schedule::ScheduleLabel, system::Resource},
     };
 
     use crate::{app::RevApp, RevFrame, RevSystemsPlugin, RevUpdate};
@@ -103,6 +143,14 @@ mod test {
         assert_eq!(forward_backward_sets_unknown(schedule), true);
         assert_eq!(forward_backward_sets_unknown(schedule), false);
     }
+
+    /*
+    todo tests:
+
+    - before/after/chain one system with commands and another system
+    - before/after a system with commands and a set with another system
+    - run_if
+     */
 
     #[test]
     fn reversible_systems_works() {
@@ -127,10 +175,12 @@ mod test {
 
         app.add_plugins(RevSystemsPlugin {
             rev_meta: Some(RevMeta::new(NonZeroUsize::new(2), 0, false)),
-            add_rev_meta_sys_in: Some((Update.intern(), None))
+            add_rev_meta_sys_in: Some((Update.intern(), None)),
         })
-            .init_resource::<Log>()
-            .rev_add_systems(RevUpdate, (sys_a, sys_b).rev_chain());
+        .init_resource::<Log>()
+        .rev_add_systems(RevUpdate, (sys_a, sys_b).rev_chain());
+
+        bevy_mod_debugdump::print_schedule_graph(&mut app, RevUpdate);
 
         app.update();
         let log = app

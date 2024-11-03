@@ -740,11 +740,11 @@ mod test {
             &mut self,
             meta: &mut RevMeta,
             strategy: ShortenStrategy,
-            states: [u8; 2],
+            states: Vec<u8>,
             push_ok: bool,
             expected_entries_len: usize,
             expected_states_len: usize,
-            expected_popped: Option<([u8; 2], usize)>,
+            expected_popped: Option<(Vec<u8>, usize)>,
         ) {
             let before = self.clone();
             if push_ok {
@@ -841,7 +841,7 @@ mod test {
         fn test_forward_log(
             &mut self,
             meta: &mut RevMeta,
-            expected_states: [u8; 2],
+            expected_states: Vec<u8>,
             out_of_log: bool,
         ) {
             let before = self.clone();
@@ -868,7 +868,7 @@ mod test {
         fn test_backward_log(
             &mut self,
             meta: &mut RevMeta,
-            expected_states: [u8; 2],
+            expected_states: Vec<u8>,
             out_of_log: bool,
         ) {
             let before = self.clone();
@@ -892,7 +892,7 @@ mod test {
             }
             self.test_states(before, meta, expected_states);
         }
-        fn test_states(&self, before: Self, meta: &RevMeta, states: [u8; 2]) {
+        fn test_states(&self, before: Self, meta: &RevMeta, states: Vec<u8>) {
             let (actual_states, entry) = self.get();
             let actual_states: Vec<u8> = actual_states.cloned().collect();
             assert_eq!(
@@ -907,7 +907,7 @@ mod test {
         }
         fn test_drain_future(
             &self,
-            expected_future: impl IntoIterator<Item = ([u8; 2], usize)>,
+            expected_future: impl IntoIterator<Item = (Vec<u8>, usize)>,
             expected_entries_len: usize,
             expected_states_len: usize,
         ) -> Self {
@@ -950,34 +950,42 @@ mod test {
     fn push_and_log_traversal() {
         for strategy in ShortenStrategy::VARIANTS {
             let meta = &mut RevMeta::new(NonZeroUsize::new(3), 0, false);
-            let mut log = StatesLog::try_new([0, 0], meta.present_world_state()).unwrap();
+            let mut log = StatesLog::try_new(vec![0; 5], meta.present_world_state()).unwrap();
 
-            log.test_forward(meta, strategy, [1, 1], true, 1, 4, None);
-            log.test_forward(meta, strategy, [2, 2], true, 2, 6, None);
+            log.test_forward(meta, strategy, vec![1; 1], true, 1, 6, None);
+            log.test_forward(meta, strategy, vec![2; 2], true, 2, 8, None);
             // shortened log
-            log.test_forward(meta, strategy, [3, 3], true, 2, 6, Some(([0, 0], 0)));
+            log.test_forward(
+                meta,
+                strategy,
+                vec![3; 3],
+                true,
+                2,
+                6,
+                Some((vec![0; 5], 0)),
+            );
 
-            log.test_backward_log(meta, [2, 2], false);
-            log.test_backward_log(meta, [1, 1], false);
+            log.test_backward_log(meta, vec![2; 2], false);
+            log.test_backward_log(meta, vec![1; 1], false);
             // out of log, no mutations happend to both meta and log here
-            log.test_backward_log(meta, [1, 1], true);
+            log.test_backward_log(meta, vec![1; 1], true);
 
-            log.test_forward_log(meta, [2, 2], false);
-            log.test_forward_log(meta, [3, 3], false);
+            log.test_forward_log(meta, vec![2; 2], false);
+            log.test_forward_log(meta, vec![3; 3], false);
             // out of log, no mutations happend to both meta and log here
-            log.test_forward_log(meta, [3, 3], true);
+            log.test_forward_log(meta, vec![3; 3], true);
 
-            log.test_backward_log(meta, [2, 2], false);
-            log.test_backward_log(meta, [1, 1], false);
+            log.test_backward_log(meta, vec![2; 2], false);
+            log.test_backward_log(meta, vec![1; 1], false);
 
-            let clone = log.test_drain_future([([2, 2], 2), ([3, 3], 3)], 0, 2);
+            let clone = log.test_drain_future([(vec![2; 2], 2), (vec![3; 3], 3)], 0, 1);
 
             for mut log in [log, clone] {
                 // all entries are truncated as they are in the future
-                log.test_forward(meta, strategy, [4, 4], true, 1, 4, None);
+                log.test_forward(meta, strategy, vec![4; 4], true, 1, 5, None);
 
                 // storing too many states fails
-                log.test_forward(meta, strategy, [4, 4], false, 1, 4, None);
+                log.test_forward(meta, strategy, vec![4; 4], false, 1, 5, None);
             }
         }
     }

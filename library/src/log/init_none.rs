@@ -4,7 +4,7 @@ use super::{OutOfLog, StateLog};
 
 #[derive(Debug, Clone, Reflect)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct InitiallyNoneStateLog<T>(Inner<StateLog<T>>);
+pub struct InitNoneLog<T>(Inner<StateLog<T>>);
 
 #[derive(Debug, Clone, Reflect)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -15,15 +15,13 @@ pub(super) enum Inner<T> {
 
 #[cfg(feature = "serde")]
 mod serde_with {
-    use std::convert::Infallible;
-
     use serde::{Deserialize, Serialize};
 
     use crate::log::serde_with::{LoglessState, LoglessWithCapacity, WithCapacity};
 
-    use super::{InitiallyNoneStateLog, Inner, StateLog};
+    use super::{InitNoneLog, Inner, StateLog};
 
-    impl<T> LoglessState for InitiallyNoneStateLog<T>
+    impl<T> LoglessState for InitNoneLog<T>
     where
         T: Serialize + for<'de> Deserialize<'de> + 'static,
     {
@@ -37,7 +35,7 @@ mod serde_with {
         }
     }
 
-    impl<T> WithCapacity for InitiallyNoneStateLog<T>
+    impl<T> WithCapacity for InitNoneLog<T>
     where
         T: Serialize + for<'de> Deserialize<'de> + 'static,
     {
@@ -69,7 +67,7 @@ mod serde_with {
         }
     }
 
-    impl<T> LoglessWithCapacity for InitiallyNoneStateLog<T>
+    impl<T> LoglessWithCapacity for InitNoneLog<T>
     where
         T: Serialize + for<'de> Deserialize<'de> + 'static,
     {
@@ -96,13 +94,13 @@ mod serde_with {
     }
 }
 
-impl<T> Default for InitiallyNoneStateLog<T> {
+impl<T> Default for InitNoneLog<T> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<T> From<T> for InitiallyNoneStateLog<T> {
+impl<T> From<T> for InitNoneLog<T> {
     fn from(present: T) -> Self {
         Self(Inner::Ran {
             log: present.into(),
@@ -111,7 +109,7 @@ impl<T> From<T> for InitiallyNoneStateLog<T> {
     }
 }
 
-impl<T> From<Option<T>> for InitiallyNoneStateLog<T> {
+impl<T> From<Option<T>> for InitNoneLog<T> {
     fn from(value: Option<T>) -> Self {
         match value {
             Some(present) => present.into(),
@@ -120,7 +118,7 @@ impl<T> From<Option<T>> for InitiallyNoneStateLog<T> {
     }
 }
 
-impl<T> InitiallyNoneStateLog<T> {
+impl<T> InitNoneLog<T> {
     pub const fn new() -> Self {
         Self::with_capacity(0)
     }

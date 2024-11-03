@@ -11,7 +11,7 @@ use bevy::{
         archetype::ArchetypeComponentId,
         component::{ComponentId, Tick},
         query::Access,
-        schedule::{InternedSystemSet, IntoSystemConfigs, SystemConfigs, SystemSet},
+        schedule::{InternedSystemSet, IntoSystemConfigs, IntoSystemSetConfigs},
         system::{IntoSystem, ReadOnlySystem, System},
         world::{unsafe_world_cell::UnsafeWorldCell, DeferredWorld, World},
     },
@@ -19,44 +19,34 @@ use bevy::{
 };
 
 use crate::{
-    check_tick, commands::CommandsLog, error_per_flag, meta::CommandsLogReducings,
-    set_configs::RevSystemSetConfigs, BackwardCmdsSys, BackwardSys,
+    check_tick,
+    commands::CommandsLog,
+    error_per_flag,
+    meta::CommandsLogReducings,
+    schedule::{BwdArcCmdSet, BwdArcSet, FwdArcSet},
 };
 
-use super::{IntoRevSystemConfigs, RevSystemConfigs};
+use super::{IntoRevSystemConfigs, RevSystemConfigs, RevSystemSetConfigs};
 
 #[doc(hidden)]
 pub struct ReversibleSystem<Marker>(PhantomData<Marker>);
 
-#[derive(SystemSet, Copy, Clone, Debug, Hash, PartialEq, Eq)]
-struct ArcSystemFallbackSet(TypeId);
-
 impl<Marker, T> IntoRevSystemConfigs<ReversibleSystem<Marker>> for T
 where
-    T: IntoSystem<(), (), Marker>,
+    T: IntoSystem<(), (), Marker> + 'static,
 {
     fn into_rev_configs(self) -> RevSystemConfigs {
         let system = IntoSystem::into_system(self);
-
-        let mut sets: Vec<InternedSystemSet> = system
-            .default_system_sets()
-            .into_iter()
-            .filter(|set| set.system_type().is_none())
-            .collect();
-        let fallback_set = ArcSystemFallbackSet(system.type_id());
-        if sets.is_empty() {
-            sets.push(fallback_set.intern());
-        }
 
         let name = |string: &str| {
             let mut name = String::with_capacity(system.name().len() + string.len());
             name.extend([&system.name(), string]);
             name
         };
-        let fwd_sys_name = name(" (forward)");
-        let bwd_sys_name = name(" (backward)");
+        let fwd_sys_name = name(" (forward system)");
+        let bwd_sys_name = name(" (backward system)");
         let bwd_cmd_name = name(" (backward commands)");
-        let observer_name = name(" (observer)");
+        let observer_name = name(" (backward commands observer)");
 
         let shared = Arc::new(RwLock::new(Shared {
             system,
@@ -90,23 +80,25 @@ where
             commands_err: false,
         };
 
-        let forward = match sets.is_empty() {
-            true => forward_sys.in_set(fallback_set),
-            false => forward_sys.into_configs(),
-        };
-        let mut backward = config_in_sets(BackwardSys, &sets, backward_sys);
-        backward = (backward_cmd, backward).chain();
-        backward = config_in_sets(BackwardCmdsSys, &sets, backward);
-        let set_configs = RevSystemSetConfigs::from_sets(sets).unwrap(); // sets not empty
+        let id = TypeId::of::<T::System>();
 
         // Note that System::has_deferred may return no correct value before initializing the system.
         // Because of this and that initializing the system here might be surprising for the user
         // the CommandsBackward system is always added. it becomes noop if the system ends up having no
         // deferred buffers. CommandsBackward::has_deferred returns the value of the actual system.
         RevSystemConfigs {
-            forward,
-            backward,
-            set_configs,
+            systems: (
+                forward_sys.in_set(FwdArcSet(id)),
+                (backward_cmd, backward_sys.in_set(BwdArcSet(id)))
+                    .chain()
+                    .in_set(BwdArcCmdSet(id)),
+            )
+                .into_configs(),
+            sets: RevSystemSetConfigs {
+                fwd_arc_sets: FwdArcSet(id).into_configs(),
+                bwd_cmd_arc_sets: BwdArcCmdSet(id).into_configs(),
+                bwd_arc_sets: BwdArcSet(id).into_configs(),
+            },
         }
     }
 }
@@ -122,9 +114,11 @@ struct ArcSystem<T> {
     shared: Arc<RwLock<Shared<T>>>,
     name: String,
     tick: Tick,
+
+    /// If this is `Some`, this system is in [`crate::schedule::ForwardSet`].
     commands_forward_err: Option<bool>,
 
-    // these need to be cloned because one cannot return &'a Access from RwLockReadGuard<'a, Access>
+    // these need to be cloned because one cannot return &'a Access from owned RwLockReadGuard<'a, Access>
     component_access: Access<ComponentId>,
     archetype_component_access: Access<ArchetypeComponentId>,
 }
@@ -316,9 +310,11 @@ impl<T: System> System for CommandsBackward<T> {
         self.tick = last_run;
     }
     fn default_system_sets(&self) -> Vec<InternedSystemSet> {
-        #[derive(SystemSet, Copy, Clone, Debug, Hash, PartialEq, Eq)]
-        struct Set(TypeId);
-        vec![Set(TypeId::of::<Self>()).intern()]
+        self.shared
+            .try_read()
+            .unwrap_or_else(expect_shared(&self.name))
+            .system
+            .default_system_sets()
     }
     fn initialize(&mut self, world: &mut World) {
         initialize_arc_system(&mut self.shared, &mut self.tick, &self.name, world);
@@ -367,16 +363,4 @@ fn expect_shared<T: Debug, Out>(name: &String) -> impl FnOnce(T) -> Out + '_ {
     move |err| {
         panic!("Could not access reversible system {name} because of {err:?}. This is a crate bug.")
     }
-}
-
-fn config_in_sets<Marker, Set: SystemSet>(
-    map: impl Fn(InternedSystemSet) -> Set,
-    sets: &Vec<InternedSystemSet>,
-    config: impl IntoSystemConfigs<Marker>,
-) -> SystemConfigs {
-    let mut configs = config.into_configs();
-    for set in sets {
-        configs = configs.in_set(map(*set));
-    }
-    configs
 }
