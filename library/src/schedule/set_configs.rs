@@ -1,24 +1,24 @@
 use bevy::{
-    ecs::schedule::{InternedSystemSet, SystemSetConfigs},
+    ecs::schedule::SystemSetConfigs,
     prelude::{Condition, IntoSystemSet, IntoSystemSetConfigs, SystemSet},
     utils::all_tuples,
 };
 use condition::forward_backward_conditions;
 
-use crate::{BackwardCmdsSys, BackwardSys};
+use super::{BwdArcCmdSet, BwdArcSet, BwdNonSys, FwdArcSet, FwdNonSys};
 
 mod condition;
 
 pub struct RevSystemSetConfigs {
-    /// Configuration(s) of sets or systems in the forward schedule.
-    pub(crate) forward_sys: SystemSetConfigs,
-
-    /// Configuration(s) of CommandsBackward in the backward schedule
-    /// paired with systems configured with [`Self::backward_sys`].
-    pub(crate) backward_cmds_sys: SystemSetConfigs,
-
-    /// Configuration(s) of sets or systems in the backward schedule.
-    pub(crate) backward_sys: SystemSetConfigs,
+    /// Contains [`FwdArcSet`]s for each system for the [`super::ForwardSet`].
+    pub(crate) fwd_arc_sets: SystemSetConfigs,
+    /// Contains [`BwdArcCmdSet`]s that contain `(bwd_cmd, bwd_arc).chain()` for each system for the
+    /// [`super::BackwardSet`]. Because that already enforces the syncpoint between each pair members,
+    /// these cofigs can always be configured with ignored_deferred. If these forced sync-points are
+    /// to be ignored, leave this configs untouched and configure [`Self::bwd_arc_sets`] instead.
+    pub(crate) bwd_cmd_arc_sets: SystemSetConfigs,
+    /// Contains [`BwdArcSet`]s which are subsets of [`BwdArcCmdSet`] with only each `bwd_arc`.
+    pub(crate) bwd_arc_sets: SystemSetConfigs,
 }
 
 pub trait IntoRevSystemSetConfigs<Marker>: Sized {
@@ -28,46 +28,46 @@ pub trait IntoRevSystemSetConfigs<Marker>: Sized {
         let set = set.intern();
         let configs = self.into_rev_configs();
         RevSystemSetConfigs {
-            forward_sys: configs.forward_sys.in_set(set),
-            backward_cmds_sys: configs.backward_cmds_sys.in_set(BackwardCmdsSys(set)),
-            backward_sys: configs.backward_sys.in_set(BackwardSys(set)),
+            fwd_arc_sets: configs.fwd_arc_sets.in_set(FwdNonSys(set)),
+            bwd_cmd_arc_sets: configs.bwd_cmd_arc_sets.in_set(BwdNonSys(set)),
+            bwd_arc_sets: configs.bwd_arc_sets, // already subsets of bwd_cmd_arc_set
         }
     }
     fn rev_before<M>(self, set: impl IntoSystemSet<M>) -> RevSystemSetConfigs {
-        let set = set.into_system_set().intern();
         let configs = self.into_rev_configs();
+        let set = set.into_system_set().intern();
         // example for a system A in self and a system B in set:
         //
         // A forward sys → maybe sync → B forward sys
         //
         // B backward cmds → maybe sync → B backward sys → A backward cmds → maybe sync → A backward sys
         RevSystemSetConfigs {
-            forward_sys: configs.forward_sys.before(set),
-            backward_cmds_sys: configs
-                .backward_cmds_sys
-                .after_ignore_deferred(BackwardCmdsSys(set)),
-            backward_sys: configs.backward_sys,
+            fwd_arc_sets: configs.fwd_arc_sets.before(FwdArcSet::from_set(set)),
+            bwd_cmd_arc_sets: configs
+                .bwd_cmd_arc_sets
+                .after_ignore_deferred(BwdArcCmdSet::from_set(set)),
+            bwd_arc_sets: configs.bwd_arc_sets,
         }
     }
     fn rev_after<M>(self, set: impl IntoSystemSet<M>) -> RevSystemSetConfigs {
-        let set = set.into_system_set().intern();
         let configs = self.into_rev_configs();
+        let set = set.into_system_set().intern();
         // example for a system A in self and a system B in set:
         //
         // B forward sys → maybe sync → A forward sys
         //
         // A backward cmds → maybe sync → A backward sys → B backward cmds → maybe sync → B backward sys
         RevSystemSetConfigs {
-            forward_sys: configs.forward_sys.after(set),
-            backward_cmds_sys: configs
-                .backward_cmds_sys
-                .before_ignore_deferred(BackwardCmdsSys(set)),
-            backward_sys: configs.backward_sys,
+            fwd_arc_sets: configs.fwd_arc_sets.after(FwdArcSet::from_set(set)),
+            bwd_cmd_arc_sets: configs
+                .bwd_cmd_arc_sets
+                .before_ignore_deferred(BwdArcCmdSet::from_set(set)),
+            bwd_arc_sets: configs.bwd_arc_sets,
         }
     }
     fn rev_before_ignore_deferred<M>(self, set: impl IntoSystemSet<M>) -> RevSystemSetConfigs {
-        let set = set.into_system_set().intern();
         let configs = self.into_rev_configs();
+        let set = set.into_system_set().intern();
         // example for a system A in self and a system B in set:
         //
         // A forward sys → B forward sys
@@ -75,14 +75,18 @@ pub trait IntoRevSystemSetConfigs<Marker>: Sized {
         // B backward cmds → maybe sync → B backward sys ┐
         //                  A backward cmds → maybe sync ┴→ A backward sys
         RevSystemSetConfigs {
-            forward_sys: configs.forward_sys.before_ignore_deferred(set),
-            backward_cmds_sys: configs.backward_cmds_sys,
-            backward_sys: configs.backward_sys.after_ignore_deferred(BackwardSys(set)),
+            fwd_arc_sets: configs
+                .fwd_arc_sets
+                .before_ignore_deferred(FwdArcSet::from_set(set)),
+            bwd_cmd_arc_sets: configs.bwd_cmd_arc_sets,
+            bwd_arc_sets: configs
+                .bwd_arc_sets
+                .after_ignore_deferred(BwdArcSet::from_set(set)),
         }
     }
     fn rev_after_ignore_deferred<M>(self, set: impl IntoSystemSet<M>) -> RevSystemSetConfigs {
-        let set = set.into_system_set().intern();
         let configs = self.into_rev_configs();
+        let set = set.into_system_set().intern();
         // example for a system A in self and a system B in set:
         //
         // B forward sys → A forward sys
@@ -90,98 +94,87 @@ pub trait IntoRevSystemSetConfigs<Marker>: Sized {
         // A backward cmds → maybe sync → A backward sys ┐
         //                  B backward cmds → maybe sync ┴→ B backward sys
         RevSystemSetConfigs {
-            forward_sys: configs.forward_sys.after_ignore_deferred(set),
-            backward_cmds_sys: configs.backward_cmds_sys,
-            backward_sys: configs
-                .backward_sys
-                .before_ignore_deferred(BackwardSys(set)),
+            fwd_arc_sets: configs
+                .fwd_arc_sets
+                .after_ignore_deferred(FwdArcSet::from_set(set)),
+            bwd_cmd_arc_sets: configs.bwd_cmd_arc_sets,
+            bwd_arc_sets: configs
+                .bwd_arc_sets
+                .before_ignore_deferred(BwdArcSet::from_set(set)),
         }
     }
     fn rev_run_if<M>(self, condition: impl Condition<M>) -> RevSystemSetConfigs {
-        let (forward_condition, backward_condition) = forward_backward_conditions(condition);
         let configs = self.into_rev_configs();
+        let (forward_condition, backward_condition) = forward_backward_conditions(condition);
         RevSystemSetConfigs {
-            forward_sys: configs.forward_sys.run_if(forward_condition),
-            backward_cmds_sys: configs.backward_cmds_sys.run_if(backward_condition),
-            backward_sys: configs.backward_sys,
+            fwd_arc_sets: configs.fwd_arc_sets.run_if(forward_condition),
+            bwd_cmd_arc_sets: configs.bwd_cmd_arc_sets.run_if(backward_condition),
+            bwd_arc_sets: configs.bwd_arc_sets, // needs none as a subset of bwd_cmd_arc_set
         }
     }
     fn rev_ambiguous_with<M>(self, set: impl IntoSystemSet<M>) -> RevSystemSetConfigs {
-        let set = set.into_system_set().intern();
         let configs = self.into_rev_configs();
+        let set = set.into_system_set().intern();
         RevSystemSetConfigs {
-            forward_sys: configs.forward_sys.ambiguous_with(set),
-            backward_cmds_sys: configs.backward_cmds_sys, // commands backward systems have no accesses that could be ambigious
-            backward_sys: configs.backward_sys.ambiguous_with(BackwardSys(set)),
+            fwd_arc_sets: configs
+                .fwd_arc_sets
+                .ambiguous_with(FwdArcSet::from_set(set)),
+            bwd_cmd_arc_sets: configs.bwd_cmd_arc_sets, // bwd_cmd have no accesses that could be ambigious
+            bwd_arc_sets: configs
+                .bwd_arc_sets
+                .ambiguous_with(BwdArcSet::from_set(set)),
         }
     }
     fn rev_ambiguous_with_all(self) -> RevSystemSetConfigs {
         let configs = self.into_rev_configs();
         RevSystemSetConfigs {
-            forward_sys: configs.forward_sys.ambiguous_with_all(),
-            backward_cmds_sys: configs.backward_cmds_sys, // commands backward systems have no accesses that could be ambigious
-            backward_sys: configs.backward_sys.ambiguous_with_all(),
+            fwd_arc_sets: configs.fwd_arc_sets.ambiguous_with_all(),
+            bwd_cmd_arc_sets: configs.bwd_cmd_arc_sets, // bwd_cmd have no accesses that could be ambigious
+            bwd_arc_sets: configs.bwd_arc_sets.ambiguous_with_all(),
         }
     }
     fn rev_chain(self) -> RevSystemSetConfigs {
         let configs = self.into_rev_configs();
         // todo: uncomment when https://github.com/bevyengine/bevy/pull/13919 is landed
         RevSystemSetConfigs {
-            forward_sys: configs.forward_sys.chain(),
-            backward_cmds_sys: configs.backward_cmds_sys.chain/*_ignore_deferred*/(),
-            backward_sys: configs.backward_sys,
+            fwd_arc_sets: configs.fwd_arc_sets.chain(),
+            bwd_cmd_arc_sets: configs.bwd_cmd_arc_sets.chain/*_ignore_deferred*/(), // each cmd and sys pair are chained without ignore_deferred
+            bwd_arc_sets: configs.bwd_arc_sets,
         }
     }
     fn rev_chain_ignore_deferred(self) -> RevSystemSetConfigs {
         let configs = self.into_rev_configs();
         // todo: uncomment when https://github.com/bevyengine/bevy/pull/13919 landed
         RevSystemSetConfigs {
-            forward_sys: configs.forward_sys.chain/*_ignore_deferred*/(),
-            backward_cmds_sys: configs.backward_cmds_sys,
-            backward_sys: configs.backward_sys.chain/*_ignore_deferred*/(),
+            fwd_arc_sets: configs.fwd_arc_sets.chain/*_ignore_deferred*/(),
+            bwd_cmd_arc_sets: configs.bwd_cmd_arc_sets,
+            bwd_arc_sets: configs.bwd_arc_sets.chain/*_ignore_deferred*/(),
         }
     }
 }
 
 impl RevSystemSetConfigs {
-    pub(crate) fn from_sets(sets: Vec<InternedSystemSet>) -> Option<Self> {
-        let mut iter = sets.into_iter();
-        let set = iter.next()?;
-        let mut forward_sys = set.into_configs();
-        let mut backward_cmds_sys = BackwardCmdsSys(set).into_configs();
-        let mut backward_sys = BackwardSys(set).into_configs();
-        for set in iter {
-            forward_sys = (forward_sys, set).into_configs();
-            backward_cmds_sys = (backward_cmds_sys, BackwardCmdsSys(set)).into_configs();
-            backward_sys = (backward_sys, BackwardSys(set)).into_configs();
-        }
-        Some(Self {
-            forward_sys,
-            backward_cmds_sys,
-            backward_sys,
-        })
-    }
     /// Split configs to be more readable in impl_into_rev_set_configs! and as partially movable as nested tuples.
     fn split(self) -> (ForwardSetConfig, BackwardSetConfigs) {
         (
             ForwardSetConfig {
-                forward_sys: self.forward_sys,
+                fwd_arc_sets: self.fwd_arc_sets,
             },
             BackwardSetConfigs {
-                backward_cmds_sys: self.backward_cmds_sys,
-                backward_sys: self.backward_sys,
+                bwd_cmd_arc_sets: self.bwd_cmd_arc_sets,
+                bwd_arc_sets: self.bwd_arc_sets,
             },
         )
     }
 }
 
 struct ForwardSetConfig {
-    forward_sys: SystemSetConfigs,
+    fwd_arc_sets: SystemSetConfigs,
 }
 
 struct BackwardSetConfigs {
-    backward_cmds_sys: SystemSetConfigs,
-    backward_sys: SystemSetConfigs,
+    bwd_cmd_arc_sets: SystemSetConfigs,
+    bwd_arc_sets: SystemSetConfigs,
 }
 
 impl IntoRevSystemSetConfigs<()> for RevSystemSetConfigs {
@@ -194,9 +187,9 @@ impl<S: SystemSet> IntoRevSystemSetConfigs<()> for S {
     fn into_rev_configs(self) -> RevSystemSetConfigs {
         let set = self.intern();
         RevSystemSetConfigs {
-            forward_sys: set.into_configs(),
-            backward_cmds_sys: BackwardCmdsSys(set).into_configs(),
-            backward_sys: BackwardSys(set).into_configs(),
+            fwd_arc_sets: FwdArcSet::from_set(set).into_configs(),
+            bwd_cmd_arc_sets: BwdArcCmdSet::from_set(set).into_configs(),
+            bwd_arc_sets: BwdArcSet::from_set(set).into_configs(),
         }
     }
 }
@@ -218,7 +211,7 @@ macro_rules! impl_into_rev_set_configs {
                 //  = (var0.into_rev_configs().split(), ..., var9.into_rev_configs().split());
                 let ($($var,)*) = ($($var.into_rev_configs().split(),)*);
 
-                let forward_sys = ($($var.0.forward_sys,)*).into_configs();
+                let fwd_arc_sets = ($($var.0.fwd_arc_sets,)*).into_configs();
 
                 // let [var0, ..., var9]
                 //  : [BackwardSetConfigs, ..., BackwardSetConfigs]
@@ -227,14 +220,14 @@ macro_rules! impl_into_rev_set_configs {
                 arr.reverse();
                 let [$($var,)*] = arr;
 
-                let backward_cmds_sys = ($($var.backward_cmds_sys,)*).into_configs();
+                let bwd_cmd_arc_sets = ($($var.bwd_cmd_arc_sets,)*).into_configs();
 
-                let backward_sys = ($($var.backward_sys,)*).into_configs();
+                let bwd_arc_sets = ($($var.bwd_arc_sets,)*).into_configs();
 
                 RevSystemSetConfigs {
-                    forward_sys,
-                    backward_cmds_sys,
-                    backward_sys,
+                    fwd_arc_sets,
+                    bwd_cmd_arc_sets,
+                    bwd_arc_sets,
                 }
             }
         }

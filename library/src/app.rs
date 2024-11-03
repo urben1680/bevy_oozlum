@@ -3,10 +3,7 @@ use bevy::{
     ecs::schedule::{ScheduleLabel, Schedules},
 };
 
-pub use crate::{
-    schedule::RevSchedule, set_configs::IntoRevSystemSetConfigs,
-    system_configs::IntoRevSystemConfigs,
-};
+pub use crate::schedule::{IntoRevSystemConfigs, IntoRevSystemSetConfigs, RevSchedule};
 
 pub trait RevApp {
     fn rev_add_systems<Marker>(

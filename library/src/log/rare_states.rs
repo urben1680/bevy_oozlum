@@ -760,12 +760,12 @@ mod test {
             meta: &mut RevMeta,
             strategy: ShortenStrategy,
             max_past_len: usize, // control when the by-len strategies trigger pop/drain to align to the by-logged-at strategies
-            states: [u8; 2],
+            states: Vec<u8>,
             entry: usize,
             push: Push,
             expected_entries_len: usize,
             expected_states_len: usize,
-            expected_popped: Option<([u8; 2], usize)>,
+            expected_popped: Option<(Vec<u8>, usize)>,
         ) {
             let before = self.clone();
             match push {
@@ -775,7 +775,7 @@ mod test {
                     let result = self
                         .try_push_present(|mut log| {
                             if matches!(push, Push::States) {
-                                log.extend(states);
+                                log.extend(states.clone());
                             }
                             RevFrame::new(entry)
                         })
@@ -876,7 +876,7 @@ mod test {
         fn test_forward_log(
             &mut self,
             meta: &mut RevMeta,
-            expected_states: [u8; 2],
+            expected_states: Vec<u8>,
             expected_entry: usize,
             expected_result: Result<bool, OutOfLog>,
         ) {
@@ -896,7 +896,7 @@ mod test {
         fn test_backward_log(
             &mut self,
             meta: &mut RevMeta,
-            expected_states: [u8; 2],
+            expected_states: Vec<u8>,
             expected_entry: usize,
             expected_result: Result<bool, OutOfLog>,
         ) {
@@ -917,7 +917,7 @@ mod test {
             &self,
             before: Self,
             meta: &RevMeta,
-            expected_states: [u8; 2],
+            expected_states: Vec<u8>,
             expected_entry: usize,
         ) {
             let (actual_states, entry) = self.get();
@@ -934,7 +934,7 @@ mod test {
         }
         fn test_drain_future(
             &self,
-            expected_future: impl IntoIterator<Item = ([u8; 2], usize)>,
+            expected_future: impl IntoIterator<Item = (Vec<u8>, usize)>,
             expected_entries_len: usize,
             expected_states_len: usize,
         ) -> Self {
@@ -977,55 +977,55 @@ mod test {
     fn push_and_log_traversal() {
         for strategy in ShortenStrategy::VARIANTS {
             let meta = &mut RevMeta::new(NonZeroUsize::new(3), 0, false);
-            let mut log = RareStatesLog::try_new([0, 0], meta.present_world_state()).unwrap();
+            let mut log = RareStatesLog::try_new(vec![0; 0], meta.present_world_state()).unwrap();
 
-            log.test_forward(meta, strategy, 0, [0, 0], 0, Push::Empty, 0, 2, None);
-            log.test_forward(meta, strategy, 1, [2, 2], 2, Push::States, 1, 4, None);
+            log.test_forward(meta, strategy, 0, vec![0; 0], 0, Push::Empty, 0, 0, None);
+            log.test_forward(meta, strategy, 1, vec![2; 2], 2, Push::States, 1, 2, None);
             // does not pop yet because the skip after the initial state is still in log range
-            log.test_forward(meta, strategy, 2, [3, 3], 3, Push::States, 2, 6, None);
+            log.test_forward(meta, strategy, 2, vec![3; 3], 3, Push::States, 2, 5, None);
             // does not pop yet because while the skip after the initial state is no longer in log range,
             // multiple uses of `push_present` by the user at the same frame makes the skips as frame offset
             // an unreliable indicator to pop here
-            log.test_forward(meta, strategy, 3, [3, 3], 3, Push::Empty, 2, 6, None);
+            log.test_forward(meta, strategy, 3, vec![3; 3], 3, Push::Empty, 2, 5, None);
             // pops oldest entry as the second-oldest entry is also out of log now
             log.test_forward(
                 meta,
                 strategy,
                 3,
-                [5, 5],
+                vec![5; 5],
                 5,
                 Push::States,
                 2,
-                6,
-                Some(([0, 0], 0)),
+                10,
+                Some((vec![0; 0], 0)),
             );
 
             meta.set_oldest_frame(1); // make log start accessible again to test out-of-log
 
-            log.test_backward_log(meta, [3, 3], 3, Ok(true));
-            log.test_backward_log(meta, [3, 3], 3, Ok(false));
-            log.test_backward_log(meta, [2, 2], 2, Ok(true));
+            log.test_backward_log(meta, vec![3; 3], 3, Ok(true));
+            log.test_backward_log(meta, vec![3; 3], 3, Ok(false));
+            log.test_backward_log(meta, vec![2; 2], 2, Ok(true));
             // out of log, no mutations happend to both meta and log here
-            log.test_backward_log(meta, [2, 2], 2, Err(OutOfLog));
+            log.test_backward_log(meta, vec![2; 2], 2, Err(OutOfLog));
 
-            log.test_forward_log(meta, [3, 3], 3, Ok(true));
-            log.test_forward_log(meta, [3, 3], 3, Ok(false));
-            log.test_forward_log(meta, [5, 5], 5, Ok(true));
+            log.test_forward_log(meta, vec![3; 3], 3, Ok(true));
+            log.test_forward_log(meta, vec![3; 3], 3, Ok(false));
+            log.test_forward_log(meta, vec![5; 5], 5, Ok(true));
             // out of log, no mutations happend to both meta and log here
-            log.test_forward_log(meta, [5, 5], 5, Err(OutOfLog));
+            log.test_forward_log(meta, vec![5; 5], 5, Err(OutOfLog));
 
-            log.test_backward_log(meta, [3, 3], 3, Ok(true));
-            log.test_backward_log(meta, [3, 3], 3, Ok(false));
-            log.test_backward_log(meta, [2, 2], 2, Ok(true));
+            log.test_backward_log(meta, vec![3; 3], 3, Ok(true));
+            log.test_backward_log(meta, vec![3; 3], 3, Ok(false));
+            log.test_backward_log(meta, vec![2; 2], 2, Ok(true));
 
-            let log_clone = log.test_drain_future([([3, 3], 3), ([5, 5], 5)], 0, 2);
+            let log_clone = log.test_drain_future([(vec![3; 3], 3), (vec![5; 5], 5)], 0, 2);
 
             for mut log in [log, log_clone] {
                 // all entries are truncated as they are in the future
-                log.test_forward(meta, strategy, 3, [4, 4], 3, Push::States, 1, 4, None);
+                log.test_forward(meta, strategy, 3, vec![4; 4], 3, Push::States, 1, 6, None);
 
                 // storing too many states fails
-                log.test_forward(meta, strategy, 3, [4, 4], 3, Push::TooMany, 1, 4, None);
+                log.test_forward(meta, strategy, 3, vec![4; 4], 3, Push::TooMany, 1, 6, None);
             }
         }
     }

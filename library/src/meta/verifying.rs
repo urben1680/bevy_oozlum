@@ -11,7 +11,7 @@ use bevy::{
 };
 
 use crate::{
-    log::{InitiallyNoneStateLog, OutOfLog, PackedRevFrame},
+    log::{InitNoneLog, OutOfLog, PackedRevFrame},
     RevFrame,
 };
 
@@ -56,13 +56,13 @@ impl VerifyingRevMeta<'_, '_> {
 
 #[derive(Clone, Copy, Debug)]
 pub struct VerifyError<'s> {
-    pub frame_log_at_err: &'s InitiallyNoneStateLog<PackedRevFrame>,
+    pub frame_log_at_err: &'s InitNoneLog<PackedRevFrame>,
     pub meta_at_err: &'s RevMeta,
 }
 
 pub struct VerifyingRevMetaState {
     meta: ComponentId,
-    frame_log: InitiallyNoneStateLog<PackedRevFrame>,
+    frame_log: InitNoneLog<PackedRevFrame>,
     meta_at_err: Option<RevMeta>,
 }
 

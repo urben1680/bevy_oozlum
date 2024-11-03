@@ -407,101 +407,98 @@ mod test {
             &mut self,
             meta: &mut RevMeta,
             strategy: ShortenStrategy,
-            push: Result<[u8; 2], [u8; 256]>,
+            push: Vec<u8>,
             expected_entries_len: usize,
             expected_transitions_len: usize,
-            expected_popped: Option<([u8; 2], usize)>,
+            expected_popped: Option<(Vec<u8>, usize)>,
         ) {
             let before = self.clone();
-            match push {
-                Ok(push) => {
-                    meta.queue_forward();
-                    meta.update(|_, _| {});
-                    let result = self.try_push_present(|mut log| {
-                        log.extend(push.clone());
-                        meta.present_world_state()
-                    });
-                    let is_ok = result.is_ok();
-                    drop(result);
-                    let after_push = self.clone();
-                    assert!(
-                        is_ok,
-                        "\nstrategy: {strategy:?}\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
-                    );
-                    let (actual_states, actual_entry) =
-                        shorten_strategy!(self, meta, strategy, meta.past_world_states());
-                    let (expected_states, expected_entry) = expected_popped.unzip();
+            if push.len() < u8::MAX as usize {
+                meta.queue_forward();
+                meta.update(|_, _| {});
+                let result = self.try_push_present(|mut log| {
+                    log.extend(push.clone());
+                    meta.present_world_state()
+                });
+                let is_ok = result.is_ok();
+                drop(result);
+                let after_push = self.clone();
+                assert!(
+                    is_ok,
+                    "\nstrategy: {strategy:?}\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
+                );
+                let (actual_states, actual_entry) =
+                    shorten_strategy!(self, meta, strategy, meta.past_world_states());
+                let (expected_states, expected_entry) = expected_popped.unzip();
+                assert_eq!(
+                    actual_states.unwrap_or_default(),
+                    expected_states.map(|popped| Vec::from_iter(popped)).unwrap_or_default(),
+                    "\nstrategy: {strategy:?}\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
+                );
+                if matches!(
+                    strategy,
+                    ShortenStrategy::PopPastByLen | ShortenStrategy::PopPastByLoggedAt
+                ) {
                     assert_eq!(
-                        actual_states.unwrap_or_default(),
-                        expected_states.map(|popped| Vec::from_iter(popped)).unwrap_or_default(),
-                        "\nstrategy: {strategy:?}\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
-                    );
-                    if matches!(
-                        strategy,
-                        ShortenStrategy::PopPastByLen | ShortenStrategy::PopPastByLoggedAt
-                    ) {
-                        assert_eq!(
-                            actual_entry, expected_entry,
-                            "\nstrategy: {strategy:?}\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
-                        );
-                    }
-                    assert_eq!(
-                        self.entries_len(),
-                        expected_entries_len,
-                        "\nstrategy: {strategy:?}\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
-                    );
-                    assert_eq!(
-                        self.transitions_len(),
-                        expected_transitions_len,
+                        actual_entry, expected_entry,
                         "\nstrategy: {strategy:?}\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
                     );
                 }
-                Err(push) => {
-                    let result = self.try_push_present(|mut log| {
-                        log.extend(push.clone());
-                        meta.present_world_state().wrapping_add(1)
-                    });
-                    let result = result.map_err(
-                        |AmountErr {
-                             values,
-                             entry,
-                             pushed_amount,
-                             _error: error,
-                         }| AmountErr::<Vec<u8>, Self> {
-                            values: Vec::from_iter(values),
-                            entry,
-                            pushed_amount,
-                            _error: error,
-                        },
-                    );
-                    match result {
-                        Ok(()) => {
-                            panic!("\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}")
-                        }
-                        Err(AmountErr {
-                            values,
-                            pushed_amount,
-                            ..
-                        }) => {
-                            assert_eq!(
-                                values, push,
-                                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
-                            );
-                            assert_eq!(
-                                pushed_amount, 256,
-                                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
-                            );
-                            assert_eq!(
-                                self.entries_len(),
-                                expected_entries_len,
-                                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
-                            );
-                            assert_eq!(
-                                self.transitions_len(),
-                                expected_transitions_len,
-                                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
-                            );
-                        }
+                assert_eq!(
+                    self.entries_len(),
+                    expected_entries_len,
+                    "\nstrategy: {strategy:?}\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
+                );
+                assert_eq!(
+                    self.transitions_len(),
+                    expected_transitions_len,
+                    "\nstrategy: {strategy:?}\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
+                );
+            } else {
+                let result = self.try_push_present(|mut log| {
+                    log.extend(push.clone());
+                    meta.present_world_state().wrapping_add(1)
+                });
+                let result = result.map_err(
+                    |AmountErr {
+                         values,
+                         entry,
+                         pushed_amount,
+                         _error: error,
+                     }| AmountErr::<Vec<u8>, Self> {
+                        values: Vec::from_iter(values),
+                        entry,
+                        pushed_amount,
+                        _error: error,
+                    },
+                );
+                match result {
+                    Ok(()) => {
+                        panic!("\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}")
+                    }
+                    Err(AmountErr {
+                        values,
+                        pushed_amount,
+                        ..
+                    }) => {
+                        assert_eq!(
+                            values, push,
+                            "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
+                        );
+                        assert_eq!(
+                            pushed_amount, 256,
+                            "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
+                        );
+                        assert_eq!(
+                            self.entries_len(),
+                            expected_entries_len,
+                            "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
+                        );
+                        assert_eq!(
+                            self.transitions_len(),
+                            expected_transitions_len,
+                            "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
+                        );
                     }
                 }
             }
@@ -509,7 +506,7 @@ mod test {
         fn test_forward_log(
             &mut self,
             meta: &mut RevMeta,
-            expected_transitions: Result<[u8; 2], OutOfLog>,
+            expected_transitions: Result<Vec<u8>, OutOfLog>,
         ) {
             let before = self.clone();
             let expected_transitions = expected_transitions.map(|transitions| {
@@ -535,7 +532,7 @@ mod test {
         fn test_backward_log(
             &mut self,
             meta: &mut RevMeta,
-            expected_transitions: Result<[u8; 2], OutOfLog>,
+            expected_transitions: Result<Vec<u8>, OutOfLog>,
         ) {
             let before = self.clone();
             let expected_transitions = expected_transitions.map(|transitions| {
@@ -560,7 +557,7 @@ mod test {
         }
         fn test_drain_future(
             &self,
-            expected_future: impl IntoIterator<Item = ([u8; 2], usize)>,
+            expected_future: impl IntoIterator<Item = (Vec<u8>, usize)>,
             expected_entries_len: usize,
             expected_transitions_len: usize,
         ) -> Self {
@@ -605,32 +602,32 @@ mod test {
             let meta = &mut RevMeta::new(NonZeroUsize::new(3), 0, false);
             let mut log = TransitionsLog::new();
 
-            log.test_forward(meta, strategy, Ok([1, 1]), 1, 2, None);
-            log.test_forward(meta, strategy, Ok([2, 2]), 2, 4, None);
+            log.test_forward(meta, strategy, vec![1; 1], 1, 1, None);
+            log.test_forward(meta, strategy, vec![2; 2], 2, 3, None);
             // shortened log
-            log.test_forward(meta, strategy, Ok([3, 3]), 2, 4, Some(([1, 1], 1)));
+            log.test_forward(meta, strategy, vec![3; 3], 2, 5, Some((vec![1; 1], 1)));
 
-            log.test_backward_log(meta, Ok([3, 3]));
-            log.test_backward_log(meta, Ok([2, 2]));
+            log.test_backward_log(meta, Ok(vec![3; 3]));
+            log.test_backward_log(meta, Ok(vec![2; 2]));
             // out of log, no mutations happend to both meta and log here
             log.test_backward_log(meta, Err(OutOfLog));
 
-            log.test_forward_log(meta, Ok([2, 2]));
-            log.test_forward_log(meta, Ok([3, 3]));
+            log.test_forward_log(meta, Ok(vec![2; 2]));
+            log.test_forward_log(meta, Ok(vec![3; 3]));
             // out of log, no mutations happend to both meta and log here
             log.test_forward_log(meta, Err(OutOfLog));
 
-            log.test_backward_log(meta, Ok([3, 3]));
-            log.test_backward_log(meta, Ok([2, 2]));
+            log.test_backward_log(meta, Ok(vec![3; 3]));
+            log.test_backward_log(meta, Ok(vec![2; 2]));
 
-            let clone = log.test_drain_future([([2, 2], 2), ([3, 3], 3)], 0, 0);
+            let clone = log.test_drain_future([(vec![2; 2], 2), (vec![3; 3], 3)], 0, 0);
 
             for mut log in [log, clone] {
                 // all entries are truncated as they are in the future
-                log.test_forward(meta, strategy, Ok([4, 4]), 1, 2, None);
+                log.test_forward(meta, strategy, vec![4; 4], 1, 4, None);
 
                 // storing too many transitions fails
-                log.test_forward(meta, strategy, Err([0; 256]), 1, 2, None);
+                log.test_forward(meta, strategy, vec![0; 256], 1, 4, None);
             }
         }
     }
