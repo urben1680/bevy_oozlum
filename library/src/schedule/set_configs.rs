@@ -5,7 +5,7 @@ use bevy::{
 };
 use condition::forward_backward_conditions;
 
-use super::{BwdArcCmdSet, BwdArcSet, BwdNonSys, FwdArcSet, FwdNonSys};
+use super::{BwdCmdArcSet, BwdArcSet, BwdNonSys, FwdArcSet, FwdNonSys};
 
 mod condition;
 
@@ -45,7 +45,7 @@ pub trait IntoRevSystemSetConfigs<Marker>: Sized {
             fwd_arc_sets: configs.fwd_arc_sets.before(FwdArcSet::from_set(set)),
             bwd_cmd_arc_sets: configs
                 .bwd_cmd_arc_sets
-                .after_ignore_deferred(BwdArcCmdSet::from_set(set)),
+                .after_ignore_deferred(BwdCmdArcSet::from_set(set)),
             bwd_arc_sets: configs.bwd_arc_sets,
         }
     }
@@ -61,7 +61,7 @@ pub trait IntoRevSystemSetConfigs<Marker>: Sized {
             fwd_arc_sets: configs.fwd_arc_sets.after(FwdArcSet::from_set(set)),
             bwd_cmd_arc_sets: configs
                 .bwd_cmd_arc_sets
-                .before_ignore_deferred(BwdArcCmdSet::from_set(set)),
+                .before_ignore_deferred(BwdCmdArcSet::from_set(set)),
             bwd_arc_sets: configs.bwd_arc_sets,
         }
     }
@@ -188,7 +188,7 @@ impl<S: SystemSet> IntoRevSystemSetConfigs<()> for S {
         let set = self.intern();
         RevSystemSetConfigs {
             fwd_arc_sets: FwdArcSet::from_set(set).into_configs(),
-            bwd_cmd_arc_sets: BwdArcCmdSet::from_set(set).into_configs(),
+            bwd_cmd_arc_sets: BwdCmdArcSet::from_set(set).into_configs(),
             bwd_arc_sets: BwdArcSet::from_set(set).into_configs(),
         }
     }
@@ -201,21 +201,21 @@ macro_rules! impl_into_rev_set_configs {
             $($T: IntoRevSystemSetConfigs<$M>,)*
         {
             fn into_rev_configs(self) -> RevSystemSetConfigs {
-                // let (var0, ..., var9)
+                // let (var0, ..., varN)
                 //  : (impl IntoRevSystemSetConfigs, ..., impl IntoRevSystemSetConfigs)
                 //  = self;
                 let ($($var,)*) = self;
 
-                // let (var0, ..., var9)
+                // let (var0, ..., varN)
                 //  : ((ForwardSetConfig, BackwardSetConfigs), ..., (ForwardSetConfig, BackwardSetConfigs))
-                //  = (var0.into_rev_configs().split(), ..., var9.into_rev_configs().split());
+                //  = (var0.into_rev_configs().split(), ..., varN.into_rev_configs().split());
                 let ($($var,)*) = ($($var.into_rev_configs().split(),)*);
 
                 let fwd_arc_sets = ($($var.0.fwd_arc_sets,)*).into_configs();
 
-                // let [var0, ..., var9]
+                // let [var0, ..., varN]
                 //  : [BackwardSetConfigs, ..., BackwardSetConfigs]
-                //  = [var9.1, ..., var0.1];
+                //  = [varN.1, ..., var0.1];
                 let mut arr = [$($var.1,)*];
                 arr.reverse();
                 let [$($var,)*] = arr;
