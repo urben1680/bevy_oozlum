@@ -13,18 +13,51 @@ mod system_configs;
 pub use set_configs::*;
 pub use system_configs::*;
 
+/// Contains a forward and a backward set that run depending on the current [`RevDirection`] in [`RevMeta`].
+#[derive(SystemSet, Copy, Clone, Debug, Hash, PartialEq, Eq)]
+pub struct RevSystemSet;
+
+/// Subset of [`RevSystemSet`].
+/// 
+/// Contains [`FwdArcSet`]s.
+#[derive(SystemSet, Copy, Clone, Debug, Hash, PartialEq, Eq)]
+struct ForwardSet;
+
+/// Subset of [`RevSystemSet`].
+/// 
+/// Contains [`BwdCmdArcSet`]s in reverse order.
+#[derive(SystemSet, Copy, Clone, Debug, Hash, PartialEq, Eq)]
+struct BackwardSet;
+
+/// Subsets of [`ForwardSet`].
+/// 
+/// Contains the system wrapped in `Arc`.
 #[derive(SystemSet, Copy, Clone, Debug, Hash, PartialEq, Eq)]
 struct FwdArcSet(TypeId);
 
-#[derive(SystemSet, Copy, Clone, Debug, Hash, PartialEq, Eq)]
-struct BwdArcCmdSet(TypeId);
-
-#[derive(SystemSet, Copy, Clone, Debug, Hash, PartialEq, Eq)]
-struct BwdArcSet(TypeId);
-
+/// Subsets of [`ForwardSet`].
+/// 
+/// Contains a non-system set.
 #[derive(SystemSet, Copy, Clone, Debug, Hash, PartialEq, Eq)]
 struct FwdNonSys(InternedSystemSet);
 
+/// Subsets of [`BackwardSet`].
+/// 
+/// Contains the [`BwdArcSet`] `sys_n` and a command log `cmd_n` in this configuration:
+/// 
+/// `(cmd_n, sys_n).chain()`
+#[derive(SystemSet, Copy, Clone, Debug, Hash, PartialEq, Eq)]
+struct BwdCmdArcSet(TypeId);
+
+/// Subsets of [`BackwardSet`].
+/// 
+/// Contains the system wrapped in `Arc`.
+#[derive(SystemSet, Copy, Clone, Debug, Hash, PartialEq, Eq)]
+struct BwdArcSet(TypeId);
+
+/// Subsets of [`BackwardSet`].
+/// 
+/// Contains a non-system set.
 #[derive(SystemSet, Copy, Clone, Debug, Hash, PartialEq, Eq)]
 struct BwdNonSys(InternedSystemSet);
 
@@ -38,7 +71,7 @@ impl FwdArcSet {
     }
 }
 
-impl BwdArcCmdSet {
+impl BwdCmdArcSet {
     fn from_set<Marker>(set: impl IntoSystemSet<Marker>) -> InternedSystemSet {
         let set = set.into_system_set().intern();
         match set.system_type() {
@@ -84,8 +117,12 @@ impl RevSchedule for Schedule {
                 matches!(meta.get_direction(), Some(RevDirection::BackwardLog))
             }
             self.configure_sets((
-                ForwardSet.run_if(if_forward),
-                BackwardSet.run_if(if_backward),
+                ForwardSet
+                    .in_set(RevSystemSet)
+                    .run_if(if_forward),
+                BackwardSet
+                    .in_set(RevSystemSet)
+                    .run_if(if_backward),
             ));
         }
         let RevSystemSetConfigs {
@@ -100,12 +137,6 @@ impl RevSchedule for Schedule {
         ))
     }
 }
-
-#[derive(SystemSet, Copy, Clone, Debug, Hash, PartialEq, Eq)]
-struct ForwardSet;
-
-#[derive(SystemSet, Copy, Clone, Debug, Hash, PartialEq, Eq)]
-struct BackwardSet;
 
 fn forward_backward_sets_unknown(schedule: &mut Schedule) -> bool {
     // ScheduleGraph::system_sets() does not return an `impl ExactSizeIterator` but it is one actually.
