@@ -23,7 +23,7 @@ use crate::{
     commands::CommandsLog,
     error_per_flag,
     meta::CommandsLogReducings,
-    schedule::{BwdArcCmdSet, BwdArcSet, FwdArcSet},
+    schedule::{BwdCmdArcSet, BwdArcSet, FwdArcSet},
 };
 
 use super::{IntoRevSystemConfigs, RevSystemConfigs, RevSystemSetConfigs};
@@ -91,12 +91,12 @@ where
                 forward_sys.in_set(FwdArcSet(id)),
                 (backward_cmd, backward_sys.in_set(BwdArcSet(id)))
                     .chain()
-                    .in_set(BwdArcCmdSet(id)),
+                    .in_set(BwdCmdArcSet(id)),
             )
                 .into_configs(),
             sets: RevSystemSetConfigs {
                 fwd_arc_sets: FwdArcSet(id).into_configs(),
-                bwd_cmd_arc_sets: BwdArcCmdSet(id).into_configs(),
+                bwd_cmd_arc_sets: BwdCmdArcSet(id).into_configs(),
                 bwd_arc_sets: BwdArcSet(id).into_configs(),
             },
         }
