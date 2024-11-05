@@ -3,13 +3,14 @@ use std::{collections::VecDeque, marker::PhantomData, ops::Deref};
 use bevy::{
     ecs::{
         component::ComponentId,
+        entity::Entity,
         event::Event,
         observer::{TriggerEvent, TriggerTargets},
         system::Resource,
-        world::World,
+        world::{DeferredWorld, World},
     },
     log::error_once,
-    prelude::{default, Entity},
+    utils::default,
 };
 
 use crate::{
@@ -189,53 +190,60 @@ struct RevEventInitialized<E>(PhantomData<E>);
 
 impl<E: Event + Clone, Targets: TriggerTargets> RevCommand<()> for TriggerEvent<E, Targets> {
     fn rev_apply(self, world: &mut World) -> Option<impl RevCommandLog> {
-        let meta = world.get_resource::<RevMeta>().cloned();
-        let mut log = world.get_resource_or_insert_with::<ObserverLog<E>>(default);
-        let Some(meta) = meta else {
-            return error_per_flag!(
-                &mut log.rev_meta_err,
-                "Initial event {} trigger failed, could not find RevMeta, \
-                future triggers likely are applied at the wrong frames from now on",
-                std::any::type_name::<E>()
-            );
-        };
-        if meta.get_direction() != Some(RevDirection::NotLog) {
-            return error_per_flag!(
-                &mut log.direction_err,
-                "Initial event {} trigger failed, RevMeta is not in the non-log Direction::Forward, \
-                future triggers likely are applied at the wrong frames from now on\n{meta:?}",
-                std::any::type_name::<E>()
-            );
-        }
-        match log.counts_log.pop_past_by_logged_at(&meta) {
-            Some((_, TriggerTargetsCount::Components(count), _)) => {
-                log.components_log.drain(count);
-            }
-            Some((_, TriggerTargetsCount::Entities(count), _)) => {
-                log.entities_log.drain(count);
-            }
-            None => {}
-        }
-        let count = if self.targets.entities().len() == 0 {
-            log.components_log
-                .extend(self.targets.components(), TriggerTargetsCount::Components)
-        } else {
-            log.entities_log
-                .extend(self.targets.entities(), TriggerTargetsCount::Entities)
-        };
-        log.counts_log
-            .push_present((self.event.clone(), count, meta.present_world_state()));
-
-        world.trigger_targets(
-            RevEvent {
-                event: self.event,
-                direction: RevDirection::NotLog,
-            },
-            self.targets,
-        );
-
-        Some(RevEventInitialized(PhantomData::<E>))
+        apply_trigger_event(self, &mut world.into())
     }
+}
+
+pub(crate) fn apply_trigger_event<E: Event + Clone, Targets: TriggerTargets>(
+    event: TriggerEvent<E, Targets>,
+    world: &mut DeferredWorld,
+) -> Option<impl RevCommandLog> {
+    let meta = world.get_resource::<RevMeta>().cloned();
+    let mut log = world.resource_mut::<ObserverLog<E>>(); // needs to be before first RevUpdate
+    let Some(meta) = meta else {
+        return error_per_flag!(
+            &mut log.rev_meta_err,
+            "Initial event {} trigger failed, could not find RevMeta, \
+            future triggers likely are applied at the wrong frames from now on",
+            std::any::type_name::<E>()
+        );
+    };
+    if meta.get_direction() != Some(RevDirection::NotLog) {
+        return error_per_flag!(
+            &mut log.direction_err,
+            "Initial event {} trigger failed, RevMeta is not in the non-log Direction::Forward, \
+            future triggers likely are applied at the wrong frames from now on\n{meta:?}",
+            std::any::type_name::<E>()
+        );
+    }
+    match log.counts_log.pop_past_by_logged_at(&meta) {
+        Some((_, TriggerTargetsCount::Components(count), _)) => {
+            log.components_log.drain(count);
+        }
+        Some((_, TriggerTargetsCount::Entities(count), _)) => {
+            log.entities_log.drain(count);
+        }
+        None => {}
+    }
+    let count = if event.targets.entities().len() == 0 {
+        log.components_log
+            .extend(event.targets.components(), TriggerTargetsCount::Components)
+    } else {
+        log.entities_log
+            .extend(event.targets.entities(), TriggerTargetsCount::Entities)
+    };
+    log.counts_log
+        .push_present((event.event.clone(), count, meta.present_world_state()));
+
+    world.trigger_targets(
+        RevEvent {
+            event: event.event,
+            direction: RevDirection::NotLog,
+        },
+        event.targets,
+    );
+
+    Some(RevEventInitialized(PhantomData::<E>))
 }
 
 impl<E: Event + Clone> RevEventInitialized<E> {
