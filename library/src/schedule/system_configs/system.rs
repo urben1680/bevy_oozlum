@@ -23,7 +23,7 @@ use crate::{
     commands::CommandsLog,
     error_per_flag,
     meta::CommandsLogReducings,
-    schedule::{BwdCmdArcSet, BwdArcSet, FwdArcSet},
+    schedule::{BwdArcSet, BwdCmdArcSet, FwdArcSet},
 };
 
 use super::{IntoRevSystemConfigs, RevSystemConfigs, RevSystemSetConfigs};
