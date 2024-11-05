@@ -1,6 +1,10 @@
 use bevy::{
-    ecs::{component::ComponentId, entity::Entity, world::DeferredWorld},
-    prelude::{Resource, World},
+    ecs::{
+        component::ComponentId,
+        entity::Entity,
+        system::Resource,
+        world::{DeferredWorld, World},
+    },
     utils::HashMap,
 };
 
@@ -8,40 +12,14 @@ use crate::meta::{RevDirection, RevMeta};
 
 use super::{buffer_rev_command, RevCommandLog};
 
-/*
-
--- might be possible: apply them at non-log forward (assert!), undo/redo is command logic that does not trigger the hook
--- filter hooks on entities that serve as parking removed components (use extra flag component)
--- filter hooks during log
-
-Können die reversible commands der hooks überhaupt im auslösenden System geloggt werden?
-Wenn System1 commands abgearbeitet werden, dann von System2, und dann die Hooks/Observer,
-dann ist System::apply_deferred ja schon vorbei?
-Eventuell braucht es auch bei ForwardSchedule ein System auf der anderen Seite des sync point
-das die commands abholt. Diese dürfen aber nicht in irgendein System landen sondern nach allen
-Systemen die diesen sync point nutzen
-das benötigt wiederum verschiedene sets wie bei der backward schedule
-
-Eventuell macht es sinn ein eigenes log für hooks zu erstellen das nicht auf RevCommands aufbaut
-da HookCommand nicht generisch ist
-
-Werden Commands aus Observers/Hooks im gleichen sync point ausgeführt?
-Dann klappt das nicht, wäre aber seltsam da die engine extra DeferredWorld nutzt
-
-Discord chat sagt observer/hooks sind fertig wenn ArcSystem::apply_deferred das system apply_deferred
-aufgerufen hat https://discord.com/channels/691052431525675048/742569353878437978/1288082352857153547
-
-Test dazu schreiben, auch mit einem anschließenden zweiten sync point der noop sein sollte
-*/
-
 /// The direction the current hook is triggered at.
 ///
 /// # Triggers
 ///
 /// | variant | description |
 /// | - | - |
-/// | `Forward{log:false}` | Triggered by reversible systems in the forward schedule (non-log). This follows bevy's hook logic. |
-/// | `Forward{log:true}` | Triggered by reversible systems in the forward schedule (log). This **does not** follow bevy's hook logic and instead is a reversible command. Still this is triggered right after `IndeterministicForward`, see it's description. |
+/// | `NotLog` | Triggered by reversible systems in the forward schedule (non-log). This follows bevy's hook logic. |
+/// | `ForwardLog` | Triggered by reversible systems in the forward schedule (log). This **does not** follow bevy's hook logic and instead is a reversible command. Still this is triggered right after `IndeterministicForward`, see it's description. |
 /// | `BackwardLog` | Triggered by reversible systems in the Backward schedule (log). This **does not** follow bevy's hook logic and instead is a reversible command. For example the `on_remove` hook with this indicates no remove but an undone remove. |
 /// | `IndeterministicForward` |
 ///
@@ -60,38 +38,60 @@ pub enum HookDirection {
     BackwardLog,
     /// Triggered by reversible systems in the forward schedule. This follows bevy's hook logic.
     /// Reversible logic should not be done with this variant.
-    IndeterministicForward,
+    IndeterministicForwardLog,
     /// Triggered by reversible systems in the backward schedule. This follows bevy's hook logic.
     /// Reversible logic should not be done with this variant.
-    IndeterministicBackward,
-    /// Triggered at any point outside reversible systems. Note that this will only trigger if either
-    /// - [`RevSystemsPlugin`](crate::RevSystemsPlugin) was added with `add_rev_meta_sys_in`
-    /// being `Some` or the default value **or**
-    /// - [`RevMeta::update_world`] was manually inserted to run the reversible schedules **or**
-    /// - Between manually calling [`RevMeta::end_running`] and [`RevMeta::update`]
-    ///
-    /// Otherwise the hook triggers with one of the deterministic variants, depending on which
-    /// reversible schedule last ran.
+    IndeterministicBackwardLog,
+    /// Triggered at any point outside reversible systems.
+    /// Reversible logic should not be done with this variant.
     NonReversibleSchedule,
 }
 
+impl From<RevDirection> for HookDirection {
+    fn from(value: RevDirection) -> Self {
+        match value {
+            RevDirection::NotLog => Self::NotLog,
+            RevDirection::ForwardLog => Self::ForwardLog,
+            RevDirection::BackwardLog => Self::BackwardLog,
+        }
+    }
+}
+
+impl TryFrom<HookDirection> for RevDirection {
+    type Error = Option<RevDirection>;
+    fn try_from(value: HookDirection) -> Result<Self, Self::Error> {
+        match value {
+            HookDirection::NotLog => Ok(RevDirection::NotLog),
+            HookDirection::ForwardLog => Ok(RevDirection::ForwardLog),
+            HookDirection::BackwardLog => Ok(RevDirection::BackwardLog),
+            HookDirection::IndeterministicForwardLog => Err(Some(RevDirection::ForwardLog)),
+            HookDirection::IndeterministicBackwardLog => Err(Some(RevDirection::BackwardLog)),
+            HookDirection::NonReversibleSchedule => Err(None),
+        }
+    }
+}
+
 impl HookDirection {
+    #[allow(non_upper_case_globals)]
+    pub const NotLog: Self = Self::Forward { log: false };
+    #[allow(non_upper_case_globals)]
+    pub const ForwardLog: Self = Self::Forward { log: true };
     fn get_in_hook(world: &DeferredWorld) -> Self {
         match world
             .get_resource::<RevMeta>()
             .and_then(RevMeta::get_direction)
         {
             Some(RevDirection::NotLog) => Self::Forward { log: false },
-            Some(RevDirection::ForwardLog) => Self::IndeterministicForward,
-            Some(RevDirection::BackwardLog) => Self::IndeterministicBackward,
+            Some(RevDirection::ForwardLog) => Self::IndeterministicForwardLog,
+            Some(RevDirection::BackwardLog) => Self::IndeterministicBackwardLog,
             None => Self::NonReversibleSchedule,
         }
     }
 }
 
 pub struct RevComponentHooks<'a> {
-    world: &'a mut World,
-    component: ComponentId,
+    pub(crate) world: &'a mut World,
+    pub(crate) component: ComponentId,
 }
 
 #[derive(Resource, Default)]
