@@ -5,7 +5,7 @@ use std::{
     ops::{Deref, Range},
 };
 
-use bevy::{prelude::default, reflect::Reflect};
+use bevy::{reflect::Reflect, utils::default};
 
 use crate::meta::RevMeta;
 
