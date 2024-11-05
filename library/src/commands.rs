@@ -24,7 +24,7 @@ pub mod observer;
 // todo: untyped take component https://github.com/bevyengine/bevy/issues/15350
 
 pub trait RevCommands {
-    fn rev_add<Marker>(&mut self, command: impl RevCommand<Marker>);
+    fn rev_queue<Marker>(&mut self, command: impl RevCommand<Marker>);
     fn rev_init_resource<R: Resource + FromWorld>(&mut self);
     fn rev_insert_resource<R: Resource>(&mut self, resource: R);
     fn rev_remove_resource<R: Resource>(&mut self);
@@ -32,7 +32,7 @@ pub trait RevCommands {
     fn rev_trigger_targets(&mut self, event: impl Event + Clone, targets: impl TriggerTargets);
 }
 
-fn buffer_rev_command(world: &mut DeferredWorld, command: impl RevCommandLog) {
+pub(crate) fn buffer_rev_command(world: &mut DeferredWorld, command: impl RevCommandLog) {
     let command: Box<dyn RevCommandLog> = Box::new(command);
     let buffer = &mut world
         .get_resource_mut::<RevCommandBuffer>()
@@ -42,7 +42,7 @@ fn buffer_rev_command(world: &mut DeferredWorld, command: impl RevCommandLog) {
 }
 
 impl RevCommands for Commands<'_, '_> {
-    fn rev_add<Marker>(&mut self, command: impl RevCommand<Marker>) {
+    fn rev_queue<Marker>(&mut self, command: impl RevCommand<Marker>) {
         self.add(|world: &mut World| {
             if let Some(command) = command.rev_apply(world) {
                 buffer_rev_command(&mut world.into(), command)
@@ -50,31 +50,31 @@ impl RevCommands for Commands<'_, '_> {
         })
     }
     fn rev_init_resource<R: Resource + FromWorld>(&mut self) {
-        self.rev_add(|world: &mut World| {
+        self.rev_queue(|world: &mut World| {
             let initiialized = ResourceSwap(world.remove_resource::<R>());
             world.init_resource::<R>();
             initiialized
         })
     }
     fn rev_insert_resource<R: Resource>(&mut self, resource: R) {
-        self.rev_add(|world: &mut World| {
+        self.rev_queue(|world: &mut World| {
             let initiialized = ResourceSwap(world.remove_resource::<R>());
             world.insert_resource(resource);
             initiialized
         })
     }
     fn rev_remove_resource<R: Resource>(&mut self) {
-        self.rev_add(|world: &mut World| {
+        self.rev_queue(|world: &mut World| {
             world
                 .remove_resource::<R>()
                 .map(|resource| ResourceSwap(Some(resource)))
         })
     }
     fn rev_trigger(&mut self, event: impl Event + Clone) {
-        self.rev_add(TriggerEvent { event, targets: () })
+        self.rev_queue(TriggerEvent { event, targets: () })
     }
     fn rev_trigger_targets(&mut self, event: impl Event + Clone, targets: impl TriggerTargets) {
-        self.rev_add(TriggerEvent { event, targets })
+        self.rev_queue(TriggerEvent { event, targets })
     }
 }
 
@@ -131,6 +131,15 @@ pub trait RevCommandLog: Send + 'static {
     fn undone_finalize(self: Box<Self>, _world: &mut World) {}
     fn redo(&mut self, world: &mut World);
     fn redone_finalize(self: Box<Self>, _world: &mut World) {}
+}
+
+impl<F: FnMut(&mut World, bool) + Send + 'static> RevCommandLog for F {
+    fn undo(&mut self, world: &mut World) {
+        self(world, false)
+    }
+    fn redo(&mut self, world: &mut World) {
+        self(world, true)
+    }
 }
 
 #[derive(Resource)]
