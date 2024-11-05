@@ -1,11 +1,10 @@
 use bevy::{
-    ecs::schedule::SystemSetConfigs,
-    prelude::{Condition, IntoSystemSet, IntoSystemSetConfigs, SystemSet},
+    ecs::schedule::{Condition, IntoSystemSet, IntoSystemSetConfigs, SystemSet, SystemSetConfigs},
     utils::all_tuples,
 };
 use condition::forward_backward_conditions;
 
-use super::{BwdCmdArcSet, BwdArcSet, BwdNonSys, FwdArcSet, FwdNonSys};
+use super::{BwdArcSet, BwdCmdArcSet, BwdNonSys, FwdArcSet, FwdNonSys};
 
 mod condition;
 
