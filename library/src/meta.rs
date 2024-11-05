@@ -4,6 +4,7 @@ use std::ops::Deref;
 use bevy::{
     ecs::{
         archetype::ArchetypeComponentId,
+        change_detection::Mut,
         component::ComponentId,
         event::Event,
         query::Access,
@@ -11,7 +12,6 @@ use bevy::{
         world::World,
     },
     log::warn_once,
-    prelude::Mut,
     reflect::{std_traits::ReflectDefault, Reflect},
     utils::tracing::info,
 };
@@ -20,6 +20,7 @@ use bevy::{
 use bevy::reflect::{ReflectDeserialize, ReflectSerialize};
 
 use crate::{
+    commands::RevCommandBuffer,
     log::{OutOfLog, PackedRevFrame},
     RevFrame, RevUpdate,
 };
@@ -69,10 +70,17 @@ pub enum RevDirection {
     BackwardLog,
 }
 
-#[allow(non_upper_case_globals)] // every crate needs a little crime
 impl RevDirection {
+    #[allow(non_upper_case_globals)]
     pub const NotLog: Self = Self::Forward { log: false };
+    #[allow(non_upper_case_globals)]
     pub const ForwardLog: Self = Self::Forward { log: true };
+    pub fn is_forward(self) -> bool {
+        matches!(self, Self::Forward { .. })
+    }
+    pub fn is_backward(self) -> bool {
+        matches!(self, Self::BackwardLog)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Reflect)]
@@ -357,6 +365,11 @@ impl RevMeta {
         }
 
         world.resource_scope(|world: &mut World, mut meta: Mut<Self>| {
+            // While this only needs to be once, this is the only resource that must be initialized before the first
+            // RevUpdate run because the first access may be by a hook that only has DeferredWorld and cannot add it itself.
+            // With this being done here bevy-ecs only users cannot forget to init it.
+            world.init_resource::<RevCommandBuffer>();
+
             if meta.get_direction().is_some() {
                 return Err(RevTryRunScheduleError::UnexpectedInitialRunning {
                     meta: meta.clone(),
