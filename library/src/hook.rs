@@ -10,7 +10,7 @@ use bevy::{
 
 use crate::meta::{RevDirection, RevMeta};
 
-use super::{buffer_rev_command, RevCommandLog};
+use super::commands::{buffer_rev_command, RevCommandLog};
 
 /// The direction the current hook is triggered at.
 ///

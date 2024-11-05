@@ -5,7 +5,7 @@ use bevy::ecs::{
     world::{DeferredWorld, World},
 };
 
-use crate::commands::{buffer_rev_command, hook::RevComponentHooks, observer::apply_trigger_event};
+use crate::{commands::buffer_rev_command, hook::RevComponentHooks, observer::apply_trigger_event};
 
 pub trait RevWorld {
     fn rev_trigger(&mut self, event: impl Event + Clone);
@@ -36,7 +36,7 @@ impl RevWorld for World {
     fn rev_register_component_hooks_by_id(&mut self, id: ComponentId) -> Option<RevComponentHooks> {
         self.register_component_hooks_by_id(id)
             .is_some()
-            .then(|| RevComponentHooks {
+            .then_some(RevComponentHooks {
                 world: self,
                 component: id,
             })
