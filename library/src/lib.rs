@@ -8,22 +8,17 @@ Features:
 - reversible versions of World::observe / App::observe
 
 Enhancements:
-- reduce todo!() and //todo
+- reduce () and //todo
 - config tests
 - make doctests work
 - mod/use/pub cleanup
--- system (set) submodules of schedule
-- observer tests
-- commands -> hook -> observer -> reversible order test
--- a second sync point aftwerwards should be scheduled to assert nothing ist postponed into it
--- test uses masks for systems that are const generic
+-- promote hook and observer
 - use serde from bevy reexport
 - reflect behind feature flag
-- use upcoming param verification for system (params)
 - RevMetaWithVerify
 -- tests
-- forward/backward keine schedules sondern system sets mit run_if, benötigt dann kein RevSchedule
--- how to handle set_apply_final_deferred(false)?
+- how to handle set_apply_final_deferred(false)?
+-- rev meta reads buffer after run too
 - more plugin constructors
 
 - InitiallyNoneStateLog / InitiallyNoneRareStateLog
@@ -54,10 +49,7 @@ UNSUPPORTED:
 use std::{fmt::Debug, hash::Hash};
 
 use bevy::{
-    ecs::{
-        component::Tick,
-        schedule::ScheduleLabel,
-    },
+    ecs::{component::Tick, schedule::ScheduleLabel},
     reflect::Reflect,
 };
 
@@ -76,11 +68,12 @@ pub mod world;
 /// Contains important extension traits `as _`, [`RevMeta`] and [`RevDirection`].
 pub mod prelude {
     pub use crate::app::RevApp as _;
-    pub use crate::commands::RevCommands as _;
+    pub use crate::commands::{hook::HookDirection, RevCommands as _};
     pub use crate::meta::{RevDirection, RevMeta};
     pub use crate::schedule::IntoRevSystemConfigs as _;
     pub use crate::schedule::IntoRevSystemSetConfigs as _;
     pub use crate::schedule::RevSchedule as _;
+    pub use crate::world::RevDeferredWorld as _;
     pub use crate::world::RevWorld as _;
 }
 
