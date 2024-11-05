@@ -1,9 +1,15 @@
 use bevy::{
-    app::{App, FixedUpdate, Plugin}, ecs::schedule::{InternedScheduleLabel, InternedSystemSet, ScheduleLabel, Schedules, IntoSystemConfigs}, utils::default
+    app::{App, FixedUpdate, Plugin},
+    ecs::schedule::{
+        InternedScheduleLabel, InternedSystemSet, IntoSystemConfigs, ScheduleLabel, Schedules,
+    },
+    utils::default,
 };
 
-use crate::{commands::RevCommandBuffer, meta::RevMeta};
-pub use crate::schedule::{IntoRevSystemConfigs, IntoRevSystemSetConfigs, RevSchedule};
+use crate::{
+    meta::RevMeta,
+    schedule::{IntoRevSystemConfigs, IntoRevSystemSetConfigs, RevSchedule},
+};
 
 pub trait RevApp {
     fn rev_add_systems<Marker>(
@@ -58,10 +64,8 @@ impl Default for RevSystemsPlugin {
 }
 
 impl Plugin for RevSystemsPlugin {
-    fn build(&self, app: &mut bevy::prelude::App) {
-        app.register_type::<RevMeta>()
-            // needs to be manually inserted because first accessor might be a hook which cannot insert it
-            .init_resource::<RevCommandBuffer>();
+    fn build(&self, app: &mut bevy::app::App) {
+        app.register_type::<RevMeta>();
 
         if let Some(rev_meta) = &self.rev_meta {
             app.insert_resource(rev_meta.clone());
