@@ -16,9 +16,6 @@ use crate::{
     RevFrame,
 };
 
-pub mod hook;
-pub mod observer;
-
 // todo: spawn/despawn with entity disabling https://github.com/bevyengine/bevy/issues/11090
 // todo: commands implementors https://docs.rs/bevy/latest/bevy/ecs/world/trait.Command.html#implementors
 // todo: untyped take component https://github.com/bevyengine/bevy/issues/15350

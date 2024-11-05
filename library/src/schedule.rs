@@ -168,10 +168,12 @@ mod test {
             system::Resource,
             world::{DeferredWorld, World},
         },
+        prelude::Commands,
     };
 
     use crate::{
-        commands::{observer::RevEvent, RevCommands},
+        commands::{RevCommandLog, RevCommands},
+        observer::RevEvent,
         world::{RevDeferredWorld, RevWorld},
         RevFrame, RevUpdate,
     };
@@ -245,7 +247,26 @@ mod test {
     #[derive(Event, Clone)]
     struct ObsvByObsv(u8);
 
-    fn test_sys<const N: u8>(world: &mut World) {
+    /// Has deferred params, will add sync point
+    fn regular_system<const N: u8>(mut world: DeferredWorld, mut commands: Commands) {
+        let direction = world.resource::<RevMeta>().direction();
+        world
+            .resource_mut::<TestLog>()
+            .0
+            .push(Test::Sys((N, direction)));
+        if direction != RevDirection::NotLog {
+            return;
+        }
+
+        // trigger observer in system
+        world.rev_trigger(ObsvBySys(N));
+
+        // trigger command in system
+        commands.rev_queue(system_command::<N>);
+    }
+
+    /// Has no deferred params, will not add sync point
+    fn exclusive_system<const N: u8>(world: &mut World) {
         let direction = world.resource::<RevMeta>().direction();
         world
             .resource_mut::<TestLog>()
@@ -262,36 +283,27 @@ mod test {
         world.rev_trigger(ObsvBySys(N));
 
         // trigger command in system
+        world.commands().rev_queue(system_command::<N>);
+    }
+
+    fn system_command<const N: u8>(world: &mut World) -> impl RevCommandLog {
+        world
+            .resource_mut::<TestLog>()
+            .0
+            .push(Test::CmdBySys((N, RevDirection::NotLog)));
+
+        // trigger hook in command
+        world.spawn(HookByCmd(N));
+
+        // trigger observer in command
+        world.rev_trigger(ObsvByCmd(N));
+
+        // trigger command in command
         world.commands().rev_queue(|world: &mut World| {
             world
                 .resource_mut::<TestLog>()
                 .0
-                .push(Test::CmdBySys((N, RevDirection::NotLog)));
-
-            // trigger hook in command
-            world.spawn(HookByCmd(N));
-
-            // trigger observer in command
-            world.rev_trigger(ObsvByCmd(N));
-
-            // trigger command in command
-            world.commands().rev_queue(|world: &mut World| {
-                world
-                    .resource_mut::<TestLog>()
-                    .0
-                    .push(Test::CmdByCmd((N, RevDirection::NotLog)));
-
-                |world: &mut World, forward: bool| {
-                    let direction = match forward {
-                        true => RevDirection::ForwardLog,
-                        false => RevDirection::BackwardLog,
-                    };
-                    world
-                        .resource_mut::<TestLog>()
-                        .0
-                        .push(Test::CmdByCmd((N, direction)));
-                }
-            });
+                .push(Test::CmdByCmd((N, RevDirection::NotLog)));
 
             |world: &mut World, forward: bool| {
                 let direction = match forward {
@@ -301,9 +313,20 @@ mod test {
                 world
                     .resource_mut::<TestLog>()
                     .0
-                    .push(Test::CmdBySys((N, direction)));
+                    .push(Test::CmdByCmd((N, direction)));
             }
         });
+
+        |world: &mut World, forward: bool| {
+            let direction = match forward {
+                true => RevDirection::ForwardLog,
+                false => RevDirection::BackwardLog,
+            };
+            world
+                .resource_mut::<TestLog>()
+                .0
+                .push(Test::CmdBySys((N, direction)));
+        }
     }
 
     fn test_run(configs: impl FnOnce(&mut Schedule), tests: Vec<Vec<Test<u8>>>) {

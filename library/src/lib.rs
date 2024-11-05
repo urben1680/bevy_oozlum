@@ -60,15 +60,18 @@ use log::PackedRevFrame;
 
 pub mod app;
 pub mod commands;
+pub mod hook;
 pub mod log;
 pub mod meta;
+pub mod observer;
 pub mod schedule;
 pub mod world;
 
 /// Contains important extension traits `as _`, [`RevMeta`] and [`RevDirection`].
 pub mod prelude {
     pub use crate::app::RevApp as _;
-    pub use crate::commands::{hook::HookDirection, RevCommands as _};
+    pub use crate::commands::RevCommands as _;
+    pub use crate::hook::HookDirection;
     pub use crate::meta::{RevDirection, RevMeta};
     pub use crate::schedule::IntoRevSystemConfigs as _;
     pub use crate::schedule::IntoRevSystemSetConfigs as _;
