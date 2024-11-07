@@ -91,7 +91,7 @@ impl<T: Copy> TargetLog<T> {
 }
 
 #[derive(Resource)]
-struct ObserverLog<E> {
+pub(crate) struct ObserverLog<E> {
     components_log: TargetLog<ComponentId>,
     entities_log: TargetLog<Entity>,
     counts_log: TransitionLog<(E, TriggerTargetsCount, RevFrame)>,
@@ -199,7 +199,15 @@ pub(crate) fn apply_trigger_event<E: Event + Clone, Targets: TriggerTargets>(
     world: &mut DeferredWorld,
 ) -> Option<impl RevCommandLog> {
     let meta = world.get_resource::<RevMeta>().cloned();
-    let mut log = world.resource_mut::<ObserverLog<E>>(); // needs to be before first RevUpdate
+    let mut log = world
+        .get_resource_mut::<ObserverLog<E>>()
+        .unwrap_or_else(|| {
+            panic!(
+                "Could not find internal observer log for event `{}`, use `world.rev_observe` \
+        to make use of reversible observers instead of `world.observe`.",
+                std::any::type_name::<E>()
+            )
+        });
     let Some(meta) = meta else {
         return error_per_flag!(
             &mut log.rev_meta_err,
