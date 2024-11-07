@@ -29,7 +29,8 @@ pub trait RevCommands {
     fn rev_trigger_targets(&mut self, event: impl Event + Clone, targets: impl TriggerTargets);
 }
 
-pub(crate) fn buffer_rev_command(world: &mut DeferredWorld, command: impl RevCommandLog) {
+pub(crate) fn buffer_rev_command<T: RevCommandLog>(world: &mut DeferredWorld, command: T) {
+    println!("buffer_rev_command::<{}>", std::any::type_name::<T>());
     let command: Box<dyn RevCommandLog> = Box::new(command);
     let buffer = &mut world
         .get_resource_mut::<RevCommandBuffer>()
@@ -160,6 +161,7 @@ impl Default for CommandsLog {
 pub enum CommandsLogErr {
     RevMetaMissing,
     RevMetaWrongDirection(RevMeta),
+    RevCommandBufferMissing(RevMeta),
     OutOfLog(RevMeta),
 }
 
@@ -178,7 +180,9 @@ impl CommandsLog {
                 for command in log.truncate_future_drain_past_by_logged_at(&meta) {
                     command.redone_finalize(world);
                 }
-                let mut buffer = world.get_resource_or_insert_with(RevCommandBuffer::default);
+                let mut buffer = world
+                    .get_resource_mut::<RevCommandBuffer>()
+                    .ok_or_else(|| CommandsLogErr::RevCommandBufferMissing(meta.clone()))?;
                 let buffer = SyncCell::get(&mut buffer.0);
                 if !buffer.is_empty() {
                     log.push_present(|mut log| {
