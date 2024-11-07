@@ -59,7 +59,8 @@ where
             shared: shared.clone(),
             name: fwd_sys_name,
             tick: Tick::new(0),
-            commands_forward_err: Some(false),
+            forward: true,
+            commands_err: false,
             component_access: default(),
             archetype_component_access: default(),
         };
@@ -68,7 +69,8 @@ where
             shared: shared.clone(),
             name: bwd_sys_name,
             tick: Tick::new(0),
-            commands_forward_err: None,
+            forward: false,
+            commands_err: false,
             component_access: default(),
             archetype_component_access: default(),
         };
@@ -115,8 +117,8 @@ struct ArcSystem<T> {
     name: String,
     tick: Tick,
 
-    /// If this is `Some`, this system is in [`crate::schedule::ForwardSet`].
-    commands_forward_err: Option<bool>,
+    forward: bool,
+    commands_err: bool,
 
     // these need to be cloned because one cannot return &'a Access from owned RwLockReadGuard<'a, Access>
     component_access: Access<ComponentId>,
@@ -161,6 +163,10 @@ impl<T: System> System for ArcSystem<T> {
             .has_deferred()
     }
     unsafe fn run_unsafe(&mut self, input: Self::In, world: UnsafeWorldCell) -> Self::Out {
+        debug_assert!(
+            !self.is_exclusive(),
+            "expected scheduler to use System::run for exclusive system"
+        );
         self.shared
             .try_write()
             .unwrap_or_else(expect_shared(&self.name))
@@ -168,11 +174,33 @@ impl<T: System> System for ArcSystem<T> {
             .run_unsafe(input, world)
     }
     fn run(&mut self, input: Self::In, world: &mut World) -> Self::Out {
-        self.shared
+        let mut shared = self
+            .shared
             .try_write()
-            .unwrap_or_else(expect_shared(&self.name))
-            .system
-            .run(input, world)
+            .unwrap_or_else(expect_shared(&self.name));
+
+        if !self.is_exclusive() {
+            shared.system.run(input, world)
+        } else if self.forward {
+            let out = shared.system.run(input, world);
+            if let Err(err) = shared.commands_log.forward(world) {
+                error_per_flag!(
+                    &mut self.commands_err,
+                    "Reversible commands from reversible system {} could not be done/redone: {err:?}",
+                    self.name
+                )
+            }
+            out
+        } else {
+            if let Err(err) = shared.commands_log.backward(world) {
+                error_per_flag!(
+                    &mut self.commands_err,
+                    "Reversible commands from reversible system {} could not be undone: {err:?}",
+                    self.name
+                )
+            }
+            shared.system.run(input, world)
+        }
     }
     fn apply_deferred(&mut self, world: &mut World) {
         let mut shared = self
@@ -186,24 +214,21 @@ impl<T: System> System for ArcSystem<T> {
         // todo: remove this if it is not needed
         world.flush();
 
-        if let Some(commands_err) = self.commands_forward_err.as_mut() {
-            // reverisble commands are now in the buffer resource so commands_log can take them
-            if let Err(err) = shared.commands_log.forward(world) {
-                error_per_flag!(
-                    commands_err,
-                    "Reversible commands from reversible system {} could not be done/redone: {err:?}",
-                    self.name
-                )
-            }
+        if !self.forward {
+            return;
+        }
+
+        // reverisble commands are now in the buffer resource so commands_log can take them
+        if let Err(err) = shared.commands_log.forward(world) {
+            error_per_flag!(
+                &mut self.commands_err,
+                "Reversible commands from reversible system {} could not be done/redone: {err:?}",
+                self.name
+            )
         }
     }
-    fn queue_deferred(&mut self, world: DeferredWorld) {
-        self.shared
-            .try_write()
-            .unwrap_or_else(expect_shared(&self.name))
-            .system
-            .queue_deferred(world);
-        // todo deferred -> reversible observer?
+    fn queue_deferred(&mut self, _world: DeferredWorld) {
+        unreachable!("{} used as an observer", std::any::type_name::<T>())
     }
     fn initialize(&mut self, world: &mut World) {
         initialize_arc_system(&mut self.shared, &mut self.tick, &self.name, world);
@@ -298,7 +323,7 @@ impl<T: System> System for CommandsBackward<T> {
         }
     }
     fn queue_deferred(&mut self, _world: DeferredWorld) {
-        unreachable!("not used as an observer log")
+        unreachable!("{} used as an observer", std::any::type_name::<T>())
     }
     fn check_change_tick(&mut self, change_tick: Tick) {
         check_tick(&mut self.tick, change_tick);
