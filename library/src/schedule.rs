@@ -165,10 +165,9 @@ mod test {
             component::Component,
             event::Event,
             observer::Trigger,
-            system::Resource,
+            system::{Commands, Resource},
             world::{DeferredWorld, World},
-        },
-        prelude::Commands,
+        }
     };
 
     use crate::{
@@ -201,8 +200,7 @@ mod test {
 
         SysCmd(T),
         SysCmdHook(T),
-        SysCmdObsv(T),
-        SysCmdCmd(T),
+        SysCmdObsv(T)
     }
 
     impl<T> Test<T> {
@@ -220,8 +218,7 @@ mod test {
 
                 Test::SysCmd(value) => Test::SysCmd(map(value)),
                 Test::SysCmdHook(value) => Test::SysCmdHook(map(value)),
-                Test::SysCmdObsv(value) => Test::SysCmdObsv(map(value)),
-                Test::SysCmdCmd(value) => Test::SysCmdCmd(map(value)),
+                Test::SysCmdObsv(value) => Test::SysCmdObsv(map(value))
             }
         }
     }
@@ -247,8 +244,7 @@ mod test {
                 Self::RegularSyncPoint(n) => vec![
                     Test::SysCmd(n),
                     Test::SysCmdHook(n),
-                    Test::SysCmdObsv(n),
-                    Test::SysCmdCmd(n),
+                    Test::SysCmdObsv(n)
                 ],
                 Self::Exclusive(n) => vec![
                     Test::Sys(n),
@@ -260,8 +256,7 @@ mod test {
                     Test::SysObsvCmd(n),
                     Test::SysCmd(n),
                     Test::SysCmdHook(n),
-                    Test::SysCmdObsv(n),
-                    Test::SysCmdCmd(n),
+                    Test::SysCmdObsv(n)
                 ],
             }
             .into_iter()
@@ -340,25 +335,6 @@ mod test {
         // trigger observer in command
         world.rev_trigger(SysCmdObsv(N));
 
-        // trigger command in command
-        world.commands().rev_queue(|world: &mut World| {
-            world
-                .resource_mut::<TestLog>()
-                .0
-                .push(Test::SysCmdCmd((N, RevDirection::NotLog)));
-
-            |world: &mut World, forward: bool| {
-                let direction = match forward {
-                    true => RevDirection::ForwardLog,
-                    false => RevDirection::BackwardLog,
-                };
-                world
-                    .resource_mut::<TestLog>()
-                    .0
-                    .push(Test::SysCmdCmd((N, direction)));
-            }
-        });
-
         |world: &mut World, forward: bool| {
             let direction = match forward {
                 true => RevDirection::ForwardLog,
@@ -394,11 +370,17 @@ mod test {
         world.rev_observe(
             |trigger: Trigger<RevEvent<SysObsv>>, mut world: DeferredWorld| {
                 let event = trigger.event();
+                let direction = event.direction();
                 let n = event.0;
+                
                 world
                     .resource_mut::<TestLog>()
                     .0
-                    .push(Test::SysObsv((n, event.direction())));
+                    .push(Test::SysObsv((n, direction)));
+
+                if direction != RevDirection::NotLog {
+                    return;
+                }
 
                 // trigger observer in observer
                 world.rev_trigger(SysObsvObsv(n));
@@ -538,7 +520,7 @@ mod test {
     #[test]
     fn single_regular_system() {
         test_run(
-            |schedule| schedule.add_systems(regular_system::<1>),
+            |schedule| schedule.rev_add_systems(regular_system::<1>),
             vec![vec![
                 TestBundle::Regular(1),
                 TestBundle::RegularSyncPoint(1),
@@ -549,7 +531,7 @@ mod test {
     #[test]
     fn single_exclusive_system() {
         test_run(
-            |schedule| schedule.add_systems(exclusive_system::<1>),
+            |schedule| schedule.rev_add_systems(exclusive_system::<1>),
             vec![vec![TestBundle::Exclusive(1)]],
         );
     }
