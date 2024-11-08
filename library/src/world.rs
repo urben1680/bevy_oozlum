@@ -10,7 +10,7 @@ use bevy::{
 };
 
 use crate::{
-    commands::buffer_rev_command,
+    commands::{buffer_rev_command, RevCommands},
     hook::RevComponentHooks,
     observer::{apply_trigger_event, ObserverLog, RevEvent},
 };
@@ -47,12 +47,13 @@ impl RevWorld for World {
         self.observe(system)
     }
     fn rev_trigger(&mut self, event: impl Event + Clone) {
-        let mut world: DeferredWorld = self.into();
-        world.rev_trigger(event);
+        self.rev_trigger_targets(event, ());
     }
     fn rev_trigger_targets(&mut self, event: impl Event + Clone, targets: impl TriggerTargets) {
-        let mut world: DeferredWorld = self.into();
-        world.rev_trigger_targets(event, targets);
+        let rev_command = apply_trigger_event(TriggerEvent { event, targets }, self);
+        if let Some(command) = rev_command {
+            buffer_rev_command(&mut self.into(), command);
+        }
     }
     fn rev_register_component_hooks<T: Component>(&mut self) -> RevComponentHooks {
         let component = self.init_component::<T>();
@@ -74,9 +75,6 @@ impl<'w> RevDeferredWorld for DeferredWorld<'w> {
         self.rev_trigger_targets(event, ());
     }
     fn rev_trigger_targets(&mut self, event: impl Event + Clone, targets: impl TriggerTargets) {
-        let rev_command = apply_trigger_event(TriggerEvent { event, targets }, self);
-        if let Some(command) = rev_command {
-            buffer_rev_command(self, command);
-        }
+        self.commands().rev_queue(TriggerEvent { event, targets });
     }
 }
