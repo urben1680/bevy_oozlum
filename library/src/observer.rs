@@ -7,7 +7,7 @@ use bevy::{
         event::Event,
         observer::{TriggerEvent, TriggerTargets},
         system::Resource,
-        world::{DeferredWorld, World},
+        world::World,
     },
     log::error_once,
     utils::default,
@@ -116,23 +116,7 @@ impl<E> Default for ObserverLog<E> {
 impl<E: Event + Clone> ObserverLog<E> {
     fn undo_redo(&mut self, world: &mut World, undo: bool) {
         let doing = if undo { "Undoing" } else { "Redoing" };
-        let meta = world.get_resource::<RevMeta>().cloned();
-        if !world.contains_resource::<ObserverLog<E>>() {
-            match meta {
-                None => error_once!(
-                    "{doing} event {} trigger failed, could not find RevMeta and specific \
-                    log resource, this might be or will be the case for other event types as well",
-                    std::any::type_name::<E>()
-                ),
-                Some(meta) => error_once!(
-                    "{doing} event {} trigger failed, could not find specific log resource, \
-                    this might or will be the case for other event types as well\n{meta:?}",
-                    std::any::type_name::<E>()
-                ),
-            }
-            return;
-        }
-        let Some(meta) = meta else {
+        let Some(meta) = world.get_resource::<RevMeta>().cloned() else {
             return error_per_flag!(
                 &mut self.rev_meta_err,
                 "{doing} event {} trigger failed, could not find RevMeta, \
@@ -156,10 +140,14 @@ impl<E: Event + Clone> ObserverLog<E> {
         };
         if undo {
             debug_assert_eq!(
-                logged_at,
-                meta.present_world_state().wrapping_sub(1),
+                logged_at.wrapping_sub(1),
+                meta.present_world_state(),
                 "todo"
             );
+            let event = RevEvent {
+                event,
+                direction: RevDirection::BackwardLog,
+            };
             match count {
                 TriggerTargetsCount::Components(count) => {
                     let targets = self.components_log.backward(count);
@@ -172,6 +160,10 @@ impl<E: Event + Clone> ObserverLog<E> {
             }
         } else {
             debug_assert_eq!(logged_at, meta.present_world_state(), "todo");
+            let event = RevEvent {
+                event,
+                direction: RevDirection::ForwardLog,
+            };
             match count {
                 TriggerTargetsCount::Components(count) => {
                     let targets = self.components_log.forward(count);
@@ -190,13 +182,13 @@ struct RevEventInitialized<E>(PhantomData<E>);
 
 impl<E: Event + Clone, Targets: TriggerTargets> RevCommand<()> for TriggerEvent<E, Targets> {
     fn rev_apply(self, world: &mut World) -> Option<impl RevCommandLog> {
-        apply_trigger_event(self, &mut world.into())
+        apply_trigger_event(self, world)
     }
 }
 
 pub(crate) fn apply_trigger_event<E: Event + Clone, Targets: TriggerTargets>(
     event: TriggerEvent<E, Targets>,
-    world: &mut DeferredWorld,
+    world: &mut World, // triggering observers on DeferedWorld also works through commands to get &mut World
 ) -> Option<impl RevCommandLog> {
     let meta = world.get_resource::<RevMeta>().cloned();
     let mut log = world
@@ -204,7 +196,7 @@ pub(crate) fn apply_trigger_event<E: Event + Clone, Targets: TriggerTargets>(
         .unwrap_or_else(|| {
             panic!(
                 "Could not find internal observer log for event `{}`, use `world.rev_observe` \
-        to make use of reversible observers instead of `world.observe`.",
+                to make use of reversible observers instead of `world.observe`.",
                 std::any::type_name::<E>()
             )
         });
@@ -224,6 +216,7 @@ pub(crate) fn apply_trigger_event<E: Event + Clone, Targets: TriggerTargets>(
             std::any::type_name::<E>()
         );
     }
+    // todo muss über observer gemacht werden, an dieser stelle könnte zu viel Zeit vergangen sein
     match log.counts_log.pop_past_by_logged_at(&meta) {
         Some((_, TriggerTargetsCount::Components(count), _)) => {
             log.components_log.drain(count);
@@ -255,10 +248,10 @@ pub(crate) fn apply_trigger_event<E: Event + Clone, Targets: TriggerTargets>(
 }
 
 impl<E: Event + Clone> RevEventInitialized<E> {
-    fn undo_redo(&self, world: &mut World, undo: bool) {
-        let doing = if undo { "Undoing" } else { "Redoing" };
+    fn undo_redo(world: &mut World, undo: bool) {
         let Some(mut log) = world.remove_resource::<ObserverLog<E>>() else {
             let meta = world.get_resource::<RevMeta>();
+            let doing = if undo { "Undoing" } else { "Redoing" };
             return error_once!(
                 "{doing} event {} trigger failed, could not find specific log resource, \
                 this might be or will be the case for other event types as well\n{meta:?}",
@@ -272,9 +265,9 @@ impl<E: Event + Clone> RevEventInitialized<E> {
 
 impl<E: Event + Clone> RevCommandLog for RevEventInitialized<E> {
     fn undo(&mut self, world: &mut World) {
-        self.undo_redo(world, true)
+        Self::undo_redo(world, true)
     }
     fn redo(&mut self, world: &mut World) {
-        self.undo_redo(world, false)
+        Self::undo_redo(world, false)
     }
 }
