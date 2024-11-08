@@ -3,7 +3,7 @@ use std::{
     borrow::Cow,
     fmt::Debug,
     marker::PhantomData,
-    sync::{Arc, RwLock},
+    sync::{Arc, Mutex, MutexGuard},
 };
 
 use bevy::{
@@ -48,17 +48,27 @@ where
         let bwd_cmd_name = name(" (backward commands)");
         let observer_name = name(" (backward commands observer)");
 
-        let shared = Arc::new(RwLock::new(Shared {
+        let default_system_sets = system.default_system_sets();
+
+        let shared = Mutex::new(SharedMut {
             system,
             initialized: false,
             commands_log: default(),
             observer_name,
-        }));
+        });
+
+        let shared = Arc::new(Shared {
+            inner: shared,
+            default_system_sets,
+        });
 
         let forward_sys = ArcSystem {
             shared: shared.clone(),
             name: fwd_sys_name,
             tick: Tick::new(0),
+            is_send: false,
+            is_exclusive: false,
+            has_deferred: false,
             forward: true,
             commands_err: false,
             component_access: default(),
@@ -69,6 +79,9 @@ where
             shared: shared.clone(),
             name: bwd_sys_name,
             tick: Tick::new(0),
+            is_send: false,
+            is_exclusive: false,
+            has_deferred: false,
             forward: false,
             commands_err: false,
             component_access: default(),
@@ -79,6 +92,7 @@ where
             shared: shared.clone(),
             name: bwd_cmd_name,
             tick: Tick::new(0),
+            has_deferred: false,
             commands_err: false,
         };
 
@@ -105,20 +119,27 @@ where
     }
 }
 
-struct Shared<T> {
+struct SharedMut<T> {
     system: T,
     initialized: bool,
     commands_log: CommandsLog,
     observer_name: String,
 }
 
+struct Shared<T> {
+    inner: Mutex<SharedMut<T>>,
+    default_system_sets: Vec<InternedSystemSet>,
+}
+
 struct ArcSystem<T> {
-    shared: Arc<RwLock<Shared<T>>>,
+    shared: Arc<Shared<T>>,
     name: String,
     tick: Tick,
-
     forward: bool,
     commands_err: bool,
+    is_send: bool,
+    is_exclusive: bool,
+    has_deferred: bool,
 
     // these need to be cloned because one cannot return &'a Access from owned RwLockReadGuard<'a, Access>
     component_access: Access<ComponentId>,
@@ -142,25 +163,13 @@ impl<T: System> System for ArcSystem<T> {
         &self.archetype_component_access
     }
     fn is_send(&self) -> bool {
-        self.shared
-            .try_read()
-            .unwrap_or_else(expect_shared(&self.name))
-            .system
-            .is_send()
+        self.is_send
     }
     fn is_exclusive(&self) -> bool {
-        self.shared
-            .try_read()
-            .unwrap_or_else(expect_shared(&self.name))
-            .system
-            .is_exclusive()
+        self.is_exclusive
     }
     fn has_deferred(&self) -> bool {
-        self.shared
-            .try_read()
-            .unwrap_or_else(expect_shared(&self.name))
-            .system
-            .has_deferred()
+        self.has_deferred
     }
     unsafe fn run_unsafe(&mut self, input: Self::In, world: UnsafeWorldCell) -> Self::Out {
         debug_assert!(
@@ -168,7 +177,8 @@ impl<T: System> System for ArcSystem<T> {
             "expected scheduler to use System::run for exclusive system"
         );
         self.shared
-            .try_write()
+            .inner
+            .try_lock()
             .unwrap_or_else(expect_shared(&self.name))
             .system
             .run_unsafe(input, world)
@@ -176,7 +186,8 @@ impl<T: System> System for ArcSystem<T> {
     fn run(&mut self, input: Self::In, world: &mut World) -> Self::Out {
         let mut shared = self
             .shared
-            .try_write()
+            .inner
+            .try_lock()
             .unwrap_or_else(expect_shared(&self.name));
 
         if !self.is_exclusive() {
@@ -203,9 +214,15 @@ impl<T: System> System for ArcSystem<T> {
         }
     }
     fn apply_deferred(&mut self, world: &mut World) {
+        if !self.has_deferred || self.is_exclusive {
+            // exclusive systems have an empty body in this trait method, see ExclusiveFunctionSystem
+            return;
+        }
+
         let mut shared = self
             .shared
-            .try_write()
+            .inner
+            .try_lock()
             .unwrap_or_else(expect_shared(&self.name));
 
         shared.system.apply_deferred(world);
@@ -231,13 +248,17 @@ impl<T: System> System for ArcSystem<T> {
         unreachable!("{} used as an observer", std::any::type_name::<T>())
     }
     fn initialize(&mut self, world: &mut World) {
-        initialize_arc_system(&mut self.shared, &mut self.tick, &self.name, world);
+        let shared = initialize_arc_system(&mut self.shared, &mut self.tick, &self.name, world);
+        self.is_send = shared.system.is_send();
+        self.is_exclusive = shared.system.is_exclusive();
+        self.has_deferred = shared.system.has_deferred();
     }
     fn update_archetype_component_access(&mut self, world: UnsafeWorldCell) {
         // reference: CombinatorSystem
         let system = &mut self
             .shared
-            .try_write()
+            .inner
+            .try_lock()
             .unwrap_or_else(expect_shared(&self.name))
             .system;
         system.update_archetype_component_access(world);
@@ -248,11 +269,7 @@ impl<T: System> System for ArcSystem<T> {
         check_tick(&mut self.tick, change_tick);
     }
     fn default_system_sets(&self) -> Vec<InternedSystemSet> {
-        self.shared
-            .try_read()
-            .unwrap_or_else(expect_shared(&self.name))
-            .system
-            .default_system_sets()
+        self.shared.default_system_sets.clone()
     }
     fn get_last_run(&self) -> Tick {
         self.tick
@@ -266,7 +283,8 @@ impl<T: System> System for ArcSystem<T> {
 unsafe impl<T: ReadOnlySystem> ReadOnlySystem for ArcSystem<T> {
     fn run_readonly(&mut self, input: Self::In, world: &World) -> Self::Out {
         self.shared
-            .try_write()
+            .inner
+            .try_lock()
             .unwrap_or_else(expect_shared(&self.name))
             .system
             .run_readonly(input, world)
@@ -274,9 +292,10 @@ unsafe impl<T: ReadOnlySystem> ReadOnlySystem for ArcSystem<T> {
 }
 
 struct CommandsBackward<T> {
-    shared: Arc<RwLock<Shared<T>>>,
+    shared: Arc<Shared<T>>,
     name: String,
     tick: Tick,
+    has_deferred: bool,
     commands_err: bool,
 }
 
@@ -301,16 +320,13 @@ impl<T: System> System for CommandsBackward<T> {
         false
     }
     fn has_deferred(&self) -> bool {
-        self.shared
-            .try_read()
-            .unwrap_or_else(expect_shared(&self.name))
-            .system
-            .has_deferred()
+        self.has_deferred
     }
     fn apply_deferred(&mut self, world: &mut World) {
         let result = self
             .shared
-            .try_write()
+            .inner
+            .try_lock()
             .unwrap_or_else(expect_shared(&self.name))
             .commands_log
             .backward(world);
@@ -335,14 +351,11 @@ impl<T: System> System for CommandsBackward<T> {
         self.tick = last_run;
     }
     fn default_system_sets(&self) -> Vec<InternedSystemSet> {
-        self.shared
-            .try_read()
-            .unwrap_or_else(expect_shared(&self.name))
-            .system
-            .default_system_sets()
+        self.shared.default_system_sets.clone()
     }
     fn initialize(&mut self, world: &mut World) {
-        initialize_arc_system(&mut self.shared, &mut self.tick, &self.name, world);
+        let shared = initialize_arc_system(&mut self.shared, &mut self.tick, &self.name, world);
+        self.has_deferred = shared.system.has_deferred();
     }
     fn run(&mut self, _input: (), _world: &mut World) {}
     unsafe fn run_unsafe(&mut self, _input: (), _world: UnsafeWorldCell) {}
@@ -354,17 +367,17 @@ unsafe impl<T: System> ReadOnlySystem for CommandsBackward<T> {
     fn run_readonly(&mut self, _input: (), _world: &World) {}
 }
 
-fn initialize_arc_system(
-    shared: &mut Arc<RwLock<Shared<impl System>>>,
+fn initialize_arc_system<'a, T: System>(
+    shared: &'a mut Arc<Shared<T>>,
     tick: &mut Tick,
     name: &String,
     world: &mut World,
-) {
+) -> MutexGuard<'a, SharedMut<T>> {
     *tick = world.change_tick();
     let arc = shared.clone();
-    let mut shared = shared.try_write().unwrap_or_else(expect_shared(name));
+    let mut shared = shared.inner.try_lock().unwrap_or_else(expect_shared(name));
     if shared.initialized {
-        return;
+        return shared;
     }
 
     // init system
@@ -376,12 +389,15 @@ fn initialize_arc_system(
     world
         .get_resource_or_insert_with(CommandsLogReducings::default)
         .0
-        .push(Box::new(move |event, world| {
-            arc.try_write()
+        .push(Box::new(move |meta, world| {
+            arc.inner
+                .try_lock()
                 .unwrap_or_else(expect_shared(&name))
                 .commands_log
-                .reduce_logged_at(world, event)
+                .reduce_logged_at(world, meta)
         }));
+
+    shared
 }
 
 fn expect_shared<T: Debug, Out>(name: &String) -> impl FnOnce(T) -> Out + '_ {
