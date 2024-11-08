@@ -24,6 +24,9 @@ Enhancements:
 - InitiallyNoneStateLog / InitiallyNoneRareStateLog
 -- Rare variant
 -- tests, serde_with
+- RevDirection impl SystemParam
+- use upcoming check_params of Systemparam to skip noop CommandsBackward?
+-- initialize_arc_system could return a bool if it has deferred or is exclusive
 
 Docs
 - examples
