@@ -167,7 +167,7 @@ mod test {
             observer::Trigger,
             system::{Commands, Resource},
             world::{DeferredWorld, World},
-        }
+        },
     };
 
     use crate::{
@@ -190,17 +190,17 @@ mod test {
     enum Test<T> {
         Sys(T),
 
-        SysHook(T),
-        SysHookObsv(T),
-        SysHookCmd(T),
-
         SysObsv(T),
         SysObsvObsv(T),
         SysObsvCmd(T),
 
+        SysHook(T),
+        SysHookObsv(T),
+        SysHookCmd(T),
+
         SysCmd(T),
         SysCmdHook(T),
-        SysCmdObsv(T)
+        SysCmdObsv(T),
     }
 
     impl<T> Test<T> {
@@ -208,17 +208,17 @@ mod test {
             match self {
                 Test::Sys(value) => Test::Sys(map(value)),
 
-                Test::SysHook(value) => Test::SysHook(map(value)),
-                Test::SysHookObsv(value) => Test::SysHookObsv(map(value)),
-                Test::SysHookCmd(value) => Test::SysHookCmd(map(value)),
-
                 Test::SysObsv(value) => Test::SysObsv(map(value)),
                 Test::SysObsvObsv(value) => Test::SysObsvObsv(map(value)),
                 Test::SysObsvCmd(value) => Test::SysObsvCmd(map(value)),
 
+                Test::SysHook(value) => Test::SysHook(map(value)),
+                Test::SysHookObsv(value) => Test::SysHookObsv(map(value)),
+                Test::SysHookCmd(value) => Test::SysHookCmd(map(value)),
+
                 Test::SysCmd(value) => Test::SysCmd(map(value)),
                 Test::SysCmdHook(value) => Test::SysCmdHook(map(value)),
-                Test::SysCmdObsv(value) => Test::SysCmdObsv(map(value))
+                Test::SysCmdObsv(value) => Test::SysCmdObsv(map(value)),
             }
         }
     }
@@ -235,28 +235,26 @@ mod test {
         type Item = Test<u8>;
         fn into_iter(self) -> Self::IntoIter {
             match self {
-                Self::Regular(n) => vec![
-                    Test::Sys(n),
+                Self::Regular(n) => vec![Test::Sys(n)],
+                Self::RegularSyncPoint(n) => vec![
                     Test::SysObsv(n),
                     Test::SysObsvObsv(n),
                     Test::SysObsvCmd(n),
-                ],
-                Self::RegularSyncPoint(n) => vec![
-                    Test::SysCmd(n),
-                    Test::SysCmdHook(n),
-                    Test::SysCmdObsv(n)
-                ],
-                Self::Exclusive(n) => vec![
-                    Test::Sys(n),
                     Test::SysHook(n),
                     Test::SysHookObsv(n),
                     Test::SysHookCmd(n),
+                    Test::SysCmdHook(n),
+                    Test::SysCmdObsv(n),
+                    Test::SysCmd(n),
+                ],
+                Self::Exclusive(n) => vec![
+                    Test::Sys(n),
                     Test::SysObsv(n),
                     Test::SysObsvObsv(n),
                     Test::SysObsvCmd(n),
-                    Test::SysCmd(n),
-                    Test::SysCmdHook(n),
-                    Test::SysCmdObsv(n)
+                    Test::SysHook(n),
+                    Test::SysHookObsv(n),
+                    Test::SysHookCmd(n),
                 ],
             }
             .into_iter()
@@ -284,8 +282,30 @@ mod test {
     #[derive(Event, Clone)]
     struct SysCmdObsv(u8);
 
-    /// Has deferred params, will add sync point
-    fn regular_system<const N: u8>(mut world: DeferredWorld, mut commands: Commands) {
+    /// Will add sync point
+    fn regular_system<const N: u8>(
+        meta: Res<RevMeta>,
+        mut log: ResMut<TestLog>,
+        mut commands: Commands,
+    ) {
+        let direction = meta.direction();
+        log.0.push(Test::Sys((N, direction)));
+        if direction != RevDirection::NotLog {
+            return;
+        }
+
+        // trigger observer in system
+        commands.rev_trigger(SysObsv(N));
+
+        // trigger hook in system
+        commands.spawn(SysHook(N));
+
+        // trigger command in system
+        commands.rev_queue(system_command::<N>);
+    }
+
+    /// Will not add sync point
+    fn deferred_system<const N: u8>(mut world: DeferredWorld) {
         let direction = world.resource::<RevMeta>().direction();
         world
             .resource_mut::<TestLog>()
@@ -297,12 +317,9 @@ mod test {
 
         // trigger observer in system
         world.rev_trigger(SysObsv(N));
-
-        // trigger command in system
-        commands.rev_queue(system_command::<N>);
     }
 
-    /// Has no deferred params, will not add sync point
+    /// Will not add sync point
     fn exclusive_system<const N: u8>(world: &mut World) {
         let direction = world.resource::<RevMeta>().direction();
         world
@@ -313,27 +330,25 @@ mod test {
             return;
         }
 
-        // trigger hook in system
-        world.spawn(SysHook(N));
-
         // trigger observer in system
         world.rev_trigger(SysObsv(N));
 
-        // trigger command in system
-        world.commands().rev_queue(system_command::<N>);
+        // trigger hook in system
+        world.spawn(SysHook(N));
     }
 
     fn system_command<const N: u8>(world: &mut World) -> impl RevCommandLog {
-        world
-            .resource_mut::<TestLog>()
-            .0
-            .push(Test::SysCmd((N, RevDirection::NotLog)));
-
         // trigger hook in command
         world.spawn(SysCmdHook(N));
 
         // trigger observer in command
         world.rev_trigger(SysCmdObsv(N));
+
+        // todo: document that stuff like this belongs right before the return
+        world
+            .resource_mut::<TestLog>()
+            .0
+            .push(Test::SysCmd((N, RevDirection::NotLog)));
 
         |world: &mut World, forward: bool| {
             let direction = match forward {
@@ -372,7 +387,7 @@ mod test {
                 let event = trigger.event();
                 let direction = event.direction();
                 let n = event.0;
-                
+
                 world
                     .resource_mut::<TestLog>()
                     .0
@@ -533,6 +548,51 @@ mod test {
         test_run(
             |schedule| schedule.rev_add_systems(exclusive_system::<1>),
             vec![vec![TestBundle::Exclusive(1)]],
+        );
+    }
+
+    #[test]
+    fn regular_after_regular() {
+        test_run(
+            |schedule| schedule.rev_add_systems((
+                regular_system::<1>,
+                regular_system::<2>.rev_after(regular_system::<1>)
+            )),
+            vec![vec![
+                TestBundle::Regular(1),
+                TestBundle::RegularSyncPoint(1),
+                TestBundle::Regular(2),
+                TestBundle::RegularSyncPoint(2),
+            ]],
+        );
+    }
+
+    #[test]
+    fn regular_before_regular() {
+        test_run(
+            |schedule| schedule.rev_add_systems((
+                regular_system::<1>.rev_before(regular_system::<2>),
+                regular_system::<2>
+            )),
+            vec![vec![
+                TestBundle::Regular(1),
+                TestBundle::RegularSyncPoint(1),
+                TestBundle::Regular(2),
+                TestBundle::RegularSyncPoint(2),
+            ]],
+        );
+    }
+
+    #[test]
+    fn regular_chain() {
+        test_run(
+            |schedule| schedule.rev_add_systems((regular_system::<1>, regular_system::<2>).rev_chain()),
+            vec![vec![
+                TestBundle::Regular(1),
+                TestBundle::RegularSyncPoint(1),
+                TestBundle::Regular(2),
+                TestBundle::RegularSyncPoint(2),
+            ]],
         );
     }
 }
