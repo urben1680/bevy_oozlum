@@ -30,7 +30,6 @@ pub trait RevCommands {
 }
 
 pub(crate) fn buffer_rev_command<T: RevCommandLog>(world: &mut DeferredWorld, command: T) {
-    println!("buffer_rev_command::<{}>", std::any::type_name::<T>());
     let command: Box<dyn RevCommandLog> = Box::new(command);
     let buffer = &mut world
         .get_resource_mut::<RevCommandBuffer>()
@@ -49,9 +48,10 @@ impl RevCommands for Commands<'_, '_> {
     }
     fn rev_init_resource<R: Resource + FromWorld>(&mut self) {
         self.rev_queue(|world: &mut World| {
-            let initiialized = ResourceSwap(world.remove_resource::<R>());
-            world.init_resource::<R>();
-            initiialized
+            (!world.contains_resource::<R>()).then(|| {
+                world.init_resource::<R>();
+                ResourceSwap::<R>(None)
+            })
         })
     }
     fn rev_insert_resource<R: Resource>(&mut self, resource: R) {
@@ -217,6 +217,7 @@ impl CommandsLog {
             .backward_log()
             .map_err(|OutOfLog| CommandsLogErr::OutOfLog(meta.clone()))?
             .into_iter()
+            .rev()
         {
             command.undo(world);
         }
