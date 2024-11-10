@@ -69,7 +69,7 @@ impl<T: Copy> TargetLog<T> {
     }
     fn extend(
         &mut self,
-        iter: impl ExactSizeIterator<Item = T>,
+        iter: &[T],
         map: impl FnOnce(usize) -> TriggerTargetsCount,
     ) -> TriggerTargetsCount {
         let len = iter.len();
@@ -180,7 +180,9 @@ impl<E: Event + Clone> ObserverLog<E> {
 
 struct RevEventInitialized<E>(PhantomData<E>);
 
-impl<E: Event + Clone, Targets: TriggerTargets> RevCommand<()> for TriggerEvent<E, Targets> {
+impl<E: Event + Clone, Targets: TriggerTargets + Send + 'static> RevCommand<()>
+    for TriggerEvent<E, Targets>
+{
     fn rev_apply(self, world: &mut World) -> Option<impl RevCommandLog> {
         apply_trigger_event(self, world)
     }

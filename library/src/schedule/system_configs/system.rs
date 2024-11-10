@@ -15,6 +15,7 @@ use bevy::{
         system::{IntoSystem, ReadOnlySystem, System},
         world::{unsafe_world_cell::UnsafeWorldCell, DeferredWorld, World},
     },
+    prelude::SystemIn,
     utils::default,
 };
 
@@ -22,8 +23,8 @@ use crate::{
     check_tick,
     commands::CommandsLog,
     error_per_flag,
-    meta::CommandsLogReducings,
-    schedule::{BwdArcSet, BwdCmdArcSet, FwdArcSet},
+    meta::{CommandsLogReducings, RevMeta},
+    schedule::{BwdCmdSet, BwdSysSet, ForwardSet, FwdSysSet},
 };
 
 use super::{IntoRevSystemConfigs, RevSystemConfigs, RevSystemSetConfigs};
@@ -104,31 +105,22 @@ where
         // deferred buffers. CommandsBackward::has_deferred returns the value of the actual system.
         RevSystemConfigs {
             systems: (
-                forward_sys.in_set(FwdArcSet(id)),
-                (backward_cmd, backward_sys.in_set(BwdArcSet(id)))
-                    .chain()
-                    .in_set(BwdCmdArcSet(id)),
+                forward_sys.in_set(FwdSysSet(id)),
+                (
+                    backward_cmd.in_set(BwdCmdSet(id)),
+                    backward_sys.in_set(BwdSysSet(id)),
+                )
+                    .chain(),
             )
                 .into_configs(),
             sets: RevSystemSetConfigs {
-                fwd_arc_sets: FwdArcSet(id).into_configs(),
-                bwd_cmd_arc_sets: BwdCmdArcSet(id).into_configs(),
-                bwd_arc_sets: BwdArcSet(id).into_configs(),
+                fwd_sys_sets: FwdSysSet(id).into_configs(),
+                bwd_cmd_sets: BwdCmdSet(id).into_configs(),
+                bwd_sys_sets: BwdSysSet(id).into_configs(),
+                cond_sets: ForwardSet.into_configs(),
             },
         }
     }
-}
-
-struct SharedMut<T> {
-    system: T,
-    initialized: bool,
-    commands_log: CommandsLog,
-    observer_name: String,
-}
-
-struct Shared<T> {
-    inner: Mutex<SharedMut<T>>,
-    default_system_sets: Vec<InternedSystemSet>,
 }
 
 struct ArcSystem<T> {
@@ -144,6 +136,18 @@ struct ArcSystem<T> {
     // these need to be cloned because one cannot return &'a Access from owned RwLockReadGuard<'a, Access>
     component_access: Access<ComponentId>,
     archetype_component_access: Access<ArchetypeComponentId>,
+}
+
+struct Shared<T> {
+    inner: Mutex<SharedMut<T>>,
+    default_system_sets: Vec<InternedSystemSet>,
+}
+
+struct SharedMut<T> {
+    system: T,
+    initialized: bool,
+    commands_log: CommandsLog,
+    observer_name: String,
 }
 
 impl<T: System> System for ArcSystem<T> {
@@ -171,7 +175,35 @@ impl<T: System> System for ArcSystem<T> {
     fn has_deferred(&self) -> bool {
         self.has_deferred
     }
-    unsafe fn run_unsafe(&mut self, input: Self::In, world: UnsafeWorldCell) -> Self::Out {
+    unsafe fn validate_param_unsafe(&mut self, world: UnsafeWorldCell) -> bool {
+        // commands log needs to read RevMeta
+        if self.is_exclusive() && !world.get_resource::<RevMeta>().is_some() {
+            return false;
+        }
+        self.shared
+            .inner
+            .try_lock()
+            .unwrap_or_else(expect_shared(&self.name))
+            .system
+            .validate_param_unsafe(world)
+    }
+    fn validate_param(&mut self, world: &World) -> bool {
+        // commands log needs to read RevMeta
+        if self.is_exclusive() && !world.contains_resource::<RevMeta>() {
+            return false;
+        }
+        self.shared
+            .inner
+            .try_lock()
+            .unwrap_or_else(expect_shared(&self.name))
+            .system
+            .validate_param(world)
+    }
+    unsafe fn run_unsafe(
+        &mut self,
+        input: SystemIn<'_, Self>,
+        world: UnsafeWorldCell,
+    ) -> Self::Out {
         debug_assert!(
             !self.is_exclusive(),
             "expected scheduler to use System::run for exclusive system"
@@ -183,7 +215,7 @@ impl<T: System> System for ArcSystem<T> {
             .system
             .run_unsafe(input, world)
     }
-    fn run(&mut self, input: Self::In, world: &mut World) -> Self::Out {
+    fn run(&mut self, input: SystemIn<'_, Self>, world: &mut World) -> Self::Out {
         let mut shared = self
             .shared
             .inner
@@ -281,7 +313,7 @@ impl<T: System> System for ArcSystem<T> {
 
 // SAFETY: todo
 unsafe impl<T: ReadOnlySystem> ReadOnlySystem for ArcSystem<T> {
-    fn run_readonly(&mut self, input: Self::In, world: &World) -> Self::Out {
+    fn run_readonly(&mut self, input: SystemIn<'_, Self>, world: &World) -> Self::Out {
         self.shared
             .inner
             .try_lock()
@@ -322,6 +354,42 @@ impl<T: System> System for CommandsBackward<T> {
     fn has_deferred(&self) -> bool {
         self.has_deferred
     }
+    unsafe fn validate_param_unsafe(&mut self, world: UnsafeWorldCell) -> bool {
+        // noop if has no deferred
+        if !self.has_deferred() {
+            return false;
+        }
+        // exclusive systems read RevMeta in Self::run during forward, keep symmetry
+        if self.is_exclusive() && !world.get_resource::<RevMeta>().is_some() {
+            return false;
+        }
+        // keep symmetry
+        self.shared
+            .inner
+            .try_lock()
+            .unwrap_or_else(expect_shared(&self.name))
+            .system
+            .validate_param_unsafe(world)
+    }
+    fn validate_param(&mut self, world: &World) -> bool {
+        // noop if has no deferred
+        if !self.has_deferred() {
+            return false;
+        }
+        // exclusive systems read RevMeta in Self::run
+        if self.is_exclusive() && !world.contains_resource::<RevMeta>() {
+            return false;
+        }
+        // keep symmetry
+        self.shared
+            .inner
+            .try_lock()
+            .unwrap_or_else(expect_shared(&self.name))
+            .system
+            .validate_param(world)
+    }
+    unsafe fn run_unsafe(&mut self, _input: (), _world: UnsafeWorldCell) {}
+    fn run(&mut self, _input: (), _world: &mut World) {}
     fn apply_deferred(&mut self, world: &mut World) {
         let result = self
             .shared
@@ -357,8 +425,6 @@ impl<T: System> System for CommandsBackward<T> {
         let shared = initialize_arc_system(&mut self.shared, &mut self.tick, &self.name, world);
         self.has_deferred = shared.system.has_deferred();
     }
-    fn run(&mut self, _input: (), _world: &mut World) {}
-    unsafe fn run_unsafe(&mut self, _input: (), _world: UnsafeWorldCell) {}
     fn update_archetype_component_access(&mut self, _world: UnsafeWorldCell) {}
 }
 

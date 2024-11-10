@@ -16,7 +16,7 @@ use crate::{
 };
 
 pub trait RevWorld {
-    fn rev_observe<E, B, M>(
+    fn rev_add_observer<E, B, M>(
         &mut self,
         system: impl IntoObserverSystem<RevEvent<E>, B, M>,
     ) -> EntityWorldMut<'_>
@@ -31,11 +31,15 @@ pub trait RevWorld {
 
 pub trait RevDeferredWorld {
     fn rev_trigger(&mut self, event: impl Event + Clone);
-    fn rev_trigger_targets(&mut self, event: impl Event + Clone, targets: impl TriggerTargets);
+    fn rev_trigger_targets(
+        &mut self,
+        event: impl Event + Clone,
+        targets: impl TriggerTargets + Send + 'static,
+    );
 }
 
 impl RevWorld for World {
-    fn rev_observe<E, B, M>(
+    fn rev_add_observer<E, B, M>(
         &mut self,
         system: impl IntoObserverSystem<RevEvent<E>, B, M>,
     ) -> EntityWorldMut<'_>
@@ -44,7 +48,7 @@ impl RevWorld for World {
         B: Bundle,
     {
         self.init_resource::<ObserverLog<E>>();
-        self.observe(system)
+        self.add_observer(system)
     }
     fn rev_trigger(&mut self, event: impl Event + Clone) {
         self.rev_trigger_targets(event, ());
@@ -56,7 +60,7 @@ impl RevWorld for World {
         }
     }
     fn rev_register_component_hooks<T: Component>(&mut self) -> RevComponentHooks {
-        let component = self.init_component::<T>();
+        let component = self.register_component::<T>();
         self.rev_register_component_hooks_by_id(component)
             .expect("todo")
     }
@@ -74,7 +78,11 @@ impl<'w> RevDeferredWorld for DeferredWorld<'w> {
     fn rev_trigger(&mut self, event: impl Event + Clone) {
         self.rev_trigger_targets(event, ());
     }
-    fn rev_trigger_targets(&mut self, event: impl Event + Clone, targets: impl TriggerTargets) {
+    fn rev_trigger_targets(
+        &mut self,
+        event: impl Event + Clone,
+        targets: impl TriggerTargets + Send + 'static,
+    ) {
         self.commands().rev_queue(TriggerEvent { event, targets });
     }
 }
