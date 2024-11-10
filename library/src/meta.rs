@@ -8,7 +8,7 @@ use bevy::{
         component::ComponentId,
         event::Event,
         query::Access,
-        system::{IntoSystem, Res, Resource, System},
+        system::{IntoSystem, Res, Resource, System, SystemParam},
         world::World,
     },
     log::warn_once,
@@ -80,6 +80,43 @@ impl RevDirection {
     }
     pub fn is_backward(self) -> bool {
         matches!(self, Self::BackwardLog)
+    }
+}
+
+unsafe impl SystemParam for RevDirection {
+    type Item<'world, 'state> = Self;
+    type State = ComponentId;
+    fn init_state(
+        world: &mut World,
+        system_meta: &mut bevy::ecs::system::SystemMeta,
+    ) -> Self::State {
+        <Res<'static, RevMeta> as SystemParam>::init_state(world, system_meta)
+    }
+    unsafe fn validate_param(
+        state: &Self::State,
+        system_meta: &bevy::ecs::system::SystemMeta,
+        world: bevy::ecs::world::unsafe_world_cell::UnsafeWorldCell,
+    ) -> bool {
+        if !<Res<'static, RevMeta> as SystemParam>::validate_param(state, system_meta, world) {
+            return false;
+        }
+        world
+            .get_resource_by_id(*state)
+            .map(|ptr| ptr.deref::<RevMeta>())
+            .and_then(RevMeta::get_direction)
+            .is_some()
+    }
+    unsafe fn get_param<'world, 'state>(
+        state: &'state mut Self::State,
+        _system_meta: &bevy::ecs::system::SystemMeta,
+        world: bevy::ecs::world::unsafe_world_cell::UnsafeWorldCell<'world>,
+        _change_tick: bevy::ecs::component::Tick,
+    ) -> Self::Item<'world, 'state> {
+        world
+            .get_resource_by_id(*state)
+            .map(|ptr| ptr.deref::<RevMeta>())
+            .and_then(RevMeta::get_direction)
+            .unwrap()
     }
 }
 

@@ -26,7 +26,11 @@ pub trait RevCommands {
     fn rev_insert_resource<R: Resource>(&mut self, resource: R);
     fn rev_remove_resource<R: Resource>(&mut self);
     fn rev_trigger(&mut self, event: impl Event + Clone);
-    fn rev_trigger_targets(&mut self, event: impl Event + Clone, targets: impl TriggerTargets);
+    fn rev_trigger_targets(
+        &mut self,
+        event: impl Event + Clone,
+        targets: impl TriggerTargets + Send + 'static,
+    );
 }
 
 pub(crate) fn buffer_rev_command<T: RevCommandLog>(world: &mut DeferredWorld, command: T) {
@@ -40,7 +44,7 @@ pub(crate) fn buffer_rev_command<T: RevCommandLog>(world: &mut DeferredWorld, co
 
 impl RevCommands for Commands<'_, '_> {
     fn rev_queue<Marker>(&mut self, command: impl RevCommand<Marker>) {
-        self.add(|world: &mut World| {
+        self.queue(|world: &mut World| {
             if let Some(command) = command.rev_apply(world) {
                 buffer_rev_command(&mut world.into(), command)
             }
@@ -71,7 +75,11 @@ impl RevCommands for Commands<'_, '_> {
     fn rev_trigger(&mut self, event: impl Event + Clone) {
         self.rev_queue(TriggerEvent { event, targets: () })
     }
-    fn rev_trigger_targets(&mut self, event: impl Event + Clone, targets: impl TriggerTargets) {
+    fn rev_trigger_targets(
+        &mut self,
+        event: impl Event + Clone,
+        targets: impl TriggerTargets + Send + 'static,
+    ) {
         self.rev_queue(TriggerEvent { event, targets })
     }
 }
