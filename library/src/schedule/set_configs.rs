@@ -2,7 +2,7 @@ use bevy::{
     ecs::schedule::{Condition, IntoSystemSet, IntoSystemSetConfigs, SystemSet, SystemSetConfigs},
     utils::all_tuples,
 };
-use condition::rev_condition;
+use condition::add_condition;
 
 use super::{BwdCmdSet, BwdNonSys, BwdSysSet, ForwardSet, FwdNonSys, FwdSysSet};
 
@@ -37,10 +37,9 @@ pub trait IntoRevSystemSetConfigs<Marker>: Sized {
         let set = set.into_system_set().intern();
         // example for a system A in self and a system B in set:
         //
-        // A forward sys ─> maybe sync ─> B forward sys ─> maybe sync
+        // A fwd_sys ─> sync ─> B fwd_sys ─> sync
         //
-        // B backward cmds ─> maybe sync ┬> B backward sys ─┐
-        //                               └> A backward cmds ┴> maybe sync ─> A backward sys
+        // B bwd_cmd ─> sync ─> B bwd_sys ─> A bwd_cmd ─> sync ─> A bwd_sys
         RevSystemSetConfigs {
             fwd_sys_sets: configs.fwd_sys_sets.before(FwdSysSet::from_set(set)),
             bwd_cmd_sets: configs.bwd_cmd_sets.after(BwdCmdSet::from_set(set)),
@@ -53,14 +52,13 @@ pub trait IntoRevSystemSetConfigs<Marker>: Sized {
         let set = set.into_system_set().intern();
         // example for a system A in self and a system B in set:
         //
-        // B forward sys ─> maybe sync ─> A forward sys ─> maybe sync
+        // B fwd_sys ─> sync ─> A fwd_sys ─> sync
         //
-        // A backward cmds ─> maybe sync ┬> A backward sys ─┐
-        //                               └> B backward cmds ┴> maybe sync ─> B backward sys
+        // A bwd_cmd ─> sync ─> A bwd_sys ─> B bwd_cmd ─> sync ─> B bwd_sys
         RevSystemSetConfigs {
             fwd_sys_sets: configs.fwd_sys_sets.after(FwdSysSet::from_set(set)),
-            bwd_cmd_sets: configs.bwd_cmd_sets.before(BwdCmdSet::from_set(set)),
-            bwd_sys_sets: configs.bwd_sys_sets.before(BwdSysSet::from_set(set)),
+            bwd_cmd_sets: configs.bwd_cmd_sets.before(BwdSysSet::from_set(set)),
+            bwd_sys_sets: configs.bwd_sys_sets.before(BwdCmdSet::from_set(set)),
             cond_sets: configs.cond_sets,
         }
     }
@@ -69,10 +67,9 @@ pub trait IntoRevSystemSetConfigs<Marker>: Sized {
         let set = set.into_system_set().intern();
         // example for a system A in self and a system B in set:
         //
-        // A forward sys ─> B forward sys ─> maybe sync
+        // A fwd_sys ─> B fwd_sys ─> sync
         //
-        // B backward cmds ┬> maybe sync ─> B backward sys ─┐
-        //                 └> A backward cmds ─> maybe sync ┴─> A backward sys
+        // B bwd_cmd ─> A bwd_cmd ─> sync ─> B bwd_sys ─> A bwd_sys
         RevSystemSetConfigs {
             fwd_sys_sets: configs
                 .fwd_sys_sets
@@ -91,10 +88,9 @@ pub trait IntoRevSystemSetConfigs<Marker>: Sized {
         let set = set.into_system_set().intern();
         // example for a system A in self and a system B in set:
         //
-        // B forward sys ─> A forward sys ─> maybe sync
+        // B fwd_sys ─> A fwd_sys ─> sync
         //
-        // A backward cmds ┬> maybe sync ─> A backward sys ─┐
-        //                 └> B backward cmds ─> maybe sync ┴─> B backward sys
+        // A bwd_cmd ─> B bwd_cmd ─> sync ─> A bwd_sys ─> B bwd_sys
         RevSystemSetConfigs {
             fwd_sys_sets: configs
                 .fwd_sys_sets
@@ -109,13 +105,13 @@ pub trait IntoRevSystemSetConfigs<Marker>: Sized {
         }
     }
     fn rev_run_if<M>(self, condition: impl Condition<M>) -> RevSystemSetConfigs {
-        let configs = self.into_rev_configs();
-        let (condition, set) = rev_condition(condition);
+        let mut configs = self.into_rev_configs();
+        let set = add_condition(&mut configs.cond_sets, condition);
         RevSystemSetConfigs {
             fwd_sys_sets: configs.fwd_sys_sets.in_set(set),
             bwd_cmd_sets: configs.bwd_cmd_sets.in_set(set),
             bwd_sys_sets: configs.bwd_sys_sets.in_set(set),
-            cond_sets: (configs.cond_sets, set.run_if(condition)).into_configs(),
+            cond_sets: configs.cond_sets,
         }
     }
     fn rev_ambiguous_with<M>(self, set: impl IntoSystemSet<M>) -> RevSystemSetConfigs {
@@ -143,6 +139,13 @@ pub trait IntoRevSystemSetConfigs<Marker>: Sized {
     }
     fn rev_chain(self) -> RevSystemSetConfigs {
         let configs = self.into_rev_configs();
+        // example for systems A, B and C in self:
+        //
+        // A fwd_sys ─> sync ─> B fwd_sys ─> sync ─> C fwd_sys ─> sync
+        //
+        // C bwd_cmd ─> sync ─> C bwd_sys ─> B bwd_cmd ─> sync ─> B bwd_sys ─> A bwd_cmd ─> sync ─> A bwd_sys
+
+        // todo: chain bwd_cmd_sys sets
         RevSystemSetConfigs {
             fwd_sys_sets: configs.fwd_sys_sets.chain(),
             bwd_cmd_sets: configs.bwd_cmd_sets.chain(),
@@ -152,6 +155,13 @@ pub trait IntoRevSystemSetConfigs<Marker>: Sized {
     }
     fn rev_chain_ignore_deferred(self) -> RevSystemSetConfigs {
         let configs = self.into_rev_configs();
+        // example for systems A, B and C in self:
+        //
+        // A fwd_sys ─> B fwd_sys ─> C fwd_sys ─> sync
+        //
+        // C bwd_cmd ─> B bwd_cmd ─> A bwd_cmd ─> sync ─> C bwd_sys ─> B bwd_sys ─> A bwd_sys
+
+        // todo: introduce atomic set X, bwd_cmd.in_set(X), bwd_sys.after(X)
         RevSystemSetConfigs {
             fwd_sys_sets: configs.fwd_sys_sets.chain_ignore_deferred(),
             bwd_cmd_sets: configs.bwd_cmd_sets.chain_ignore_deferred(),
