@@ -359,10 +359,6 @@ impl<T: System> System for CommandsBackward<T> {
         if !self.has_deferred() {
             return false;
         }
-        // exclusive systems read RevMeta in Self::run during forward, keep symmetry
-        if self.is_exclusive() && !world.get_resource::<RevMeta>().is_some() {
-            return false;
-        }
         // keep symmetry
         self.shared
             .inner
