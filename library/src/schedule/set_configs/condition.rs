@@ -1,15 +1,20 @@
-use std::{any::TypeId, borrow::Cow, sync::atomic::AtomicU32};
+use std::{
+    any::TypeId,
+    borrow::Cow,
+    mem::replace,
+    sync::atomic::{AtomicU32, Ordering},
+};
 
 use bevy::{
     ecs::{
         archetype::ArchetypeComponentId,
         component::{ComponentId, Tick},
         query::Access,
-        schedule::{Condition, InternedSystemSet},
+        schedule::{Condition, InternedSystemSet, SystemSetConfigs},
         system::{IntoSystem, ReadOnlySystem, System},
         world::{unsafe_world_cell::UnsafeWorldCell, DeferredWorld, World},
     },
-    prelude::{SystemIn, SystemSet},
+    prelude::{IntoSystemSetConfigs, SystemIn, SystemSet},
     utils::default,
 };
 
@@ -17,11 +22,17 @@ use crate::{
     error_per_flag,
     log::{OutOfLog, RareTransitionLog},
     meta::{RevDirection, RevMeta},
+    schedule::ForwardSet,
 };
 
-pub(super) fn rev_condition<Marker>(
+pub(crate) fn add_condition<Marker>(
+    configs: &mut SystemSetConfigs,
     condition: impl Condition<Marker>,
-) -> (impl Condition<()>, InternedSystemSet) {
+) -> InternedSystemSet {
+    #[derive(SystemSet, Copy, Clone, Debug, Hash, PartialEq, Eq)]
+    struct CondSet(u32);
+    static SET_COUNTER: AtomicU32 = AtomicU32::new(0);
+
     let condition = RevCondition {
         condition: IntoSystem::into_system(condition),
         meta_id: None,
@@ -30,14 +41,11 @@ pub(super) fn rev_condition<Marker>(
         archetype_component_access: default(),
         out_of_log_err: false,
     };
-    let id = SET_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    (condition, CondSet(id).intern())
+    let set = CondSet(SET_COUNTER.fetch_add(1, Ordering::Relaxed)).intern();
+    let before = replace(configs, ForwardSet.into_configs());
+    *configs = (before, set.run_if(condition)).into_configs();
+    set
 }
-
-#[derive(SystemSet, Copy, Clone, Debug, Hash, PartialEq, Eq)]
-pub(crate) struct CondSet(u32); // not needed for distributive_run_if
-
-static SET_COUNTER: AtomicU32 = AtomicU32::new(0);
 
 struct RevCondition<T> {
     condition: T,
