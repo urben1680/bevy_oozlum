@@ -11,11 +11,11 @@ use bevy::{
         archetype::ArchetypeComponentId,
         component::{ComponentId, Tick},
         query::Access,
-        schedule::{InternedSystemSet, IntoSystemConfigs, IntoSystemSetConfigs},
+        schedule::{InternedSystemSet, IntoSystemConfigs, IntoSystemSetConfigs, SystemSetConfigs},
         system::{IntoSystem, ReadOnlySystem, System},
         world::{unsafe_world_cell::UnsafeWorldCell, DeferredWorld, World},
     },
-    prelude::SystemIn,
+    prelude::{SystemIn, SystemSet},
     utils::default,
 };
 
@@ -24,7 +24,7 @@ use crate::{
     commands::CommandsLog,
     error_per_flag,
     meta::{CommandsLogReducings, RevMeta},
-    schedule::{BwdCmdSet, BwdSysSet, ForwardSet, FwdSysSet},
+    schedule::{BackwardSet, BwdCmdSet, BwdCmdSysSet, BwdSysSet, ForwardSet, FwdSysSet},
 };
 
 use super::{IntoRevSystemConfigs, RevSystemConfigs, RevSystemSetConfigs};
@@ -49,7 +49,7 @@ where
         let bwd_cmd_name = name(" (backward commands)");
         let observer_name = name(" (backward commands observer)");
 
-        let default_system_sets = system.default_system_sets();
+        let default_system_sets: Vec<InternedSystemSet> = system.default_system_sets();
 
         let shared = Mutex::new(SharedMut {
             system,
@@ -60,10 +60,10 @@ where
 
         let shared = Arc::new(Shared {
             inner: shared,
-            default_system_sets,
+            default_system_sets: default_system_sets.clone(),
         });
 
-        let forward_sys = ArcSystem {
+        let mut forward_sys = ArcSystem {
             shared: shared.clone(),
             name: fwd_sys_name,
             tick: Tick::new(0),
@@ -74,9 +74,9 @@ where
             commands_err: false,
             component_access: default(),
             archetype_component_access: default(),
-        };
+        }.in_set(ForwardSet);
 
-        let backward_sys = ArcSystem {
+        let mut backward_sys = ArcSystem {
             shared: shared.clone(),
             name: bwd_sys_name,
             tick: Tick::new(0),
@@ -87,17 +87,38 @@ where
             commands_err: false,
             component_access: default(),
             archetype_component_access: default(),
-        };
+        }.in_set(BackwardSet);
 
-        let backward_cmd = CommandsBackward {
+        let mut backward_cmd = CommandsBackward {
             shared: shared.clone(),
             name: bwd_cmd_name,
             tick: Tick::new(0),
             has_deferred: false,
             commands_err: false,
-        };
+        }.in_set(BackwardSet);
 
-        let id = TypeId::of::<T::System>();
+        let mut fwd_sys_sets = None;;
+        let mut bwd_cmd_sets = None;
+        let mut bwd_sys_sets = None;
+        let mut bwd_cmd_sys_sets = None;
+
+        fn add_configs(configs: &mut Option<SystemSetConfigs>, add: SystemSetConfigs) {
+            *configs = Some(match configs.take() {
+                None => add.into_configs(),
+                Some(configs) => (configs, add).into_configs()
+            });
+        }
+
+        for set in default_system_sets {
+            forward_sys = forward_sys.in_set(FwdSysSet(set));
+            backward_sys = backward_sys.in_set(BwdSysSet(set));
+            backward_cmd = backward_cmd.in_set(BwdCmdSet(set));
+
+            add_configs(&mut fwd_sys_sets, FwdSysSet(set).in_set(ForwardSet));
+            add_configs(&mut bwd_cmd_sets, BwdCmdSet(set).in_set(BwdCmdSysSet(set)).in_set(BackwardSet));
+            add_configs(&mut bwd_sys_sets, BwdSysSet(set).in_set(BwdCmdSysSet(set)).in_set(BackwardSet));
+            add_configs(&mut bwd_cmd_sys_sets, BwdCmdSysSet(set).in_set(BackwardSet));
+        }
 
         // Note that System::has_deferred may return no correct value before initializing the system.
         // Because of this and that initializing the system here might be surprising for the user
@@ -105,19 +126,19 @@ where
         // deferred buffers. CommandsBackward::has_deferred returns the value of the actual system.
         RevSystemConfigs {
             systems: (
-                forward_sys.in_set(FwdSysSet(id)),
+                forward_sys,
                 (
-                    backward_cmd.in_set(BwdCmdSet(id)),
-                    backward_sys.in_set(BwdSysSet(id)),
-                )
-                    .chain(),
+                    backward_cmd,
+                    backward_sys
+                ).chain(),
             )
                 .into_configs(),
             sets: RevSystemSetConfigs {
-                fwd_sys_sets: FwdSysSet(id).into_configs(),
-                bwd_cmd_sets: BwdCmdSet(id).into_configs(),
-                bwd_sys_sets: BwdSysSet(id).into_configs(),
-                cond_sets: ForwardSet.into_configs(),
+                fwd_sys_sets: fwd_sys_sets.unwrap(),
+                bwd_cmd_sets: bwd_cmd_sets.unwrap(),
+                bwd_sys_sets: bwd_sys_sets.unwrap(),
+                bwd_cmd_sys_sets: bwd_cmd_sys_sets.unwrap(),
+                condition_sets: ForwardSet.into_configs(),
             },
         }
     }
@@ -177,7 +198,7 @@ impl<T: System> System for ArcSystem<T> {
     }
     unsafe fn validate_param_unsafe(&mut self, world: UnsafeWorldCell) -> bool {
         // commands log needs to read RevMeta
-        if self.is_exclusive() && !world.get_resource::<RevMeta>().is_some() {
+        if self.is_exclusive && !world.get_resource::<RevMeta>().is_some() {
             return false;
         }
         self.shared
@@ -189,7 +210,7 @@ impl<T: System> System for ArcSystem<T> {
     }
     fn validate_param(&mut self, world: &World) -> bool {
         // commands log needs to read RevMeta
-        if self.is_exclusive() && !world.contains_resource::<RevMeta>() {
+        if self.is_exclusive && !world.contains_resource::<RevMeta>() {
             return false;
         }
         self.shared
@@ -204,8 +225,8 @@ impl<T: System> System for ArcSystem<T> {
         input: SystemIn<'_, Self>,
         world: UnsafeWorldCell,
     ) -> Self::Out {
-        debug_assert!(
-            !self.is_exclusive(),
+        assert!(
+            !self.is_exclusive,
             "expected scheduler to use System::run for exclusive system"
         );
         self.shared
@@ -356,7 +377,7 @@ impl<T: System> System for CommandsBackward<T> {
     }
     unsafe fn validate_param_unsafe(&mut self, world: UnsafeWorldCell) -> bool {
         // noop if has no deferred
-        if !self.has_deferred() {
+        if !self.has_deferred {
             return false;
         }
         // keep symmetry
@@ -369,11 +390,7 @@ impl<T: System> System for CommandsBackward<T> {
     }
     fn validate_param(&mut self, world: &World) -> bool {
         // noop if has no deferred
-        if !self.has_deferred() {
-            return false;
-        }
-        // exclusive systems read RevMeta in Self::run
-        if self.is_exclusive() && !world.contains_resource::<RevMeta>() {
+        if !self.has_deferred {
             return false;
         }
         // keep symmetry

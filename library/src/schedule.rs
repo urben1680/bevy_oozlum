@@ -2,7 +2,7 @@ use std::any::TypeId;
 
 use bevy::ecs::{
     change_detection::Res,
-    schedule::{InternedSystemSet, IntoSystemSet, IntoSystemSetConfigs, Schedule, SystemSet},
+    schedule::{InternedSystemSet, IntoSystemSet, IntoSystemConfigs, IntoSystemSetConfigs, Schedule, SystemSet},
 };
 
 use crate::meta::{RevDirection, RevMeta};
@@ -33,61 +33,58 @@ struct BackwardSet;
 ///
 /// Each contains the system wrapped in `Arc`.
 #[derive(SystemSet, Copy, Clone, Debug, Hash, PartialEq, Eq)]
-struct FwdSysSet(TypeId);
+struct FwdSysSet(InternedSystemSet);
 
 /// Subsets of [`ForwardSet`].
 ///
 /// Each contains a non-system set.
-#[derive(SystemSet, Copy, Clone, Debug, Hash, PartialEq, Eq)]
-struct FwdNonSys(InternedSystemSet);
+//#[derive(SystemSet, Copy, Clone, Debug, Hash, PartialEq, Eq)]
+//struct FwdNonSys(InternedSystemSet);
 
 /// Subsets of [`BackwardSet`].
 ///
 /// todo
 #[derive(SystemSet, Copy, Clone, Debug, Hash, PartialEq, Eq)]
-struct BwdCmdSet(TypeId);
+struct BwdCmdSet(InternedSystemSet);
 
 /// Subsets of [`BackwardSet`].
 ///
 /// Each contains the system wrapped in `Arc`.
 #[derive(SystemSet, Copy, Clone, Debug, Hash, PartialEq, Eq)]
-struct BwdSysSet(TypeId);
+struct BwdSysSet(InternedSystemSet);
+
+/// Subsets of [`BackwardSet`].
+///
+/// Each contains the system wrapped in `Arc`.
+#[derive(SystemSet, Copy, Clone, Debug, Hash, PartialEq, Eq)]
+struct BwdCmdSysSet(InternedSystemSet);
 
 /// Subsets of [`BackwardSet`].
 ///
 /// Each contains a non-system set.
-#[derive(SystemSet, Copy, Clone, Debug, Hash, PartialEq, Eq)]
-struct BwdNonSys(InternedSystemSet);
+//#[derive(SystemSet, Copy, Clone, Debug, Hash, PartialEq, Eq)]
+//struct BwdNonSys(InternedSystemSet);
 
-impl FwdSysSet {
-    fn from_set<Marker>(set: impl IntoSystemSet<Marker>) -> InternedSystemSet {
-        let set = set.into_system_set();
-        match set.system_type() {
-            Some(id) => Self(id).intern(),
-            None => FwdNonSys(set.intern()).intern(),
+/* 
+macro_rules! impl_from_set {
+    ($T: ident, $NonSys: ident) => {
+        impl $T {
+            fn from_set<Marker>(set: impl IntoSystemSet<Marker>) -> InternedSystemSet {
+                let set = set.into_system_set();
+                match set.system_type() {
+                    Some(id) => Self(id).intern(),
+                    None => $NonSys(set.intern()).intern(),
+                }
+            }
         }
-    }
+    };
 }
 
-impl BwdCmdSet {
-    fn from_set<Marker>(set: impl IntoSystemSet<Marker>) -> InternedSystemSet {
-        let set = set.into_system_set();
-        match set.system_type() {
-            Some(id) => Self(id).intern(),
-            None => BwdNonSys(set.intern()).intern(),
-        }
-    }
-}
-
-impl BwdSysSet {
-    fn from_set<Marker>(set: impl IntoSystemSet<Marker>) -> InternedSystemSet {
-        let set = set.into_system_set();
-        match set.system_type() {
-            Some(id) => Self(id).intern(),
-            None => BwdNonSys(set.intern()).intern(),
-        }
-    }
-}
+impl_from_set!(FwdSysSet, FwdNonSys);
+impl_from_set!(BwdCmdSet, BwdNonSys);
+impl_from_set!(BwdSysSet, BwdNonSys);
+impl_from_set!(BwdCmdSysSet, BwdNonSys);
+*/
 
 pub trait RevSchedule {
     fn rev_add_systems<Marker>(&mut self, systems: impl IntoRevSystemConfigs<Marker>) -> &mut Self;
@@ -126,12 +123,14 @@ impl RevSchedule for Schedule {
             fwd_sys_sets,
             bwd_cmd_sets,
             bwd_sys_sets,
-            cond_sets,
+            bwd_cmd_sys_sets,
+            condition_sets: cond_sets,
         } = sets.into_rev_configs();
         self.configure_sets((
-            fwd_sys_sets.in_set(ForwardSet),
-            bwd_cmd_sets.in_set(BackwardSet),
-            bwd_sys_sets.in_set(BackwardSet),
+            fwd_sys_sets,
+            bwd_cmd_sets,
+            bwd_sys_sets,
+            bwd_cmd_sys_sets,
             cond_sets,
         ))
     }
@@ -154,16 +153,13 @@ mod test {
     };
 
     use crate::{
-        commands::{RevCommandLog, RevCommands},
-        observer::RevEvent,
-        world::{RevDeferredWorld, RevWorld},
-        RevFrame, RevUpdate,
+        app::RevApp, commands::{RevCommandLog, RevCommands}, observer::RevEvent, world::{RevDeferredWorld, RevWorld}, RevFrame, RevUpdate
     };
 
     use super::*;
 
     #[derive(SystemSet, Copy, Clone, Debug, Hash, PartialEq, Eq)]
-    struct TestSet<const U: u8>;
+    struct TestSet(u8);
 
     #[derive(Debug, Clone, Copy, PartialEq)]
     enum Test<T> {
@@ -326,7 +322,7 @@ mod test {
         }
     }
 
-    fn test_run<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
+    fn test_run<C: for<'a> FnOnce(&'a mut Schedule) -> &'a mut Schedule>(
         configs: Vec<C>,
         expected: Vec<Vec<TestBundle>>,
     ) {
@@ -337,13 +333,15 @@ mod test {
             world.insert_resource(RevMeta::new(None, 0, false));
             let mut schedule = Schedule::new(FixedUpdate);
             schedule.add_systems(RevMeta::update_world);
-            assert!(schedule.initialize(&mut world).is_ok());
+            let err = schedule.initialize(&mut world).err();
+            assert!(err.is_none(), "{:?}", err.unwrap());
             world.add_schedule(schedule);
 
             // set up reversible schedule
             let mut schedule = Schedule::new(RevUpdate);
             config(&mut schedule);
-            assert!(schedule.initialize(&mut world).is_ok());
+            let err = schedule.initialize(&mut world).err();
+            assert!(err.is_none(), "{:?}", err.unwrap());
             world.add_schedule(schedule);
 
             // set up observers
@@ -576,51 +574,51 @@ mod test {
             // #2 set after system
             Box::new(move |schedule: &mut Schedule| {
                 schedule
-                    .rev_add_systems((sys_a(), sys_b().rev_in_set(TestSet::<2>)))
-                    .rev_configure_sets(set_after(TestSet::<2>.into_rev_configs(), set_a))
+                    .rev_add_systems((sys_a(), sys_b().rev_in_set(TestSet(2))))
+                    .rev_configure_sets(set_after(TestSet(2).into_rev_configs(), set_a))
             }),
             // #3 set after system (flipped)
             Box::new(move |schedule: &mut Schedule| {
                 schedule
-                    .rev_add_systems((sys_b().rev_in_set(TestSet::<2>), sys_a()))
-                    .rev_configure_sets(set_after(TestSet::<2>.into_rev_configs(), set_a))
+                    .rev_add_systems((sys_b().rev_in_set(TestSet(2)), sys_a()))
+                    .rev_configure_sets(set_after(TestSet(2).into_rev_configs(), set_a))
             }),
             // #4 system after set
             Box::new(move |schedule: &mut Schedule| {
                 schedule.rev_add_systems((
-                    sys_a().rev_in_set(TestSet::<1>),
-                    sys_after(sys_b(), TestSet::<1>.intern()),
+                    sys_a().rev_in_set(TestSet(1)),
+                    sys_after(sys_b(), TestSet(1).intern()),
                 ))
             }),
             // #5 system after set (flipped)
             Box::new(move |schedule: &mut Schedule| {
                 schedule.rev_add_systems((
-                    sys_after(sys_b(), TestSet::<1>.intern()),
-                    sys_a().rev_in_set(TestSet::<1>),
+                    sys_after(sys_b(), TestSet(1).intern()),
+                    sys_a().rev_in_set(TestSet(1)),
                 ))
             }),
             // #6 set after set
             Box::new(move |schedule: &mut Schedule| {
                 schedule
                     .rev_add_systems((
-                        sys_a().rev_in_set(TestSet::<1>),
-                        sys_b().rev_in_set(TestSet::<2>),
+                        sys_a().rev_in_set(TestSet(1)),
+                        sys_b().rev_in_set(TestSet(2)),
                     ))
                     .rev_configure_sets(set_after(
-                        TestSet::<2>.into_rev_configs(),
-                        TestSet::<1>.intern(),
+                        TestSet(2).into_rev_configs(),
+                        TestSet(1).intern(),
                     ))
             }),
             // #6 set after set (flipped)
             Box::new(move |schedule: &mut Schedule| {
                 schedule
                     .rev_add_systems((
-                        sys_b().rev_in_set(TestSet::<2>),
-                        sys_a().rev_in_set(TestSet::<1>),
+                        sys_b().rev_in_set(TestSet(2)),
+                        sys_a().rev_in_set(TestSet(1)),
                     ))
                     .rev_configure_sets(set_after(
-                        TestSet::<2>.into_rev_configs(),
-                        TestSet::<1>.intern(),
+                        TestSet(2).into_rev_configs(),
+                        TestSet(1).intern(),
                     ))
             }),
             // #7 system before system
@@ -634,51 +632,51 @@ mod test {
             // #9 set before system
             Box::new(move |schedule: &mut Schedule| {
                 schedule
-                    .rev_add_systems((sys_a().rev_in_set(TestSet::<1>), sys_b()))
-                    .rev_configure_sets(set_before(TestSet::<1>.into_rev_configs(), set_b))
+                    .rev_add_systems((sys_a().rev_in_set(TestSet(1)), sys_b()))
+                    .rev_configure_sets(set_before(TestSet(1).into_rev_configs(), set_b))
             }),
             // #10 set before system (flipped)
             Box::new(move |schedule: &mut Schedule| {
                 schedule
-                    .rev_add_systems((sys_b(), sys_a().rev_in_set(TestSet::<1>)))
-                    .rev_configure_sets(set_before(TestSet::<1>.into_rev_configs(), set_b))
+                    .rev_add_systems((sys_b(), sys_a().rev_in_set(TestSet(1))))
+                    .rev_configure_sets(set_before(TestSet(1).into_rev_configs(), set_b))
             }),
             // #11 system before set
             Box::new(move |schedule: &mut Schedule| {
                 schedule.rev_add_systems((
-                    sys_before(sys_a(), TestSet::<2>.intern()),
-                    sys_b().rev_in_set(TestSet::<2>),
+                    sys_before(sys_a(), TestSet(2).intern()),
+                    sys_b().rev_in_set(TestSet(2)),
                 ))
             }),
             // #12 system before set (flipped)
             Box::new(move |schedule: &mut Schedule| {
                 schedule.rev_add_systems((
-                    sys_b().rev_in_set(TestSet::<2>),
-                    sys_before(sys_a(), TestSet::<2>.intern()),
+                    sys_b().rev_in_set(TestSet(2)),
+                    sys_before(sys_a(), TestSet(2).intern()),
                 ))
             }),
             // #13 set before set
             Box::new(move |schedule: &mut Schedule| {
                 schedule
                     .rev_add_systems((
-                        sys_a().rev_in_set(TestSet::<1>),
-                        sys_b().rev_in_set(TestSet::<2>),
+                        sys_a().rev_in_set(TestSet(1)),
+                        sys_b().rev_in_set(TestSet(2)),
                     ))
                     .rev_configure_sets(set_before(
-                        TestSet::<1>.into_rev_configs(),
-                        TestSet::<2>.intern(),
+                        TestSet(1).into_rev_configs(),
+                        TestSet(2).intern(),
                     ))
             }),
             // #14 set before set (flipped)
             Box::new(move |schedule: &mut Schedule| {
                 schedule
                     .rev_add_systems((
-                        sys_b().rev_in_set(TestSet::<2>),
-                        sys_a().rev_in_set(TestSet::<1>),
+                        sys_b().rev_in_set(TestSet(2)),
+                        sys_a().rev_in_set(TestSet(1)),
                     ))
                     .rev_configure_sets(set_before(
-                        TestSet::<1>.into_rev_configs(),
-                        TestSet::<2>.intern(),
+                        TestSet(1).into_rev_configs(),
+                        TestSet(2).intern(),
                     ))
             }),
             // #15 system chain
@@ -689,19 +687,19 @@ mod test {
             Box::new(move |schedule: &mut Schedule| {
                 schedule
                     .rev_add_systems((
-                        sys_a().rev_in_set(TestSet::<1>),
-                        sys_b().rev_in_set(TestSet::<2>),
+                        sys_a().rev_in_set(TestSet(1)),
+                        sys_b().rev_in_set(TestSet(2)),
                     ))
-                    .rev_configure_sets(set_chain((TestSet::<1>, TestSet::<2>).into_rev_configs()))
+                    .rev_configure_sets(set_chain((TestSet(1), TestSet(2)).into_rev_configs()))
             }),
             // #17 set chain (flipped)
             Box::new(move |schedule: &mut Schedule| {
                 schedule
                     .rev_add_systems((
-                        sys_b().rev_in_set(TestSet::<2>),
-                        sys_a().rev_in_set(TestSet::<1>),
+                        sys_b().rev_in_set(TestSet(2)),
+                        sys_a().rev_in_set(TestSet(1)),
                     ))
-                    .rev_configure_sets(set_chain((TestSet::<1>, TestSet::<2>).into_rev_configs()))
+                    .rev_configure_sets(set_chain((TestSet(1), TestSet(2)).into_rev_configs()))
             }),
         ]
     }
@@ -848,8 +846,8 @@ mod test {
         }
         fn configs(schedule: &mut Schedule) -> &mut Schedule {
             schedule
-                .rev_add_systems(non_exclusive_system::<1>.rev_in_set(TestSet::<1>))
-                .rev_configure_sets(TestSet::<1>.rev_run_if(at_2))
+                .rev_add_systems(non_exclusive_system::<1>.rev_in_set(TestSet(1)))
+                .rev_configure_sets(TestSet(1).rev_run_if(at_2))
         }
         test_run(
             vec![configs],
@@ -862,5 +860,31 @@ mod test {
                 vec![], // does not run at 3
             ],
         );
+    }
+
+    #[test]
+    fn foo() {
+        let mut app = bevy::app::App::new();
+        app.rev_add_systems(RevUpdate, non_exclusive_system::<1>);
+        app.update();
+        bevy_mod_debugdump::print_schedule_graph(&mut app, RevUpdate);
+    }
+
+    #[test]
+    fn bar() {
+        fn sys(){};
+
+        #[derive(SystemSet, Copy, Clone, Debug, Hash, PartialEq, Eq)]
+        struct Set(u8);
+
+        let mut schedule = Schedule::new(RevUpdate);
+        schedule
+            .add_systems(sys.in_set(Set(1)))
+            .configure_sets((
+                Set(1).into_configs().in_set(Set(2)),
+                Set(1).into_configs().after(Set(2))
+            ));
+        let result = schedule.initialize(&mut World::new());
+        assert!(result.is_err())
     }
 }
