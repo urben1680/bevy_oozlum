@@ -15,7 +15,7 @@ use bevy::{
         system::{IntoSystem, ReadOnlySystem, System},
         world::{unsafe_world_cell::UnsafeWorldCell, DeferredWorld, World},
     },
-    prelude::{SystemIn, SystemSet},
+    prelude::SystemIn,
     utils::default,
 };
 
@@ -74,7 +74,8 @@ where
             commands_err: false,
             component_access: default(),
             archetype_component_access: default(),
-        }.in_set(ForwardSet);
+        }
+        .in_set(ForwardSet);
 
         let mut backward_sys = ArcSystem {
             shared: shared.clone(),
@@ -87,7 +88,8 @@ where
             commands_err: false,
             component_access: default(),
             archetype_component_access: default(),
-        }.in_set(BackwardSet);
+        }
+        .in_set(BackwardSet);
 
         let mut backward_cmd = CommandsBackward {
             shared: shared.clone(),
@@ -95,9 +97,10 @@ where
             tick: Tick::new(0),
             has_deferred: false,
             commands_err: false,
-        }.in_set(BackwardSet);
+        }
+        .in_set(BackwardSet);
 
-        let mut fwd_sys_sets = None;;
+        let mut fwd_sys_sets = None;
         let mut bwd_cmd_sets = None;
         let mut bwd_sys_sets = None;
         let mut bwd_cmd_sys_sets = None;
@@ -105,18 +108,24 @@ where
         fn add_configs(configs: &mut Option<SystemSetConfigs>, add: SystemSetConfigs) {
             *configs = Some(match configs.take() {
                 None => add.into_configs(),
-                Some(configs) => (configs, add).into_configs()
+                Some(configs) => (configs, add).into_configs(),
             });
         }
 
         for set in default_system_sets {
             forward_sys = forward_sys.in_set(FwdSysSet(set));
-            backward_sys = backward_sys.in_set(BwdSysSet(set));
             backward_cmd = backward_cmd.in_set(BwdCmdSet(set));
+            backward_sys = backward_sys.in_set(BwdSysSet(set));
 
             add_configs(&mut fwd_sys_sets, FwdSysSet(set).in_set(ForwardSet));
-            add_configs(&mut bwd_cmd_sets, BwdCmdSet(set).in_set(BwdCmdSysSet(set)).in_set(BackwardSet));
-            add_configs(&mut bwd_sys_sets, BwdSysSet(set).in_set(BwdCmdSysSet(set)).in_set(BackwardSet));
+            add_configs(
+                &mut bwd_cmd_sets,
+                BwdCmdSet(set).in_set(BwdCmdSysSet(set)).in_set(BackwardSet),
+            );
+            add_configs(
+                &mut bwd_sys_sets,
+                BwdSysSet(set).in_set(BwdCmdSysSet(set)).in_set(BackwardSet),
+            );
             add_configs(&mut bwd_cmd_sys_sets, BwdCmdSysSet(set).in_set(BackwardSet));
         }
 
@@ -125,14 +134,7 @@ where
         // the CommandsBackward system is always added. it becomes noop if the system ends up having no
         // deferred buffers. CommandsBackward::has_deferred returns the value of the actual system.
         RevSystemConfigs {
-            systems: (
-                forward_sys,
-                (
-                    backward_cmd,
-                    backward_sys
-                ).chain(),
-            )
-                .into_configs(),
+            systems: (forward_sys, (backward_cmd, backward_sys).chain()).into_configs(),
             sets: RevSystemSetConfigs {
                 fwd_sys_sets: fwd_sys_sets.unwrap(),
                 bwd_cmd_sets: bwd_cmd_sets.unwrap(),
