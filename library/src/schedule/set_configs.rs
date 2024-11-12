@@ -1,7 +1,8 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use bevy::{
-    ecs::schedule::{Condition, InternedSystemSet, IntoSystemSet, IntoSystemSetConfigs, SystemSet, SystemSetConfigs}, utils::all_tuples
+    ecs::schedule::{Condition, IntoSystemSet, IntoSystemSetConfigs, SystemSet, SystemSetConfigs},
+    utils::all_tuples,
 };
 use condition::add_condition;
 
@@ -33,7 +34,7 @@ pub trait IntoRevSystemSetConfigs<Marker>: Sized {
             bwd_cmd_sets: configs.bwd_cmd_sets.in_set(BwdCmdSet(set)),
             bwd_sys_sets: configs.bwd_sys_sets.in_set(BwdSysSet(set)),
             bwd_cmd_sys_sets: configs.bwd_cmd_sys_sets.in_set(BwdCmdSysSet(set)),
-            condition_sets: configs.condition_sets
+            condition_sets: configs.condition_sets,
         }
     }
     fn rev_before<M>(self, set: impl IntoSystemSet<M>) -> RevSystemSetConfigs {
@@ -48,8 +49,10 @@ pub trait IntoRevSystemSetConfigs<Marker>: Sized {
             fwd_sys_sets: configs.fwd_sys_sets.before(FwdSysSet(set)),
             bwd_cmd_sets: configs.bwd_cmd_sets,
             bwd_sys_sets: configs.bwd_sys_sets,
-            bwd_cmd_sys_sets: configs.bwd_cmd_sys_sets.after_ignore_deferred(BwdCmdSysSet(set)),
-            condition_sets: configs.condition_sets
+            bwd_cmd_sys_sets: configs
+                .bwd_cmd_sys_sets
+                .after_ignore_deferred(BwdCmdSysSet(set)),
+            condition_sets: configs.condition_sets,
         }
     }
     fn rev_after<M>(self, set: impl IntoSystemSet<M>) -> RevSystemSetConfigs {
@@ -64,8 +67,10 @@ pub trait IntoRevSystemSetConfigs<Marker>: Sized {
             fwd_sys_sets: configs.fwd_sys_sets.after(FwdSysSet(set)),
             bwd_cmd_sets: configs.bwd_cmd_sets,
             bwd_sys_sets: configs.bwd_sys_sets,
-            bwd_cmd_sys_sets: configs.bwd_cmd_sys_sets.before_ignore_deferred(BwdCmdSysSet(set)),
-            condition_sets: configs.condition_sets
+            bwd_cmd_sys_sets: configs
+                .bwd_cmd_sys_sets
+                .before_ignore_deferred(BwdCmdSysSet(set)),
+            condition_sets: configs.condition_sets,
         }
     }
     fn rev_before_ignore_deferred<M>(self, set: impl IntoSystemSet<M>) -> RevSystemSetConfigs {
@@ -77,17 +82,11 @@ pub trait IntoRevSystemSetConfigs<Marker>: Sized {
         let configs = self.into_rev_configs();
         let set = set.into_system_set().intern();
         RevSystemSetConfigs {
-            fwd_sys_sets: configs
-                .fwd_sys_sets
-                .before_ignore_deferred(FwdSysSet(set)),
-            bwd_cmd_sets: configs
-                .bwd_cmd_sets
-                .after_ignore_deferred(BwdCmdSet(set)),
-            bwd_sys_sets: configs
-                .bwd_sys_sets
-                .after_ignore_deferred(BwdSysSet(set)),
+            fwd_sys_sets: configs.fwd_sys_sets.before_ignore_deferred(FwdSysSet(set)),
+            bwd_cmd_sets: configs.bwd_cmd_sets.after_ignore_deferred(BwdCmdSet(set)),
+            bwd_sys_sets: configs.bwd_sys_sets.after_ignore_deferred(BwdSysSet(set)),
             bwd_cmd_sys_sets: configs.bwd_cmd_sys_sets,
-            condition_sets: configs.condition_sets
+            condition_sets: configs.condition_sets,
         }
     }
     fn rev_after_ignore_deferred<M>(self, set: impl IntoSystemSet<M>) -> RevSystemSetConfigs {
@@ -99,17 +98,11 @@ pub trait IntoRevSystemSetConfigs<Marker>: Sized {
         let configs = self.into_rev_configs();
         let set = set.into_system_set().intern();
         RevSystemSetConfigs {
-            fwd_sys_sets: configs
-                .fwd_sys_sets
-                .after_ignore_deferred(FwdSysSet(set)),
-            bwd_cmd_sets: configs
-                .bwd_cmd_sets
-                .before_ignore_deferred(BwdCmdSet(set)),
-            bwd_sys_sets: configs
-                .bwd_sys_sets
-                .before_ignore_deferred(BwdSysSet(set)),
+            fwd_sys_sets: configs.fwd_sys_sets.after_ignore_deferred(FwdSysSet(set)),
+            bwd_cmd_sets: configs.bwd_cmd_sets.before_ignore_deferred(BwdCmdSet(set)),
+            bwd_sys_sets: configs.bwd_sys_sets.before_ignore_deferred(BwdSysSet(set)),
             bwd_cmd_sys_sets: configs.bwd_cmd_sys_sets,
-            condition_sets: configs.condition_sets
+            condition_sets: configs.condition_sets,
         }
     }
     fn rev_run_if<M>(self, condition: impl Condition<M>) -> RevSystemSetConfigs {
@@ -120,22 +113,18 @@ pub trait IntoRevSystemSetConfigs<Marker>: Sized {
             bwd_cmd_sets: configs.bwd_cmd_sets.in_set(set),
             bwd_sys_sets: configs.bwd_sys_sets.in_set(set),
             bwd_cmd_sys_sets: configs.bwd_cmd_sys_sets.in_set(set),
-            condition_sets: configs.condition_sets
+            condition_sets: configs.condition_sets,
         }
     }
     fn rev_ambiguous_with<M>(self, set: impl IntoSystemSet<M>) -> RevSystemSetConfigs {
         let configs = self.into_rev_configs();
         let set = set.into_system_set().intern();
         RevSystemSetConfigs {
-            fwd_sys_sets: configs
-                .fwd_sys_sets
-                .ambiguous_with(FwdSysSet(set)),
+            fwd_sys_sets: configs.fwd_sys_sets.ambiguous_with(FwdSysSet(set)),
             bwd_cmd_sets: configs.bwd_cmd_sets, // bwd_cmd have no accesses that could be ambigious
-            bwd_sys_sets: configs
-                .bwd_sys_sets
-                .ambiguous_with(BwdSysSet(set)),
+            bwd_sys_sets: configs.bwd_sys_sets.ambiguous_with(BwdSysSet(set)),
             bwd_cmd_sys_sets: configs.bwd_cmd_sys_sets, // adding config would be redundant
-            condition_sets: configs.condition_sets
+            condition_sets: configs.condition_sets,
         }
     }
     fn rev_ambiguous_with_all(self) -> RevSystemSetConfigs {
@@ -169,8 +158,6 @@ pub trait IntoRevSystemSetConfigs<Marker>: Sized {
         //  sys A -> sys B -> sys C -> sync
         // Backward
         //  cmd C -> cmd B -> cmd A -> sync -> sys C -> sys B -> sys A
-
-        // todo: Problem, wenn hier non-system sets gechained werden, sind bwd_cmd_sets gleich bwd_sys_sets
         let configs = self.into_rev_configs();
         #[derive(SystemSet, Copy, Clone, Debug, Hash, PartialEq, Eq)]
         struct ChainIgnoreDeferred(u32);
@@ -178,10 +165,10 @@ pub trait IntoRevSystemSetConfigs<Marker>: Sized {
         let set = ChainIgnoreDeferred(ID.fetch_add(1, Ordering::Relaxed)).intern();
         RevSystemSetConfigs {
             fwd_sys_sets: configs.fwd_sys_sets.chain_ignore_deferred(),
-            bwd_cmd_sets: configs.bwd_cmd_sets.in_set(set),
-            bwd_sys_sets: configs.bwd_sys_sets.after(set),
+            bwd_cmd_sets: configs.bwd_cmd_sets.chain_ignore_deferred().in_set(set),
+            bwd_sys_sets: configs.bwd_sys_sets.chain_ignore_deferred().after(set),
             bwd_cmd_sys_sets: configs.bwd_cmd_sys_sets,
-            condition_sets: configs.condition_sets
+            condition_sets: (configs.condition_sets, set.in_set(BackwardSet)).into_configs(), // todo rename field
         }
     }
 }
@@ -230,7 +217,7 @@ struct ForwardSetConfig {
 struct BackwardSetConfigs {
     bwd_cmd_sets: SystemSetConfigs,
     bwd_sys_sets: SystemSetConfigs,
-    bwd_cmd_sys_sets: SystemSetConfigs
+    bwd_cmd_sys_sets: SystemSetConfigs,
 }
 
 macro_rules! impl_into_rev_set_configs {
