@@ -1,8 +1,8 @@
-use std::any::TypeId;
+use std::fmt::Debug;
 
 use bevy::ecs::{
     change_detection::Res,
-    schedule::{InternedSystemSet, IntoSystemSet, IntoSystemConfigs, IntoSystemSetConfigs, Schedule, SystemSet},
+    schedule::{InternedSystemSet, IntoSystemSetConfigs, Schedule, SystemSet},
 };
 
 use crate::meta::{RevDirection, RevMeta};
@@ -32,59 +32,45 @@ struct BackwardSet;
 /// Subsets of [`ForwardSet`].
 ///
 /// Each contains the system wrapped in `Arc`.
-#[derive(SystemSet, Copy, Clone, Debug, Hash, PartialEq, Eq)]
+#[derive(SystemSet, Copy, Clone, Hash, PartialEq, Eq)]
 struct FwdSysSet(InternedSystemSet);
-
-/// Subsets of [`ForwardSet`].
-///
-/// Each contains a non-system set.
-//#[derive(SystemSet, Copy, Clone, Debug, Hash, PartialEq, Eq)]
-//struct FwdNonSys(InternedSystemSet);
 
 /// Subsets of [`BackwardSet`].
 ///
 /// todo
-#[derive(SystemSet, Copy, Clone, Debug, Hash, PartialEq, Eq)]
+#[derive(SystemSet, Copy, Clone, Hash, PartialEq, Eq)]
 struct BwdCmdSet(InternedSystemSet);
 
 /// Subsets of [`BackwardSet`].
 ///
 /// Each contains the system wrapped in `Arc`.
-#[derive(SystemSet, Copy, Clone, Debug, Hash, PartialEq, Eq)]
+#[derive(SystemSet, Copy, Clone, Hash, PartialEq, Eq)]
 struct BwdSysSet(InternedSystemSet);
 
 /// Subsets of [`BackwardSet`].
 ///
 /// Each contains the system wrapped in `Arc`.
-#[derive(SystemSet, Copy, Clone, Debug, Hash, PartialEq, Eq)]
+#[derive(SystemSet, Copy, Clone, Hash, PartialEq, Eq)]
 struct BwdCmdSysSet(InternedSystemSet);
 
-/// Subsets of [`BackwardSet`].
-///
-/// Each contains a non-system set.
-//#[derive(SystemSet, Copy, Clone, Debug, Hash, PartialEq, Eq)]
-//struct BwdNonSys(InternedSystemSet);
-
-/* 
-macro_rules! impl_from_set {
-    ($T: ident, $NonSys: ident) => {
-        impl $T {
-            fn from_set<Marker>(set: impl IntoSystemSet<Marker>) -> InternedSystemSet {
-                let set = set.into_system_set();
-                match set.system_type() {
-                    Some(id) => Self(id).intern(),
-                    None => $NonSys(set.intern()).intern(),
+macro_rules! impl_set_debug {
+    ($T: ident) => {
+        impl Debug for $T {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                let mut f = f.debug_tuple(std::any::type_name::<Self>());
+                match self.0.system_type() {
+                    None => f.field(&self.0).finish(),
+                    Some(id) => f.field(&id).finish(),
                 }
             }
         }
     };
 }
 
-impl_from_set!(FwdSysSet, FwdNonSys);
-impl_from_set!(BwdCmdSet, BwdNonSys);
-impl_from_set!(BwdSysSet, BwdNonSys);
-impl_from_set!(BwdCmdSysSet, BwdNonSys);
-*/
+impl_set_debug!(FwdSysSet);
+impl_set_debug!(BwdCmdSet);
+impl_set_debug!(BwdSysSet);
+impl_set_debug!(BwdCmdSysSet);
 
 pub trait RevSchedule {
     fn rev_add_systems<Marker>(&mut self, systems: impl IntoRevSystemConfigs<Marker>) -> &mut Self;
@@ -97,7 +83,8 @@ pub trait RevSchedule {
 impl RevSchedule for Schedule {
     fn rev_add_systems<Marker>(&mut self, systems: impl IntoRevSystemConfigs<Marker>) -> &mut Self {
         let RevSystemConfigs { systems, sets } = systems.into_rev_configs();
-        self.add_systems(systems).rev_configure_sets(sets)
+        // configure sets first because that adds the base configs for the base sets
+        self.rev_configure_sets(sets).add_systems(systems)
     }
     fn rev_configure_sets<Marker>(
         &mut self,
@@ -116,6 +103,7 @@ impl RevSchedule for Schedule {
                     ForwardSet.run_if(if_forward),
                     BackwardSet.run_if(if_backward),
                 )
+                    .chain()
                     .in_set(RevSystemsSet),
             );
         }
@@ -124,14 +112,14 @@ impl RevSchedule for Schedule {
             bwd_cmd_sets,
             bwd_sys_sets,
             bwd_cmd_sys_sets,
-            condition_sets: cond_sets,
+            condition_sets,
         } = sets.into_rev_configs();
         self.configure_sets((
             fwd_sys_sets,
             bwd_cmd_sets,
             bwd_sys_sets,
             bwd_cmd_sys_sets,
-            cond_sets,
+            condition_sets,
         ))
     }
 }
@@ -141,19 +129,24 @@ mod test {
     use std::mem::take;
 
     use bevy::{
-        app::FixedUpdate,
+        app::{App, FixedUpdate},
         ecs::{
             change_detection::ResMut,
             component::Component,
             event::Event,
             observer::Trigger,
+            schedule::IntoSystemSet,
             system::{Commands, Resource},
             world::{DeferredWorld, World},
         },
+        utils::default,
     };
 
     use crate::{
-        app::RevApp, commands::{RevCommandLog, RevCommands}, observer::RevEvent, world::{RevDeferredWorld, RevWorld}, RevFrame, RevUpdate
+        commands::{RevCommandLog, RevCommands},
+        observer::RevEvent,
+        world::{RevDeferredWorld, RevWorld},
+        RevFrame, RevUpdate,
     };
 
     use super::*;
@@ -322,7 +315,7 @@ mod test {
         }
     }
 
-    fn test_run<C: for<'a> FnOnce(&'a mut Schedule) -> &'a mut Schedule>(
+    fn test_run<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
         configs: Vec<C>,
         expected: Vec<Vec<TestBundle>>,
     ) {
@@ -454,8 +447,9 @@ mod test {
                 },
             );
 
-            fn test_step(
+            fn test_step<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
                 world: &mut World,
+                config: &C,
                 variant: usize,
                 step: usize,
                 expected: &Vec<TestBundle>,
@@ -472,15 +466,27 @@ mod test {
                 } else {
                     iter.rev().collect()
                 };
-                assert_eq!(
-                    actual, expected,
-                    "config #{variant}, {direction:?}, step #{step}"
-                );
+                if actual != expected {
+                    let mut schedule = Schedule::new(RevUpdate);
+                    config(&mut schedule);
+                    let mut app = App::new();
+                    app.add_schedule(schedule);
+                    let graph =
+                        bevy_mod_debugdump::schedule_graph_dot(&mut app, RevUpdate, &default());
+                    panic!("log mismatch! config #{variant}, {direction:?}, step #{step}\nexpected:\n{expected:?}\nactual:\n{actual:?}\n\n{graph}")
+                }
             }
 
             // run tests forward
             for (step, expected) in expected.iter().enumerate() {
-                test_step(&mut world, variant, step, expected, RevDirection::NotLog);
+                test_step(
+                    &mut world,
+                    &config,
+                    variant,
+                    step,
+                    expected,
+                    RevDirection::NotLog,
+                );
             }
 
             // run tests backward log
@@ -490,6 +496,7 @@ mod test {
             for (step, expected) in expected.iter().enumerate().rev() {
                 test_step(
                     &mut world,
+                    &config,
                     variant,
                     step,
                     expected,
@@ -503,6 +510,7 @@ mod test {
             for (step, expected) in expected.iter().enumerate() {
                 test_step(
                     &mut world,
+                    &config,
                     variant,
                     step,
                     expected,
@@ -798,6 +806,7 @@ mod test {
 
     #[test]
     fn non_exclusive_then_exclusive_ignore_deferred() {
+        // Problem: exclusive system triggert irgendwo world.flush oä
         test_run(
             a_then_b(false, true, true),
             vec![vec![
@@ -817,40 +826,21 @@ mod test {
     }
 
     #[test]
-    fn run_if_system() {
+    fn run_if() {
         fn at_2(meta: Res<RevMeta>) -> bool {
             let now: usize = meta.present_world_state().into();
             now == 2
         }
-        fn configs(schedule: &mut Schedule) -> &mut Schedule {
+        fn config0(schedule: &mut Schedule) -> &mut Schedule {
             schedule.rev_add_systems(non_exclusive_system::<1>.rev_run_if(at_2))
         }
-        test_run(
-            vec![configs],
-            vec![
-                vec![], // does not run at 1
-                vec![
-                    TestBundle::NonExclusive(1),
-                    TestBundle::NonExclusiveSyncPoint(1),
-                ],
-                vec![], // does not run at 3
-            ],
-        );
-    }
-
-    #[test]
-    fn run_if_set() {
-        fn at_2(meta: Res<RevMeta>) -> bool {
-            let now: usize = meta.present_world_state().into();
-            now == 2
-        }
-        fn configs(schedule: &mut Schedule) -> &mut Schedule {
+        fn config1(schedule: &mut Schedule) -> &mut Schedule {
             schedule
                 .rev_add_systems(non_exclusive_system::<1>.rev_in_set(TestSet(1)))
                 .rev_configure_sets(TestSet(1).rev_run_if(at_2))
         }
         test_run(
-            vec![configs],
+            vec![config0, config1],
             vec![
                 vec![], // does not run at 1
                 vec![
@@ -860,31 +850,5 @@ mod test {
                 vec![], // does not run at 3
             ],
         );
-    }
-
-    #[test]
-    fn foo() {
-        let mut app = bevy::app::App::new();
-        app.rev_add_systems(RevUpdate, non_exclusive_system::<1>);
-        app.update();
-        bevy_mod_debugdump::print_schedule_graph(&mut app, RevUpdate);
-    }
-
-    #[test]
-    fn bar() {
-        fn sys(){};
-
-        #[derive(SystemSet, Copy, Clone, Debug, Hash, PartialEq, Eq)]
-        struct Set(u8);
-
-        let mut schedule = Schedule::new(RevUpdate);
-        schedule
-            .add_systems(sys.in_set(Set(1)))
-            .configure_sets((
-                Set(1).into_configs().in_set(Set(2)),
-                Set(1).into_configs().after(Set(2))
-            ));
-        let result = schedule.initialize(&mut World::new());
-        assert!(result.is_err())
     }
 }
