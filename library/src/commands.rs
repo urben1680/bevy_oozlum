@@ -149,12 +149,16 @@ impl<F: FnMut(&mut World, bool) + Send + 'static> RevCommandLog for F {
 }
 
 #[derive(Resource)]
-pub(crate) struct RevCommandBuffer(SyncCell<VecDeque<Box<dyn RevCommandLog>>>);
+struct RevCommandBuffer(SyncCell<VecDeque<Box<dyn RevCommandLog>>>);
 
 impl Default for RevCommandBuffer {
     fn default() -> Self {
         Self(SyncCell::new(default()))
     }
+}
+
+pub(crate) fn init_commands_buffer(world: &mut World) {
+    world.init_resource::<RevCommandBuffer>();
 }
 
 pub struct CommandsLog(SyncCell<TransitionsLog<Box<dyn RevCommandLog>, RevFrame>>);
