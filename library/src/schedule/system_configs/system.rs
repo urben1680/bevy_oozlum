@@ -156,7 +156,7 @@ struct ArcSystem<T> {
     is_exclusive: bool,
     has_deferred: bool,
 
-    // these need to be cloned because one cannot return &'a Access from owned RwLockReadGuard<'a, Access>
+    // these need to be cloned because `&'a Access` cannot be returned from owned `MutexGuard<'a, Access>`
     component_access: Access<ComponentId>,
     archetype_component_access: Access<ArchetypeComponentId>,
 }
@@ -281,10 +281,6 @@ impl<T: System> System for ArcSystem<T> {
             .unwrap_or_else(expect_shared(&self.name));
 
         shared.system.apply_deferred(world);
-
-        // make sure everything is done, expect that all hooks and observers ran too
-        // todo: remove this if it is not needed
-        world.flush();
 
         if !self.forward {
             return;
