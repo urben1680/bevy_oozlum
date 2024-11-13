@@ -20,7 +20,7 @@ use bevy::{
 use bevy::reflect::{ReflectDeserialize, ReflectSerialize};
 
 use crate::{
-    commands::RevCommandBuffer,
+    commands::init_commands_buffer,
     log::{OutOfLog, PackedRevFrame},
     RevFrame, RevUpdate,
 };
@@ -405,7 +405,7 @@ impl RevMeta {
             // While this only needs to be once, this is the only resource that must be initialized before the first
             // RevUpdate run because the first access may be by a hook that only has DeferredWorld and cannot add it itself.
             // With this being done here bevy-ecs only users cannot forget to init it.
-            world.init_resource::<RevCommandBuffer>();
+            init_commands_buffer(world);
 
             if meta.get_direction().is_some() {
                 return Err(RevTryRunScheduleError::UnexpectedInitialRunning {
