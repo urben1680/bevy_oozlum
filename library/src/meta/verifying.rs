@@ -98,17 +98,15 @@ impl VerifyingRevMetaState {
         match meta.get_direction() {
             Some(RevDirection::NotLog) => {
                 last_run = self.get();
-                if let Some(log) = self.frame_log.get_log_mut() {
-                    log.pop_past_by_logged_at(meta);
-                }
+                self.frame_log.pop_past_by_logged_at(meta);
                 self.frame_log
                     .push_present(meta.present_world_state().into());
             }
             Some(RevDirection::ForwardLog) => {
                 last_run = self.get();
                 match self.frame_log.forward_log() {
-                    Ok(log) => {
-                        let this_run = (**log).into();
+                    Ok(()) => {
+                        let this_run = self.frame_log.get().unwrap().clone().into();
                         if this_run != meta.present_world_state() {
                             self.mismatch("forward", meta, this_run, system_name);
                         }
