@@ -29,7 +29,7 @@ mod verifying;
 
 pub use verifying::{VerifyError, VerifyingRevMeta};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum RevTryRunScheduleError {
     RevMetaMissingFirstCall,
     RevMetaMissing { existed_previously: bool },
@@ -212,7 +212,7 @@ pub enum FutureBound {
 /// RevMeta is used to control the processing of reversible systems.
 ///
 /// It keepts track what the current frame is and to which frame one can go forward and backward in time.
-#[derive(Debug, Clone, Resource, Reflect)]
+#[derive(Debug, Clone, Resource, Reflect, PartialEq)]
 #[reflect(Default)]
 #[cfg_attr(
     feature = "serde",
@@ -402,10 +402,6 @@ impl RevMeta {
         }
 
         world.resource_scope(|world: &mut World, mut meta: Mut<Self>| {
-            // While this only needs to be once, this is the only resource that must be initialized before the first
-            // RevUpdate run because the first access may be by a hook that only has DeferredWorld and cannot add it itself.
-            // With this being done here bevy-ecs only users cannot forget to init it.
-            init_commands_buffer(world);
 
             if meta.get_direction().is_some() {
                 return Err(RevTryRunScheduleError::UnexpectedInitialRunning {
@@ -414,21 +410,26 @@ impl RevMeta {
             }
             let previous = meta.clone();
             let result = meta.update(|meta, reduce_logged_at| {
-                world.insert_resource(meta.clone());
+                world.try_schedule_scope(RevUpdate, |world, schedule| {
+                    // While this only needs to be once, this is the only resource that must be initialized before the first
+                    // RevUpdate run because the first access may be by a hook that only has DeferredWorld and cannot add it itself.
+                    // With this being done here bevy-ecs only users cannot forget to init it.
+                    init_commands_buffer(world);
 
-                if let Some(reduce_logged_at) = reduce_logged_at {
-                    world.trigger(reduce_logged_at);
-                    if let Some(reducings) = world.remove_resource::<CommandsLogReducings>() {
-                        for reducing in &reducings.0 {
-                            reducing(meta, world);
+                    world.insert_resource(meta.clone());
+    
+                    if let Some(reduce_logged_at) = reduce_logged_at {
+                        world.trigger(reduce_logged_at);
+                        if let Some(reducings) = world.remove_resource::<CommandsLogReducings>() {
+                            for reducing in &reducings.0 {
+                                reducing(meta, world);
+                            }
+                            world.insert_resource(reducings);
                         }
-                        world.insert_resource(reducings);
                     }
-                }
 
-                world
-                    .try_run_schedule(RevUpdate)
-                    .map_err(|_| RevTryRunScheduleError::RevUpdateMissing { meta: meta.clone() })
+                    schedule.run(world);
+                }).map_err(|_| RevTryRunScheduleError::RevUpdateMissing { meta: meta.clone() })
             });
 
             match result.transpose() {
@@ -621,6 +622,10 @@ fn range_len(start: RevFrame, end: RevFrame) -> usize {
 mod test {
     use std::ops::RangeInclusive;
 
+    use bevy::prelude::{ResMut, Schedule, Schedules, Trigger};
+
+    use crate::log::TransitionLog;
+
     use super::*;
 
     const ONE: NonZeroUsize = NonZeroUsize::MIN;
@@ -760,5 +765,32 @@ mod test {
         meta.queue_forward();
         meta.update_internal();
         assert_eq!(meta.world_states(), 2);
+    }
+
+    #[test]
+    fn check_logged_at() {
+        #[derive(Resource)]
+        struct CheckLoggedAtRes(TransitionLog<RevFrame>);
+
+        let meta = RevMeta::new(None, RevMeta::MAX_WORLD_STATES - 1, false);
+        let mut res = CheckLoggedAtRes(TransitionLog::new());
+        res.0.push_present(RevFrame::new(0));
+        assert_eq!(res.0.transitions_len(), 1);
+
+        let mut schedules = Schedules::new();
+        schedules.insert(Schedule::new(RevUpdate));
+
+        let mut world = World::new();
+        world.insert_resource(meta);
+        world.insert_resource(res);
+        world.insert_resource(schedules);
+        world.add_observer(|trigger: Trigger<CheckLoggedAt>, mut res: ResMut<CheckLoggedAtRes>| {
+            res.0.pop_past_by_logged_at(trigger.event());
+        });
+        world.flush();
+
+        assert_eq!(RevMeta::try_update_world(&mut world), Ok(()));
+        let res = world.remove_resource::<CheckLoggedAtRes>().unwrap();
+        assert_eq!(res.0.transitions_len(), 0);
     }
 }
