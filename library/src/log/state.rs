@@ -8,7 +8,7 @@ use bevy::reflect::Reflect;
 
 use crate::{log::index_oob, meta::RevMeta};
 
-use super::{LogIter, LoggedAt, OutOfLog};
+use super::{LoggedAt, OutOfLog};
 
 #[derive(Debug, Default, Clone, Reflect)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -160,10 +160,7 @@ impl<T> StateLog<T> {
         self.states.push_back(before);
         self.index += 1;
     }
-    pub fn drain_future(&mut self) -> impl LogIter<T> {
-        self.drain_future_specific()
-    }
-    pub(super) fn drain_future_specific(&mut self) -> Drain<T> {
+    pub fn drain_future(&mut self) -> Drain<T> {
         self.states.drain(self.index..)
     }
     pub fn clear(&mut self) {
@@ -217,10 +214,7 @@ impl<T> StateLog<T> {
             None
         }
     }
-    pub fn drain_past_by_len(&mut self, max_past_len: usize) -> impl LogIter<T> {
-        self.drain_past_by_len_specific(max_past_len)
-    }
-    pub(super) fn drain_past_by_len_specific(&mut self, max_past_len: usize) -> Drain<T> {
+    pub fn drain_past_by_len(&mut self, max_past_len: usize) -> Drain<T> {
         let excessive = self.index.saturating_sub(max_past_len);
         self.index -= excessive;
         self.states.drain(..excessive)
@@ -240,19 +234,14 @@ impl<T: LoggedAt> StateLog<T> {
             None
         }
     }
-    pub fn truncate_future_drain_past_by_logged_at(&mut self, meta: &RevMeta) -> impl LogIter<T> {
-        self.truncate_future_drain_past_by_logged_at_specific(meta)
-    }
-    pub(super) fn truncate_future_drain_past_by_logged_at_specific(
-        &mut self, meta: &RevMeta
-    ) -> Drain<T> {
+    pub fn truncate_future_drain_past_by_logged_at(&mut self, meta: &RevMeta) -> Drain<T> {
         // may be redundant but if not improves partition_point performance
         self.states.truncate(self.index);
 
         let past_len = meta.past_world_states();
-        let to = self.states.partition_point(|entry| {
-            meta.frames_since(entry.logged_at()) > past_len
-        });
+        let to = self
+            .states
+            .partition_point(|entry| meta.frames_since(entry.logged_at()) > past_len);
         self.index -= to;
         self.states.drain(..to)
     }
