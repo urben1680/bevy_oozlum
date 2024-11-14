@@ -5,7 +5,7 @@ use bevy::reflect::{std_traits::ReflectDefault, Reflect};
 
 use crate::meta::RevMeta;
 
-use super::{index_oob, LogIter, LoggedAt, OutOfLog, RareValue};
+use super::{index_oob, LoggedAt, OutOfLog, RareDrain, RareValue};
 
 #[derive(Debug, Clone, Reflect)]
 #[reflect(Default)]
@@ -137,9 +137,9 @@ impl<T> RareTransitionLog<T> {
     pub fn transitions_shrink_to_fit(&mut self) {
         self.transitions.shrink_to_fit()
     }
-    pub fn drain_future(&mut self) -> impl LogIter<T> {
+    pub fn drain_future(&mut self) -> RareDrain<T> {
         self.skips_max = self.skips;
-        self.transitions.drain(self.index..).map(|rare| rare.value)
+        RareDrain(self.transitions.drain(self.index..))
     }
     pub fn clear(&mut self) {
         self.transitions.clear();
@@ -214,7 +214,7 @@ impl<T> RareTransitionLog<T> {
             None
         }
     }
-    pub fn drain_past_by_len(&mut self, max_past_len: usize) -> impl LogIter<T> {
+    pub fn drain_past_by_len(&mut self, max_past_len: usize) -> RareDrain<T> {
         let mut drain_amount = 0;
         for entry in self.transitions.iter() {
             let less = self.past_len - entry.len();
@@ -225,9 +225,7 @@ impl<T> RareTransitionLog<T> {
             drain_amount += 1;
         }
         self.index -= drain_amount;
-        self.transitions
-            .drain(..drain_amount)
-            .map(|rare| rare.value)
+        RareDrain(self.transitions.drain(..drain_amount))
     }
     fn pop_past(&mut self) -> Option<T> {
         self.transitions.pop_front().map(|rare| {
@@ -251,7 +249,7 @@ impl<T: LoggedAt> RareTransitionLog<T> {
             None
         }
     }
-    pub fn truncate_future_drain_past_by_logged_at(&mut self, meta: &RevMeta) -> impl LogIter<T> {
+    pub fn truncate_future_drain_past_by_logged_at(&mut self, meta: &RevMeta) -> RareDrain<T> {
         // may be redundant but if not improves partition_point performance
         self.transitions.truncate(self.index);
 
@@ -266,7 +264,7 @@ impl<T: LoggedAt> RareTransitionLog<T> {
                 .map(RareValue::skips)
                 .sum::<usize>();
         self.index -= to;
-        self.transitions.drain(..to).map(|rare| rare.value)
+        RareDrain(self.transitions.drain(..to))
     }
 }
 
