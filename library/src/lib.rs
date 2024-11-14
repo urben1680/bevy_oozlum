@@ -1,6 +1,13 @@
 /*
 TODO:
 
+- find new name
+-- catchier and more unique to not use reversible-systems/schedules for comparable crates
+-- "systems" in reverse: smetsys, can be altered to smet-sys or something
+-- "schedules" in reverse: seludehcs (ew)
+- should still be descriptive
+-- rev..?
+
 Features:
 - entity commands, standard rev commands
 -- postponed due to required components + disabled entities + moving components
@@ -12,25 +19,18 @@ Enhancements:
 - config tests
 - make doctests work
 - mod/use/pub cleanup
--- promote hook and observer
 - use serde from bevy reexport
 - reflect behind feature flag
-- RevMetaWithVerify
--- tests
 - how to handle set_apply_final_deferred(false)?
--- rev meta reads buffer after run too
+-- idea: rev meta reads buffer after run too
 - more plugin constructors
-
-- InitiallyNoneStateLog / InitiallyNoneRareStateLog
--- Rare variant
--- tests, serde_with
-- RevDirection impl SystemParam
-- use upcoming check_params of Systemparam to skip noop CommandsBackward?
--- initialize_arc_system could return a bool if it has deferred or is exclusive
+-- outsource to direct RevMeta constructors
+- RareInitNoneLog
+- VerifyingRevMeta tests
 
 Docs
 - examples
-- documentations, besonders mit informationen welche Methoden für deterministische Logik geeignet ist
+- documentations, point out determinism aspects of methods
 
 UNSUPPORTED:
 
@@ -39,14 +39,21 @@ UNSUPPORTED:
 -- might be more easy to do if Ticks needed no wrapping, like with proposed u64 Ticks
 - IntoSystemConfigs::distributive_run_if
 -- incompatible with how internals work
+-- todo: may work with new approach with using sets as system executions have a deterministic order
 - Schedule::set_apply_final_deferred
 -- default behavior is critical for assumptions of backward schedule
+-- todo: test behavior, extend tests
 - ScheduleBuildSettings::auto_insert_apply_deferred
 -- see unsupported Schedule::set_apply_final_deferred
 - Trigger::event_mut
 -- mutations on the event are not reflectable in the log
 - EntityCommands/EntityWorldMut
 -- missing features on bevy's side
+
+ISSUES:
+- reversible change detection (copy over to new repo)
+- analyze test schedule::non_exclusive_then_exclusive_ignore_deferred, consider revamping test strategy
+- reversible entity commands, link to https://github.com/bevyengine/bevy/issues/15350 as blocker
 */
 
 use std::{fmt::Debug, hash::Hash};
