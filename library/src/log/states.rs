@@ -1,5 +1,8 @@
 use std::{
-    collections::{TryReserveError, VecDeque},
+    collections::{
+        vec_deque::{Drain, Iter},
+        TryReserveError, VecDeque,
+    },
     convert::Infallible,
     fmt::Debug,
     ops::{Deref, Range},
@@ -10,7 +13,7 @@ use bevy::{reflect::Reflect, utils::default};
 use crate::meta::RevMeta;
 
 use super::{
-    doc_with_amount, impl_with_amount, AmountErr, EntryAmount, LogIter, LogMut, LoggedAt, NotUSize,
+    doc_with_amount, impl_with_amount, AmountErr, EntryAmount, LogMut, LoggedAt, NotUSize,
     OutOfLog, StateLog, ValueEntry, WithAmountInternal,
 };
 
@@ -261,12 +264,12 @@ where
         let from = self.index - amount;
         (&entry_amount, from..self.index)
     }
-    pub fn get(&self) -> (impl LogIter<&T>, &U) {
+    pub fn get(&self) -> (Iter<T>, &U) {
         let (entry, range) = self.get_entry_range();
         let states = self.states.range(range);
         (states, &entry.entry)
     }
-    pub fn drain_future(&mut self) -> (impl LogIter<T>, impl LogIter<EntryAmount<Self>>) {
+    pub fn drain_future(&mut self) -> (Drain<T>, Drain<EntryAmount<Self>>) {
         (self.states.drain(self.index..), self.amounts.drain_future())
     }
     pub fn clear(&mut self) {
@@ -293,15 +296,12 @@ where
         self.index += amount;
         Ok(())
     }
-    pub fn pop_past_by_len(
-        &mut self,
-        max_past_len: usize,
-    ) -> Option<ValueEntry<impl LogIter<T>, U>> {
+    pub fn pop_past_by_len(&mut self, max_past_len: usize) -> Option<ValueEntry<Drain<T>, U>> {
         self.amounts
             .pop_past_by_len(max_past_len)
             .map(|entry_amount| self.drain_past_by_amount(entry_amount))
     }
-    pub fn drain_past_by_len(&mut self, max_past_len: usize) -> impl LogIter<T> {
+    pub fn drain_past_by_len(&mut self, max_past_len: usize) -> Drain<T> {
         let amount: usize = self
             .amounts
             .drain_past_by_len(max_past_len)
@@ -310,10 +310,7 @@ where
         self.index -= amount;
         self.states.drain(..amount)
     }
-    fn drain_past_by_amount(
-        &mut self,
-        entry_amount: EntryAmount<Self>,
-    ) -> ValueEntry<impl LogIter<T>, U> {
+    fn drain_past_by_amount(&mut self, entry_amount: EntryAmount<Self>) -> ValueEntry<Drain<T>, U> {
         let amount = entry_amount.amount();
         self.index -= amount;
         ValueEntry {
@@ -367,7 +364,7 @@ where
     fn fallible_push_present<Out: Into<U>>(
         &mut self,
         c: impl FnOnce(LogMut<T>) -> Out,
-    ) -> Result<(), AmountErr<impl LogIter<T>, Self>> {
+    ) -> Result<(), AmountErr<Drain<T>, Self>> {
         self.states.truncate(self.index);
         let entry = c(LogMut(&mut self.states)).into();
         let pushed_amount = self.states.len() - self.index;
@@ -481,7 +478,7 @@ where
     pub fn try_push_present<Out: Into<U>>(
         &mut self,
         c: impl FnOnce(LogMut<T>) -> Out,
-    ) -> Result<(), AmountErr<impl LogIter<T>, Self>> {
+    ) -> Result<(), AmountErr<Drain<T>, Self>> {
         self.fallible_push_present(c)
     }
     pub fn try_clear_with(
@@ -499,15 +496,12 @@ impl<T, U: LoggedAt, const AMOUNT_BYTES: usize> StatesLog<T, U, AMOUNT_BYTES>
 where
     Self: WithAmountInternal<Entry = U>,
 {
-    pub fn pop_past_by_logged_at(
-        &mut self,
-        meta: &RevMeta,
-    ) -> Option<ValueEntry<impl LogIter<T>, U>> {
+    pub fn pop_past_by_logged_at(&mut self, meta: &RevMeta) -> Option<ValueEntry<Drain<T>, U>> {
         self.amounts
             .pop_past_by_logged_at(meta)
             .map(|entry_amount| self.drain_past_by_amount(entry_amount))
     }
-    pub fn truncate_future_drain_past_by_logged_at(&mut self, meta: &RevMeta) -> impl LogIter<T> {
+    pub fn truncate_future_drain_past_by_logged_at(&mut self, meta: &RevMeta) -> Drain<T> {
         let amount: usize = self
             .amounts
             .truncate_future_drain_past_by_logged_at(meta)
