@@ -61,7 +61,7 @@ pub struct VerifyError<'s> {
 }
 
 pub struct VerifyingRevMetaState {
-    meta: ComponentId,
+    meta_id: ComponentId,
     frame_log: InitNoneLog<PackedRevFrame>,
     meta_at_err: Option<RevMeta>,
 }
@@ -168,7 +168,7 @@ unsafe impl SystemParam for VerifyingRevMeta<'_, '_> {
     type State = VerifyingRevMetaState;
     fn init_state(world: &mut World, system_meta: &mut SystemMeta) -> Self::State {
         VerifyingRevMetaState {
-            meta: Res::<RevMeta>::init_state(world, system_meta),
+            meta_id: Res::<RevMeta>::init_state(world, system_meta),
             frame_log: default(),
             meta_at_err: None,
         }
@@ -180,10 +180,17 @@ unsafe impl SystemParam for VerifyingRevMeta<'_, '_> {
         _change_tick: bevy::ecs::component::Tick,
     ) -> Self::Item<'world, 'state> {
         let meta: &RevMeta = world
-            .get_resource_by_id(state.meta)
-            .expect("todo, upcoming verify params feature")
+            .get_resource_by_id(state.meta_id)
+            .expect("validate_param returned true for this method to run")
             .deref(); //SAFETY: correct ComponentId from Res::<RevMeta>::init_state
         state.get_param(meta, system_meta.name())
+    }
+    unsafe fn validate_param(
+            state: &Self::State,
+            _system_meta: &SystemMeta,
+            world: bevy::ecs::world::unsafe_world_cell::UnsafeWorldCell,
+        ) -> bool {
+        world.get_resource_by_id(state.meta_id).is_some()
     }
 }
 
