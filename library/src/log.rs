@@ -210,24 +210,8 @@
 //! [`ForwardLog`]: crate::meta::Direction::ForwardLog
 //! [`BackwardLog`]: crate::meta::Direction::BackwardLog
 
-/*
-test unification:
-
-methods on log that takes &mut RevMeta and...
-- log: Result<T, OutOfLog> where T is trait defined
-- non-log:
--- state: T, expected_log_len
--- states: Result<[T;N], [T;N]>, expected_log_len
--- rare_state: Option<T>, minimum_log_len, expected_states_len
--- rate_states: Result<[T;N], [T;N]>, minimum_log_len, expected_states_len
--- transition: T, expected_log_len
--- transitions: Result<[T;N], [T;N]>, expected_log_len
--- rare_transition: Option<T>, minimum_log_len, expected_transitions_len
--- rare_transitions: Result<[T;N], [T;N]>, minimum_log_len, expected_transitions_len
-*/
-
 use std::{
-    collections::{TryReserveError, VecDeque},
+    collections::{vec_deque::Drain, TryReserveError, VecDeque},
     fmt::Debug,
     iter::FusedIterator,
     ops::Deref,
@@ -387,16 +371,6 @@ impl PartialEq<PackedRevFrame> for RevFrame {
     }
 }
 
-pub trait LogIter<'a, T>:
-    Iterator<Item = T> + DoubleEndedIterator + ExactSizeIterator + FusedIterator
-{
-}
-
-impl<T, I: Iterator<Item = T> + DoubleEndedIterator + ExactSizeIterator + FusedIterator>
-    LogIter<'_, T> for I
-{
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct OutOfLog;
 
@@ -530,6 +504,38 @@ impl<T> RareValue<T> {
         usize::from_ne_bytes(self.skips_ne)
     }
 }
+
+/// Draining iterator used by some methods of rare logs.
+///
+/// See [`vec_deque::Drain`](Drain), that is wrapped here, for further information.
+#[derive(Debug)]
+// Nameable alternative to `Map<Drain<RareValue<T>>, impl FnMut(RareValue<T>) -> T>`
+pub struct RareDrain<'a, T>(Drain<'a, RareValue<T>>);
+
+impl<T> Iterator for RareDrain<'_, T> {
+    type Item = T;
+
+    #[inline]
+    fn next(&mut self) -> Option<T> {
+        self.0.next().map(|rare| rare.value)
+    }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.0.size_hint()
+    }
+}
+
+impl<T> DoubleEndedIterator for RareDrain<'_, T> {
+    #[inline]
+    fn next_back(&mut self) -> Option<T> {
+        self.0.next_back().map(|rare| rare.value)
+    }
+}
+
+impl<T> ExactSizeIterator for RareDrain<'_, T> {}
+
+impl<T> FusedIterator for RareDrain<'_, T> {}
 
 // Private bounds need no documentation because the `drain_future`
 // methods which return this type document these bounds themselves.
@@ -831,6 +837,9 @@ mod test {
             Self::PopPastByLoggedAt,
             Self::DrainPastByLoggedAt,
         ];
+        pub(super) fn by_len(self) -> bool {
+            matches!(self, Self::PopPastByLen | Self::DrainPastByLen)
+        }
     }
 
     macro_rules! shorten_strategy {
