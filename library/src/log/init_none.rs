@@ -1,5 +1,5 @@
 use std::{
-    collections::{TryReserveError, VecDeque},
+    collections::{vec_deque::Drain, TryReserveError, VecDeque},
     mem::take,
 };
 
@@ -7,7 +7,7 @@ use bevy::reflect::Reflect;
 
 use crate::meta::RevMeta;
 
-use super::{LogIter, LoggedAt, OutOfLog, StateLog};
+use super::{LoggedAt, OutOfLog, StateLog};
 
 #[derive(Debug, Clone, Reflect)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -36,8 +36,13 @@ mod serde_with {
 
     #[derive(serde::Serialize, serde::Deserialize)]
     pub(crate) enum InnerWithCapacity<T> {
-        NeverRan { capacity: usize },
-        Ran { log: T, undone_first_run: Option<bool> },
+        NeverRan {
+            capacity: usize,
+        },
+        Ran {
+            log: T,
+            undone_first_run: Option<bool>,
+        },
     }
 
     impl<T> LoglessState for InitNoneLog<T>
@@ -99,7 +104,10 @@ mod serde_with {
         fn get_logless_with_capacity(&self) -> Self::Se<'_> {
             match self.0 {
                 Inner::NeverRan { ref empty } => (None, empty.capacity()),
-                Inner::Ran { ref log, undone_first_run: Some(true) } => (None, log.states_capacity()),
+                Inner::Ran {
+                    ref log,
+                    undone_first_run: Some(true),
+                } => (None, log.states_capacity()),
                 Inner::Ran { ref log, .. } => (Some(&*log), log.states_capacity()),
             }
         }
@@ -125,17 +133,14 @@ impl<T> Default for InitNoneLog<T> {
 
 impl<T> From<T> for InitNoneLog<T> {
     fn from(present: T) -> Self {
-        Self(Inner::Ran {
-            log: present.into(),
-            undone_first_run: None,
-        })
+        Self::new_some(present)
     }
 }
 
 impl<T> From<Option<T>> for InitNoneLog<T> {
     fn from(value: Option<T>) -> Self {
         match value {
-            Some(present) => present.into(),
+            Some(present) => Self::new_some(present),
             None => Self::new_none(),
         }
     }
@@ -184,10 +189,11 @@ impl<T> InitNoneLog<T> {
     }
     pub fn get(&self) -> Option<&T> {
         match self.0 {
-            Inner::Ran { ref log, undone_first_run } if undone_first_run != Some(true) => {
-                Some(&*log)
-            },
-            _ => None
+            Inner::Ran {
+                ref log,
+                undone_first_run,
+            } if undone_first_run != Some(true) => Some(&*log),
+            _ => None,
         }
     }
     pub fn states_len(&self) -> usize {
@@ -260,7 +266,7 @@ impl<T> InitNoneLog<T> {
             }
         }
     }
-    pub fn drain_future(&mut self) -> impl LogIter<T> {
+    pub fn drain_future(&mut self) -> Drain<T> {
         if matches!(
             self.0,
             Inner::Ran {
@@ -282,22 +288,18 @@ impl<T> InitNoneLog<T> {
         }
         match &mut self.0 {
             Inner::NeverRan { empty } => empty.drain(..0),
-            Inner::Ran { log, .. } => log.drain_future_specific(),
+            Inner::Ran { log, .. } => log.drain_future(),
         }
     }
     pub fn clear_log(&mut self) {
-        if let Inner::Ran {
-            log,
-            ..
-        } = &mut self.0
-        {
+        if let Inner::Ran { log, .. } = &mut self.0 {
             log.clear();
         }
     }
     pub fn clear(&mut self) {
         let empty = match take(self).0 {
             Inner::NeverRan { empty } => empty,
-            Inner::Ran { log, .. } => log.into_inner_with_log().1
+            Inner::Ran { log, .. } => log.into_inner_with_log().1,
         };
         self.0 = Inner::NeverRan { empty };
     }
@@ -315,55 +317,70 @@ impl<T> InitNoneLog<T> {
     }
     pub fn backward_log(&mut self) -> Result<(), OutOfLog> {
         match self.0 {
-            Inner::Ran { undone_first_run: Some(true), .. } => Err(OutOfLog),
-            Inner::Ran { ref mut log, undone_first_run: None } => {
-                log.backward_log()
-            },
-            Inner::Ran { ref mut log, ref mut undone_first_run} => {
+            Inner::Ran {
+                undone_first_run: Some(true),
+                ..
+            }
+            | Inner::NeverRan { .. } => Err(OutOfLog),
+            Inner::Ran {
+                ref mut log,
+                undone_first_run: None,
+            } => log.backward_log(),
+            Inner::Ran {
+                ref mut log,
+                ref mut undone_first_run,
+            } => {
                 *undone_first_run = Some(log.backward_log() == Err(OutOfLog));
                 Ok(())
-            },
-            Inner::NeverRan { .. } => Err(OutOfLog)
+            }
         }
     }
     pub fn forward_log(&mut self) -> Result<(), OutOfLog> {
         match self.0 {
-            Inner::Ran { undone_first_run: Some(ref mut undone), .. } if *undone => {
+            Inner::Ran {
+                undone_first_run: Some(ref mut undone),
+                ..
+            } if *undone => {
                 *undone = false;
                 Ok(())
-            },
+            }
             Inner::Ran { ref mut log, .. } => log.forward_log(),
-            Inner::NeverRan { .. } => Err(OutOfLog)
+            Inner::NeverRan { .. } => Err(OutOfLog),
         }
     }
     pub fn pop_past_by_len(&mut self, max_past_len: usize) -> Option<T> {
         match self.0 {
-            Inner::Ran { undone_first_run: Some(true), .. } | Inner::NeverRan { .. } => None,
+            Inner::Ran {
+                undone_first_run: Some(true),
+                ..
+            }
+            | Inner::NeverRan { .. } => None,
             Inner::Ran {
                 ref mut log,
-                ref mut undone_first_run
+                ref mut undone_first_run,
             } => {
                 let popped = log.pop_past_by_len(max_past_len);
                 if popped.is_some() || log.past_len() == max_past_len {
                     *undone_first_run = None;
                 }
                 popped
-            } 
+            }
         }
     }
-    pub fn drain_past_by_len(&mut self, max_past_len: usize) -> impl LogIter<T> {
+    pub fn drain_past_by_len(&mut self, max_past_len: usize) -> Drain<T> {
         match self.0 {
             Inner::NeverRan { ref mut empty } => empty.drain(..0),
             Inner::Ran {
                 ref mut log,
                 undone_first_run: Some(true),
-            } => log.drain_past_by_len_specific(usize::MAX),
+            } => log.drain_past_by_len(usize::MAX),
             Inner::Ran {
-                ref mut log, 
-                ref mut undone_first_run
+                ref mut log,
+                ref mut undone_first_run,
             } => {
-                let iter = log.drain_past_by_len_specific(max_past_len);
-                if iter.len() != 0 {
+                let past_len = log.past_len();
+                let iter = log.drain_past_by_len(max_past_len);
+                if iter.len() != 0 || past_len == max_past_len {
                     *undone_first_run = None;
                 }
                 iter
@@ -385,10 +402,14 @@ impl<T> InitNoneLog<T> {
 impl<T: LoggedAt> InitNoneLog<T> {
     pub fn pop_past_by_logged_at(&mut self, meta: &RevMeta) -> Option<T> {
         match self.0 {
-            Inner::Ran { undone_first_run: Some(true), .. } | Inner::NeverRan { .. } => None,
-            Inner::Ran { 
-                ref mut log, 
-                ref mut undone_first_run 
+            Inner::Ran {
+                undone_first_run: Some(true),
+                ..
+            }
+            | Inner::NeverRan { .. } => None,
+            Inner::Ran {
+                ref mut log,
+                ref mut undone_first_run,
             } => {
                 let popped = log.pop_past_by_logged_at(meta);
                 if popped.is_some() {
@@ -398,23 +419,404 @@ impl<T: LoggedAt> InitNoneLog<T> {
             }
         }
     }
-    pub fn truncate_future_drain_past_by_logged_at(&mut self, meta: &RevMeta) -> impl LogIter<T> {
+    pub fn truncate_future_drain_past_by_logged_at(&mut self, meta: &RevMeta) -> Drain<T> {
         match self.0 {
             Inner::NeverRan { ref mut empty } => empty.drain(..0),
             Inner::Ran {
                 ref mut log,
                 undone_first_run: Some(true),
-            } => log.drain_past_by_len_specific(usize::MAX),
+            } => log.drain_past_by_len(usize::MAX),
             Inner::Ran {
-                ref mut log, 
-                ref mut undone_first_run
+                ref mut log,
+                ref mut undone_first_run,
             } => {
-                let iter = log.truncate_future_drain_past_by_logged_at_specific(meta);
+                let iter = log.truncate_future_drain_past_by_logged_at(meta);
                 if iter.len() != 0 {
                     *undone_first_run = None;
                 }
                 iter
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use std::num::NonZeroUsize;
+
+    use serde::{Deserialize, Serialize};
+
+    use super::*;
+
+    use crate::{
+        log::test::{shorten_strategy, ShortenStrategy},
+        meta::RevMeta,
+        RevFrame,
+    };
+
+    #[test]
+    fn serde_with() {
+        #[derive(Serialize, Deserialize)]
+        struct Logs {
+            full: InitNoneLog<char>,
+            #[serde(with = "crate::log::logless_state")]
+            logless: InitNoneLog<char>,
+            #[serde(with = "crate::log::with_capacity")]
+            full_with_capacity: InitNoneLog<char>,
+            #[serde(with = "crate::log::logless_with_capacity")]
+            logless_with_capacity: InitNoneLog<char>,
+        }
+
+        impl Logs {
+            fn new(log: InitNoneLog<char>, reserve_additional: usize) -> Self {
+                let mut logs = Self {
+                    full: log.clone(),
+                    logless: log.clone(),
+                    full_with_capacity: log.clone(),
+                    logless_with_capacity: log.clone(),
+                };
+                logs.full.states_reserve_exact(reserve_additional);
+                logs.logless.states_reserve_exact(reserve_additional);
+                logs.full_with_capacity
+                    .states_reserve_exact(reserve_additional);
+                logs.logless_with_capacity
+                    .states_reserve_exact(reserve_additional);
+                logs
+            }
+        }
+
+        #[derive(Serialize, Deserialize)]
+        struct LogsIn {
+            never_ran: Logs,
+            ran_after_none: Logs,
+            undone_first_run: Logs,
+            never_none: Logs,
+        }
+
+        let original_never_ran = InitNoneLog::new_none();
+        assert!(matches!(original_never_ran.0, Inner::NeverRan { .. }));
+
+        let mut original_ran_after_none = original_never_ran.clone();
+        original_ran_after_none.push_present('a');
+        original_ran_after_none.push_present('b');
+        original_ran_after_none.push_present('c');
+        original_ran_after_none.backward_log().expect("in log");
+        assert!(matches!(
+            original_ran_after_none.0,
+            Inner::Ran {
+                undone_first_run: Some(false),
+                ..
+            }
+        ));
+
+        let mut original_undone_first_run = original_ran_after_none.clone();
+        original_undone_first_run.backward_log().expect("in log");
+        original_undone_first_run.backward_log().expect("in log");
+        assert!(matches!(
+            original_undone_first_run.0,
+            Inner::Ran {
+                undone_first_run: Some(true),
+                ..
+            }
+        ));
+
+        let mut original_never_none = original_ran_after_none.clone();
+        original_never_none.pop_past_by_len(1);
+        assert!(matches!(
+            original_never_none.0,
+            Inner::Ran {
+                undone_first_run: None,
+                ..
+            }
+        ));
+
+        let logs = LogsIn {
+            never_ran: Logs::new(original_never_ran.clone(), 100),
+            ran_after_none: Logs::new(original_ran_after_none.clone(), 98),
+            undone_first_run: Logs::new(original_undone_first_run.clone(), 98),
+            never_none: Logs::new(original_never_none.clone(), 98),
+        };
+
+        let serialized = serde_json::to_string_pretty(&logs).unwrap();
+        let LogsIn {
+            never_ran,
+            ran_after_none,
+            undone_first_run,
+            never_none,
+        } = serde_json::from_str(&serialized).unwrap();
+
+        struct Test {
+            logs: Logs,
+            original: InitNoneLog<char>,
+            expected_state: Option<char>,
+            expected_len: usize,
+            name: &'static str,
+        }
+
+        let tests = [
+            Test {
+                logs: never_ran,
+                original: original_never_ran,
+                expected_state: None,
+                expected_len: 0,
+                name: "never_ran",
+            },
+            Test {
+                logs: ran_after_none,
+                original: original_ran_after_none,
+                expected_state: Some('b'),
+                expected_len: 2,
+                name: "ran_after_none",
+            },
+            Test {
+                logs: undone_first_run,
+                original: original_undone_first_run,
+                expected_state: None,
+                expected_len: 2,
+                name: "undone_first_run",
+            },
+            Test {
+                logs: never_none,
+                original: original_never_none,
+                expected_state: Some('b'),
+                expected_len: 2,
+                name: "never_none",
+            },
+        ];
+
+        for test in tests {
+            let Test {
+                logs,
+                original,
+                expected_state,
+                expected_len,
+                name,
+            } = test;
+
+            let Logs {
+                full,
+                logless,
+                full_with_capacity,
+                logless_with_capacity,
+            } = logs;
+
+            let test = |log: &InitNoneLog<char>, expected_len, with_capacity| {
+                assert_eq!(
+                    log.get().cloned(), expected_state,
+                    "name: {name}\nbefore: {original:#?}\nserialized: {serialized}\nafter: {log:#?}"
+                );
+                assert_eq!(
+                    log.states_len(),
+                    expected_len,
+                    "name: {name}\nbefore: {original:#?}\nserialized: {serialized}\nafter: {log:#?}"
+                );
+                assert_eq!(
+                    log.states_capacity() >= 100,
+                    with_capacity,
+                    "name: {name}\nbefore: {original:#?}\nserialized: {serialized}\nafter: {log:#?}\ncapacity: {}",
+                    log.states_capacity()
+                );
+            };
+
+            test(&full, expected_len, false);
+            test(&logless, 0, false);
+            test(&full_with_capacity, expected_len, true);
+            test(&logless_with_capacity, 0, true);
+        }
+    }
+
+    impl InitNoneLog<(u8, RevFrame)> {
+        fn test_forward(
+            &mut self,
+            meta: &mut RevMeta,
+            strategy: ShortenStrategy,
+            push: u8,
+            expected_states_len: usize,
+            expected_popped: Option<(u8, usize)>,
+        ) {
+            meta.queue_forward();
+            meta.update(|_, _| {});
+            let before = self.clone();
+            let push = (push, meta.present_world_state());
+            self.push_present(push);
+            let after_push = self.clone();
+            let actual_popped = shorten_strategy!(
+                self,
+                meta,
+                strategy,
+                meta.past_world_states(),
+                before,
+                after_push
+            );
+            assert_eq!(
+                actual_popped, expected_popped,
+                "\nstrategy: {strategy:#?}\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
+            );
+            assert_eq!(
+                self.states_len(),
+                expected_states_len,
+                "\nstrategy: {strategy:#?}\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
+            );
+            assert_eq!(
+                self.get().cloned(), Some(push),
+                "\nstrategy: {strategy:#?}\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
+            );
+        }
+        fn test_forward_log(
+            &mut self,
+            meta: &mut RevMeta,
+            expected_state: Option<u8>,
+            out_of_log: bool,
+        ) {
+            let before = self.clone();
+            if out_of_log {
+                let result = self.forward_log();
+                assert_eq!(
+                    result,
+                    Err(OutOfLog),
+                    "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
+                );
+            } else {
+                let frame = meta.present_world_state().wrapping_add(1);
+                meta.queue_log(frame).unwrap_or_else(|_| {
+                    panic!("\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}")
+                });
+                meta.update(|_, _| {});
+                let result = self.forward_log();
+                assert_eq!(
+                    result,
+                    Ok(()),
+                    "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
+                );
+            }
+            self.test_state(before, meta, expected_state);
+        }
+        fn test_backward_log(
+            &mut self,
+            meta: &mut RevMeta,
+            expected_state: Option<u8>,
+            out_of_log: bool,
+        ) {
+            let before = self.clone();
+            if out_of_log {
+                let result = self.backward_log();
+                assert_eq!(
+                    result,
+                    Err(OutOfLog),
+                    "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
+                );
+            } else {
+                let frame = meta.present_world_state().wrapping_sub(1);
+                meta.queue_log(frame).unwrap_or_else(|_| {
+                    panic!("\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}")
+                });
+                meta.update(|_, _| {});
+                let result = self.backward_log();
+                assert_eq!(
+                    result,
+                    Ok(()),
+                    "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
+                );
+            }
+            self.test_state(before, meta, expected_state);
+        }
+        fn test_state(&self, before: Self, meta: &RevMeta, expected_state: Option<u8>) {
+            let expected_state =
+                expected_state.map(|expected_state| (expected_state, meta.present_world_state()));
+            assert_eq!(
+                self.get().cloned(),
+                expected_state,
+                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
+            );
+        }
+        fn test_drain_future(
+            &self,
+            expected_future: impl IntoIterator<Item = (u8, usize)>,
+            expected_states_len: usize,
+        ) -> Self {
+            let before = self.clone();
+            let mut clone = self.clone();
+            let actual_future: Vec<_> = clone.drain_future().collect();
+            let expected_future: Vec<_> = expected_future
+                .into_iter()
+                .map(|(state, frame)| (state, RevFrame(frame)))
+                .collect();
+            assert_eq!(
+                actual_future, expected_future,
+                "\nbefore: {before:#?}\nafter_drain_future: {clone:#?}"
+            );
+            assert_eq!(
+                clone.states_len(),
+                expected_states_len,
+                "\nbefore: {before:#?}\nafter_drain_future: {clone:#?}"
+            );
+            clone
+        }
+    }
+
+    #[test]
+    fn push_and_log_traversal() {
+        for strategy in ShortenStrategy::VARIANTS {
+            let meta = &mut RevMeta::new(NonZeroUsize::new(3), 0, false);
+            let mut log = InitNoneLog::new_none();
+
+            log.test_forward(meta, strategy, 1, 0, None);
+
+            // reaching pre-state None
+            log.test_backward_log(meta, None, false);
+            // out of log, no mutations happend to both meta and log here
+            log.test_backward_log(meta, None, true);
+
+            // back in state Some
+            log.test_forward_log(meta, Some(1), false);
+            // out of log, no mutations happend to both meta and log here
+            log.test_forward_log(meta, Some(1), true);
+
+            log.test_forward(meta, strategy, 2, 1, None);
+
+            // truncated pre-state None, does not cause pop
+            log.test_forward(meta, strategy, 3, 2, None);
+
+            // only by_len methods can determine if None state can be truncated in isolation
+            if strategy.by_len() {
+                log.test_backward_log(meta, Some(2), false);
+                log.test_backward_log(meta, Some(1), false);
+                // out of log, no mutations happend to both meta and log here
+                log.test_backward_log(meta, Some(1), true);
+
+                log.test_forward_log(meta, Some(2), false);
+                log.test_forward_log(meta, Some(3), false);
+                // out of log, no mutations happend to both meta and log here
+                log.test_forward_log(meta, Some(3), true);
+            }
+
+            // reduces log, this does pop a state
+            log.test_forward(meta, strategy, 4, 2, Some((1, 1)));
+
+            log.test_backward_log(meta, Some(3), false);
+            log.test_backward_log(meta, Some(2), false);
+            // out of log, no mutations happend to both meta and log here
+            log.test_backward_log(meta, Some(2), true);
+
+            log.test_forward_log(meta, Some(3), false);
+            log.test_forward_log(meta, Some(4), false);
+            // out of log, no mutations happend to both meta and log here
+            log.test_forward_log(meta, Some(4), true);
+
+            log.test_backward_log(meta, Some(3), false);
+            log.test_backward_log(meta, Some(2), false);
+
+            let clone = log.test_drain_future([(3, 3), (4, 4)], 0);
+
+            for mut log in [log, clone] {
+                // all entries are truncated as they are in the future
+                log.test_forward(meta, strategy, 5, 1, None);
+            }
+        }
+    }
+
+    #[allow(dead_code)]
+    fn impls_reflect() {
+        bevy::reflect::TypeRegistry::empty().register::<InitNoneLog<RevFrame>>();
     }
 }
