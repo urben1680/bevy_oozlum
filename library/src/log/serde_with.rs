@@ -10,6 +10,7 @@ use serde::{
 pub mod logless_state {
     use super::*;
 
+    #[doc(hidden)]
     #[allow(private_bounds)]
     pub fn serialize<S, T>(this: &T, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -19,6 +20,7 @@ pub mod logless_state {
         this.get_logless_state().serialize(serializer)
     }
 
+    #[doc(hidden)]
     #[allow(private_bounds)]
     pub fn deserialize<'de, D, T>(deserializer: D) -> Result<T, D::Error>
     where
@@ -33,6 +35,7 @@ pub mod logless_state {
 pub mod with_capacity {
     use super::*;
 
+    #[doc(hidden)]
     #[allow(private_bounds)]
     pub fn serialize<S, T>(this: &T, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -42,6 +45,7 @@ pub mod with_capacity {
         this.get_with_capacity().serialize(serializer)
     }
 
+    #[doc(hidden)]
     #[allow(private_bounds)]
     pub fn deserialize<'de, D, T>(deserializer: D) -> Result<T, D::Error>
     where
@@ -56,6 +60,7 @@ pub mod with_capacity {
 pub mod logless_with_capacity {
     use super::*;
 
+    #[doc(hidden)]
     #[allow(private_bounds)]
     pub fn serialize<S, T>(this: &T, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -65,6 +70,7 @@ pub mod logless_with_capacity {
         this.get_logless_with_capacity().serialize(serializer)
     }
 
+    #[doc(hidden)]
     #[allow(private_bounds)]
     pub fn deserialize<'de, D, T>(deserializer: D) -> Result<T, D::Error>
     where
