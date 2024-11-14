@@ -1,11 +1,11 @@
 use core::fmt::Debug;
-use std::collections::{TryReserveError, VecDeque};
+use std::collections::{vec_deque::Drain, TryReserveError, VecDeque};
 
 use bevy::reflect::{std_traits::ReflectDefault, Reflect};
 
 use crate::meta::RevMeta;
 
-use super::{index_oob, LogIter, LoggedAt, OutOfLog};
+use super::{index_oob, LoggedAt, OutOfLog};
 
 #[derive(Debug, Clone, Reflect)]
 #[reflect(Default)]
@@ -102,7 +102,7 @@ impl<T> TransitionLog<T> {
         self.transitions.push_back(transition);
         self.index = self.transitions.len();
     }
-    pub fn drain_future(&mut self) -> impl LogIter<T> {
+    pub fn drain_future(&mut self) -> Drain<T> {
         self.transitions.drain(self.index..)
     }
     pub fn clear(&mut self) {
@@ -133,7 +133,7 @@ impl<T> TransitionLog<T> {
             None
         }
     }
-    pub fn drain_past_by_len(&mut self, max_past_len: usize) -> impl LogIter<T> {
+    pub fn drain_past_by_len(&mut self, max_past_len: usize) -> Drain<T> {
         let excessive = self.index.saturating_sub(max_past_len);
         self.index -= excessive;
         self.transitions.drain(..excessive)
@@ -154,7 +154,7 @@ impl<T: LoggedAt> TransitionLog<T> {
             None
         }
     }
-    pub fn truncate_future_drain_past_by_logged_at(&mut self, meta: &RevMeta) -> impl LogIter<T> {
+    pub fn truncate_future_drain_past_by_logged_at(&mut self, meta: &RevMeta) -> Drain<T> {
         // may be redundant but if not improves partition_point performance
         self.transitions.truncate(self.index);
 
