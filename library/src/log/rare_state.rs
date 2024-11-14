@@ -8,7 +8,7 @@ use bevy::reflect::Reflect;
 
 use crate::meta::RevMeta;
 
-use super::{index_oob, LogIter, LoggedAt, OutOfLog, RareValue};
+use super::{index_oob, LoggedAt, OutOfLog, RareDrain, RareValue};
 
 #[derive(Debug, Clone, Reflect)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -159,8 +159,8 @@ impl<T> RareStateLog<T> {
     pub fn states_shrink_to_fit(&mut self) {
         self.states.shrink_to_fit()
     }
-    pub fn drain_future(&mut self) -> impl LogIter<T> {
-        self.states.drain(self.index..).map(|rare| rare.value)
+    pub fn drain_future(&mut self) -> RareDrain<T> {
+        RareDrain(self.states.drain(self.index..))
     }
     pub fn clear(&mut self) {
         self.states.clear();
@@ -246,7 +246,7 @@ impl<T> RareStateLog<T> {
             None
         }
     }
-    pub fn drain_past_by_len(&mut self, max_past_len: usize) -> impl LogIter<T> {
+    pub fn drain_past_by_len(&mut self, max_past_len: usize) -> RareDrain<T> {
         let mut drain_amount = 0;
         for entry in self.states.iter() {
             let less = self.past_len - entry.len();
@@ -257,7 +257,7 @@ impl<T> RareStateLog<T> {
             drain_amount += 1;
         }
         self.index -= drain_amount;
-        self.states.drain(..drain_amount).map(|rare| rare.value)
+        RareDrain(self.states.drain(..drain_amount))
     }
     fn pop_past(&mut self) -> Option<T> {
         self.states.pop_front().map(|rare| {
@@ -285,7 +285,7 @@ impl<T: LoggedAt> RareStateLog<T> {
             None
         }
     }
-    pub fn truncate_future_drain_past_by_logged_at(&mut self, meta: &RevMeta) -> impl LogIter<T> {
+    pub fn truncate_future_drain_past_by_logged_at(&mut self, meta: &RevMeta) -> RareDrain<T> {
         // May be redundant but if not improves partition_point performance
         self.states.truncate(self.index);
 
@@ -306,7 +306,7 @@ impl<T: LoggedAt> RareStateLog<T> {
                 .map(RareValue::skips)
                 .sum::<usize>();
         self.index -= to;
-        self.states.drain(..to).map(|rare| rare.value)
+        RareDrain(self.states.drain(..to))
     }
 }
 
