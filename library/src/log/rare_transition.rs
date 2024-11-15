@@ -11,11 +11,14 @@ use super::{index_oob, LoggedAt, OutOfLog, RareDrain, RareValue};
 #[reflect(Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct RareTransitionLog<T> {
-    /// RareValue.skips represents the number of None pushes before the transition in the struct
+    /// RareValue.skips represents the number of None pushes before the transition in the struct.
     transitions: VecDeque<RareValue<T>>,
     index: usize,
+    /// For simplicity, this never gets reduced by `pop`/`drain_past_by_len`/`logged_at`.
     skips: usize,
-    /// Used to check for OutOfLog error when calling `self.forward_log`
+    /// Used to check for OutOfLog error when calling `self.forward_log`/`logged_at`.
+    ///
+    /// For simplicity, this never gets reduced by `pop`/`drain_past_by_len`.
     skips_max: usize,
     past_len: usize,
 }
@@ -26,10 +29,7 @@ mod serde_with {
 
     use serde::{Deserialize, Serialize};
 
-    use crate::{
-        log::serde_with::{LoglessWithCapacity, WithCapacity, WithCapacityWrapper},
-        RevFrame,
-    };
+    use crate::log::serde_with::{LoglessWithCapacity, WithCapacity, WithCapacityWrapper};
 
     use super::{RareTransitionLog, RareValue};
 
@@ -45,7 +45,7 @@ mod serde_with {
             WithCapacityWrapper<VecDeque<RareValue<T>>>,
             usize,
             usize,
-            RevFrame, // deserializes from usize and asserts value in range
+            usize,
             usize,
         );
         fn get_with_capacity(&self) -> Self::Se<'_> {
@@ -58,7 +58,7 @@ mod serde_with {
             )
         }
         fn from_with_capacity(
-            (WithCapacityWrapper(transitions), index, skips, RevFrame(skips_max), past_len): Self::De,
+            (WithCapacityWrapper(transitions), index, skips, skips_max, past_len): Self::De,
         ) -> Self {
             Self {
                 transitions,
@@ -151,7 +151,7 @@ impl<T> RareTransitionLog<T> {
     pub fn push_present(&mut self, transition: Option<T>) {
         self.transitions.truncate(self.index);
         match transition {
-            None if self.skips < RevMeta::MAX_WORLD_STATES => {
+            None => {
                 self.skips += 1;
                 self.past_len += 1;
             }
@@ -162,7 +162,6 @@ impl<T> RareTransitionLog<T> {
                 self.skips = 0;
                 self.past_len += 1;
             }
-            None => {} // assume user will not go back before current entry
         }
         self.skips_max = self.skips;
     }
