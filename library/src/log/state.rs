@@ -118,9 +118,6 @@ impl<T> StateLog<T> {
             index: 0,
         }
     }
-    pub(crate) fn past_len(&self) -> usize {
-        self.index
-    }
     pub fn into_inner(self) -> T {
         self.present
     }
