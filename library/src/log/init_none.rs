@@ -22,6 +22,7 @@ enum Inner<T> {
     Ran {
         log: StateLog<T>,
         /// If `None`, own none state is out of log or was never init as none.
+        /// For simplicity, this never gets unset by `pop`/`drain_past_by_len`.
         undone_first_run: Option<bool>,
     },
 }
@@ -184,6 +185,10 @@ impl<T> InitNoneLog<T> {
     pub fn into_inner(self) -> Option<T> {
         match self.0 {
             Inner::NeverRan { .. } => None,
+            Inner::Ran {
+                undone_first_run: Some(true),
+                ..
+            } => None,
             Inner::Ran { log, .. } => Some(log.into_inner()),
         }
     }
@@ -292,8 +297,17 @@ impl<T> InitNoneLog<T> {
         }
     }
     pub fn clear_log(&mut self) {
-        if let Inner::Ran { log, .. } = &mut self.0 {
-            log.clear();
+        if let Inner::Ran {
+            log,
+            undone_first_run,
+        } = &mut self.0
+        {
+            if *undone_first_run == Some(true) {
+                self.clear()
+            } else {
+                log.clear();
+                *undone_first_run = None;
+            }
         }
     }
     pub fn clear(&mut self) {
@@ -358,13 +372,9 @@ impl<T> InitNoneLog<T> {
             Inner::Ran {
                 ref mut log,
                 ref mut undone_first_run,
-            } => {
-                let popped = log.pop_past_by_len(max_past_len);
-                if popped.is_some() || log.past_len() == max_past_len {
-                    *undone_first_run = None;
-                }
-                popped
-            }
+            } => log
+                .pop_past_by_len(max_past_len)
+                .inspect(|_| *undone_first_run = None),
         }
     }
     pub fn drain_past_by_len(&mut self, max_past_len: usize) -> Drain<T> {
@@ -378,9 +388,8 @@ impl<T> InitNoneLog<T> {
                 ref mut log,
                 ref mut undone_first_run,
             } => {
-                let past_len = log.past_len();
                 let iter = log.drain_past_by_len(max_past_len);
-                if iter.len() != 0 || past_len == max_past_len {
+                if iter.len() != 0 {
                     *undone_first_run = None;
                 }
                 iter
@@ -410,13 +419,9 @@ impl<T: LoggedAt> InitNoneLog<T> {
             Inner::Ran {
                 ref mut log,
                 ref mut undone_first_run,
-            } => {
-                let popped = log.pop_past_by_logged_at(meta);
-                if popped.is_some() {
-                    *undone_first_run = None;
-                }
-                popped
-            }
+            } => log
+                .pop_past_by_logged_at(meta)
+                .inspect(|_| *undone_first_run = None),
         }
     }
     pub fn truncate_future_drain_past_by_logged_at(&mut self, meta: &RevMeta) -> Drain<T> {
@@ -758,59 +763,68 @@ mod test {
     fn push_and_log_traversal() {
         for strategy in ShortenStrategy::VARIANTS {
             let meta = &mut RevMeta::new(NonZeroUsize::new(3), 0, false);
-            let mut log = InitNoneLog::new_none();
+            let mut init_none = InitNoneLog::new_none();
 
-            log.test_forward(meta, strategy, 1, 0, None);
+            init_none.test_forward(meta, strategy, 1, 0, None);
 
             // reaching pre-state None
-            log.test_backward_log(meta, None, false);
+            init_none.test_backward_log(meta, None, false);
             // out of log, no mutations happend to both meta and log here
-            log.test_backward_log(meta, None, true);
+            init_none.test_backward_log(meta, None, true);
 
             // back in state Some
-            log.test_forward_log(meta, Some(1), false);
+            init_none.test_forward_log(meta, Some(1), false);
             // out of log, no mutations happend to both meta and log here
-            log.test_forward_log(meta, Some(1), true);
+            init_none.test_forward_log(meta, Some(1), true);
 
-            log.test_forward(meta, strategy, 2, 1, None);
+            init_none.test_forward(meta, strategy, 2, 1, None);
 
-            // truncated pre-state None, does not cause pop
-            log.test_forward(meta, strategy, 3, 2, None);
+            // has no initial value that is out of log now
+            init_none.test_forward(meta, strategy, 3, 2, None);
 
-            // only by_len methods can determine if None state can be truncated in isolation
-            if strategy.by_len() {
+            let meta = &mut RevMeta::new(NonZeroUsize::new(3), 0, false);
+            let mut init_some = InitNoneLog::new_some((0, meta.present_world_state()));
+
+            init_some.test_forward(meta, strategy, 1, 1, None);
+
+            init_some.test_backward_log(meta, Some(0), false);
+            // out of log, no mutations happend to both meta and log here
+            init_some.test_backward_log(meta, Some(0), true);
+
+            init_some.test_forward_log(meta, Some(1), false);
+            // out of log, no mutations happend to both meta and log here
+            init_some.test_forward_log(meta, Some(1), true);
+
+            init_some.test_forward(meta, strategy, 2, 2, None);
+
+            // pops the initial value that became out-of-log
+            init_some.test_forward(meta, strategy, 3, 2, Some((0, 0)));
+
+            for mut log in [init_none, init_some] {
+                let meta = &mut meta.clone();
+
+                // reduces log, this does pop a state
+                log.test_forward(meta, strategy, 4, 2, Some((1, 1)));
+
+                log.test_backward_log(meta, Some(3), false);
                 log.test_backward_log(meta, Some(2), false);
-                log.test_backward_log(meta, Some(1), false);
                 // out of log, no mutations happend to both meta and log here
-                log.test_backward_log(meta, Some(1), true);
+                log.test_backward_log(meta, Some(2), true);
 
-                log.test_forward_log(meta, Some(2), false);
                 log.test_forward_log(meta, Some(3), false);
+                log.test_forward_log(meta, Some(4), false);
                 // out of log, no mutations happend to both meta and log here
-                log.test_forward_log(meta, Some(3), true);
-            }
+                log.test_forward_log(meta, Some(4), true);
 
-            // reduces log, this does pop a state
-            log.test_forward(meta, strategy, 4, 2, Some((1, 1)));
+                log.test_backward_log(meta, Some(3), false);
+                log.test_backward_log(meta, Some(2), false);
 
-            log.test_backward_log(meta, Some(3), false);
-            log.test_backward_log(meta, Some(2), false);
-            // out of log, no mutations happend to both meta and log here
-            log.test_backward_log(meta, Some(2), true);
+                let clone = log.test_drain_future([(3, 3), (4, 4)], 0);
 
-            log.test_forward_log(meta, Some(3), false);
-            log.test_forward_log(meta, Some(4), false);
-            // out of log, no mutations happend to both meta and log here
-            log.test_forward_log(meta, Some(4), true);
-
-            log.test_backward_log(meta, Some(3), false);
-            log.test_backward_log(meta, Some(2), false);
-
-            let clone = log.test_drain_future([(3, 3), (4, 4)], 0);
-
-            for mut log in [log, clone] {
-                // all entries are truncated as they are in the future
-                log.test_forward(meta, strategy, 5, 1, None);
+                for mut log in [log, clone] {
+                    // all entries are truncated as they are in the future
+                    log.test_forward(meta, strategy, 5, 1, None);
+                }
             }
         }
     }
