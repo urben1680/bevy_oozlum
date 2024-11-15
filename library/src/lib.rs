@@ -13,6 +13,7 @@ Features:
 -- postponed due to required components + disabled entities + moving components
 - add license
 - reversible versions of World::observe / App::observe
+- EntityCommands/EntityWorldMut rev_add_observer
 
 Enhancements:
 - reduce () and //todo
@@ -25,12 +26,14 @@ Enhancements:
 -- idea: rev meta reads buffer after run too
 - more plugin constructors
 -- outsource to direct RevMeta constructors
-- RareInitNoneLog
+- RareInitNoneLog tests
 - VerifyingRevMeta tests
 
 Docs
 - examples
-- documentations, point out determinism aspects of methods
+- documentations
+-- point out determinism aspects of methods
+-- log contract (always valid, may go further into the past)
 
 UNSUPPORTED:
 
@@ -77,7 +80,7 @@ pub mod observer;
 pub mod schedule;
 pub mod world;
 
-/// Contains important extension traits `as _`, [`RevMeta`] and [`RevDirection`].
+/// Contains important extension traits `as _`, [`RevMeta`], [`RevDirection`] and [`HookDirection`].
 pub mod prelude {
     pub use crate::app::RevApp as _;
     pub use crate::commands::RevCommands as _;
