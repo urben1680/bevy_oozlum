@@ -129,8 +129,22 @@ impl<T> RareStateLog<T> {
             ..Self::new(present)
         }
     }
+    pub(super) fn with_alloc(present: T, mut empty: VecDeque<RareValue<T>>) -> Self {
+        empty.clear();
+        Self {
+            states: empty,
+            present,
+            index: 0,
+            skips: 0,
+            skips_max: 0,
+            past_len: 0,
+        }
+    }
     pub fn into_inner(self) -> T {
         self.present
+    }
+    pub(super) fn into_inner_with_log_with_skips(self) -> (T, VecDeque<RareValue<T>>, usize) {
+        (self.present, self.states, self.skips)
     }
     pub fn states_len(&self) -> usize {
         self.states.len()
@@ -176,7 +190,7 @@ impl<T> RareStateLog<T> {
     pub fn push_present(&mut self, state: Option<T>) {
         self.states.truncate(self.index);
         match state {
-            None if self.skips < RevMeta::MAX_WORLD_STATES => {
+            None => {
                 self.skips += 1;
                 self.past_len += 1;
             }
@@ -187,9 +201,40 @@ impl<T> RareStateLog<T> {
                 self.index += 1;
                 self.past_len += 1;
             }
-            None => {} // assume user will not go back before current entry
         }
         self.skips_max = self.skips;
+    }
+    pub(super) fn init_none_push_present(
+        &mut self,
+        undone: &mut bool,
+        skips_max: &mut usize,
+        state: Option<T>,
+    ) {
+        self.states.truncate(self.index);
+        match state {
+            None if *undone => {
+                self.skips += 1;
+                *skips_max = self.skips;
+            }
+            None => {
+                self.skips += 1;
+                self.past_len += 1;
+                self.skips_max = self.skips;
+            }
+            Some(state) if *undone => {
+                *skips_max = self.skips;
+                *undone = false;
+                self.clear_with(state)
+            }
+            Some(state) => {
+                let previous = core::mem::replace(&mut self.present, state);
+                self.states.push_back(RareValue::new(previous, self.skips));
+                self.skips = 0;
+                self.index += 1;
+                self.past_len += 1;
+                self.skips_max = self.skips;
+            }
+        }
     }
     pub fn backward_log(&mut self) -> Result<bool, OutOfLog> {
         if self.skips > 0 {
@@ -206,11 +251,64 @@ impl<T> RareStateLog<T> {
         self.past_len -= 1;
         Ok(true)
     }
+    pub(super) fn init_none_backward_log(
+        &mut self,
+        undone: &mut bool,
+        skips_max: usize,
+    ) -> Result<bool, OutOfLog> {
+        if self.skips > 0 {
+            self.skips -= 1;
+            self.past_len -= 1;
+            return Ok(false);
+        }
+        match self.index.checked_sub(1) {
+            Some(index) => {
+                if !self.swap_state_and_skips_max(index) {
+                    return Err(index_oob());
+                }
+                self.index = index;
+                self.skips = self.skips_max;
+                self.past_len -= 1;
+                Ok(true)
+            }
+            None if !*undone => {
+                *undone = true;
+                self.skips = skips_max;
+                Ok(true)
+            }
+            None => Err(OutOfLog),
+        }
+    }
     pub fn forward_log(&mut self) -> Result<bool, OutOfLog> {
         if self.skips < self.skips_max {
             self.past_len += 1;
             self.skips += 1;
             Ok(false)
+        } else if self.swap_state_and_skips_max(self.index) {
+            self.past_len += 1;
+            self.index += 1;
+            self.skips = 0;
+            Ok(true)
+        } else {
+            Err(OutOfLog)
+        }
+    }
+    pub(super) fn init_none_forward_log(
+        &mut self,
+        undone: &mut bool,
+        mut skips_max: usize,
+    ) -> Result<bool, OutOfLog> {
+        if !*undone {
+            skips_max = self.skips_max;
+        }
+        if self.skips < skips_max {
+            self.past_len += 1;
+            self.skips += 1;
+            Ok(false)
+        } else if *undone {
+            *undone = false;
+            self.skips = 0;
+            Ok(true)
         } else if self.swap_state_and_skips_max(self.index) {
             self.past_len += 1;
             self.index += 1;
@@ -239,7 +337,7 @@ impl<T> RareStateLog<T> {
             .past_len
             .checked_sub(max_past_len)
             .filter(|len| *len > 0)?;
-        let past_end = self.states.front_mut()?;
+        let past_end = self.states.front()?;
         if excessive_len >= past_end.len() {
             self.pop_past()
         } else {
