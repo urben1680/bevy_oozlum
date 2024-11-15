@@ -1,14 +1,11 @@
 use bevy::{
-    app::{App, FixedUpdate, Plugin},
-    ecs::schedule::{
+    app::{App, FixedUpdate, Plugin}, ecs::{bundle::Bundle, event::Event, schedule::{
         InternedScheduleLabel, InternedSystemSet, IntoSystemConfigs, ScheduleLabel, Schedules,
-    },
-    utils::default,
+    }, system::IntoObserverSystem}, utils::default
 };
 
 use crate::{
-    meta::RevMeta,
-    schedule::{IntoRevSystemConfigs, IntoRevSystemSetConfigs, RevSchedule},
+    meta::RevMeta, observer::RevEvent, schedule::{IntoRevSystemConfigs, IntoRevSystemSetConfigs, RevSchedule}, world::RevWorld
 };
 
 pub trait RevApp {
@@ -22,6 +19,13 @@ pub trait RevApp {
         schedule: impl ScheduleLabel,
         sets: impl IntoRevSystemSetConfigs<Marker>,
     ) -> &mut Self;
+    fn rev_add_observer<E, B, M>(
+        &mut self,
+        system: impl IntoObserverSystem<RevEvent<E>, B, M>,
+    ) -> &mut Self
+    where
+        E: Event + Clone,
+        B: Bundle;
 }
 
 impl RevApp for App {
@@ -45,6 +49,18 @@ impl RevApp for App {
             .resource_mut::<Schedules>()
             .entry(schedule)
             .rev_configure_sets(sets);
+        self
+    }
+    
+    fn rev_add_observer<E, B, M>(
+        &mut self,
+        system: impl IntoObserverSystem<RevEvent<E>, B, M>,
+    ) -> &mut Self
+    where
+        E: Event + Clone,
+        B: Bundle,
+    {
+        self.world_mut().rev_add_observer(system);
         self
     }
 }
