@@ -236,6 +236,7 @@ mod transition;
 mod transitions;
 
 pub use init_none::InitNoneLog;
+pub use rare_init_none::RareInitNoneLog;
 pub use rare_state::RareStateLog;
 pub use rare_states::RareStatesLog;
 pub use rare_transition::RareTransitionLog;
@@ -478,6 +479,9 @@ struct RareValue<T> {
     ///
     /// This is not a `PackedRevFrame` because skips may be sub-frames and sum up to larger values.
     /// Instead, this is usize's native byte representation to reduce the alignment of this field.
+    ///
+    /// This value never gets reduced by `pop`/`drain_past_by_len` to be consistent with the behavior
+    /// of `pop`/`drain_past_by_logged_at` which cannot interpret these skips as frames as pointed out.
     skips_ne: [u8; USIZE_BYTES as usize],
 }
 
@@ -837,9 +841,6 @@ mod test {
             Self::PopPastByLoggedAt,
             Self::DrainPastByLoggedAt,
         ];
-        pub(super) fn by_len(self) -> bool {
-            matches!(self, Self::PopPastByLen | Self::DrainPastByLen)
-        }
     }
 
     macro_rules! shorten_strategy {
