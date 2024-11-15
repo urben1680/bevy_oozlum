@@ -229,7 +229,7 @@ pub struct RevMeta {
     /// - regularily set this value to not less than `now() + 2 - frame` before the next update
     /// - set it to `None`, disabling forgetting world states
     ///
-    /// Reducing this value alone does not cause deallocations, this has to be done manually with each [log structs](crate::log) if desired.
+    /// Reducing this value alone does not cause deallocations, this has to be done manually with each [log struct](crate::log) if desired.
     ///
     /// Changing this value is always possible but only comes into effect when updating the world during [`RevDirection::NotLog`].
     ///
@@ -402,7 +402,6 @@ impl RevMeta {
         }
 
         world.resource_scope(|world: &mut World, mut meta: Mut<Self>| {
-
             if meta.get_direction().is_some() {
                 return Err(RevTryRunScheduleError::UnexpectedInitialRunning {
                     meta: meta.clone(),
@@ -410,26 +409,29 @@ impl RevMeta {
             }
             let previous = meta.clone();
             let result = meta.update(|meta, reduce_logged_at| {
-                world.try_schedule_scope(RevUpdate, |world, schedule| {
-                    // While this only needs to be once, this is the only resource that must be initialized before the first
-                    // RevUpdate run because the first access may be by a hook that only has DeferredWorld and cannot add it itself.
-                    // With this being done here bevy-ecs only users cannot forget to init it.
-                    init_commands_buffer(world);
+                world
+                    .try_schedule_scope(RevUpdate, |world, schedule| {
+                        // While this only needs to be once, this is the only resource that must be initialized before the first
+                        // RevUpdate run because the first access may be by a hook that only has DeferredWorld and cannot add it itself.
+                        // With this being done here bevy-ecs only users cannot forget to init it.
+                        init_commands_buffer(world);
 
-                    world.insert_resource(meta.clone());
-    
-                    if let Some(reduce_logged_at) = reduce_logged_at {
-                        world.trigger(reduce_logged_at);
-                        if let Some(reducings) = world.remove_resource::<CommandsLogReducings>() {
-                            for reducing in &reducings.0 {
-                                reducing(meta, world);
+                        world.insert_resource(meta.clone());
+
+                        if let Some(reduce_logged_at) = reduce_logged_at {
+                            world.trigger(reduce_logged_at);
+                            if let Some(reducings) = world.remove_resource::<CommandsLogReducings>()
+                            {
+                                for reducing in &reducings.0 {
+                                    reducing(meta, world);
+                                }
+                                world.insert_resource(reducings);
                             }
-                            world.insert_resource(reducings);
                         }
-                    }
 
-                    schedule.run(world);
-                }).map_err(|_| RevTryRunScheduleError::RevUpdateMissing { meta: meta.clone() })
+                        schedule.run(world);
+                    })
+                    .map_err(|_| RevTryRunScheduleError::RevUpdateMissing { meta: meta.clone() })
             });
 
             match result.transpose() {
@@ -454,14 +456,13 @@ impl RevMeta {
     pub fn update_world(world: &mut World) {
         match Self::try_update_world(world) {
             Err(RevTryRunScheduleError::RevMetaMissingFirstCall) => info!(
-                "RevMeta does not exist yet, reversible schedule RevUpdate will not be called until it is inserted."
+                "RevMeta does not exist yet, reversible schedule RevUpdate will not be called until it is inserted"
             ),
             Err(RevTryRunScheduleError::RevMetaMissing { existed_previously: true, .. }) => info!(
-                "RevMeta was removed, reversible schedule RevUpdate will not be called until it is inserted again."
+                "RevMeta was removed, reversible schedule RevUpdate will not be called until it is inserted again"
             ),
-            Err(RevTryRunScheduleError::RevUpdateMissing { meta }) => warn_once!(
-                "RevMeta cannot find reversible schedule RevUpdate, make sure to not \
-                run it recursively or call RevMeta::update_world recursively.\n{meta:?}"
+            Err(RevTryRunScheduleError::RevUpdateMissing { .. }) => warn_once!(
+                "RevMeta cannot find reversible schedule RevUpdate, make sure to not call RevMeta::update_world recursively"
             ),
             _ => {}
         }
@@ -484,7 +485,7 @@ impl RevMeta {
     ///
     /// # Panics
     ///
-    /// If this is caled recursively in the closure and the closure is called because the updated direction is not paused,
+    /// If this is called recursively in the closure and the closure is called because the updated direction is not paused,
     /// this will panic. The same can happen if `RevMeta` is in an invalid state, cloned from inside the closure for example.
     pub fn update<Out>(
         &mut self,
@@ -542,7 +543,7 @@ impl RevMeta {
             .min(Self::MAX_WORLD_STATES);
         // past states equal to max states is too many as the present state has to be added to the comparision
         if self.past_world_states() >= max_world_states {
-            self.oldest_frame = self.oldest_frame.wrapping_add(1);
+            self.oldest_frame = self.present_frame.wrapping_sub(max_world_states - 1);
         }
         self.youngest_frame = self.present_frame;
         matches!(
@@ -784,9 +785,11 @@ mod test {
         world.insert_resource(meta);
         world.insert_resource(res);
         world.insert_resource(schedules);
-        world.add_observer(|trigger: Trigger<CheckLoggedAt>, mut res: ResMut<CheckLoggedAtRes>| {
-            res.0.pop_past_by_logged_at(trigger.event());
-        });
+        world.add_observer(
+            |trigger: Trigger<CheckLoggedAt>, mut res: ResMut<CheckLoggedAtRes>| {
+                res.0.pop_past_by_logged_at(trigger.event());
+            },
+        );
         world.flush();
 
         assert_eq!(RevMeta::try_update_world(&mut world), Ok(()));
