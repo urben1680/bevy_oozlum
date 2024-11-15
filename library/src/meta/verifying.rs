@@ -186,10 +186,10 @@ unsafe impl SystemParam for VerifyingRevMeta<'_, '_> {
         state.get_param(meta, system_meta.name())
     }
     unsafe fn validate_param(
-            state: &Self::State,
-            _system_meta: &SystemMeta,
-            world: bevy::ecs::world::unsafe_world_cell::UnsafeWorldCell,
-        ) -> bool {
+        state: &Self::State,
+        _system_meta: &SystemMeta,
+        world: bevy::ecs::world::unsafe_world_cell::UnsafeWorldCell,
+    ) -> bool {
         world.get_resource_by_id(state.meta_id).is_some()
     }
 }
