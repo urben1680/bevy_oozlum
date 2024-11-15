@@ -617,7 +617,7 @@ mod test {
                         TestSet(1).intern(),
                     ))
             }),
-            // #6 set after set (flipped)
+            // #7 set after set (flipped)
             Box::new(move |schedule: &mut Schedule| {
                 schedule
                     .rev_add_systems((
@@ -629,41 +629,41 @@ mod test {
                         TestSet(1).intern(),
                     ))
             }),
-            // #7 system before system
+            // #8 system before system
             Box::new(move |schedule: &mut Schedule| {
                 schedule.rev_add_systems((sys_before(sys_a(), set_b), sys_b()))
             }),
-            // #8 system before system (flipped)
+            // #9 system before system (flipped)
             Box::new(move |schedule: &mut Schedule| {
                 schedule.rev_add_systems((sys_b(), sys_before(sys_a(), set_b)))
             }),
-            // #9 set before system
+            // #10 set before system
             Box::new(move |schedule: &mut Schedule| {
                 schedule
                     .rev_add_systems((sys_a().rev_in_set(TestSet(1)), sys_b()))
                     .rev_configure_sets(set_before(TestSet(1).into_rev_configs(), set_b))
             }),
-            // #10 set before system (flipped)
+            // #11 set before system (flipped)
             Box::new(move |schedule: &mut Schedule| {
                 schedule
                     .rev_add_systems((sys_b(), sys_a().rev_in_set(TestSet(1))))
                     .rev_configure_sets(set_before(TestSet(1).into_rev_configs(), set_b))
             }),
-            // #11 system before set
+            // #12 system before set
             Box::new(move |schedule: &mut Schedule| {
                 schedule.rev_add_systems((
                     sys_before(sys_a(), TestSet(2).intern()),
                     sys_b().rev_in_set(TestSet(2)),
                 ))
             }),
-            // #12 system before set (flipped)
+            // #13 system before set (flipped)
             Box::new(move |schedule: &mut Schedule| {
                 schedule.rev_add_systems((
                     sys_b().rev_in_set(TestSet(2)),
                     sys_before(sys_a(), TestSet(2).intern()),
                 ))
             }),
-            // #13 set before set
+            // #14 set before set
             Box::new(move |schedule: &mut Schedule| {
                 schedule
                     .rev_add_systems((
@@ -675,7 +675,7 @@ mod test {
                         TestSet(2).intern(),
                     ))
             }),
-            // #14 set before set (flipped)
+            // #15 set before set (flipped)
             Box::new(move |schedule: &mut Schedule| {
                 schedule
                     .rev_add_systems((
@@ -687,11 +687,11 @@ mod test {
                         TestSet(2).intern(),
                     ))
             }),
-            // #15 system chain
+            // #16 system chain
             Box::new(move |schedule: &mut Schedule| {
                 schedule.rev_add_systems(sys_chain((sys_a(), sys_b()).into_rev_configs()))
             }),
-            // #16 set chain
+            // #17 set chain
             Box::new(move |schedule: &mut Schedule| {
                 schedule
                     .rev_add_systems((
@@ -700,7 +700,7 @@ mod test {
                     ))
                     .rev_configure_sets(set_chain((TestSet(1), TestSet(2)).into_rev_configs()))
             }),
-            // #17 set chain (flipped)
+            // #18 set chain (flipped)
             Box::new(move |schedule: &mut Schedule| {
                 schedule
                     .rev_add_systems((
@@ -811,7 +811,8 @@ mod test {
         // The implemention is simple here, using the vanilla before_ignore_deferred in the case of config #0.
         // The sync point disappears if the BackwardSet is empty.
         // Chaining ForwardSet and BackwardSet has no effect.
-        // bevy_mod_debugdump does not show other causes for this sync point
+        // bevy_mod_debugdump does not show other causes for this sync point.
+        // All configs from a_then_b are affected, though not the flipped variants.
         // TODO: Find cause and maybe report an issue at bevy.
         test_run(
             a_then_b(false, true, true),
