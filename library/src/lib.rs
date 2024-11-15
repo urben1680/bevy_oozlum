@@ -9,25 +9,20 @@ TODO:
 -- rev..?
 
 Features:
-- entity commands, standard rev commands
--- postponed due to required components + disabled entities + moving components
 - add license
-- reversible versions of World::observe / App::observe
 - EntityCommands/EntityWorldMut rev_add_observer
 
 Enhancements:
 - reduce () and //todo
-- config tests
 - make doctests work
-- mod/use/pub cleanup
 - use serde from bevy reexport
 - reflect behind feature flag
-- how to handle set_apply_final_deferred(false)?
--- idea: rev meta reads buffer after run too
 - more plugin constructors
 -- outsource to direct RevMeta constructors
 - RareInitNoneLog tests
 - VerifyingRevMeta tests
+- retry IntoSystemConfigs::distributive_run_if
+- retest Schedule::set_apply_final_deferred
 
 Docs
 - examples
