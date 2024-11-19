@@ -447,7 +447,7 @@ impl<T: LoggedAt> InitNoneLog<T> {
 
 #[cfg(test)]
 mod test {
-    use std::num::NonZeroUsize;
+    use std::num::NonZeroU32;
 
     use serde::{Deserialize, Serialize};
 
@@ -506,34 +506,43 @@ mod test {
         original_ran_after_none.push_present('b');
         original_ran_after_none.push_present('c');
         original_ran_after_none.backward_log().expect("in log");
-        assert!(matches!(
-            original_ran_after_none.0,
-            Inner::Ran {
-                undone_first_run: Some(false),
-                ..
-            }
-        ));
+        assert!(
+            matches!(
+                original_ran_after_none.0,
+                Inner::Ran {
+                    undone_first_run: Some(false),
+                    ..
+                }
+            ),
+            "{original_ran_after_none:#?}"
+        );
 
         let mut original_undone_first_run = original_ran_after_none.clone();
         original_undone_first_run.backward_log().expect("in log");
         original_undone_first_run.backward_log().expect("in log");
-        assert!(matches!(
-            original_undone_first_run.0,
-            Inner::Ran {
-                undone_first_run: Some(true),
-                ..
-            }
-        ));
+        assert!(
+            matches!(
+                original_undone_first_run.0,
+                Inner::Ran {
+                    undone_first_run: Some(true),
+                    ..
+                }
+            ),
+            "{original_undone_first_run:#?}"
+        );
 
         let mut original_never_none = original_ran_after_none.clone();
         original_never_none.pop_past_by_len(1);
-        assert!(matches!(
-            original_never_none.0,
-            Inner::Ran {
-                undone_first_run: None,
-                ..
-            }
-        ));
+        assert!(
+            matches!(
+                original_never_none.0,
+                Inner::Ran {
+                    undone_first_run: None,
+                    ..
+                }
+            ),
+            "{original_never_none:#?}"
+        );
 
         let logs = LogsIn {
             never_ran: Logs::new(original_never_ran.clone(), 100),
@@ -637,7 +646,7 @@ mod test {
             strategy: ShortenStrategy,
             push: u8,
             expected_states_len: usize,
-            expected_popped: Option<(u8, usize)>,
+            expected_popped: Option<(u8, u32)>,
         ) {
             meta.queue_forward();
             meta.update(|_, _| {});
@@ -736,7 +745,7 @@ mod test {
         }
         fn test_drain_future(
             &self,
-            expected_future: impl IntoIterator<Item = (u8, usize)>,
+            expected_future: impl IntoIterator<Item = (u8, u32)>,
             expected_states_len: usize,
         ) -> Self {
             let before = self.clone();
@@ -762,7 +771,7 @@ mod test {
     #[test]
     fn push_and_log_traversal() {
         for strategy in ShortenStrategy::VARIANTS {
-            let meta = &mut RevMeta::new(NonZeroUsize::new(3), 0, false);
+            let meta = &mut RevMeta::new(NonZeroU32::new(3), 0, false);
             let mut init_none = InitNoneLog::new_none();
 
             init_none.test_forward(meta, strategy, 1, 0, None);
@@ -782,7 +791,7 @@ mod test {
             // has no initial value that is out of log now
             init_none.test_forward(meta, strategy, 3, 2, None);
 
-            let meta = &mut RevMeta::new(NonZeroUsize::new(3), 0, false);
+            let meta = &mut RevMeta::new(NonZeroU32::new(3), 0, false);
             let mut init_some = InitNoneLog::new_some((0, meta.present_world_state()));
 
             init_some.test_forward(meta, strategy, 1, 1, None);

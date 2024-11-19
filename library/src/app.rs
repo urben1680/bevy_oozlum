@@ -1,11 +1,22 @@
 use bevy::{
-    app::{App, FixedUpdate, Plugin}, ecs::{bundle::Bundle, event::Event, schedule::{
-        InternedScheduleLabel, InternedSystemSet, IntoSystemConfigs, ScheduleLabel, Schedules,
-    }, system::IntoObserverSystem}, utils::default
+    app::{App, FixedUpdate, Plugin},
+    ecs::{
+        bundle::Bundle,
+        event::Event,
+        schedule::{
+            InternedScheduleLabel, InternedSystemSet, IntoSystemConfigs, ScheduleLabel, Schedules,
+        },
+        system::IntoObserverSystem,
+    },
+    prelude::SystemSet,
+    utils::default,
 };
 
 use crate::{
-    meta::RevMeta, observer::RevEvent, schedule::{IntoRevSystemConfigs, IntoRevSystemSetConfigs, RevSchedule}, world::RevWorld
+    meta::RevMeta,
+    observer::RevEvent,
+    schedule::{IntoRevSystemConfigs, IntoRevSystemSetConfigs, RevSchedule},
+    world::RevWorld,
 };
 
 pub trait RevApp {
@@ -51,7 +62,7 @@ impl RevApp for App {
             .rev_configure_sets(sets);
         self
     }
-    
+
     fn rev_add_observer<E, B, M>(
         &mut self,
         system: impl IntoObserverSystem<RevEvent<E>, B, M>,
@@ -65,35 +76,60 @@ impl RevApp for App {
     }
 }
 
-pub struct RevSystemsPlugin {
-    pub rev_meta: Option<RevMeta>,
-    pub add_rev_meta_sys_in: Option<(InternedScheduleLabel, Option<InternedSystemSet>)>,
+pub enum RevSystemsPlugin {
+    AddMeta(RevMeta),
+    AddMetaRunner(RevMeta, InternedScheduleLabel),
+    AddMetaRunnerInSet(RevMeta, InternedScheduleLabel, InternedSystemSet),
+    AddRunner(InternedScheduleLabel),
+    AddRunnerInSet(InternedScheduleLabel, InternedSystemSet),
 }
 
 impl Default for RevSystemsPlugin {
     fn default() -> Self {
-        Self {
-            rev_meta: Some(default()),
-            add_rev_meta_sys_in: Some((FixedUpdate.intern(), None)),
-        }
+        Self::AddMetaRunner(default(), FixedUpdate.intern())
+    }
+}
+
+impl RevSystemsPlugin {
+    pub fn add_meta(meta: RevMeta) -> Self {
+        Self::AddMeta(meta)
+    }
+    pub fn add_meta_runner(meta: RevMeta, schedule: impl ScheduleLabel) -> Self {
+        Self::AddMetaRunner(meta, schedule.intern())
+    }
+    pub fn add_meta_runner_in_set(
+        meta: RevMeta,
+        schedule: impl ScheduleLabel,
+        set: impl SystemSet,
+    ) -> Self {
+        Self::AddMetaRunnerInSet(meta, schedule.intern(), set.intern())
+    }
+    pub fn add_runner(schedule: impl ScheduleLabel) -> Self {
+        Self::AddRunner(schedule.intern())
+    }
+    pub fn add_runner_in_set(schedule: impl ScheduleLabel, set: impl SystemSet) -> Self {
+        Self::AddRunnerInSet(schedule.intern(), set.intern())
     }
 }
 
 impl Plugin for RevSystemsPlugin {
-    fn build(&self, app: &mut bevy::app::App) {
-        app.register_type::<RevMeta>();
-
-        if let Some(rev_meta) = &self.rev_meta {
-            app.insert_resource(rev_meta.clone());
+    fn build(&self, app: &mut App) {
+        match self {
+            Self::AddMeta(meta, ..)
+            | Self::AddMetaRunner(meta, ..)
+            | Self::AddMetaRunnerInSet(meta, ..) => {
+                app.insert_resource(meta.clone());
+            }
+            _ => {}
+        };
+        match self {
+            Self::AddMetaRunner(_, schedule) | Self::AddRunner(schedule) => {
+                app.add_systems(*schedule, RevMeta::update_world);
+            }
+            Self::AddMetaRunnerInSet(_, schedule, set) | Self::AddRunnerInSet(schedule, set) => {
+                app.add_systems(*schedule, RevMeta::update_world.in_set(*set));
+            }
+            Self::AddMeta(..) => {}
         }
-
-        let Some((schedule, set)) = self.add_rev_meta_sys_in else {
-            return;
-        };
-
-        match set {
-            Some(set) => app.add_systems(schedule, RevMeta::update_world.in_set(set)),
-            None => app.add_systems(schedule, RevMeta::update_world),
-        };
     }
 }

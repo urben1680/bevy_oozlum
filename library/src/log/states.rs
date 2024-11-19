@@ -514,7 +514,7 @@ where
 
 #[cfg(test)]
 mod test {
-    use std::num::NonZeroUsize;
+    use std::num::NonZeroU32;
 
     use serde::{Deserialize, Serialize};
 
@@ -738,7 +738,7 @@ mod test {
             push_ok: bool,
             expected_entries_len: usize,
             expected_states_len: usize,
-            expected_popped: Option<(Vec<u8>, usize)>,
+            expected_popped: Option<(Vec<u8>, u32)>,
         ) {
             let before = self.clone();
             if push_ok {
@@ -901,7 +901,7 @@ mod test {
         }
         fn test_drain_future(
             &self,
-            expected_future: impl IntoIterator<Item = (Vec<u8>, usize)>,
+            expected_future: impl IntoIterator<Item = (Vec<u8>, u32)>,
             expected_entries_len: usize,
             expected_states_len: usize,
         ) -> Self {
@@ -911,7 +911,7 @@ mod test {
             let actual_future: Vec<_> = entries
                 .map(|entry_amount| {
                     let states = states.by_ref().take(entry_amount.amount()).collect();
-                    (states, usize::from(entry_amount.entry))
+                    (states, u32::from(entry_amount.entry))
                 })
                 .collect();
             let expected_future: Vec<_> = expected_future
@@ -943,7 +943,7 @@ mod test {
     #[test]
     fn push_and_log_traversal() {
         for strategy in ShortenStrategy::VARIANTS {
-            let meta = &mut RevMeta::new(NonZeroUsize::new(3), 0, false);
+            let meta = &mut RevMeta::new(NonZeroU32::new(3), 0, false);
             let mut log = StatesLog::try_new(vec![0; 5], meta.present_world_state()).unwrap();
 
             log.test_forward(meta, strategy, vec![1; 1], true, 1, 6, None);

@@ -246,7 +246,7 @@ impl<T: LoggedAt> StateLog<T> {
 
 #[cfg(test)]
 mod test {
-    use std::num::NonZeroUsize;
+    use std::num::NonZeroU32;
 
     use serde::{Deserialize, Serialize};
 
@@ -353,7 +353,7 @@ mod test {
             strategy: ShortenStrategy,
             push: u8,
             expected_states_len: usize,
-            expected_popped: Option<(u8, usize)>,
+            expected_popped: Option<(u8, u32)>,
         ) {
             meta.queue_forward();
             meta.update(|_, _| {});
@@ -436,7 +436,7 @@ mod test {
         }
         fn test_drain_future(
             &self,
-            expected_future: impl IntoIterator<Item = (u8, usize)>,
+            expected_future: impl IntoIterator<Item = (u8, u32)>,
             expected_states_len: usize,
         ) -> Self {
             let before = self.clone();
@@ -462,7 +462,7 @@ mod test {
     #[test]
     fn push_and_log_traversal() {
         for strategy in ShortenStrategy::VARIANTS {
-            let meta = &mut RevMeta::new(NonZeroUsize::new(3), 0, false);
+            let meta = &mut RevMeta::new(NonZeroU32::new(3), 0, false);
             let mut log = StateLog::new((0, meta.present_world_state()));
 
             log.test_forward(meta, strategy, 1, 1, None);

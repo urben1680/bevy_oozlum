@@ -1,12 +1,10 @@
-use bevy::{
-    ecs::{
-        component::{Component, ComponentId},
-        event::Event,
-        observer::{TriggerEvent, TriggerTargets},
-        system::IntoObserverSystem,
-        world::{DeferredWorld, World},
-    },
-    prelude::{Bundle, EntityWorldMut},
+use bevy::ecs::{
+    bundle::Bundle,
+    component::{Component, ComponentId},
+    event::Event,
+    observer::{TriggerEvent, TriggerTargets},
+    system::IntoObserverSystem,
+    world::{DeferredWorld, EntityWorldMut, World},
 };
 
 use crate::{
@@ -27,15 +25,6 @@ pub trait RevWorld {
     fn rev_trigger_targets(&mut self, event: impl Event + Clone, targets: impl TriggerTargets);
     fn rev_register_component_hooks<T: Component>(&mut self) -> RevComponentHooks;
     fn rev_register_component_hooks_by_id(&mut self, id: ComponentId) -> Option<RevComponentHooks>;
-}
-
-pub trait RevDeferredWorld {
-    fn rev_trigger(&mut self, event: impl Event + Clone);
-    fn rev_trigger_targets(
-        &mut self,
-        event: impl Event + Clone,
-        targets: impl TriggerTargets + Send + 'static,
-    );
 }
 
 impl RevWorld for World {
@@ -74,6 +63,15 @@ impl RevWorld for World {
     }
 }
 
+pub trait RevDeferredWorld {
+    fn rev_trigger(&mut self, event: impl Event + Clone);
+    fn rev_trigger_targets(
+        &mut self,
+        event: impl Event + Clone,
+        targets: impl TriggerTargets + Send + 'static,
+    );
+}
+
 impl<'w> RevDeferredWorld for DeferredWorld<'w> {
     fn rev_trigger(&mut self, event: impl Event + Clone) {
         self.rev_trigger_targets(event, ());
@@ -84,5 +82,33 @@ impl<'w> RevDeferredWorld for DeferredWorld<'w> {
         targets: impl TriggerTargets + Send + 'static,
     ) {
         self.commands().rev_queue(TriggerEvent { event, targets });
+    }
+}
+
+pub trait RevEntityWorldMut {
+    fn rev_observe<E, B, M>(
+        &mut self,
+        system: impl IntoObserverSystem<RevEvent<E>, B, M>,
+    ) -> &mut Self
+    where
+        E: Event + Clone,
+        B: Bundle;
+}
+
+impl RevEntityWorldMut for EntityWorldMut<'_> {
+    fn rev_observe<E, B, M>(
+        &mut self,
+        system: impl IntoObserverSystem<RevEvent<E>, B, M>,
+    ) -> &mut Self
+    where
+        E: Event + Clone,
+        B: Bundle,
+    {
+        let world = unsafe {
+            // SAFETY: inserting a resource does not change self's location
+            self.world_mut()
+        };
+        world.init_resource::<ObserverLog<E>>();
+        self.observe(system)
     }
 }

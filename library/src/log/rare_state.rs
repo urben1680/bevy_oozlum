@@ -28,9 +28,8 @@ mod serde_with {
 
     use serde::{Deserialize, Serialize};
 
-    use crate::{
-        log::serde_with::{LoglessState, LoglessWithCapacity, WithCapacity, WithCapacityWrapper},
-        RevFrame,
+    use crate::log::serde_with::{
+        LoglessState, LoglessWithCapacity, WithCapacity, WithCapacityWrapper,
     };
 
     use super::{RareStateLog, RareValue};
@@ -60,7 +59,7 @@ mod serde_with {
             T,
             usize,
             usize,
-            RevFrame, // deserializes from usize and asserts value in range
+            usize,
             usize,
         );
         fn get_with_capacity(&self) -> Self::Se<'_> {
@@ -74,7 +73,7 @@ mod serde_with {
             )
         }
         fn from_with_capacity(
-            (WithCapacityWrapper(states), present, index, skips, RevFrame(skips_max), past_len): Self::De,
+            (WithCapacityWrapper(states), present, index, skips, skips_max, past_len): Self::De,
         ) -> Self {
             Self {
                 states,
@@ -410,7 +409,7 @@ impl<T: LoggedAt> RareStateLog<T> {
 
 #[cfg(test)]
 mod test {
-    use std::num::NonZeroUsize;
+    use std::num::NonZeroU32;
 
     use serde::{Deserialize, Serialize};
 
@@ -516,10 +515,10 @@ mod test {
             meta: &mut RevMeta,
             strategy: ShortenStrategy,
             max_past_len: usize, // control when the by-len strategies trigger pop/drain to align to the by-logged-at strategies
-            state: (u8, usize),
+            state: (u8, u32),
             state_is_pushed: bool,
             expected_states_len: usize,
-            expected_popped: Option<(u8, usize)>,
+            expected_popped: Option<(u8, u32)>,
         ) {
             meta.queue_forward();
             meta.update(|_, _| {});
@@ -543,7 +542,7 @@ mod test {
         fn test_forward_log(
             &mut self,
             meta: &mut RevMeta,
-            expected_state: (u8, usize),
+            expected_state: (u8, u32),
             expected_result: Result<bool, OutOfLog>,
         ) {
             let before = self.clone();
@@ -562,7 +561,7 @@ mod test {
         fn test_backward_log(
             &mut self,
             meta: &mut RevMeta,
-            expected_state: (u8, usize),
+            expected_state: (u8, u32),
             expected_result: Result<bool, OutOfLog>,
         ) {
             let before = self.clone();
@@ -578,7 +577,7 @@ mod test {
             );
             self.test_state(before, meta, expected_state);
         }
-        fn test_state(&self, before: Self, meta: &RevMeta, state: (u8, usize)) {
+        fn test_state(&self, before: Self, meta: &RevMeta, state: (u8, u32)) {
             let state = (state.0, RevFrame::new(state.1));
             assert_eq!(
                 **self, state,
@@ -587,7 +586,7 @@ mod test {
         }
         fn test_drain_future(
             &self,
-            expected_future: impl IntoIterator<Item = (u8, usize)>,
+            expected_future: impl IntoIterator<Item = (u8, u32)>,
             expected_states_len: usize,
         ) -> Self {
             let before = self.clone();
@@ -613,7 +612,7 @@ mod test {
     #[test]
     fn push() {
         for strategy in ShortenStrategy::VARIANTS {
-            let meta = &mut RevMeta::new(NonZeroUsize::new(3), 0, false);
+            let meta = &mut RevMeta::new(NonZeroU32::new(3), 0, false);
             let mut log = RareStateLog::new((0, meta.present_world_state()));
 
             log.test_forward(meta, strategy, 0, (0, 0), false, 0, None);

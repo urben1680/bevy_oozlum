@@ -516,3 +516,201 @@ impl<T: LoggedAt> RareInitNoneLog<T> {
         }
     }
 }
+
+#[cfg(test)]
+mod test {
+    use std::num::NonZeroU32;
+
+    use serde::{Deserialize, Serialize};
+
+    use super::*;
+
+    use crate::{
+        log::test::{shorten_strategy, ShortenStrategy},
+        meta::RevMeta,
+        RevFrame,
+    };
+
+    #[test]
+    fn serde_with() {
+        #[derive(Serialize, Deserialize)]
+        struct Logs {
+            full: RareInitNoneLog<char>,
+            #[serde(with = "crate::log::logless_state")]
+            logless: RareInitNoneLog<char>,
+            #[serde(with = "crate::log::with_capacity")]
+            full_with_capacity: RareInitNoneLog<char>,
+            #[serde(with = "crate::log::logless_with_capacity")]
+            logless_with_capacity: RareInitNoneLog<char>,
+        }
+
+        impl Logs {
+            fn new(log: RareInitNoneLog<char>, reserve_additional: usize) -> Self {
+                let mut logs = Self {
+                    full: log.clone(),
+                    logless: log.clone(),
+                    full_with_capacity: log.clone(),
+                    logless_with_capacity: log.clone(),
+                };
+                logs.full.states_reserve_exact(reserve_additional);
+                logs.logless.states_reserve_exact(reserve_additional);
+                logs.full_with_capacity
+                    .states_reserve_exact(reserve_additional);
+                logs.logless_with_capacity
+                    .states_reserve_exact(reserve_additional);
+                logs
+            }
+        }
+
+        #[derive(Serialize, Deserialize)]
+        struct LogsIn {
+            never_ran: Logs,
+            ran_after_none: Logs,
+            undone_first_run: Logs,
+            never_none: Logs,
+        }
+
+        let original_never_ran = RareInitNoneLog::new_none();
+        assert!(
+            matches!(original_never_ran.0, Inner::NeverRan { .. }),
+            "{original_never_ran:?}"
+        );
+
+        let mut original_ran_after_none = original_never_ran.clone();
+        original_ran_after_none.push_present(Some('a'));
+        original_ran_after_none.push_present(Some('b'));
+        original_ran_after_none.push_present(Some('c'));
+        original_ran_after_none.backward_log().expect("in log");
+        assert!(
+            matches!(
+                original_ran_after_none.0,
+                Inner::Ran {
+                    undone_first_run: Some(UndoneFirstRun { undone: false, .. }),
+                    ..
+                }
+            ),
+            "{original_ran_after_none:#?}"
+        );
+
+        let mut original_undone_first_run = original_ran_after_none.clone();
+        original_undone_first_run.backward_log().expect("in log");
+        original_undone_first_run.backward_log().expect("in log");
+        assert!(
+            matches!(
+                original_undone_first_run.0,
+                Inner::Ran {
+                    undone_first_run: Some(UndoneFirstRun { undone: true, .. }),
+                    ..
+                }
+            ),
+            "{original_undone_first_run:#?}"
+        );
+
+        let mut original_never_none = original_ran_after_none.clone();
+        original_never_none.pop_past_by_len(1);
+        assert!(
+            matches!(
+                original_never_none.0,
+                Inner::Ran {
+                    undone_first_run: None,
+                    ..
+                }
+            ),
+            "{original_never_none:#?}"
+        );
+
+        let logs = LogsIn {
+            never_ran: Logs::new(original_never_ran.clone(), 100),
+            ran_after_none: Logs::new(original_ran_after_none.clone(), 98),
+            undone_first_run: Logs::new(original_undone_first_run.clone(), 98),
+            never_none: Logs::new(original_never_none.clone(), 98),
+        };
+
+        let serialized = serde_json::to_string_pretty(&logs).unwrap();
+        let LogsIn {
+            never_ran,
+            ran_after_none,
+            undone_first_run,
+            never_none,
+        } = serde_json::from_str(&serialized).unwrap();
+
+        struct Test {
+            logs: Logs,
+            original: RareInitNoneLog<char>,
+            expected_state: Option<char>,
+            expected_len: usize,
+            name: &'static str,
+        }
+
+        let tests = [
+            Test {
+                logs: never_ran,
+                original: original_never_ran,
+                expected_state: None,
+                expected_len: 0,
+                name: "never_ran",
+            },
+            Test {
+                logs: ran_after_none,
+                original: original_ran_after_none,
+                expected_state: Some('b'),
+                expected_len: 2,
+                name: "ran_after_none",
+            },
+            Test {
+                logs: undone_first_run,
+                original: original_undone_first_run,
+                expected_state: None,
+                expected_len: 2,
+                name: "undone_first_run",
+            },
+            Test {
+                logs: never_none,
+                original: original_never_none,
+                expected_state: Some('b'),
+                expected_len: 2,
+                name: "never_none",
+            },
+        ];
+
+        for test in tests {
+            let Test {
+                logs,
+                original,
+                expected_state,
+                expected_len,
+                name,
+            } = test;
+
+            let Logs {
+                full,
+                logless,
+                full_with_capacity,
+                logless_with_capacity,
+            } = logs;
+
+            let test = |log: &RareInitNoneLog<char>, expected_len, with_capacity| {
+                assert_eq!(
+                    log.get().cloned(), expected_state,
+                    "name: {name}\nbefore: {original:#?}\nserialized: {serialized}\nafter: {log:#?}"
+                );
+                assert_eq!(
+                    log.states_len(),
+                    expected_len,
+                    "name: {name}\nbefore: {original:#?}\nserialized: {serialized}\nafter: {log:#?}"
+                );
+                assert_eq!(
+                    log.states_capacity() >= 100,
+                    with_capacity,
+                    "name: {name}\nbefore: {original:#?}\nserialized: {serialized}\nafter: {log:#?}\ncapacity: {}",
+                    log.states_capacity()
+                );
+            };
+
+            test(&full, expected_len, false);
+            test(&logless, 0, false);
+            test(&full_with_capacity, expected_len, true);
+            test(&logless_with_capacity, 0, true);
+        }
+    }
+}

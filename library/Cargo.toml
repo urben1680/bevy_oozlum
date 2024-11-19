@@ -18,10 +18,6 @@ bevy_mod_debugdump = { git = "https://github.com/andriyDev/bevy_mod_debugdump", 
 [features]
 default = ["serde"] # todo: remove line before release
 serde = ["dep:serde"]
-time_bytes_1 = []
-time_bytes_2 = []
-time_bytes_3 = []
-time_bytes_4 = []
-time_bytes_5 = []
-time_bytes_6 = []
-time_bytes_7 = []
+packed_rev_frame_size_1 = []
+packed_rev_frame_size_2 = []
+packed_rev_frame_size_3 = []

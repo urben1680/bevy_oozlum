@@ -4,11 +4,11 @@ use bevy::{
     ecs::schedule::{Condition, IntoSystemSet, IntoSystemSetConfigs, SystemSet, SystemSetConfigs},
     utils::all_tuples,
 };
-use condition::add_condition;
 
-use super::{BackwardSet, BwdCmdSet, BwdCmdSysSet, BwdSysSet, ForwardSet, FwdSysSet};
-
-mod condition;
+use super::{
+    condition::add_condition, BackwardSet, BwdCmdSet, BwdCmdSysSet, BwdSysSet, ForwardSet,
+    FwdSysSet,
+};
 
 pub struct RevSystemSetConfigs {
     /// Contains [`FwdArcSet`]s for each system for the [`super::ForwardSet`].

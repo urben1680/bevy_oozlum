@@ -1,4 +1,4 @@
-use core::num::NonZeroUsize;
+use core::num::NonZeroU32;
 use std::ops::Deref;
 
 use bevy::{
@@ -19,11 +19,7 @@ use bevy::{
 #[cfg(feature = "serde")]
 use bevy::reflect::{ReflectDeserialize, ReflectSerialize};
 
-use crate::{
-    commands::init_commands_buffer,
-    log::{OutOfLog, PackedRevFrame},
-    RevFrame, RevUpdate,
-};
+use crate::{commands::init_commands_buffer, log::OutOfLog, PackedRevFrame, RevFrame, RevUpdate};
 
 mod verifying;
 
@@ -129,11 +125,11 @@ unsafe impl SystemParam for RevDirection {
 )]
 enum InternalDirection {
     RunningForward,
-    RunningForwardLog { updates_until_pause: NonZeroUsize },
-    RunningBackwardLog { updates_until_pause: NonZeroUsize },
+    RunningForwardLog { updates_until_pause: NonZeroU32 },
+    RunningBackwardLog { updates_until_pause: NonZeroU32 },
     RanForward,
-    RanForwardLog { updates_until_pause: NonZeroUsize },
-    RanBackwardLog { updates_until_pause: NonZeroUsize },
+    RanForwardLog { updates_until_pause: NonZeroU32 },
+    RanBackwardLog { updates_until_pause: NonZeroU32 },
     Pause,
 }
 
@@ -234,7 +230,7 @@ pub struct RevMeta {
     /// Changing this value is always possible but only comes into effect when updating the world during [`RevDirection::NotLog`].
     ///
     /// **Note** that there is a hard limit of [`Self::MAX_WORLD_STATES`] this value is clamped to when read internally.
-    pub max_world_states: Option<NonZeroUsize>,
+    pub max_world_states: Option<NonZeroU32>,
     oldest_frame: RevFrame,
     present_frame: RevFrame,
     youngest_frame: RevFrame,
@@ -245,14 +241,14 @@ pub struct RevMeta {
 
 impl Default for RevMeta {
     fn default() -> Self {
-        Self::new(Some(NonZeroUsize::MIN), 0, false)
+        Self::new(Some(NonZeroU32::MIN), 0, false)
     }
 }
 
 impl RevMeta {
-    pub const MAX_WORLD_STATES: usize = PackedRevFrame::MAX_AS_USIZE / 2;
-    pub const fn new(max_len: Option<NonZeroUsize>, now: usize, paused: bool) -> Self {
-        if now > PackedRevFrame::MAX_AS_USIZE {
+    pub const MAX_WORLD_STATES: u32 = PackedRevFrame::MAX_AS_U32 / 2;
+    pub const fn new(max_len: Option<NonZeroU32>, now: u32, paused: bool) -> Self {
+        if now > PackedRevFrame::MAX_AS_U32 {
             panic!("now must not be larger than RevMeta::MAX_WORLD_STATES * 2")
         }
         let now = RevFrame::new(now);
@@ -282,13 +278,13 @@ impl RevMeta {
     pub fn present_world_state(&self) -> RevFrame {
         self.present_frame
     }
-    pub fn past_world_states(&self) -> usize {
+    pub fn past_world_states(&self) -> u32 {
         range_len(self.oldest_frame, self.present_frame)
     }
-    pub fn future_world_states(&self) -> usize {
+    pub fn future_world_states(&self) -> u32 {
         range_len(self.present_frame, self.youngest_frame)
     }
-    pub fn world_states(&self) -> usize {
+    pub fn world_states(&self) -> u32 {
         let len = range_len(self.oldest_frame, self.youngest_frame);
         len + 1 // both ends are inclusive
     }
@@ -348,7 +344,7 @@ impl RevMeta {
         let states_to_value_inclusive = range_len(start_inclusive, value);
         states_to_value_inclusive <= states
     }
-    pub(crate) fn frames_since(&self, frame: RevFrame) -> usize {
+    pub(crate) fn frames_since(&self, frame: RevFrame) -> u32 {
         range_len(frame, self.present_frame)
     }
     pub fn clear(&mut self) {
@@ -361,14 +357,14 @@ impl RevMeta {
     pub fn queue_forward(&mut self) {
         self.queue = Some(InternalDirection::RunningForward);
     }
-    pub fn queue_log(&mut self, to: RevFrame) -> Result<usize, OutOfLog> {
+    pub fn queue_log(&mut self, to: RevFrame) -> Result<u32, OutOfLog> {
         let to_past = range_len(to, self.present_frame);
         let to_future = range_len(self.present_frame, to);
         if to_past > self.past_world_states() && to_future > self.future_world_states() {
             return Err(OutOfLog);
         }
         let from_present = to_past.min(to_future);
-        self.queue = NonZeroUsize::new(from_present).map(|updates_until_pause| {
+        self.queue = NonZeroU32::new(from_present).map(|updates_until_pause| {
             if to_past == from_present {
                 InternalDirection::RunningBackwardLog {
                     updates_until_pause,
@@ -538,29 +534,29 @@ impl RevMeta {
         self.present_frame = self.present_frame.wrapping_add(1);
         let max_world_states = self
             .max_world_states
-            .map(NonZeroUsize::get)
+            .map(NonZeroU32::get)
             .unwrap_or(Self::MAX_WORLD_STATES)
             .min(Self::MAX_WORLD_STATES);
+        self.youngest_frame = self.present_frame;
         // past states equal to max states is too many as the present state has to be added to the comparision
         if self.past_world_states() >= max_world_states {
+            let first_half = self.oldest_frame.first_half();
             self.oldest_frame = self.present_frame.wrapping_sub(max_world_states - 1);
+            if self.oldest_frame.first_half() != first_half {
+                return Some(CheckLoggedAt(self.clone()));
+            }
         }
-        self.youngest_frame = self.present_frame;
-        matches!(
-            self.present_frame.0,
-            Self::MAX_WORLD_STATES | PackedRevFrame::MAX_AS_USIZE
-        )
-        .then_some(CheckLoggedAt(self.clone()))
+        None
     }
     #[cfg(test)]
-    pub(crate) fn set_oldest_frame(&mut self, oldest_frame: usize) {
+    pub(crate) fn set_oldest_frame(&mut self, oldest_frame: u32) {
         self.oldest_frame = RevFrame::new(oldest_frame);
         let past_world_states = self.past_world_states();
         if self
             .max_world_states
             .is_some_and(|max_world_states| max_world_states.get() < past_world_states)
         {
-            self.max_world_states = NonZeroUsize::new(past_world_states);
+            self.max_world_states = NonZeroU32::new(past_world_states);
         }
     }
     pub(crate) fn add_read_if_no_write(
@@ -602,17 +598,17 @@ impl RevMeta {
     }
 }
 
-fn reduction_successful(updates_until_pause: &mut NonZeroUsize) -> bool {
-    NonZeroUsize::new(updates_until_pause.get() - 1)
+fn reduction_successful(updates_until_pause: &mut NonZeroU32) -> bool {
+    NonZeroU32::new(updates_until_pause.get() - 1)
         .map(|reduced| *updates_until_pause = reduced)
         .is_some()
 }
 
 /// Returns len of wrapping range `start..end`
-fn range_len(start: RevFrame, end: RevFrame) -> usize {
-    if PackedRevFrame::MAX_AS_USIZE != usize::MAX && start.0 > end.0 {
+fn range_len(start: RevFrame, end: RevFrame) -> u32 {
+    if PackedRevFrame::MAX_AS_U32 != u32::MAX && start.0 > end.0 {
         // 0 ## end .. start ## PackedRevFrame::MAX_AS_USIZE .. usize::MAX
-        PackedRevFrame::MAX_AS_USIZE - start.0 + end.0
+        PackedRevFrame::MAX_AS_U32 - start.0 + end.0
     } else {
         // 0 .. start ## end .. PackedRevFrame::MAX_AS_USIZE .. usize::MAX
         end.0.wrapping_sub(start.0)
@@ -629,15 +625,15 @@ mod test {
 
     use super::*;
 
-    const ONE: NonZeroUsize = NonZeroUsize::MIN;
-    const TWO: NonZeroUsize = unsafe { NonZeroUsize::new_unchecked(2) };
-    const THREE: NonZeroUsize = unsafe { NonZeroUsize::new_unchecked(3) };
+    const ONE: NonZeroU32 = NonZeroU32::MIN;
+    const TWO: NonZeroU32 = unsafe { NonZeroU32::new_unchecked(2) };
+    const THREE: NonZeroU32 = unsafe { NonZeroU32::new_unchecked(3) };
 
     /// Constructs [`RevMeta`] and asserts the values are valid
     fn arrange(
-        max_len: Option<NonZeroUsize>,
-        now: usize,
-        range: RangeInclusive<usize>,
+        max_len: Option<NonZeroU32>,
+        now: u32,
+        range: RangeInclusive<u32>,
         direction: InternalDirection,
     ) -> RevMeta {
         let present_world_state = RevFrame::new(now);
@@ -773,7 +769,8 @@ mod test {
         #[derive(Resource)]
         struct CheckLoggedAtRes(TransitionLog<RevFrame>);
 
-        let meta = RevMeta::new(None, RevMeta::MAX_WORLD_STATES - 1, false);
+        let mut meta = RevMeta::new(NonZeroU32::new(1), RevMeta::MAX_WORLD_STATES - 1, false);
+        meta.update(|_, _| ()); // bring oldest_state to edge of first half
         let mut res = CheckLoggedAtRes(TransitionLog::new());
         res.0.push_present(RevFrame::new(0));
         assert_eq!(res.0.transitions_len(), 1);

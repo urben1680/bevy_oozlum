@@ -30,7 +30,7 @@ pub(crate) fn add_condition<Marker>(
     condition: impl Condition<Marker>,
 ) -> InternedSystemSet {
     #[derive(SystemSet, Copy, Clone, Debug, Hash, PartialEq, Eq)]
-    struct CondSet(u32);
+    struct ConditionSet(u32);
     static SET_COUNTER: AtomicU32 = AtomicU32::new(0);
 
     let condition = RevCondition {
@@ -41,7 +41,7 @@ pub(crate) fn add_condition<Marker>(
         archetype_component_access: default(),
         out_of_log_err: false,
     };
-    let set = CondSet(SET_COUNTER.fetch_add(1, Ordering::Relaxed)).intern();
+    let set = ConditionSet(SET_COUNTER.fetch_add(1, Ordering::Relaxed)).intern();
     let before = replace(configs, ForwardSet.into_configs());
     *configs = (before, set.run_if(condition)).into_configs();
     set
@@ -66,7 +66,7 @@ impl<T: ReadOnlySystem<Out = bool>> RevCondition<T> {
         match meta.direction() {
             RevDirection::NotLog => {
                 let out = valid && eval_cond(&mut self.condition);
-                self.log.pop_past_by_len(meta.past_world_states().saturating_sub(1));
+                self.log.pop_past_by_len(meta.past_world_states().saturating_sub(1) as usize);
                 self.log.push_present(out.then_some(()));
                 out
             },
