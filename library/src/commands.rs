@@ -2,9 +2,10 @@ use std::collections::VecDeque;
 
 use bevy::{
     ecs::{
+        bundle::Bundle,
         event::Event,
         observer::{TriggerEvent, TriggerTargets},
-        system::{Commands, Resource},
+        system::{Commands, EntityCommands, IntoObserverSystem, Resource},
         world::{DeferredWorld, FromWorld, World},
     },
     utils::{default, synccell::SyncCell},
@@ -13,6 +14,7 @@ use bevy::{
 use crate::{
     log::{OutOfLog, TransitionsLog},
     meta::{RevDirection, RevMeta},
+    observer::{ObserverLog, RevEvent},
     RevFrame,
 };
 
@@ -21,6 +23,13 @@ use crate::{
 // todo: untyped take component https://github.com/bevyengine/bevy/issues/15350
 
 pub trait RevCommands {
+    fn rev_add_observer<E, B, M>(
+        &mut self,
+        system: impl IntoObserverSystem<RevEvent<E>, B, M>,
+    ) -> EntityCommands<'_>
+    where
+        E: Event + Clone,
+        B: Bundle;
     fn rev_queue<Marker>(&mut self, command: impl RevCommand<Marker>);
     fn rev_init_resource<R: Resource + FromWorld>(&mut self);
     fn rev_insert_resource<R: Resource>(&mut self, resource: R);
@@ -43,6 +52,17 @@ pub(crate) fn buffer_rev_command<T: RevCommandLog>(world: &mut DeferredWorld, co
 }
 
 impl RevCommands for Commands<'_, '_> {
+    fn rev_add_observer<E, B, M>(
+        &mut self,
+        system: impl IntoObserverSystem<RevEvent<E>, B, M>,
+    ) -> EntityCommands<'_>
+    where
+        E: Event + Clone,
+        B: Bundle,
+    {
+        self.init_resource::<ObserverLog<E>>();
+        self.add_observer(system)
+    }
     fn rev_queue<Marker>(&mut self, command: impl RevCommand<Marker>) {
         self.queue(|world: &mut World| {
             if let Some(command) = command.rev_apply(world) {
@@ -81,6 +101,30 @@ impl RevCommands for Commands<'_, '_> {
         targets: impl TriggerTargets + Send + 'static,
     ) {
         self.rev_queue(TriggerEvent { event, targets })
+    }
+}
+
+pub trait RevEntityCommands {
+    fn rev_observe<E, B, M>(
+        &mut self,
+        system: impl IntoObserverSystem<RevEvent<E>, B, M>,
+    ) -> &mut Self
+    where
+        E: Event + Clone,
+        B: Bundle;
+}
+
+impl RevEntityCommands for EntityCommands<'_> {
+    fn rev_observe<E, B, M>(
+        &mut self,
+        system: impl IntoObserverSystem<RevEvent<E>, B, M>,
+    ) -> &mut Self
+    where
+        E: Event + Clone,
+        B: Bundle,
+    {
+        self.commands().init_resource::<ObserverLog<E>>();
+        self.observe(system)
     }
 }
 

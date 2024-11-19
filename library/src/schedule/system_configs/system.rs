@@ -51,7 +51,7 @@ where
 
         let default_system_sets: Vec<InternedSystemSet> = system.default_system_sets();
 
-        let shared = Mutex::new(SharedMut {
+        let inner = Mutex::new(Inner {
             system,
             initialized: false,
             commands_log: default(),
@@ -59,7 +59,7 @@ where
         });
 
         let shared = Arc::new(Shared {
-            inner: shared,
+            inner,
             default_system_sets: default_system_sets.clone(),
         });
 
@@ -124,7 +124,10 @@ where
             );
             add_configs(
                 &mut bwd_sys_sets,
-                BwdSysSet(set).in_set(BwdCmdSysSet(set)).in_set(BackwardSet),
+                BwdSysSet(set)
+                    .after(BwdCmdSet(set))
+                    .in_set(BwdCmdSysSet(set))
+                    .in_set(BackwardSet),
             );
             add_configs(&mut bwd_cmd_sys_sets, BwdCmdSysSet(set).in_set(BackwardSet));
         }
@@ -134,7 +137,7 @@ where
         // the CommandsBackward system is always added. it becomes noop if the system ends up having no
         // deferred buffers. CommandsBackward::has_deferred returns the value of the actual system.
         RevSystemConfigs {
-            systems: (forward_sys, (backward_cmd, backward_sys).chain()).into_configs(),
+            systems: (forward_sys, backward_cmd, backward_sys).into_configs(),
             sets: RevSystemSetConfigs {
                 fwd_sys_sets: fwd_sys_sets.unwrap(),
                 bwd_cmd_sets: bwd_cmd_sets.unwrap(),
@@ -162,11 +165,11 @@ struct ArcSystem<T> {
 }
 
 struct Shared<T> {
-    inner: Mutex<SharedMut<T>>,
+    inner: Mutex<Inner<T>>,
     default_system_sets: Vec<InternedSystemSet>,
 }
 
-struct SharedMut<T> {
+struct Inner<T> {
     system: T,
     initialized: bool,
     commands_log: CommandsLog,
@@ -449,7 +452,7 @@ fn initialize_arc_system<'a, T: System>(
     tick: &mut Tick,
     name: &String,
     world: &mut World,
-) -> MutexGuard<'a, SharedMut<T>> {
+) -> MutexGuard<'a, Inner<T>> {
     *tick = world.change_tick();
     let arc = shared.clone();
     let mut shared = shared.inner.try_lock().unwrap_or_else(expect_shared(name));

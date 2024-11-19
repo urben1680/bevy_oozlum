@@ -219,9 +219,6 @@ use std::{
 
 use bevy::{log::error, reflect::Reflect, utils::all_tuples};
 
-#[cfg(feature = "serde")]
-use bevy::reflect::{ReflectDeserialize, ReflectSerialize};
-
 mod init_none;
 mod rare_init_none;
 mod rare_state;
@@ -247,130 +244,6 @@ pub use state::StateLog;
 pub use states::StatesLog;
 pub use transition::TransitionLog;
 pub use transitions::TransitionsLog;
-
-#[cfg(feature = "time_bytes_1")]
-const TIME_BYTES: u32 = 1;
-
-#[cfg(feature = "time_bytes_2")]
-const TIME_BYTES: u32 = 2;
-
-#[cfg(feature = "time_bytes_3")]
-const TIME_BYTES: u32 = 3;
-
-#[cfg(feature = "time_bytes_4")]
-const TIME_BYTES: u32 = 4;
-
-#[cfg(feature = "time_bytes_5")]
-const TIME_BYTES: u32 = 5;
-
-#[cfg(feature = "time_bytes_6")]
-const TIME_BYTES: u32 = 6;
-
-#[cfg(feature = "time_bytes_7")]
-const TIME_BYTES: u32 = 7;
-
-#[cfg(not(any(
-    feature = "time_bytes_1",
-    feature = "time_bytes_2",
-    feature = "time_bytes_3",
-    feature = "time_bytes_4",
-    feature = "time_bytes_5",
-    feature = "time_bytes_6",
-    feature = "time_bytes_7",
-)))]
-const TIME_BYTES: u32 = 8;
-
-const USIZE_BYTES: u32 = usize::BITS / 8;
-
-#[derive(Clone, Copy, Reflect, PartialEq, Eq)]
-#[reflect(Debug)]
-#[cfg_attr(feature = "serde", reflect(Serialize, Deserialize))]
-pub struct PackedRevFrame([u8; Self::BYTES as usize]);
-
-impl PackedRevFrame {
-    pub(crate) const BYTES: u32 = if TIME_BYTES > USIZE_BYTES {
-        USIZE_BYTES
-    } else {
-        TIME_BYTES
-    };
-    pub(crate) const MAX_AS_USIZE: usize = {
-        let bits = Self::BYTES * 8;
-        let shift = usize::BITS.saturating_sub(bits);
-        usize::MAX >> shift
-    };
-    fn into_usize(self) -> usize {
-        let mut i = self.0.into_iter();
-        usize::from_le_bytes(std::array::from_fn(|_| i.next().unwrap_or(0)))
-    }
-}
-
-impl Debug for PackedRevFrame {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.into_usize().fmt(f)
-    }
-}
-
-#[cfg(feature = "serde")]
-impl serde::Serialize for PackedRevFrame {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        self.into_usize().serialize(serializer)
-    }
-}
-
-#[cfg(feature = "serde")]
-impl<'de> serde::Deserialize<'de> for PackedRevFrame {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let value: usize = usize::deserialize(deserializer)?;
-        if value <= Self::MAX_AS_USIZE {
-            let mut i = value.to_le_bytes().into_iter();
-            Ok(Self(std::array::from_fn(|_| i.next().unwrap_or(0))))
-        } else {
-            Err(serde::de::Error::custom(format!(
-                "{value} does not fit into {} bytes, cannot map this value to `PackedRevFrame` \
-                on this machine, increase the `time_bytes_*` feature of the reversible_systems \
-                crate to the value of the source where this value was serialized or, if the \
-                source does not use that feature, change that to a value low enough to be \
-                supported by all machines",
-                Self::BYTES,
-            )))
-        }
-    }
-}
-
-impl From<PackedRevFrame> for RevFrame {
-    fn from(value: PackedRevFrame) -> Self {
-        RevFrame(usize::from_le_bytes(value.0))
-    }
-}
-
-impl From<RevFrame> for PackedRevFrame {
-    fn from(value: RevFrame) -> Self {
-        // RevFrame is only constructed from usize <= PackedRevFrame::MAX_USIZE
-        let mut i = value.0.to_le_bytes().into_iter();
-        Self(std::array::from_fn(|_| i.next().unwrap_or(0)))
-    }
-}
-
-impl From<PackedRevFrame> for usize {
-    fn from(value: PackedRevFrame) -> Self {
-        let value: RevFrame = value.into();
-        value.0
-    }
-}
-
-impl PartialEq<RevFrame> for PackedRevFrame {
-    fn eq(&self, other: &RevFrame) -> bool {
-        let this: RevFrame = (*self).into();
-        this.eq(other)
-    }
-}
-
-impl PartialEq<PackedRevFrame> for RevFrame {
-    fn eq(&self, other: &PackedRevFrame) -> bool {
-        let other: RevFrame = (*other).into();
-        self.eq(&other)
-    }
-}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct OutOfLog;
@@ -469,13 +342,15 @@ impl<'a, T: Iterator, U> IntoIterator for &'a mut ValueEntry<T, U> {
     }
 }
 
+const USIZE_BYTES: usize = usize::BITS as usize / 8;
+
 #[derive(Clone, PartialEq, Reflect)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] // todo: manual impl with usize as intermediate skips value
 struct RareValue<T> {
     value: T,
-    /// If `T` is a state, then these are the skips after the value.
+    /// If `T` is a state, then these are the skips _after_ the state.
     ///
-    /// If `T` is a transiton, then these are the skips before the transition.
+    /// If `T` is a transiton, then these are the skips _before_ the transition.
     ///
     /// This is not a `PackedRevFrame` because skips may be sub-frames and sum up to larger values.
     /// Instead, this is usize's native byte representation to reduce the alignment of this field.
@@ -608,7 +483,7 @@ impl LoggedAt for RevFrame {
 
 impl LoggedAt for PackedRevFrame {
     fn logged_at(&self) -> RevFrame {
-        RevFrame(self.into_usize())
+        RevFrame((*self).into())
     }
 }
 
@@ -822,7 +697,7 @@ macro_rules! impl_with_amount {
 
 use impl_with_amount;
 
-use crate::RevFrame;
+use crate::{PackedRevFrame, RevFrame};
 
 #[cfg(test)]
 mod test {
@@ -847,12 +722,12 @@ mod test {
         // single value per log entry
         ($log: expr, $meta: expr, $strategy: expr, $len: expr, $before: expr, $after_push: expr) => {
             match $strategy {
-                ShortenStrategy::PopPastByLen => $log.pop_past_by_len($len),
+                ShortenStrategy::PopPastByLen => $log.pop_past_by_len($len as usize),
                 ShortenStrategy::PopPastByLoggedAt => $log.pop_past_by_logged_at($meta),
                 ShortenStrategy::DrainPastByLen | ShortenStrategy::DrainPastByLoggedAt => {
                     let mut actual_popped: Vec<_> = match $strategy {
                         ShortenStrategy::DrainPastByLen => {
-                            $log.drain_past_by_len($len).collect()
+                            $log.drain_past_by_len($len as usize).collect()
                         }
                         ShortenStrategy::DrainPastByLoggedAt => {
                             $log.truncate_future_drain_past_by_logged_at($meta).collect()
@@ -866,29 +741,29 @@ mod test {
                     );
                     actual_popped.pop()
                 }
-            }.map(|(value, logged_at)| (value, usize::from(logged_at)))
+            }.map(|(value, logged_at)| (value, u32::from(logged_at)))
         };
         // multiple values per log entry
         ($log: expr, $meta: expr, $strategy: expr, $len: expr) => {
             match $strategy {
                 ShortenStrategy::PopPastByLen => $log
-                    .pop_past_by_len($len)
+                    .pop_past_by_len($len as usize)
                     .map(|value_entry| (
                         value_entry.value.collect::<Vec<_>>(),
-                        usize::from(value_entry.entry),
+                        u32::from(value_entry.entry),
                     ))
                     .unzip(),
                 ShortenStrategy::PopPastByLoggedAt => $log
                     .pop_past_by_logged_at($meta)
                     .map(|value_entry| (
                         value_entry.value.collect::<Vec<_>>(),
-                        usize::from(value_entry.entry),
+                        u32::from(value_entry.entry),
                     ))
                     .unzip(),
                 ShortenStrategy::DrainPastByLen | ShortenStrategy::DrainPastByLoggedAt => {
                     let actual_popped: Vec<_> = match $strategy {
                         ShortenStrategy::DrainPastByLen => {
-                            $log.drain_past_by_len($len).collect()
+                            $log.drain_past_by_len($len as usize).collect()
                         }
                         ShortenStrategy::DrainPastByLoggedAt => {
                             $log.truncate_future_drain_past_by_logged_at($meta).collect()

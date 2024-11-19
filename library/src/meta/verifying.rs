@@ -11,8 +11,8 @@ use bevy::{
 };
 
 use crate::{
-    log::{InitNoneLog, OutOfLog, PackedRevFrame},
-    RevFrame,
+    log::{InitNoneLog, OutOfLog},
+    PackedRevFrame, RevFrame,
 };
 
 use super::{RevDirection, RevMeta};
@@ -37,7 +37,7 @@ impl Deref for VerifyingRevMeta<'_, '_> {
 impl VerifyingRevMeta<'_, '_> {
     /// Get the frame the system last ran.
     ///
-    /// Returns None if the system did not run in the past.
+    /// Returns None if the system did not run in the past or if the last run is no longer in log.
     ///
     /// Note that this is the chronical last run and therefore is always in the past.
     ///
@@ -94,13 +94,16 @@ impl VerifyingRevMetaState {
         }
     }
     fn update_state_get_last_run(&mut self, meta: &RevMeta, system_name: &str) -> Option<RevFrame> {
-        let last_run;
+        let mut last_run;
         match meta.get_direction() {
             Some(RevDirection::NotLog) => {
                 last_run = self.get();
-                self.frame_log.pop_past_by_logged_at(meta);
                 self.frame_log
                     .push_present(meta.present_world_state().into());
+                self.frame_log.pop_past_by_logged_at(meta);
+                if self.frame_log.states_is_empty() {
+                    last_run = None;
+                }
             }
             Some(RevDirection::ForwardLog) => {
                 last_run = self.get();
@@ -196,3 +199,108 @@ unsafe impl SystemParam for VerifyingRevMeta<'_, '_> {
 
 // SAFETY: Only reads RevMeta
 unsafe impl ReadOnlySystemParam for VerifyingRevMeta<'_, '_> {}
+
+#[cfg(test)]
+mod test {
+    use bevy::ecs::{
+        schedule::{Schedule, Schedules},
+        system::Resource,
+    };
+
+    use crate::RevUpdate;
+
+    use super::*;
+
+    #[derive(Resource)]
+    struct ShouldErr;
+
+    fn system(verify: VerifyingRevMeta, should_err: Option<Res<ShouldErr>>) {
+        match should_err {
+            None => assert!(verify.last_run_or_err.is_ok()),
+            Some(_) => assert!(verify.last_run_or_err.is_err()),
+        }
+    }
+
+    fn setup() -> World {
+        let mut schedule = Schedule::new(RevUpdate);
+        schedule.add_systems(system);
+
+        let mut schedules = Schedules::new();
+        schedules.insert(schedule);
+
+        let mut world = World::new();
+        world.insert_resource(RevMeta::new(None, 0, false));
+        world.insert_resource(schedules);
+        world
+    }
+
+    fn log_to(world: &mut World, to: u32) {
+        assert!(world
+            .resource_mut::<RevMeta>()
+            .queue_log(RevFrame::new(to))
+            .is_ok());
+    }
+
+    fn skip_rev_schedule(world: &mut World) {
+        world.resource_mut::<RevMeta>().update(|_, _| ());
+        world.insert_resource(ShouldErr);
+    }
+
+    #[test]
+    fn no_panic() {
+        let mut world = setup();
+
+        assert_eq!(RevMeta::try_update_world(&mut world), Ok(())); // now: 1
+        assert_eq!(RevMeta::try_update_world(&mut world), Ok(())); // now: 2
+
+        log_to(&mut world, 0);
+
+        assert_eq!(RevMeta::try_update_world(&mut world), Ok(())); // now: 1
+        assert_eq!(RevMeta::try_update_world(&mut world), Ok(())); // now: 0
+
+        log_to(&mut world, 2);
+
+        assert_eq!(RevMeta::try_update_world(&mut world), Ok(())); // now: 1
+        assert_eq!(RevMeta::try_update_world(&mut world), Ok(())); // now: 2
+    }
+
+    #[test]
+    fn panic_backward_missed() {
+        let mut world = setup();
+
+        assert_eq!(RevMeta::try_update_world(&mut world), Ok(())); // now: 1
+        assert_eq!(RevMeta::try_update_world(&mut world), Ok(())); // now: 2
+
+        log_to(&mut world, 0);
+        skip_rev_schedule(&mut world);
+
+        assert_eq!(RevMeta::try_update_world(&mut world), Ok(())); // now: 0
+    }
+
+    #[test]
+    fn panic_forward_missed() {
+        let mut world = setup();
+
+        assert_eq!(RevMeta::try_update_world(&mut world), Ok(())); // now: 1
+        assert_eq!(RevMeta::try_update_world(&mut world), Ok(())); // now: 2
+
+        log_to(&mut world, 0);
+
+        assert_eq!(RevMeta::try_update_world(&mut world), Ok(())); // now: 1
+        assert_eq!(RevMeta::try_update_world(&mut world), Ok(())); // now: 0
+
+        log_to(&mut world, 2);
+        skip_rev_schedule(&mut world);
+
+        assert_eq!(RevMeta::try_update_world(&mut world), Ok(())); // now: 2
+    }
+
+    #[test]
+    fn panic_out_of_log() {
+        let mut world = setup();
+        skip_rev_schedule(&mut world);
+        log_to(&mut world, 0);
+
+        assert_eq!(RevMeta::try_update_world(&mut world), Ok(())); // now: 0
+    }
+}

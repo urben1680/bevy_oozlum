@@ -269,7 +269,7 @@ impl<T: LoggedAt> RareTransitionLog<T> {
 
 #[cfg(test)]
 mod test {
-    use std::num::NonZeroUsize;
+    use std::num::NonZeroU32;
 
     use serde::{Deserialize, Serialize};
 
@@ -339,7 +339,7 @@ mod test {
             strategy: ShortenStrategy,
             push: Option<u8>,
             expected_transitions_len: usize,
-            expected_popped: Option<(u8, usize)>,
+            expected_popped: Option<(u8, u32)>,
         ) {
             meta.queue_forward();
             meta.update(|_, _| {});
@@ -403,7 +403,7 @@ mod test {
         }
         fn test_drain_future(
             &self,
-            expected_future: impl IntoIterator<Item = (u8, usize)>,
+            expected_future: impl IntoIterator<Item = (u8, u32)>,
             expected_transitions_len: usize,
         ) -> Self {
             let before = self.clone();
@@ -429,7 +429,7 @@ mod test {
     #[test]
     fn push_and_log_traversal() {
         for strategy in ShortenStrategy::VARIANTS {
-            let meta = &mut RevMeta::new(NonZeroUsize::new(3), 0, false);
+            let meta = &mut RevMeta::new(NonZeroU32::new(3), 0, false);
             let mut log = RareTransitionLog::new();
 
             log.test_forward(meta, strategy, Some(1), 1, None);
