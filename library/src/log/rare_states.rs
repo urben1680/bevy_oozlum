@@ -771,10 +771,11 @@ mod test {
                             if matches!(push, Push::States) {
                                 log.extend(states.clone());
                             }
-                            RevFrame::new(entry)
+                            RevFrame::checked_new(entry)
                         })
                         .ok();
-                    let expected = matches!(push, Push::Empty).then_some(RevFrame::new(entry));
+                    let expected =
+                        matches!(push, Push::Empty).then_some(RevFrame::checked_new(entry));
                     let after_push = self.clone();
                     assert_eq!(
                         result,
@@ -922,7 +923,7 @@ mod test {
             );
             assert_eq!(
                 *entry,
-                RevFrame::new(expected_entry),
+                RevFrame::checked_new(expected_entry),
                 "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
             );
         }
@@ -970,7 +971,7 @@ mod test {
     #[test]
     fn push_and_log_traversal() {
         for strategy in ShortenStrategy::VARIANTS {
-            let meta = &mut RevMeta::new(NonZeroU32::new(3), 0, false);
+            let meta = &mut RevMeta::new(NonZeroU32::new(3), None, false);
             let mut log = RareStatesLog::try_new(vec![0; 0], meta.present_world_state()).unwrap();
 
             log.test_forward(meta, strategy, 0, vec![0; 0], 0, Push::Empty, 0, 0, None);
