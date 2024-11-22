@@ -10,7 +10,7 @@ use bevy::{
 
 use crate::meta::{RevDirection, RevMeta};
 
-use super::commands::{buffer_rev_command, RevCommandLog};
+use super::commands::{buffer_rev_command, RevCommandInit};
 
 /// The direction the current hook is triggered at.
 ///
@@ -258,7 +258,7 @@ impl HookCommand {
     }
 }
 
-impl RevCommandLog for HookCommand {
+impl RevCommandInit for HookCommand {
     fn undo(&mut self, world: &mut World) {
         self.undo_redo(world.into(), true)
     }
