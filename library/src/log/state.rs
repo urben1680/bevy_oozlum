@@ -224,7 +224,7 @@ impl<T: LoggedAt> StateLog<T> {
             return None;
         }
         let logged_at = self.states.front()?.logged_at();
-        if !meta.contains_in_state_logged(logged_at) {
+        if !meta.contains_in_past(logged_at, true, true) {
             self.index -= 1;
             self.states.pop_front()
         } else {
@@ -238,7 +238,7 @@ impl<T: LoggedAt> StateLog<T> {
         let past_len = meta.past_world_states();
         let to = self
             .states
-            .partition_point(|entry| meta.frames_since(entry.logged_at()) > past_len);
+            .partition_point(|entry| meta.frames_before_present(entry.logged_at()) > past_len);
         self.index -= to;
         self.states.drain(..to)
     }
@@ -462,7 +462,7 @@ mod test {
     #[test]
     fn push_and_log_traversal() {
         for strategy in ShortenStrategy::VARIANTS {
-            let meta = &mut RevMeta::new(NonZeroU32::new(3), 0, false);
+            let meta = &mut RevMeta::new(NonZeroU32::new(3), None, false);
             let mut log = StateLog::new((0, meta.present_world_state()));
 
             log.test_forward(meta, strategy, 1, 1, None);
