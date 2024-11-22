@@ -18,10 +18,6 @@ use crate::{
     RevFrame,
 };
 
-// todo: spawn/despawn with entity disabling https://github.com/bevyengine/bevy/issues/11090
-// todo: commands implementors https://docs.rs/bevy/latest/bevy/ecs/world/trait.Command.html#implementors
-// todo: untyped take component https://github.com/bevyengine/bevy/issues/15350
-
 pub trait RevCommands {
     fn rev_add_observer<E, B, M>(
         &mut self,
@@ -42,8 +38,8 @@ pub trait RevCommands {
     );
 }
 
-pub(crate) fn buffer_rev_command<T: RevCommandLog>(world: &mut DeferredWorld, command: T) {
-    let command: Box<dyn RevCommandLog> = Box::new(command);
+pub(crate) fn buffer_rev_command<T: RevCommandInit>(world: &mut DeferredWorld, command: T) {
+    let command: Box<dyn RevCommandInit> = Box::new(command);
     let buffer = &mut world
         .get_resource_mut::<RevCommandBuffer>()
         .expect("todo")
@@ -130,7 +126,7 @@ impl RevEntityCommands for EntityCommands<'_> {
 
 struct ResourceSwap<R: Resource>(Option<R>);
 
-impl<R: Resource> RevCommandLog for ResourceSwap<R> {
+impl<R: Resource> RevCommandInit for ResourceSwap<R> {
     fn undo(&mut self, world: &mut World) {
         match (self.0.as_mut(), world.get_resource_mut::<R>()) {
             (Some(r1), Some(mut r2)) => core::mem::swap(r1, &mut *r2),
@@ -145,45 +141,45 @@ impl<R: Resource> RevCommandLog for ResourceSwap<R> {
 }
 
 pub trait RevCommand<Marker>: Send + 'static {
-    fn rev_apply(self, world: &mut World) -> Option<impl RevCommandLog>;
+    fn rev_apply(self, world: &mut World) -> Option<impl RevCommandInit>;
 }
 
-impl<T: RevCommandLog, F: FnOnce(&mut World) -> Option<T> + Send + 'static>
+impl<T: RevCommandInit, F: FnOnce(&mut World) -> Option<T> + Send + 'static>
     RevCommand<fn(&mut World) -> Option<T>> for F
 {
-    fn rev_apply(self, world: &mut World) -> Option<impl RevCommandLog> {
+    fn rev_apply(self, world: &mut World) -> Option<impl RevCommandInit> {
         self(world)
     }
 }
 
-impl<T: RevCommandLog, F: FnOnce(&mut World) -> T + Send + 'static> RevCommand<fn(&mut World) -> T>
+impl<T: RevCommandInit, F: FnOnce(&mut World) -> T + Send + 'static> RevCommand<fn(&mut World) -> T>
     for F
 {
-    fn rev_apply(self, world: &mut World) -> Option<impl RevCommandLog> {
+    fn rev_apply(self, world: &mut World) -> Option<impl RevCommandInit> {
         Some(self(world))
     }
 }
 
-impl<T: RevCommandLog> RevCommand<Option<T>> for Option<T> {
-    fn rev_apply(self, _world: &mut World) -> Option<impl RevCommandLog> {
+impl<T: RevCommandInit> RevCommand<Option<T>> for Option<T> {
+    fn rev_apply(self, _world: &mut World) -> Option<impl RevCommandInit> {
         self
     }
 }
 
-impl<T: RevCommandLog> RevCommand<T> for T {
-    fn rev_apply(self, _world: &mut World) -> Option<impl RevCommandLog> {
+impl<T: RevCommandInit> RevCommand<T> for T {
+    fn rev_apply(self, _world: &mut World) -> Option<impl RevCommandInit> {
         Some(self)
     }
 }
 
-pub trait RevCommandLog: Send + 'static {
+pub trait RevCommandInit: Send + 'static {
     fn undo(&mut self, world: &mut World);
     fn undone_finalize(self: Box<Self>, _world: &mut World) {}
     fn redo(&mut self, world: &mut World);
     fn redone_finalize(self: Box<Self>, _world: &mut World) {}
 }
 
-impl<F: FnMut(&mut World, bool) + Send + 'static> RevCommandLog for F {
+impl<F: FnMut(&mut World, bool) + Send + 'static> RevCommandInit for F {
     fn undo(&mut self, world: &mut World) {
         self(world, false)
     }
@@ -193,7 +189,7 @@ impl<F: FnMut(&mut World, bool) + Send + 'static> RevCommandLog for F {
 }
 
 #[derive(Resource)]
-struct RevCommandBuffer(SyncCell<VecDeque<Box<dyn RevCommandLog>>>);
+struct RevCommandBuffer(SyncCell<VecDeque<Box<dyn RevCommandInit>>>);
 
 impl Default for RevCommandBuffer {
     fn default() -> Self {
@@ -201,11 +197,7 @@ impl Default for RevCommandBuffer {
     }
 }
 
-pub(crate) fn init_commands_buffer(world: &mut World) {
-    world.init_resource::<RevCommandBuffer>();
-}
-
-pub struct CommandsLog(SyncCell<TransitionsLog<Box<dyn RevCommandLog>, RevFrame>>);
+pub struct CommandsLog(SyncCell<TransitionsLog<Box<dyn RevCommandInit>, RevFrame>>);
 
 impl Default for CommandsLog {
     fn default() -> Self {
@@ -233,6 +225,7 @@ impl CommandsLog {
                 for command in log.drain_future().0.rev() {
                     command.undone_finalize(world);
                 }
+                // should this be reversed too? recent commands may rely on side effects of older commands that are affected here
                 for command in log.truncate_future_drain_past_by_logged_at(&meta) {
                     command.redone_finalize(world);
                 }
@@ -284,5 +277,11 @@ impl CommandsLog {
         for command in log.truncate_future_drain_past_by_logged_at(meta) {
             command.redone_finalize(world);
         }
+    }
+    /// Initializes an internal resource needed for reversible commands to be logged by [`CommandsLog`].
+    ///
+    /// This usually does not need to be called because that is already done by [`RevSystemsPlugin`](crate::app::RevSystemsPlugin).
+    pub fn init_buffer(world: &mut World) {
+        world.init_resource::<RevCommandBuffer>();
     }
 }
