@@ -257,7 +257,9 @@ impl<T> RareStateLog<T> {
     ) -> Result<bool, OutOfLog> {
         if self.skips > 0 {
             self.skips -= 1;
-            self.past_len -= 1;
+            if !*undone {
+                self.past_len -= 1;
+            }
             return Ok(false);
         }
         match self.index.checked_sub(1) {
@@ -301,7 +303,9 @@ impl<T> RareStateLog<T> {
             skips_max = self.skips_max;
         }
         if self.skips < skips_max {
-            self.past_len += 1;
+            if !*undone {
+                self.past_len += 1;
+            }
             self.skips += 1;
             Ok(false)
         } else if *undone {
@@ -376,7 +380,7 @@ impl<T: LoggedAt> RareStateLog<T> {
         // It might be possible to ignore this issue if the oldest entry has no skips,
         // but simplicity is favored here to keep lookups, operations and maintenance burden lower.
         let logged_at = self.states.get(1)?.logged_at();
-        if !meta.contains_in_state_logged(logged_at) {
+        if !meta.contains_in_past(logged_at, true, true) {
             self.pop_past()
         } else {
             None
@@ -394,7 +398,7 @@ impl<T: LoggedAt> RareStateLog<T> {
         // but simplicity is favored here to keep lookups, operations and maintenance burden lower.
         let to = self
             .states
-            .partition_point(|entry| meta.frames_since(entry.logged_at()) > past_len)
+            .partition_point(|entry| meta.frames_before_present(entry.logged_at()) > past_len)
             .saturating_sub(1);
         self.past_len -= to // `to` plus sum of `RareValue::skips` == sum of `RareValue::len` but with less operations 
             + self
@@ -523,7 +527,7 @@ mod test {
             meta.queue_forward();
             meta.update(|_, _| {});
             let before = self.clone();
-            let push = state_is_pushed.then(|| (state.0, RevFrame::new(state.1)));
+            let push = state_is_pushed.then(|| (state.0, RevFrame::checked_new(state.1)));
             self.push_present(push);
             let after_push = self.clone();
             let actual_popped =
@@ -578,7 +582,7 @@ mod test {
             self.test_state(before, meta, expected_state);
         }
         fn test_state(&self, before: Self, meta: &RevMeta, state: (u8, u32)) {
-            let state = (state.0, RevFrame::new(state.1));
+            let state = (state.0, RevFrame::checked_new(state.1));
             assert_eq!(
                 **self, state,
                 "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
@@ -612,7 +616,7 @@ mod test {
     #[test]
     fn push() {
         for strategy in ShortenStrategy::VARIANTS {
-            let meta = &mut RevMeta::new(NonZeroU32::new(3), 0, false);
+            let meta = &mut RevMeta::new(NonZeroU32::new(3), None, false);
             let mut log = RareStateLog::new((0, meta.present_world_state()));
 
             log.test_forward(meta, strategy, 0, (0, 0), false, 0, None);
