@@ -607,7 +607,12 @@ mod test {
         );
 
         let mut original_never_none = original_ran_after_none.clone();
-        original_never_none.pop_past_by_len(1);
+        if let Inner::Ran {
+            undone_first_run, ..
+        } = &mut original_never_none.0
+        {
+            *undone_first_run = None;
+        }
         assert!(
             matches!(
                 original_never_none.0,
@@ -712,5 +717,190 @@ mod test {
             test(&full_with_capacity, expected_len, true);
             test(&logless_with_capacity, 0, true);
         }
+    }
+
+    impl RareInitNoneLog<(u8, RevFrame)> {
+        fn test_forward(
+            &mut self,
+            meta: &mut RevMeta,
+            strategy: ShortenStrategy,
+            max_past_len: usize, // control when the by-len strategies trigger pop/drain to align to the by-logged-at strategies
+            state: Option<(u8, u32)>,
+            state_is_pushed: bool,
+            expected_states_len: usize,
+            expected_popped: Option<(u8, u32)>,
+        ) {
+            meta.queue_forward();
+            meta.update(|_, _| {});
+            let before = self.clone();
+            let push = state.filter(|_| state_is_pushed).map(|(state, frame)| (state, RevFrame::checked_new(frame)));
+            self.push_present(push);
+            let after_push = self.clone();
+            let actual_popped =
+                shorten_strategy!(self, meta, strategy, max_past_len, before, after_push);
+            assert_eq!(
+                actual_popped, expected_popped,
+                "\nstrategy: {strategy:#?}\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
+            );
+            let actual_states_len = self.states_len();
+            assert_eq!(
+                actual_states_len, expected_states_len,
+                "\nstrategy: {strategy:#?}\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
+            );
+            self.test_state(before, meta, state);
+        }
+        fn test_forward_log(
+            &mut self,
+            meta: &mut RevMeta,
+            expected_state: Option<(u8, u32)>,
+            expected_result: Result<bool, OutOfLog>,
+        ) {
+            let before = self.clone();
+            let actual_result = self.forward_log();
+            if expected_result.is_ok() {
+                let frame = meta.present_world_state().wrapping_add(1);
+                meta.queue_log(frame).unwrap();
+                meta.update(|_, _| {});
+            }
+            assert_eq!(
+                actual_result, expected_result,
+                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
+            );
+            self.test_state(before, meta, expected_state);
+        }
+        fn test_backward_log(
+            &mut self,
+            meta: &mut RevMeta,
+            expected_state: Option<(u8, u32)>,
+            expected_result: Result<bool, OutOfLog>,
+        ) {
+            let before = self.clone();
+            let actual_result = self.backward_log();
+            if expected_result.is_ok() {
+                let frame = meta.present_world_state().wrapping_sub(1);
+                meta.queue_log(frame).unwrap();
+                meta.update(|_, _| {});
+            }
+            assert_eq!(
+                actual_result, expected_result,
+                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
+            );
+            self.test_state(before, meta, expected_state);
+        }
+        fn test_state(&self, before: Self, meta: &RevMeta, expected_state: Option<(u8, u32)>) {
+            let expected_state =
+                expected_state.map(|(state, frame)| (state, RevFrame::checked_new(frame)));
+            assert_eq!(
+                self.get().cloned(),
+                expected_state,
+                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
+            );
+        }
+        fn test_drain_future(
+            &self,
+            expected_future: impl IntoIterator<Item = (u8, u32)>,
+            expected_states_len: usize,
+        ) -> Self {
+            let before = self.clone();
+            let mut clone = self.clone();
+            let actual_future: Vec<_> = clone.drain_future().collect();
+            let expected_future: Vec<_> = expected_future
+                .into_iter()
+                .map(|(state, frame)| (state, RevFrame(frame)))
+                .collect();
+            assert_eq!(
+                actual_future, expected_future,
+                "\nbefore: {before:#?}\nafter_drain_future: {clone:#?}"
+            );
+            assert_eq!(
+                clone.states_len(),
+                expected_states_len,
+                "\nbefore: {before:#?}\nafter_drain_future: {clone:#?}"
+            );
+            clone
+        }
+    }
+
+    #[test]
+    fn push_and_log_traversal() {
+        for strategy in ShortenStrategy::VARIANTS {
+            let meta = &mut RevMeta::new(NonZeroU32::new(3), None, false);
+            let mut init_none = RareInitNoneLog::new_none();
+
+            init_none.test_forward(meta, strategy, 0, None, false, 0, None);
+            init_none.test_forward(meta, strategy, 1, Some((2, 2)), true, 0, None);
+
+            // reaching pre-state None
+            init_none.test_backward_log(meta, None, Ok(true));
+            init_none.test_backward_log(meta, None, Ok(false));
+            // out of log, no mutations happend to both meta and log here
+            init_none.test_backward_log(meta, None, Err(OutOfLog));
+
+            init_none.test_forward_log(meta, None, Ok(false));
+            // back in state Some
+            init_none.test_forward_log(meta, Some((2, 2)), Ok(true));
+            // out of log, no mutations happend to both meta and log here
+            init_none.test_forward_log(meta, Some((2, 2)), Err(OutOfLog));
+
+            init_none.test_forward(meta, strategy, 2, Some((2, 2)), false, 0, None);
+
+            // has no initial value that is out of log now
+            init_none.test_forward(meta, strategy, 3, Some((3, 3)), true, 1, None);
+
+            let meta = &mut RevMeta::new(NonZeroU32::new(3), None, false);
+            let mut init_some = RareInitNoneLog::new_some((0, meta.present_world_state()));
+
+            init_some.test_forward(meta, strategy, 0, Some((0, 0)), false, 0, None);
+            init_some.test_forward(meta, strategy, 1, Some((2, 2)), true, 1, None);
+
+            init_some.test_backward_log(meta, Some((0, 0)), Ok(true));
+            init_some.test_backward_log(meta, Some((0, 0)), Ok(false));
+            // out of log, no mutations happend to both meta and log here
+            init_some.test_backward_log(meta, Some((0, 0)), Err(OutOfLog));
+
+            init_some.test_forward_log(meta, Some((0, 0)), Ok(false));
+            init_some.test_forward_log(meta, Some((2, 2)), Ok(true));
+            // out of log, no mutations happend to both meta and log here
+            init_some.test_forward_log(meta, Some((2, 2)), Err(OutOfLog));
+
+            init_some.test_forward(meta, strategy, 2, Some((2, 2)), false, 1, None);
+
+            // pops the initial value that became out-of-log
+            init_some.test_forward(meta, strategy, 3, Some((3, 3)), true, 1, Some((0, 0)));
+/* 
+todo: forward/backward_init_none überarbeiten
+
+            for mut log in [init_none, init_some] {
+                let meta = &mut meta.clone();
+
+                // reduces log, this does pop a state
+                log.test_forward(meta, strategy, 4, 2, Some((1, 1)));
+
+                log.test_backward_log(meta, Some(3), false);
+                log.test_backward_log(meta, Some(2), false);
+                // out of log, no mutations happend to both meta and log here
+                log.test_backward_log(meta, Some(2), true);
+
+                log.test_forward_log(meta, Some(3), false);
+                log.test_forward_log(meta, Some(4), false);
+                // out of log, no mutations happend to both meta and log here
+                log.test_forward_log(meta, Some(4), true);
+
+                log.test_backward_log(meta, Some(3), false);
+                log.test_backward_log(meta, Some(2), false);
+
+                let clone = log.test_drain_future([(3, 3), (4, 4)], 0);
+
+                for mut log in [log, clone] {
+                    // all entries are truncated as they are in the future
+                    log.test_forward(meta, strategy, 5, 1, None);
+                }
+            }*/
+        }
+    }
+
+    #[allow(dead_code)]
+    fn impls_reflect() {
+        bevy::reflect::TypeRegistry::empty().register::<RareInitNoneLog<RevFrame>>();
     }
 }
