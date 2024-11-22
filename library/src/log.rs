@@ -526,7 +526,6 @@ trait WithAmountInternal: WithAmount {
 
 #[derive(Debug, Clone, Copy)]
 pub struct AmountOverflow;
-
 pub trait WithAmount {
     type Err: Debug;
     #[doc(hidden)]
