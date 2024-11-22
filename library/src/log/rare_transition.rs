@@ -242,7 +242,7 @@ impl<T: LoggedAt> RareTransitionLog<T> {
             return None;
         }
         let logged_at = self.transitions.front()?.logged_at();
-        if !meta.contains_in_transition_logged(logged_at) {
+        if !meta.contains_in_past(logged_at, false, true) {
             self.pop_past()
         } else {
             None
@@ -255,7 +255,7 @@ impl<T: LoggedAt> RareTransitionLog<T> {
         let past_len = meta.past_world_states();
         let to = self
             .transitions
-            .partition_point(|entry| meta.frames_since(entry.logged_at()) >= past_len);
+            .partition_point(|entry| meta.frames_before_present(entry.logged_at()) >= past_len);
         self.past_len -= to // `to` plus sum of `RareValue::skips` == sum of `RareValue::len` but with less operations 
             + self
                 .transitions
@@ -429,7 +429,7 @@ mod test {
     #[test]
     fn push_and_log_traversal() {
         for strategy in ShortenStrategy::VARIANTS {
-            let meta = &mut RevMeta::new(NonZeroU32::new(3), 0, false);
+            let meta = &mut RevMeta::new(NonZeroU32::new(3), None, false);
             let mut log = RareTransitionLog::new();
 
             log.test_forward(meta, strategy, Some(1), 1, None);
