@@ -1,11 +1,8 @@
 use std::fmt::Debug;
 
-use bevy::ecs::{
-    change_detection::Res,
-    schedule::{InternedSystemSet, IntoSystemSetConfigs, Schedule, SystemSet},
-};
+use bevy::ecs::schedule::{InternedSystemSet, IntoSystemSetConfigs, Schedule, SystemSet};
 
-use crate::meta::{RevDirection, RevMeta};
+use crate::meta::RevDirection;
 
 mod condition;
 mod set_configs;
@@ -92,12 +89,12 @@ impl RevSchedule for Schedule {
         sets: impl IntoRevSystemSetConfigs<Marker>,
     ) -> &mut Self {
         if !self.graph().contains_set(ForwardSet) {
-            // run conditions return false if RevMeta is missing
-            fn if_forward(meta: Res<RevMeta>) -> bool {
-                matches!(meta.get_direction(), Some(RevDirection::Forward { .. }))
+            // run conditions return false if RevMeta is missing or not in a running RevDirection
+            fn if_forward(direction: RevDirection) -> bool {
+                matches!(direction, RevDirection::Forward { .. })
             }
-            fn if_backward(meta: Res<RevMeta>) -> bool {
-                matches!(meta.get_direction(), Some(RevDirection::BackwardLog))
+            fn if_backward(direction: RevDirection) -> bool {
+                matches!(direction, RevDirection::BackwardLog)
             }
             self.configure_sets(
                 (
@@ -129,6 +126,7 @@ impl RevSchedule for Schedule {
 mod test {
     use std::{
         mem::take,
+        num::NonZeroU32,
         sync::{
             atomic::{AtomicBool, Ordering},
             Arc,
@@ -136,22 +134,22 @@ mod test {
     };
 
     use bevy::{
-        app::{App, FixedUpdate},
+        app::FixedUpdate,
         ecs::{
-            change_detection::ResMut,
+            change_detection::{Res, ResMut},
             component::Component,
             event::Event,
             observer::Trigger,
             schedule::IntoSystemSet,
-            system::{Commands, Resource},
+            system::{Commands, IntoSystem, Resource},
             world::{DeferredWorld, World},
         },
-        prelude::IntoSystem,
-        utils::default,
+        prelude::run_once,
     };
 
     use crate::{
-        commands::{RevCommandLog, RevCommands},
+        commands::{CommandsLog, RevCommandInit, RevCommands},
+        meta::RevMeta,
         observer::RevEvent,
         world::{RevDeferredWorld, RevWorld},
         RevFrame, RevUpdate,
@@ -260,12 +258,19 @@ mod test {
 
     /// Will add sync point
     fn non_exclusive_system<const N: u8>(
-        meta: Res<RevMeta>,
+        direction: RevDirection,
         mut log: ResMut<TestLog>,
+        commands: Commands,
+    ) {
+        log.0.push(Test::Sys((N, direction)));
+
+        non_exclusive_system_commands_only::<N>(direction, commands);
+    }
+
+    fn non_exclusive_system_commands_only<const N: u8>(
+        direction: RevDirection,
         mut commands: Commands,
     ) {
-        let direction = meta.direction();
-        log.0.push(Test::Sys((N, direction)));
         if direction != RevDirection::NotLog {
             return;
         }
@@ -298,7 +303,7 @@ mod test {
         world.spawn(SysHook(N));
     }
 
-    fn system_command<const N: u8>(world: &mut World) -> impl RevCommandLog {
+    fn system_command<const N: u8>(world: &mut World) -> impl RevCommandInit {
         // trigger hook in command
         world.spawn(SysCmdHook(N));
 
@@ -342,15 +347,17 @@ mod test {
     ) {
         // set up world
         let mut world = World::new();
+        CommandsLog::init_buffer(&mut world);
         world.init_resource::<TestLog>();
-        world.insert_resource(RevMeta::new(None, 0, false));
+        world.insert_resource(RevMeta::new(None, None, false));
+
+        // set up schedules
         let mut schedule = Schedule::new(FixedUpdate);
         schedule.add_systems(RevMeta::update_world);
         let err = schedule.initialize(&mut world).err();
         assert!(err.is_none(), "{:?}", err.unwrap());
         world.add_schedule(schedule);
 
-        // set up reversible schedule
         let mut schedule = Schedule::new(RevUpdate);
         config(&mut schedule);
         schedule.set_apply_final_deferred(apply_final_deferred);
@@ -468,9 +475,8 @@ mod test {
             },
         );
 
-        fn test_step<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
+        fn test_step(
             world: &mut World,
-            config: &C,
             variant: usize,
             apply_final_deferred: bool,
             step: usize,
@@ -488,21 +494,13 @@ mod test {
             } else {
                 iter.rev().collect()
             };
-            if actual != expected {
-                let mut schedule = Schedule::new(RevUpdate);
-                config(&mut schedule);
-                let mut app = App::new();
-                app.add_schedule(schedule);
-                let graph = bevy_mod_debugdump::schedule_graph_dot(&mut app, RevUpdate, &default());
-                panic!("log mismatch! config #{variant}, apply_final_deferred {apply_final_deferred}, {direction:?}, step #{step}\nexpected:\n{expected:?}\nactual:\n{actual:?}\n\n{graph}")
-            }
+            assert_eq!(actual, expected, "log mismatch! config #{variant}, apply_final_deferred {apply_final_deferred}, {direction:?}, step #{step}");
         }
 
         // run tests forward
         for (step, expected) in expected.iter().enumerate() {
             test_step(
                 &mut world,
-                &config,
                 variant,
                 apply_final_deferred,
                 step,
@@ -514,11 +512,10 @@ mod test {
         // run tests backward log
         let mut meta = world.resource_mut::<RevMeta>();
         let end_frame = meta.present_world_state();
-        assert!(meta.queue_log(RevFrame::new(0)).is_ok());
+        assert!(meta.queue_log(RevFrame::checked_new(0)).is_ok());
         for (step, expected) in expected.iter().enumerate().rev() {
             test_step(
                 &mut world,
-                &config,
                 variant,
                 apply_final_deferred,
                 step,
@@ -533,7 +530,6 @@ mod test {
         for (step, expected) in expected.iter().enumerate() {
             test_step(
                 &mut world,
-                &config,
                 variant,
                 apply_final_deferred,
                 step,
@@ -585,13 +581,13 @@ mod test {
 
         if b_exclusive {
             sys_b = || exclusive_system::<2>.into_rev_configs();
-            sys_b_pipe_noop = || exclusive_system::<2>.pipe(noop::<3>).into_rev_configs();
-            noop_pipe_sys_b = || noop::<3>.pipe(exclusive_system::<2>).into_rev_configs();
+            sys_b_pipe_noop = || exclusive_system::<2>.pipe(noop::<4>).into_rev_configs();
+            noop_pipe_sys_b = || noop::<4>.pipe(exclusive_system::<2>).into_rev_configs();
             set_sys_b = exclusive_system::<2>.into_system_set().intern();
         } else {
             sys_b = || non_exclusive_system::<2>.into_rev_configs();
-            sys_b_pipe_noop = || non_exclusive_system::<2>.pipe(noop::<3>).into_rev_configs();
-            noop_pipe_sys_b = || noop::<3>.pipe(non_exclusive_system::<2>).into_rev_configs();
+            sys_b_pipe_noop = || non_exclusive_system::<2>.pipe(noop::<4>).into_rev_configs();
+            noop_pipe_sys_b = || noop::<4>.pipe(non_exclusive_system::<2>).into_rev_configs();
             set_sys_b = non_exclusive_system::<2>.into_system_set().intern();
         };
 
@@ -654,51 +650,57 @@ mod test {
             Box::new(move |schedule: &mut Schedule| {
                 schedule.rev_add_systems((sys_after(sys_b(), set_noop_a), noop_pipe_sys_a()))
             }),
-            // #10 system-noop after system pipe by system
-            Box::new(move |schedule: &mut Schedule| {
-                schedule.rev_add_systems((sys_a(), sys_after(sys_b_pipe_noop(), set_sys_a)))
-            }),
-            // #11 system-noop after system pipe by system (flipped)
-            Box::new(move |schedule: &mut Schedule| {
-                schedule.rev_add_systems((sys_after(sys_b_pipe_noop(), set_sys_a), sys_a()))
-            }),
-            // #12 noop-system after system pipe by system
-            Box::new(move |schedule: &mut Schedule| {
-                schedule.rev_add_systems((sys_a(), sys_after(noop_pipe_sys_b(), set_sys_a)))
-            }),
-            // #13 noop-system after system pipe by system (flipped)
-            Box::new(move |schedule: &mut Schedule| {
-                schedule.rev_add_systems((sys_after(noop_pipe_sys_b(), set_sys_a), sys_a()))
-            }),
-            // todo
-
-            // #2 set after system
+            // #10 set after system
             Box::new(move |schedule: &mut Schedule| {
                 schedule
                     .rev_add_systems((sys_a(), sys_b().rev_in_set(TestSet(2))))
                     .rev_configure_sets(set_after(TestSet(2).into_rev_configs(), set_sys_a))
             }),
-            // #3 set after system (flipped)
+            // #11 set after system (flipped)
             Box::new(move |schedule: &mut Schedule| {
                 schedule
                     .rev_add_systems((sys_b().rev_in_set(TestSet(2)), sys_a()))
                     .rev_configure_sets(set_after(TestSet(2).into_rev_configs(), set_sys_a))
             }),
-            // #4 system after set
+            // #12 set after system-noop pipe by system
+            Box::new(move |schedule: &mut Schedule| {
+                schedule
+                    .rev_add_systems((sys_a_pipe_noop(), sys_b().rev_in_set(TestSet(2))))
+                    .rev_configure_sets(set_after(TestSet(2).into_rev_configs(), set_sys_a))
+            }),
+            // #13 set after system-noop pipe by system (flipped)
+            Box::new(move |schedule: &mut Schedule| {
+                schedule
+                    .rev_add_systems((sys_b().rev_in_set(TestSet(2)), sys_a_pipe_noop()))
+                    .rev_configure_sets(set_after(TestSet(2).into_rev_configs(), set_sys_a))
+            }),
+            // #14 set after system-noop pipe by noop
+            Box::new(move |schedule: &mut Schedule| {
+                schedule
+                    .rev_add_systems((sys_a_pipe_noop(), sys_b().rev_in_set(TestSet(2))))
+                    .rev_configure_sets(set_after(TestSet(2).into_rev_configs(), set_noop_a))
+            }),
+            // #15 set after system-noop pipe by noop (flipped)
+            Box::new(move |schedule: &mut Schedule| {
+                schedule
+                    .rev_add_systems((sys_b().rev_in_set(TestSet(2)), sys_a_pipe_noop()))
+                    .rev_configure_sets(set_after(TestSet(2).into_rev_configs(), set_noop_a))
+            }),
+            // #16 system after set
             Box::new(move |schedule: &mut Schedule| {
                 schedule.rev_add_systems((
                     sys_a().rev_in_set(TestSet(1)),
                     sys_after(sys_b(), TestSet(1).intern()),
                 ))
             }),
-            // #5 system after set (flipped)
+            // #17 system after set (flipped)
             Box::new(move |schedule: &mut Schedule| {
                 schedule.rev_add_systems((
                     sys_after(sys_b(), TestSet(1).intern()),
                     sys_a().rev_in_set(TestSet(1)),
                 ))
             }),
-            // #6 set after set
+            // #18 set after set
             Box::new(move |schedule: &mut Schedule| {
                 schedule
                     .rev_add_systems((
@@ -710,7 +712,7 @@ mod test {
                         TestSet(1).intern(),
                     ))
             }),
-            // #7 set after set (flipped)
+            // #19 set after set (flipped)
             Box::new(move |schedule: &mut Schedule| {
                 schedule
                     .rev_add_systems((
@@ -722,41 +724,121 @@ mod test {
                         TestSet(1).intern(),
                     ))
             }),
-            // #8 system before system
+            // #20 system before system
             Box::new(move |schedule: &mut Schedule| {
                 schedule.rev_add_systems((sys_before(sys_a(), set_sys_b), sys_b()))
             }),
-            // #9 system before system (flipped)
+            // #21 system before system (flipped)
             Box::new(move |schedule: &mut Schedule| {
                 schedule.rev_add_systems((sys_b(), sys_before(sys_a(), set_sys_b)))
             }),
-            // #10 set before system
+            // #22 system before system-noop pipe by system
+            Box::new(move |schedule: &mut Schedule| {
+                schedule.rev_add_systems((sys_before(sys_a(), set_sys_b), sys_b_pipe_noop()))
+            }),
+            // #23 system before system-noop pipe by system (flipped)
+            Box::new(move |schedule: &mut Schedule| {
+                schedule.rev_add_systems((sys_b_pipe_noop(), sys_before(sys_a(), set_sys_b)))
+            }),
+            // #24 system before system-noop pipe by noop
+            Box::new(move |schedule: &mut Schedule| {
+                schedule.rev_add_systems((sys_before(sys_a(), set_noop_b), sys_b_pipe_noop()))
+            }),
+            // #25 system before system-noop pipe by noop (flipped)
+            Box::new(move |schedule: &mut Schedule| {
+                schedule.rev_add_systems((sys_b_pipe_noop(), sys_before(sys_a(), set_noop_b)))
+            }),
+            // #26 system before noop-system pipe by system
+            Box::new(move |schedule: &mut Schedule| {
+                schedule.rev_add_systems((sys_before(sys_a(), set_sys_b), noop_pipe_sys_b()))
+            }),
+            // #27 system before noop-system pipe by system (flipped)
+            Box::new(move |schedule: &mut Schedule| {
+                schedule.rev_add_systems((noop_pipe_sys_b(), sys_before(sys_a(), set_sys_b)))
+            }),
+            // #28 system before noop-system pipe by noop
+            Box::new(move |schedule: &mut Schedule| {
+                schedule.rev_add_systems((sys_before(sys_a(), set_noop_b), noop_pipe_sys_b()))
+            }),
+            // #29 system before noop-system pipe by noop (flipped)
+            Box::new(move |schedule: &mut Schedule| {
+                schedule.rev_add_systems((noop_pipe_sys_b(), sys_before(sys_a(), set_noop_b)))
+            }),
+            // #30 set before system
             Box::new(move |schedule: &mut Schedule| {
                 schedule
                     .rev_add_systems((sys_a().rev_in_set(TestSet(1)), sys_b()))
                     .rev_configure_sets(set_before(TestSet(1).into_rev_configs(), set_sys_b))
             }),
-            // #11 set before system (flipped)
+            // #31 set before system (flipped)
             Box::new(move |schedule: &mut Schedule| {
                 schedule
                     .rev_add_systems((sys_b(), sys_a().rev_in_set(TestSet(1))))
                     .rev_configure_sets(set_before(TestSet(1).into_rev_configs(), set_sys_b))
             }),
-            // #12 system before set
+            // #32 set before system-noop pipe by system
+            Box::new(move |schedule: &mut Schedule| {
+                schedule
+                    .rev_add_systems((sys_a().rev_in_set(TestSet(1)), sys_b_pipe_noop()))
+                    .rev_configure_sets(set_before(TestSet(1).into_rev_configs(), set_sys_b))
+            }),
+            // #33 set before system-noop pipe by system (flipped)
+            Box::new(move |schedule: &mut Schedule| {
+                schedule
+                    .rev_add_systems((sys_b_pipe_noop(), sys_a().rev_in_set(TestSet(1))))
+                    .rev_configure_sets(set_before(TestSet(1).into_rev_configs(), set_sys_b))
+            }),
+            // #34 set before system-noop pipe by noop
+            Box::new(move |schedule: &mut Schedule| {
+                schedule
+                    .rev_add_systems((sys_a().rev_in_set(TestSet(1)), sys_b_pipe_noop()))
+                    .rev_configure_sets(set_before(TestSet(1).into_rev_configs(), set_noop_b))
+            }),
+            // #35 set before system-noop pipe by noop (flipped)
+            Box::new(move |schedule: &mut Schedule| {
+                schedule
+                    .rev_add_systems((sys_b_pipe_noop(), sys_a().rev_in_set(TestSet(1))))
+                    .rev_configure_sets(set_before(TestSet(1).into_rev_configs(), set_noop_b))
+            }),
+            // #36 set before noop-system pipe by system
+            Box::new(move |schedule: &mut Schedule| {
+                schedule
+                    .rev_add_systems((sys_a().rev_in_set(TestSet(1)), noop_pipe_sys_b()))
+                    .rev_configure_sets(set_before(TestSet(1).into_rev_configs(), set_sys_b))
+            }),
+            // #37 set before noop-system pipe by system (flipped)
+            Box::new(move |schedule: &mut Schedule| {
+                schedule
+                    .rev_add_systems((noop_pipe_sys_b(), sys_a().rev_in_set(TestSet(1))))
+                    .rev_configure_sets(set_before(TestSet(1).into_rev_configs(), set_sys_b))
+            }),
+            // #38 set before noop-system pipe by noop
+            Box::new(move |schedule: &mut Schedule| {
+                schedule
+                    .rev_add_systems((sys_a().rev_in_set(TestSet(1)), noop_pipe_sys_b()))
+                    .rev_configure_sets(set_before(TestSet(1).into_rev_configs(), set_noop_b))
+            }),
+            // #39 set before noop-system pipe by noop (flipped)
+            Box::new(move |schedule: &mut Schedule| {
+                schedule
+                    .rev_add_systems((noop_pipe_sys_b(), sys_a().rev_in_set(TestSet(1))))
+                    .rev_configure_sets(set_before(TestSet(1).into_rev_configs(), set_noop_b))
+            }),
+            // #40 system before set
             Box::new(move |schedule: &mut Schedule| {
                 schedule.rev_add_systems((
                     sys_before(sys_a(), TestSet(2).intern()),
                     sys_b().rev_in_set(TestSet(2)),
                 ))
             }),
-            // #13 system before set (flipped)
+            // #41 system before set (flipped)
             Box::new(move |schedule: &mut Schedule| {
                 schedule.rev_add_systems((
                     sys_b().rev_in_set(TestSet(2)),
                     sys_before(sys_a(), TestSet(2).intern()),
                 ))
             }),
-            // #14 set before set
+            // #42 set before set
             Box::new(move |schedule: &mut Schedule| {
                 schedule
                     .rev_add_systems((
@@ -768,7 +850,7 @@ mod test {
                         TestSet(2).intern(),
                     ))
             }),
-            // #15 set before set (flipped)
+            // #43 set before set (flipped)
             Box::new(move |schedule: &mut Schedule| {
                 schedule
                     .rev_add_systems((
@@ -780,11 +862,11 @@ mod test {
                         TestSet(2).intern(),
                     ))
             }),
-            // #16 system chain
+            // #44 system chain
             Box::new(move |schedule: &mut Schedule| {
                 schedule.rev_add_systems(sys_chain((sys_a(), sys_b()).into_rev_configs()))
             }),
-            // #17 set chain
+            // #45 set chain
             Box::new(move |schedule: &mut Schedule| {
                 schedule
                     .rev_add_systems((
@@ -793,7 +875,7 @@ mod test {
                     ))
                     .rev_configure_sets(set_chain((TestSet(1), TestSet(2)).into_rev_configs()))
             }),
-            // #18 set chain (flipped)
+            // #46 set chain (flipped)
             Box::new(move |schedule: &mut Schedule| {
                 schedule
                     .rev_add_systems((
@@ -925,6 +1007,23 @@ mod test {
     }
 
     #[test]
+    fn pipe_commands() {
+        fn configs(schedule: &mut Schedule) -> &mut Schedule {
+            schedule.rev_add_systems(
+                non_exclusive_system_commands_only::<1>
+                    .pipe(non_exclusive_system_commands_only::<2>),
+            )
+        }
+        test_run(
+            vec![configs],
+            vec![vec![
+                TestBundle::NonExclusiveSyncPoint(1),
+                TestBundle::NonExclusiveSyncPoint(2),
+            ]],
+        )
+    }
+
+    #[test]
     fn run_if() {
         fn at_2(meta: Res<RevMeta>) -> bool {
             let now: u32 = meta.present_world_state().into();
@@ -977,5 +1076,70 @@ mod test {
                 vec![], // does not run at 3
             ],
         );
+    }
+
+    #[test]
+    fn check_logged_at() {
+        #[derive(Resource, Copy, Clone, Debug, PartialEq)]
+        enum TestCommand {
+            Applied,
+            Finalized,
+        }
+
+        impl RevCommandInit for TestCommand {
+            fn redo(&mut self, _world: &mut World) {
+                unimplemented!()
+            }
+            fn redone_finalize(self: Box<Self>, world: &mut World) {
+                world.insert_resource(Self::Finalized);
+            }
+            fn undo(&mut self, _world: &mut World) {
+                unimplemented!()
+            }
+            fn undone_finalize(self: Box<Self>, _world: &mut World) {
+                unimplemented!()
+            }
+        }
+
+        fn system(mut commands: Commands) {
+            commands.rev_queue(|world: &mut World| {
+                world.insert_resource(TestCommand::Applied);
+                TestCommand::Applied
+            });
+        }
+
+        // setup world
+        let mut world = World::new();
+        CommandsLog::init_buffer(&mut world);
+        world.insert_resource(RevMeta::new(
+            NonZeroU32::new(1),
+            Some(RevFrame::checked_new(RevMeta::MAX_WORLD_STATES - 2)),
+            false,
+        ));
+
+        // setup schedules
+        let mut schedule = Schedule::new(FixedUpdate);
+        schedule.add_systems(RevMeta::update_world);
+        let err = schedule.initialize(&mut world).err();
+        assert!(err.is_none(), "{:?}", err.unwrap());
+        world.add_schedule(schedule);
+
+        let mut schedule = Schedule::new(RevUpdate);
+        schedule.rev_add_systems(system.rev_run_if(run_once));
+        let err = schedule.initialize(&mut world).err();
+        assert!(err.is_none(), "{:?}", err.unwrap());
+        world.add_schedule(schedule);
+
+        // first updates issues command that sets the Applied resource
+        world.run_schedule(FixedUpdate);
+        assert_eq!(world.remove_resource(), Some(TestCommand::Applied));
+
+        // no system run and no event to check the commands log because log start is still <= MAX_WORLD_STATES
+        world.run_schedule(FixedUpdate);
+        assert_eq!(world.remove_resource::<TestCommand>(), None);
+
+        // no system run but an event to check the commands log because log start is MAX_WORLD_STATES + 1
+        world.run_schedule(FixedUpdate);
+        assert_eq!(world.remove_resource(), Some(TestCommand::Finalized));
     }
 }
