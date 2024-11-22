@@ -14,7 +14,7 @@ use bevy::{
 };
 
 use crate::{
-    commands::{RevCommand, RevCommandLog},
+    commands::{RevCommand, RevCommandInit},
     error_per_flag,
     log::TransitionLog,
     meta::{RevDirection, RevMeta},
@@ -183,7 +183,7 @@ struct RevEventInitialized<E>(PhantomData<E>);
 impl<E: Event + Clone, Targets: TriggerTargets + Send + 'static> RevCommand<()>
     for TriggerEvent<E, Targets>
 {
-    fn rev_apply(self, world: &mut World) -> Option<impl RevCommandLog> {
+    fn rev_apply(self, world: &mut World) -> Option<impl RevCommandInit> {
         apply_trigger_event(self, world)
     }
 }
@@ -191,7 +191,7 @@ impl<E: Event + Clone, Targets: TriggerTargets + Send + 'static> RevCommand<()>
 pub(crate) fn apply_trigger_event<E: Event + Clone, Targets: TriggerTargets>(
     event: TriggerEvent<E, Targets>,
     world: &mut World, // triggering observers on DeferedWorld also works through commands to get &mut World
-) -> Option<impl RevCommandLog> {
+) -> Option<impl RevCommandInit> {
     let meta = world.get_resource::<RevMeta>().cloned();
     let mut log = world
         .get_resource_mut::<ObserverLog<E>>()
@@ -265,7 +265,7 @@ impl<E: Event + Clone> RevEventInitialized<E> {
     }
 }
 
-impl<E: Event + Clone> RevCommandLog for RevEventInitialized<E> {
+impl<E: Event + Clone> RevCommandInit for RevEventInitialized<E> {
     fn undo(&mut self, world: &mut World) {
         Self::undo_redo(world, true)
     }
