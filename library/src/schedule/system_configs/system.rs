@@ -12,18 +12,17 @@ use bevy::{
         component::{ComponentId, Tick},
         query::Access,
         schedule::{InternedSystemSet, IntoSystemConfigs, IntoSystemSetConfigs, SystemSetConfigs},
-        system::{IntoSystem, ReadOnlySystem, System},
+        system::{Commands, IntoSystem, ReadOnlySystem, System},
         world::{unsafe_world_cell::UnsafeWorldCell, DeferredWorld, World},
     },
-    prelude::SystemIn,
+    prelude::{SystemIn, Trigger},
     utils::default,
 };
 
 use crate::{
-    check_tick,
     commands::CommandsLog,
     error_per_flag,
-    meta::{CommandsLogReducings, RevMeta},
+    meta::{CheckLoggedAt, RevMeta},
     schedule::{BackwardSet, BwdCmdSet, BwdCmdSysSet, BwdSysSet, ForwardSet, FwdSysSet},
 };
 
@@ -306,6 +305,10 @@ impl<T: System> System for ArcSystem<T> {
         self.is_send = shared.system.is_send();
         self.is_exclusive = shared.system.is_exclusive();
         self.has_deferred = shared.system.has_deferred();
+        self.component_access
+            .extend(shared.system.component_access());
+        self.archetype_component_access
+            .extend(shared.system.archetype_component_access());
     }
     fn update_archetype_component_access(&mut self, world: UnsafeWorldCell) {
         // reference: CombinatorSystem
@@ -466,22 +469,33 @@ fn initialize_arc_system<'a, T: System>(
 
     // add observer for reducing commands using the logged_at mechanism
     let name = shared.observer_name.clone();
-    world
-        .get_resource_or_insert_with(CommandsLogReducings::default)
-        .0
-        .push(Box::new(move |meta, world| {
-            arc.inner
-                .try_lock()
-                .unwrap_or_else(expect_shared(&name))
-                .commands_log
-                .reduce_logged_at(world, meta)
-        }));
+    world.add_observer(
+        move |trigger: Trigger<CheckLoggedAt>, mut commands: Commands| {
+            let meta: RevMeta = trigger.event().meta().clone();
+            let arc = arc.clone();
+            let name = name.clone();
+            commands.queue(move |world: &mut World| {
+                arc.clone()
+                    .inner
+                    .try_lock()
+                    .unwrap_or_else(expect_shared(&name))
+                    .commands_log
+                    .reduce_logged_at(world, &meta)
+            });
+        },
+    );
 
     shared
 }
 
 fn expect_shared<T: Debug, Out>(name: &String) -> impl FnOnce(T) -> Out + '_ {
-    move |err| {
-        panic!("Could not access reversible system {name} because of {err:?}. This is a crate bug.")
+    move |err| panic!("Could not access reversible system {name} because of {err:?}")
+}
+
+/// reference: Tick::check_tick
+fn check_tick(this: &mut Tick, change_tick: Tick) {
+    let age = change_tick.get().wrapping_sub(this.get());
+    if age > Tick::MAX.get() {
+        *this = Tick::new(change_tick.get().wrapping_sub(Tick::MAX.get()));
     }
 }
