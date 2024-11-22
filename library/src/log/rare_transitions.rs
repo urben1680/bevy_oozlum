@@ -609,7 +609,7 @@ mod test {
     #[test]
     fn push_and_log_traversal() {
         for strategy in ShortenStrategy::VARIANTS {
-            let meta = &mut RevMeta::new(NonZeroU32::new(3), 0, false);
+            let meta = &mut RevMeta::new(NonZeroU32::new(3), None, false);
             let mut log = RareTransitionsLog::new();
 
             log.test_forward(meta, strategy, vec![1; 1], 1, 1, None);
