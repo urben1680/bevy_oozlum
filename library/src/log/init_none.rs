@@ -367,8 +367,8 @@ impl<T> InitNoneLog<T> {
             Inner::Ran {
                 undone_first_run: Some(true),
                 ..
-            }
-            | Inner::NeverRan { .. } => None,
+            } => None,
+            Inner::NeverRan { .. } => None,
             Inner::Ran {
                 ref mut log,
                 ref mut undone_first_run,
@@ -532,7 +532,12 @@ mod test {
         );
 
         let mut original_never_none = original_ran_after_none.clone();
-        original_never_none.pop_past_by_len(1);
+        if let Inner::Ran {
+            undone_first_run, ..
+        } = &mut original_never_none.0
+        {
+            *undone_first_run = None;
+        }
         assert!(
             matches!(
                 original_never_none.0,
@@ -771,7 +776,7 @@ mod test {
     #[test]
     fn push_and_log_traversal() {
         for strategy in ShortenStrategy::VARIANTS {
-            let meta = &mut RevMeta::new(NonZeroU32::new(3), 0, false);
+            let meta = &mut RevMeta::new(NonZeroU32::new(3), None, false);
             let mut init_none = InitNoneLog::new_none();
 
             init_none.test_forward(meta, strategy, 1, 0, None);
@@ -791,7 +796,7 @@ mod test {
             // has no initial value that is out of log now
             init_none.test_forward(meta, strategy, 3, 2, None);
 
-            let meta = &mut RevMeta::new(NonZeroU32::new(3), 0, false);
+            let meta = &mut RevMeta::new(NonZeroU32::new(3), None, false);
             let mut init_some = InitNoneLog::new_some((0, meta.present_world_state()));
 
             init_some.test_forward(meta, strategy, 1, 1, None);
