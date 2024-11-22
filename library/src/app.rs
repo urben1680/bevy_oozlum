@@ -13,6 +13,7 @@ use bevy::{
 };
 
 use crate::{
+    commands::CommandsLog,
     meta::RevMeta,
     observer::RevEvent,
     schedule::{IntoRevSystemConfigs, IntoRevSystemSetConfigs, RevSchedule},
@@ -78,15 +79,15 @@ impl RevApp for App {
 
 pub enum RevSystemsPlugin {
     AddMeta(RevMeta),
-    AddMetaRunner(RevMeta, InternedScheduleLabel),
-    AddMetaRunnerInSet(RevMeta, InternedScheduleLabel, InternedSystemSet),
+    AddMetaAndRunner(RevMeta, InternedScheduleLabel),
+    AddMetaAndRunnerInSet(RevMeta, InternedScheduleLabel, InternedSystemSet),
     AddRunner(InternedScheduleLabel),
     AddRunnerInSet(InternedScheduleLabel, InternedSystemSet),
 }
 
 impl Default for RevSystemsPlugin {
     fn default() -> Self {
-        Self::AddMetaRunner(default(), FixedUpdate.intern())
+        Self::AddMetaAndRunner(default(), FixedUpdate.intern())
     }
 }
 
@@ -94,15 +95,15 @@ impl RevSystemsPlugin {
     pub fn add_meta(meta: RevMeta) -> Self {
         Self::AddMeta(meta)
     }
-    pub fn add_meta_runner(meta: RevMeta, schedule: impl ScheduleLabel) -> Self {
-        Self::AddMetaRunner(meta, schedule.intern())
+    pub fn add_meta_and_runner(meta: RevMeta, schedule: impl ScheduleLabel) -> Self {
+        Self::AddMetaAndRunner(meta, schedule.intern())
     }
-    pub fn add_meta_runner_in_set(
+    pub fn add_meta_and_runner_in_set(
         meta: RevMeta,
         schedule: impl ScheduleLabel,
         set: impl SystemSet,
     ) -> Self {
-        Self::AddMetaRunnerInSet(meta, schedule.intern(), set.intern())
+        Self::AddMetaAndRunnerInSet(meta, schedule.intern(), set.intern())
     }
     pub fn add_runner(schedule: impl ScheduleLabel) -> Self {
         Self::AddRunner(schedule.intern())
@@ -114,19 +115,20 @@ impl RevSystemsPlugin {
 
 impl Plugin for RevSystemsPlugin {
     fn build(&self, app: &mut App) {
+        CommandsLog::init_buffer(app.world_mut());
         match self {
             Self::AddMeta(meta, ..)
-            | Self::AddMetaRunner(meta, ..)
-            | Self::AddMetaRunnerInSet(meta, ..) => {
+            | Self::AddMetaAndRunner(meta, ..)
+            | Self::AddMetaAndRunnerInSet(meta, ..) => {
                 app.insert_resource(meta.clone());
             }
             _ => {}
         };
         match self {
-            Self::AddMetaRunner(_, schedule) | Self::AddRunner(schedule) => {
+            Self::AddMetaAndRunner(_, schedule) | Self::AddRunner(schedule) => {
                 app.add_systems(*schedule, RevMeta::update_world);
             }
-            Self::AddMetaRunnerInSet(_, schedule, set) | Self::AddRunnerInSet(schedule, set) => {
+            Self::AddMetaAndRunnerInSet(_, schedule, set) | Self::AddRunnerInSet(schedule, set) => {
                 app.add_systems(*schedule, RevMeta::update_world.in_set(*set));
             }
             Self::AddMeta(..) => {}
