@@ -229,7 +229,7 @@ mod test {
         schedules.insert(schedule);
 
         let mut world = World::new();
-        world.insert_resource(RevMeta::new(None, 0, false));
+        world.insert_resource(RevMeta::new(None, None, false));
         world.insert_resource(schedules);
         world
     }
@@ -237,7 +237,7 @@ mod test {
     fn log_to(world: &mut World, to: u32) {
         assert!(world
             .resource_mut::<RevMeta>()
-            .queue_log(RevFrame::new(to))
+            .queue_log(RevFrame::checked_new(to))
             .is_ok());
     }
 
