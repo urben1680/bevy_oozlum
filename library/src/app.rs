@@ -78,6 +78,7 @@ impl RevApp for App {
 }
 
 pub enum RevSystemsPlugin {
+    AddNothing,
     AddMeta(RevMeta),
     AddMetaAndRunner(RevMeta, InternedScheduleLabel),
     AddMetaAndRunnerInSet(RevMeta, InternedScheduleLabel, InternedSystemSet),
@@ -131,7 +132,7 @@ impl Plugin for RevSystemsPlugin {
             Self::AddMetaAndRunnerInSet(_, schedule, set) | Self::AddRunnerInSet(schedule, set) => {
                 app.add_systems(*schedule, RevMeta::update_world.in_set(*set));
             }
-            Self::AddMeta(..) => {}
+            Self::AddMeta(..) | Self::AddNothing => {}
         }
     }
 }
