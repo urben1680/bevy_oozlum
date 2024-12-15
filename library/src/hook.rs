@@ -14,7 +14,7 @@ use super::commands::{buffer_rev_command, RevCommandInit};
 
 /// The direction the current hook is triggered at.
 ///
-/// # Triggers
+/// # Triggers //todo: put documentation into variant docs
 ///
 /// | variant | description |
 /// | - | - |
@@ -103,6 +103,7 @@ struct ComponentHooksResource {
 struct ComponentHookEntry {
     on_add: Option<RevComponentHook>,
     on_insert: Option<RevComponentHook>,
+    on_replace: Option<RevComponentHook>,
     on_remove: Option<RevComponentHook>,
 }
 
@@ -185,6 +186,43 @@ impl<'a> RevComponentHooks<'a> {
 
         self
     }
+    pub fn on_replace(&mut self, hook: RevComponentHook) -> &mut Self {
+        let mut resource = self
+            .world
+            .get_resource_or_insert_with(ComponentHooksResource::default);
+        let hooks = resource.hooks.entry(self.component).or_default();
+        if hooks.on_replace.is_some() {
+            todo!()
+        }
+        hooks.on_replace = Some(hook);
+
+        self.world
+            .register_component_hooks_by_id(self.component)
+            .expect("todo")
+            .on_replace(|mut world, entity, component| {
+                let direction = HookDirection::get_in_hook(&world);
+                if direction == (HookDirection::Forward { log: false }) {
+                    buffer_rev_command(
+                        &mut world,
+                        HookCommand {
+                            entity,
+                            component,
+                            variant: HookVariant::OnReplace,
+                        },
+                    )
+                }
+                world
+                    .get_resource::<ComponentHooksResource>()
+                    .expect("todo")
+                    .hooks
+                    .get(&component)
+                    .expect("todo")
+                    .on_replace
+                    .expect("todo")(direction, world, entity, component);
+            });
+
+        self
+    }
     pub fn on_remove(&mut self, hook: RevComponentHook) -> &mut Self {
         let mut resource = self
             .world
@@ -222,6 +260,18 @@ impl<'a> RevComponentHooks<'a> {
 
         self
     }
+    pub fn try_on_add(&mut self, hook: RevComponentHook) -> Option<&mut Self> {
+        todo!()
+    }
+    pub fn try_on_insert(&mut self, hook: RevComponentHook) -> Option<&mut Self> {
+        todo!()
+    }
+    pub fn try_on_replace(&mut self, hook: RevComponentHook) -> Option<&mut Self> {
+        todo!()
+    }
+    pub fn try_on_remove(&mut self, hook: RevComponentHook) -> Option<&mut Self> {
+        todo!()
+    }
 }
 
 struct HookCommand {
@@ -233,6 +283,7 @@ struct HookCommand {
 enum HookVariant {
     OnAdd,
     OnInsert,
+    OnReplace,
     OnRemove,
 }
 
@@ -252,6 +303,7 @@ impl HookCommand {
         let hook = match self.variant {
             HookVariant::OnAdd => hooks.on_add,
             HookVariant::OnInsert => hooks.on_insert,
+            HookVariant::OnReplace => hooks.on_replace,
             HookVariant::OnRemove => hooks.on_remove,
         };
         hook.expect("todo")(direction, world.into(), self.entity, self.component)

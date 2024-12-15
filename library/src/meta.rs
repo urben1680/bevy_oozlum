@@ -716,14 +716,8 @@ mod test {
     fn queue_log_to_out_of_range_fails() {
         let mut meta = arrange(None, 2, 1..=3, InternalDirection::Pause);
 
-        assert_eq!(
-            meta.queue_log(RevFrame::checked_new(0)),
-            Err(OutOfLog)
-        );
-        assert_eq!(
-            meta.queue_log(RevFrame::checked_new(4)),
-            Err(OutOfLog)
-        );
+        assert_eq!(meta.queue_log(RevFrame::checked_new(0)), Err(OutOfLog));
+        assert_eq!(meta.queue_log(RevFrame::checked_new(4)), Err(OutOfLog));
     }
 
     #[test]

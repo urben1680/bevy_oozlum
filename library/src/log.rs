@@ -220,7 +220,6 @@ use std::{
 use bevy::{log::error, reflect::Reflect, utils::all_tuples};
 
 mod init_none;
-mod rare_init_none;
 mod rare_state;
 mod rare_states;
 mod rare_transition;
@@ -233,7 +232,6 @@ mod transition;
 mod transitions;
 
 pub use init_none::InitNoneLog;
-pub use rare_init_none::RareInitNoneLog;
 pub use rare_state::RareStateLog;
 pub use rare_states::RareStatesLog;
 pub use rare_transition::RareTransitionLog;
@@ -526,6 +524,7 @@ trait WithAmountInternal: WithAmount {
 
 #[derive(Debug, Clone, Copy)]
 pub struct AmountOverflow;
+
 pub trait WithAmount {
     type Err: Debug;
     #[doc(hidden)]
