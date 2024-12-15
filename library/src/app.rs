@@ -5,10 +5,10 @@ use bevy::{
         event::Event,
         schedule::{
             InternedScheduleLabel, InternedSystemSet, IntoSystemConfigs, ScheduleLabel, Schedules,
+            SystemSet,
         },
         system::IntoObserverSystem,
     },
-    prelude::SystemSet,
     utils::default,
 };
 

@@ -140,11 +140,10 @@ mod test {
             component::Component,
             event::Event,
             observer::Trigger,
-            schedule::IntoSystemSet,
+            schedule::{common_conditions::run_once, IntoSystemSet},
             system::{Commands, IntoSystem, Resource},
             world::{DeferredWorld, World},
         },
-        prelude::run_once,
     };
 
     use crate::{

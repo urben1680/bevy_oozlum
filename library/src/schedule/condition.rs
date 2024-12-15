@@ -10,11 +10,12 @@ use bevy::{
         archetype::ArchetypeComponentId,
         component::{ComponentId, Tick},
         query::Access,
-        schedule::{Condition, InternedSystemSet, SystemSetConfigs},
-        system::{IntoSystem, ReadOnlySystem, System},
+        schedule::{
+            Condition, InternedSystemSet, IntoSystemSetConfigs, SystemSet, SystemSetConfigs,
+        },
+        system::{IntoSystem, ReadOnlySystem, System, SystemIn},
         world::{unsafe_world_cell::UnsafeWorldCell, DeferredWorld, World},
     },
-    prelude::{IntoSystemSetConfigs, SystemIn, SystemSet},
     utils::default,
 };
 
