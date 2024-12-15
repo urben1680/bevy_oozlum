@@ -2,16 +2,14 @@ use std::{collections::VecDeque, marker::PhantomData, ops::Deref};
 
 use bevy::{
     ecs::{
-        component::{ComponentId, Components, RequiredComponents, StorageType},
+        component::{Component, ComponentId, StorageType},
         entity::Entity,
         event::Event,
         observer::{TriggerEvent, TriggerTargets},
-        storage::Storages,
         system::Resource,
         world::World,
     },
     log::error_once,
-    prelude::Component,
     utils::default,
 };
 
@@ -32,15 +30,6 @@ pub struct RevEvent<E: Event + Clone> {
 impl<E: Event + Clone> Component for RevEvent<E> {
     const STORAGE_TYPE: StorageType = E::STORAGE_TYPE;
     fn register_component_hooks(_hooks: &mut bevy::ecs::component::ComponentHooks) {
-        todo!()
-    }
-    fn register_required_components(
-        _component_id: ComponentId,
-        _components: &mut Components,
-        _storages: &mut Storages,
-        _required_components: &mut RequiredComponents,
-        _inheritance_depth: u16,
-    ) {
         todo!()
     }
 }

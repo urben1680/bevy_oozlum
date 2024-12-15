@@ -10,12 +10,12 @@ use bevy::{
     ecs::{
         archetype::ArchetypeComponentId,
         component::{ComponentId, Tick},
+        observer::Trigger,
         query::Access,
         schedule::{InternedSystemSet, IntoSystemConfigs, IntoSystemSetConfigs, SystemSetConfigs},
-        system::{Commands, IntoSystem, ReadOnlySystem, System},
+        system::{Commands, IntoSystem, ReadOnlySystem, System, SystemIn},
         world::{unsafe_world_cell::UnsafeWorldCell, DeferredWorld, World},
     },
-    prelude::{SystemIn, Trigger},
     utils::default,
 };
 
