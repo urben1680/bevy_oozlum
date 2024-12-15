@@ -13,8 +13,7 @@ TODO:
 
 Enhancements:
 - reduce todo!() and //todo
-- RareInitNoneLog tests
-- impl Error for relevant structs/enums
+- impl Error for relevant structs/enums via thiserror
 - #[inline]s
 - examples
 -- folder next to src
@@ -39,6 +38,7 @@ ISSUES/DISCUSSIONS:
 - manual sync point configuration
 -- apply_deferred
 -- ScheduleBuildSettings::auto_insert_apply_deferred
+- rare_init_none
 */
 
 use std::{fmt::Debug, hash::Hash};
