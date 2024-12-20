@@ -30,8 +30,6 @@ Docs
 -- check-logged-at should not be used as the sole shortening mechanism or else logs can grow larger than desired
 
 ISSUES/DISCUSSIONS:
-- Trigger::event_mut
--- mutations on the event are not reflectable in the log
 - reversible change detection (copy over to new repo)
 - analyze test schedule::non_exclusive_then_exclusive_ignore_deferred, consider revamping test strategy
 - reversible entity commands, link to https://github.com/bevyengine/bevy/issues/15350 as blocker
@@ -50,25 +48,19 @@ use bevy::reflect::{ReflectDeserialize, ReflectSerialize};
 
 pub mod app;
 pub mod commands;
-pub mod hook;
 pub mod log;
 pub mod meta;
-pub mod observer;
 pub mod schedule;
-pub mod world;
+//pub mod world;
 
 /// Contains all extension traits `as _` and common types.
 pub mod prelude {
     pub use crate::app::{RevApp as _, RevSystemsPlugin};
-    pub use crate::commands::{RevCommands as _, RevEntityCommands as _};
-    pub use crate::hook::HookDirection;
+    pub use crate::commands::{BuffersUndoRedo as _, RevCommands as _, UndoRedoBuffer};
     pub use crate::meta::{RevDirection, RevMeta, VerifyingRevMeta};
-    pub use crate::observer::RevEvent;
     pub use crate::schedule::{
         IntoRevSystemConfigs as _, IntoRevSystemSetConfigs as _, RevSchedule as _,
     };
-    pub use crate::world::RevWorld as _;
-    pub use crate::world::{RevDeferredWorld as _, RevEntityWorldMut as _, RevWorld as _};
     pub use crate::{PackedRevFrame, RevFrame, RevUpdate};
 }
 
