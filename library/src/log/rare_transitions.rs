@@ -78,7 +78,11 @@ mod serde_with {
     where
         Self: WithAmountInternal<Entry = U>,
     {
-        type Se<'se> = (usize, usize) where T: 'se, U: 'se;
+        type Se<'se>
+            = (usize, usize)
+        where
+            T: 'se,
+            U: 'se;
         type De = (usize, usize);
         fn get_logless_with_capacity(&self) -> Self::Se<'_> {
             (self.entries_capacity(), self.transitions_capacity())
