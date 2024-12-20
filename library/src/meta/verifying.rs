@@ -46,7 +46,7 @@ impl VerifyingRevMeta<'_, '_> {
     /// Panics if the update of the value failed or if the the current frame does not
     /// match with the frame that is logged by this SystemParam.
     ///
-    /// [`Self::get_last_run`] is a fallible variant.
+    /// Access [`Self::last_run_or_err`] if panic is undesired.
     pub fn last_run(&self) -> Option<RevFrame> {
         self.last_run_or_err.unwrap_or_else(|err| panic!(
             "VerifyingRevMeta::last_run panicked: VerifyingRevMeta::get_param failed previously, see log\n{err:#?}"
