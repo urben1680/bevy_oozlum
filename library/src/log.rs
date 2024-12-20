@@ -246,7 +246,7 @@ pub use transitions::TransitionsLog;
 #[derive(Debug, Clone, PartialEq)]
 pub struct OutOfLog;
 
-/// A `&mut VecDeque<T>` wrapper that only allows mutations that add to the deque.
+/// A `&mut VecDeque<T>` wrapper that does not expose methods which remove from the deque.
 pub struct LogMut<'a, T>(&'a mut VecDeque<T>);
 
 impl<'a, T> LogMut<'a, T> {
