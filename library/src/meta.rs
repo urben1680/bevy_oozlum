@@ -163,9 +163,6 @@ impl InternalDirection {
 pub struct CheckLoggedAt(RevMeta);
 
 impl CheckLoggedAt {
-    pub fn new(meta: RevMeta) -> Self {
-        Self(meta)
-    }
     pub fn meta(&self) -> &RevMeta {
         &self.0
     }
@@ -596,7 +593,7 @@ mod test {
         system::ResMut,
     };
 
-    use crate::{commands::CommandsLog, log::TransitionLog};
+    use crate::{commands::UndoRedoBuffer, log::TransitionLog};
 
     use super::*;
 
@@ -755,7 +752,7 @@ mod test {
         schedules.insert(Schedule::new(RevUpdate));
 
         let mut world = World::new();
-        CommandsLog::init_buffer(&mut world);
+        UndoRedoBuffer::init(&mut world);
         world.insert_resource(meta);
         world.insert_resource(res);
         world.insert_resource(schedules);
