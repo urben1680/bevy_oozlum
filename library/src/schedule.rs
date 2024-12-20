@@ -147,10 +147,8 @@ mod test {
     };
 
     use crate::{
-        commands::{CommandsLog, RevCommandInit, RevCommands},
+        commands::{BuffersUndoRedo, RevCommands, UndoRedo, UndoRedoBuffer},
         meta::RevMeta,
-        observer::RevEvent,
-        world::{RevDeferredWorld, RevWorld},
         RevFrame, RevUpdate,
     };
 
@@ -275,7 +273,7 @@ mod test {
         }
 
         // trigger observer in system
-        commands.rev_trigger(SysObsv(N));
+        commands.trigger(SysObsv(N));
 
         // trigger hook in system
         commands.spawn(SysHook(N));
@@ -296,18 +294,18 @@ mod test {
         }
 
         // trigger observer in system
-        world.rev_trigger(SysObsv(N));
+        world.trigger(SysObsv(N));
 
         // trigger hook in system
         world.spawn(SysHook(N));
     }
 
-    fn system_command<const N: u8>(world: &mut World) -> impl RevCommandInit {
+    fn system_command<const N: u8>(world: &mut World) -> impl UndoRedo {
         // trigger hook in command
         world.spawn(SysCmdHook(N));
 
         // trigger observer in command
-        world.rev_trigger(SysCmdObsv(N));
+        world.trigger(SysCmdObsv(N));
 
         // todo: document that stuff like this belongs right before the return
         world
@@ -338,6 +336,13 @@ mod test {
         }
     }
 
+    fn direction_from_forward(forward: bool) -> RevDirection {
+        match forward {
+            true => RevDirection::ForwardLog,
+            false => RevDirection::BackwardLog,
+        }
+    }
+
     fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
         variant: usize,
         config: &C,
@@ -346,7 +351,7 @@ mod test {
     ) {
         // set up world
         let mut world = World::new();
-        CommandsLog::init_buffer(&mut world);
+        UndoRedoBuffer::init(&mut world);
         world.init_resource::<TestLog>();
         world.insert_resource(RevMeta::new(None, None, false));
 
@@ -365,81 +370,93 @@ mod test {
         world.add_schedule(schedule);
 
         // set up observers
-        world.rev_add_observer(
-            |trigger: Trigger<RevEvent<SysObsv>>, mut world: DeferredWorld| {
-                let event = trigger.event();
-                let direction = event.direction();
-                let n = event.0;
+        world.add_observer(|event: Trigger<SysObsv>, mut world: DeferredWorld| {
+            let n = event.0;
 
+            world
+                .resource_mut::<TestLog>()
+                .0
+                .push(Test::SysObsv((n, RevDirection::NotLog)));
+
+            // trigger observer in observer
+            world.trigger::<SysObsvObsv>(SysObsvObsv(n));
+
+            // trigger command in observer
+            world.commands().rev_queue(move |world: &mut World| {
                 world
                     .resource_mut::<TestLog>()
                     .0
-                    .push(Test::SysObsv((n, direction)));
+                    .push(Test::SysObsvCmd((n, RevDirection::NotLog)));
 
-                if direction != RevDirection::NotLog {
-                    return;
-                }
-
-                // trigger observer in observer
-                world.rev_trigger(SysObsvObsv(n));
-
-                // trigger command in observer
-                world.commands().rev_queue(move |world: &mut World| {
+                move |world: &mut World, forward: bool| {
+                    let direction = match forward {
+                        true => RevDirection::ForwardLog,
+                        false => RevDirection::BackwardLog,
+                    };
                     world
                         .resource_mut::<TestLog>()
                         .0
-                        .push(Test::SysObsvCmd((n, RevDirection::NotLog)));
+                        .push(Test::SysObsvCmd((n, direction)));
+                }
+            });
 
-                    move |world: &mut World, forward: bool| {
-                        let direction = match forward {
-                            true => RevDirection::ForwardLog,
-                            false => RevDirection::BackwardLog,
-                        };
-                        world
-                            .resource_mut::<TestLog>()
-                            .0
-                            .push(Test::SysObsvCmd((n, direction)));
-                    }
+            // buffer reversible observer
+            world.buffer_undo_redo(move |world: &mut World, forward: bool| {
+                world
+                    .resource_mut::<TestLog>()
+                    .0
+                    .push(Test::SysObsv((n, direction_from_forward(forward))));
+            });
+        });
+        world.add_observer(
+            |event: Trigger<SysHookObsv>, mut log: ResMut<TestLog>, mut buffer: UndoRedoBuffer| {
+                let n = event.0;
+                log.0.push(Test::SysHookObsv((n, RevDirection::NotLog)));
+                buffer.buffer_undo_redo(move |world: &mut World, forward: bool| {
+                    world
+                        .resource_mut::<TestLog>()
+                        .0
+                        .push(Test::SysHookObsv((n, direction_from_forward(forward))));
                 });
             },
         );
-        world.rev_add_observer(
-            |trigger: Trigger<RevEvent<SysHookObsv>>, mut log: ResMut<TestLog>| {
-                let event = trigger.event();
-                log.0.push(Test::SysHookObsv((event.0, event.direction())));
+        world.add_observer(
+            |event: Trigger<SysObsvObsv>, mut log: ResMut<TestLog>, mut buffer: UndoRedoBuffer| {
+                let n = event.0;
+                log.0.push(Test::SysObsvObsv((n, RevDirection::NotLog)));
+                buffer.buffer_undo_redo(move |world: &mut World, forward: bool| {
+                    world
+                        .resource_mut::<TestLog>()
+                        .0
+                        .push(Test::SysObsvObsv((n, direction_from_forward(forward))));
+                });
             },
         );
-        world.rev_add_observer(
-            |trigger: Trigger<RevEvent<SysObsvObsv>>, mut log: ResMut<TestLog>| {
-                let event = trigger.event();
-                log.0.push(Test::SysObsvObsv((event.0, event.direction())));
-            },
-        );
-        world.rev_add_observer(
-            |trigger: Trigger<RevEvent<SysCmdObsv>>, mut log: ResMut<TestLog>| {
-                let event = trigger.event();
-                log.0.push(Test::SysCmdObsv((event.0, event.direction())));
+        world.add_observer(
+            |event: Trigger<SysCmdObsv>, mut log: ResMut<TestLog>, mut buffer: UndoRedoBuffer| {
+                let n = event.0;
+                log.0.push(Test::SysCmdObsv((n, RevDirection::NotLog)));
+                buffer.buffer_undo_redo(move |world: &mut World, forward: bool| {
+                    world
+                        .resource_mut::<TestLog>()
+                        .0
+                        .push(Test::SysCmdObsv((n, direction_from_forward(forward))));
+                });
             },
         );
 
         // set up hooks
-        world.rev_register_component_hooks::<SysHook>().on_add(
-            |direction, mut world, entity, _| {
-                let Ok(direction): Result<RevDirection, _> = direction.try_into() else {
-                    return;
-                };
-                let n = world.entity(entity).get::<SysHook>().expect("todo").0;
+        world
+            .register_component_hooks::<SysHook>()
+            .on_add(|mut world, entity, _| {
+                let n = world.entity(entity).get::<SysHook>().unwrap().0;
                 world
                     .resource_mut::<TestLog>()
                     .0
-                    .push(Test::SysHook((n, direction)));
-
-                if direction != RevDirection::NotLog {
-                    return;
-                }
+                    .push(Test::SysHook((n, RevDirection::NotLog)));
 
                 // trigger observer in hook
-                world.rev_trigger(SysHookObsv(n));
+                world.trigger::<SysHookObsv>(SysHookObsv(n));
 
                 // trigger command in hook
                 world.commands().rev_queue(move |world: &mut World| {
@@ -459,20 +476,32 @@ mod test {
                             .push(Test::SysHookCmd((n, direction)));
                     }
                 });
-            },
-        );
-        world.rev_register_component_hooks::<SysCmdHook>().on_add(
-            |direction, mut world, entity, _| {
-                let Ok(direction) = direction.try_into() else {
-                    return;
-                };
+
+                // buffer reversible hook
+                world.buffer_undo_redo(move |world: &mut World, forward: bool| {
+                    world
+                        .resource_mut::<TestLog>()
+                        .0
+                        .push(Test::SysHook((n, direction_from_forward(forward))));
+                });
+            });
+        world
+            .register_component_hooks::<SysCmdHook>()
+            .on_add(|mut world, entity, _| {
                 let n = world.entity(entity).get::<SysCmdHook>().expect("todo").0;
                 world
                     .resource_mut::<TestLog>()
                     .0
-                    .push(Test::SysCmdHook((n, direction)));
-            },
-        );
+                    .push(Test::SysCmdHook((n, RevDirection::NotLog)));
+
+                // buffer reversible hook
+                world.buffer_undo_redo(move |world: &mut World, forward: bool| {
+                    world
+                        .resource_mut::<TestLog>()
+                        .0
+                        .push(Test::SysCmdHook((n, direction_from_forward(forward))));
+                });
+            });
 
         fn test_step(
             world: &mut World,
@@ -1085,7 +1114,7 @@ mod test {
             Finalized,
         }
 
-        impl RevCommandInit for TestCommand {
+        impl UndoRedo for TestCommand {
             fn redo(&mut self, _world: &mut World) {
                 unimplemented!()
             }
@@ -1109,7 +1138,7 @@ mod test {
 
         // setup world
         let mut world = World::new();
-        CommandsLog::init_buffer(&mut world);
+        UndoRedoBuffer::init(&mut world);
         world.insert_resource(RevMeta::new(
             NonZeroU32::new(1),
             Some(RevFrame::checked_new(RevMeta::MAX_WORLD_STATES - 2)),
