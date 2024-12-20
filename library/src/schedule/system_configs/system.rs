@@ -91,7 +91,7 @@ where
         .in_set(BackwardSet);
 
         let mut backward_cmd = CommandsBackward {
-            shared: shared.clone(),
+            shared,
             name: bwd_cmd_name,
             tick: Tick::new(0),
             has_deferred: false,
@@ -208,7 +208,7 @@ impl<T: System> System for ArcSystem<T> {
         self.shared
             .inner
             .try_lock()
-            .unwrap_or_else(expect_shared(&self.name))
+            .unwrap_or_else(expect_lock(&self.name))
             .system
             .validate_param_unsafe(world)
     }
@@ -220,7 +220,7 @@ impl<T: System> System for ArcSystem<T> {
         self.shared
             .inner
             .try_lock()
-            .unwrap_or_else(expect_shared(&self.name))
+            .unwrap_or_else(expect_lock(&self.name))
             .system
             .validate_param(world)
     }
@@ -236,7 +236,7 @@ impl<T: System> System for ArcSystem<T> {
         self.shared
             .inner
             .try_lock()
-            .unwrap_or_else(expect_shared(&self.name))
+            .unwrap_or_else(expect_lock(&self.name))
             .system
             .run_unsafe(input, world)
     }
@@ -245,7 +245,7 @@ impl<T: System> System for ArcSystem<T> {
             .shared
             .inner
             .try_lock()
-            .unwrap_or_else(expect_shared(&self.name));
+            .unwrap_or_else(expect_lock(&self.name));
 
         if !self.is_exclusive() {
             shared.system.run(input, world)
@@ -280,7 +280,7 @@ impl<T: System> System for ArcSystem<T> {
             .shared
             .inner
             .try_lock()
-            .unwrap_or_else(expect_shared(&self.name));
+            .unwrap_or_else(expect_lock(&self.name));
 
         shared.system.apply_deferred(world);
 
@@ -316,7 +316,7 @@ impl<T: System> System for ArcSystem<T> {
             .shared
             .inner
             .try_lock()
-            .unwrap_or_else(expect_shared(&self.name))
+            .unwrap_or_else(expect_lock(&self.name))
             .system;
         system.update_archetype_component_access(world);
         self.archetype_component_access
@@ -342,7 +342,7 @@ unsafe impl<T: ReadOnlySystem> ReadOnlySystem for ArcSystem<T> {
         self.shared
             .inner
             .try_lock()
-            .unwrap_or_else(expect_shared(&self.name))
+            .unwrap_or_else(expect_lock(&self.name))
             .system
             .run_readonly(input, world)
     }
@@ -388,7 +388,7 @@ impl<T: System> System for CommandsBackward<T> {
         self.shared
             .inner
             .try_lock()
-            .unwrap_or_else(expect_shared(&self.name))
+            .unwrap_or_else(expect_lock(&self.name))
             .system
             .validate_param_unsafe(world)
     }
@@ -401,7 +401,7 @@ impl<T: System> System for CommandsBackward<T> {
         self.shared
             .inner
             .try_lock()
-            .unwrap_or_else(expect_shared(&self.name))
+            .unwrap_or_else(expect_lock(&self.name))
             .system
             .validate_param(world)
     }
@@ -412,7 +412,7 @@ impl<T: System> System for CommandsBackward<T> {
             .shared
             .inner
             .try_lock()
-            .unwrap_or_else(expect_shared(&self.name))
+            .unwrap_or_else(expect_lock(&self.name))
             .commands_log
             .backward(world);
         if let Err(err) = result {
@@ -458,7 +458,7 @@ fn initialize_arc_system<'a, T: System>(
 ) -> MutexGuard<'a, Inner<T>> {
     *tick = world.change_tick();
     let arc = shared.clone();
-    let mut shared = shared.inner.try_lock().unwrap_or_else(expect_shared(name));
+    let mut shared = shared.inner.try_lock().unwrap_or_else(expect_lock(name));
     if shared.initialized {
         return shared;
     }
@@ -478,7 +478,7 @@ fn initialize_arc_system<'a, T: System>(
                 arc.clone()
                     .inner
                     .try_lock()
-                    .unwrap_or_else(expect_shared(&name))
+                    .unwrap_or_else(expect_lock(&name))
                     .commands_log
                     .reduce_logged_at(world, &meta)
             });
@@ -488,7 +488,7 @@ fn initialize_arc_system<'a, T: System>(
     shared
 }
 
-fn expect_shared<T: Debug, Out>(name: &String) -> impl FnOnce(T) -> Out + '_ {
+fn expect_lock<T: Debug, Out>(name: &String) -> impl FnOnce(T) -> Out + '_ {
     move |err| panic!("Could not access reversible system {name} because of {err:?}")
 }
 
