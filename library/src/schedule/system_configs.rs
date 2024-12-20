@@ -62,7 +62,7 @@ where
                 unreachable!("`configs.systems` is always `(fwd_sys, bwd_cmd, bwd_sys)` or further nested tuples")
             }
         };
-        if matches!(nodes.get(0), Some(NodeConfigs::NodeConfig(..))) {
+        if matches!(nodes.get(0), Some(NodeConfigs::NodeConfig(_))) {
             // detected fwd_sys of single system from `(fwd_sys, bwd_cmd, bwd_sys).into_configs()`
             return configs.rev_run_if(condition);
         }
