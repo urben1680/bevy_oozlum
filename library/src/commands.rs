@@ -2,10 +2,8 @@ use std::collections::VecDeque;
 
 use bevy::{
     ecs::{
-        bundle::Bundle,
-        event::Event,
-        observer::{TriggerEvent, TriggerTargets},
-        system::{Commands, EntityCommands, IntoObserverSystem, Resource},
+        change_detection::ResMut,
+        system::{Commands, Resource, SystemParam},
         world::{DeferredWorld, FromWorld, World},
     },
     utils::{default, synccell::SyncCell},
@@ -14,55 +12,63 @@ use bevy::{
 use crate::{
     log::{OutOfLog, TransitionsLog},
     meta::{RevDirection, RevMeta},
-    observer::{ObserverLog, RevEvent},
     RevFrame,
 };
 
+pub trait BuffersUndoRedo {
+    fn buffer_undo_redo(&mut self, undo_redo: impl UndoRedo);
+}
+
+impl BuffersUndoRedo for World {
+    fn buffer_undo_redo(&mut self, undo_redo: impl UndoRedo) {
+        DeferredWorld::buffer_undo_redo(&mut self.into(), undo_redo);
+    }
+}
+
+impl<'w> BuffersUndoRedo for DeferredWorld<'w> {
+    fn buffer_undo_redo(&mut self, undo_redo: impl UndoRedo) {
+        let undo_redo: Box<dyn UndoRedo> = Box::new(undo_redo);
+        let buffer = &mut self
+            .get_resource_mut::<UndoRedoBufferSealed>()
+            .expect("todo")
+            .0;
+        SyncCell::get(buffer).push_back(undo_redo);
+    }
+}
+
+#[derive(SystemParam)]
+pub struct UndoRedoBuffer<'w> {
+    buffer: ResMut<'w, UndoRedoBufferSealed>,
+}
+
+impl<'w> BuffersUndoRedo for UndoRedoBuffer<'w> {
+    fn buffer_undo_redo(&mut self, undo_redo: impl UndoRedo) {
+        let undo_redo: Box<dyn UndoRedo> = Box::new(undo_redo);
+        SyncCell::get(&mut self.buffer.0).push_back(undo_redo);
+    }
+}
+
+impl UndoRedoBuffer<'static> {
+    /// Initializes an internal resource needed for reversible commands to be logged by [`CommandsLog`].
+    ///
+    /// This usually does not need to be called because that is already done by [`RevSystemsPlugin`](crate::app::RevSystemsPlugin).
+    pub fn init(world: &mut World) {
+        world.init_resource::<UndoRedoBufferSealed>();
+    }
+}
+
 pub trait RevCommands {
-    fn rev_add_observer<E, B, M>(
-        &mut self,
-        system: impl IntoObserverSystem<RevEvent<E>, B, M>,
-    ) -> EntityCommands<'_>
-    where
-        E: Event + Clone,
-        B: Bundle;
     fn rev_queue<Marker>(&mut self, command: impl RevCommand<Marker>);
     fn rev_init_resource<R: Resource + FromWorld>(&mut self);
     fn rev_insert_resource<R: Resource>(&mut self, resource: R);
     fn rev_remove_resource<R: Resource>(&mut self);
-    fn rev_trigger(&mut self, event: impl Event + Clone);
-    fn rev_trigger_targets(
-        &mut self,
-        event: impl Event + Clone,
-        targets: impl TriggerTargets + Send + 'static,
-    );
-}
-
-pub(crate) fn buffer_rev_command<T: RevCommandInit>(world: &mut DeferredWorld, command: T) {
-    let command: Box<dyn RevCommandInit> = Box::new(command);
-    let buffer = &mut world
-        .get_resource_mut::<RevCommandBuffer>()
-        .expect("todo")
-        .0;
-    SyncCell::get(buffer).push_back(command);
 }
 
 impl RevCommands for Commands<'_, '_> {
-    fn rev_add_observer<E, B, M>(
-        &mut self,
-        system: impl IntoObserverSystem<RevEvent<E>, B, M>,
-    ) -> EntityCommands<'_>
-    where
-        E: Event + Clone,
-        B: Bundle,
-    {
-        self.init_resource::<ObserverLog<E>>();
-        self.add_observer(system)
-    }
     fn rev_queue<Marker>(&mut self, command: impl RevCommand<Marker>) {
         self.queue(|world: &mut World| {
-            if let Some(command) = command.rev_apply(world) {
-                buffer_rev_command(&mut world.into(), command)
+            if let Some(undo_redo) = command.rev_apply(world) {
+                world.buffer_undo_redo(undo_redo)
             }
         })
     }
@@ -88,45 +94,10 @@ impl RevCommands for Commands<'_, '_> {
                 .map(|resource| ResourceSwap(Some(resource)))
         })
     }
-    fn rev_trigger(&mut self, event: impl Event + Clone) {
-        self.rev_queue(TriggerEvent { event, targets: () })
-    }
-    fn rev_trigger_targets(
-        &mut self,
-        event: impl Event + Clone,
-        targets: impl TriggerTargets + Send + 'static,
-    ) {
-        self.rev_queue(TriggerEvent { event, targets })
-    }
 }
-
-pub trait RevEntityCommands {
-    fn rev_observe<E, B, M>(
-        &mut self,
-        system: impl IntoObserverSystem<RevEvent<E>, B, M>,
-    ) -> &mut Self
-    where
-        E: Event + Clone,
-        B: Bundle;
-}
-
-impl RevEntityCommands for EntityCommands<'_> {
-    fn rev_observe<E, B, M>(
-        &mut self,
-        system: impl IntoObserverSystem<RevEvent<E>, B, M>,
-    ) -> &mut Self
-    where
-        E: Event + Clone,
-        B: Bundle,
-    {
-        self.commands().init_resource::<ObserverLog<E>>();
-        self.observe(system)
-    }
-}
-
 struct ResourceSwap<R: Resource>(Option<R>);
 
-impl<R: Resource> RevCommandInit for ResourceSwap<R> {
+impl<R: Resource> UndoRedo for ResourceSwap<R> {
     fn undo(&mut self, world: &mut World) {
         match (self.0.as_mut(), world.get_resource_mut::<R>()) {
             (Some(r1), Some(mut r2)) => core::mem::swap(r1, &mut *r2),
@@ -141,45 +112,45 @@ impl<R: Resource> RevCommandInit for ResourceSwap<R> {
 }
 
 pub trait RevCommand<Marker>: Send + 'static {
-    fn rev_apply(self, world: &mut World) -> Option<impl RevCommandInit>;
+    fn rev_apply(self, world: &mut World) -> Option<impl UndoRedo>;
 }
 
-impl<T: RevCommandInit, F: FnOnce(&mut World) -> Option<T> + Send + 'static>
+impl<T: UndoRedo, F: FnOnce(&mut World) -> Option<T> + Send + 'static>
     RevCommand<fn(&mut World) -> Option<T>> for F
 {
-    fn rev_apply(self, world: &mut World) -> Option<impl RevCommandInit> {
+    fn rev_apply(self, world: &mut World) -> Option<impl UndoRedo> {
         self(world)
     }
 }
 
-impl<T: RevCommandInit, F: FnOnce(&mut World) -> T + Send + 'static> RevCommand<fn(&mut World) -> T>
+impl<T: UndoRedo, F: FnOnce(&mut World) -> T + Send + 'static> RevCommand<fn(&mut World) -> T>
     for F
 {
-    fn rev_apply(self, world: &mut World) -> Option<impl RevCommandInit> {
+    fn rev_apply(self, world: &mut World) -> Option<impl UndoRedo> {
         Some(self(world))
     }
 }
 
-impl<T: RevCommandInit> RevCommand<Option<T>> for Option<T> {
-    fn rev_apply(self, _world: &mut World) -> Option<impl RevCommandInit> {
+impl<T: UndoRedo> RevCommand<Option<T>> for Option<T> {
+    fn rev_apply(self, _world: &mut World) -> Option<impl UndoRedo> {
         self
     }
 }
 
-impl<T: RevCommandInit> RevCommand<T> for T {
-    fn rev_apply(self, _world: &mut World) -> Option<impl RevCommandInit> {
+impl<T: UndoRedo> RevCommand<T> for T {
+    fn rev_apply(self, _world: &mut World) -> Option<impl UndoRedo> {
         Some(self)
     }
 }
 
-pub trait RevCommandInit: Send + 'static {
+pub trait UndoRedo: Send + 'static {
     fn undo(&mut self, world: &mut World);
     fn undone_finalize(self: Box<Self>, _world: &mut World) {}
     fn redo(&mut self, world: &mut World);
     fn redone_finalize(self: Box<Self>, _world: &mut World) {}
 }
 
-impl<F: FnMut(&mut World, bool) + Send + 'static> RevCommandInit for F {
+impl<F: FnMut(&mut World, bool) + Send + 'static> UndoRedo for F {
     fn undo(&mut self, world: &mut World) {
         self(world, false)
     }
@@ -188,16 +159,17 @@ impl<F: FnMut(&mut World, bool) + Send + 'static> RevCommandInit for F {
     }
 }
 
+// uses a VecDeque so the actual log can use `VecDeque::append`
 #[derive(Resource)]
-struct RevCommandBuffer(SyncCell<VecDeque<Box<dyn RevCommandInit>>>);
+struct UndoRedoBufferSealed(SyncCell<VecDeque<Box<dyn UndoRedo>>>);
 
-impl Default for RevCommandBuffer {
+impl Default for UndoRedoBufferSealed {
     fn default() -> Self {
         Self(SyncCell::new(default()))
     }
 }
 
-pub struct CommandsLog(SyncCell<TransitionsLog<Box<dyn RevCommandInit>, RevFrame>>);
+pub struct CommandsLog(SyncCell<TransitionsLog<Box<dyn UndoRedo>, RevFrame>>);
 
 impl Default for CommandsLog {
     fn default() -> Self {
@@ -230,7 +202,7 @@ impl CommandsLog {
                     command.redone_finalize(world);
                 }
                 let mut buffer = world
-                    .get_resource_mut::<RevCommandBuffer>()
+                    .get_resource_mut::<UndoRedoBufferSealed>()
                     .ok_or_else(|| CommandsLogErr::RevCommandBufferMissing(meta.clone()))?;
                 let buffer = SyncCell::get(&mut buffer.0);
                 if !buffer.is_empty() {
@@ -277,11 +249,5 @@ impl CommandsLog {
         for command in log.truncate_future_drain_past_by_logged_at(meta) {
             command.redone_finalize(world);
         }
-    }
-    /// Initializes an internal resource needed for reversible commands to be logged by [`CommandsLog`].
-    ///
-    /// This usually does not need to be called because that is already done by [`RevSystemsPlugin`](crate::app::RevSystemsPlugin).
-    pub fn init_buffer(world: &mut World) {
-        world.init_resource::<RevCommandBuffer>();
     }
 }
