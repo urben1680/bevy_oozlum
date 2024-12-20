@@ -37,7 +37,10 @@ mod serde_with {
     }
 
     impl<T> LoglessWithCapacity for TransitionLog<T> {
-        type Se<'se> = usize where T: 'se;
+        type Se<'se>
+            = usize
+        where
+            T: 'se;
         type De = usize;
         fn get_logless_with_capacity(&self) -> Self::Se<'_> {
             self.transitions.capacity()
