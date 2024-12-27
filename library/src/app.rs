@@ -8,7 +8,6 @@ use bevy::{
 };
 
 use crate::{
-    commands::UndoRedoBuffer,
     meta::RevMeta,
     schedule::{IntoRevSystemConfigs, IntoRevSystemSetConfigs, RevSchedule},
 };
@@ -52,7 +51,6 @@ impl RevApp for App {
 }
 
 pub enum RevSystemsPlugin {
-    AddNothing,
     AddMeta(RevMeta),
     AddMetaAndRunner(RevMeta, InternedScheduleLabel),
     AddMetaAndRunnerInSet(RevMeta, InternedScheduleLabel, InternedSystemSet),
@@ -90,7 +88,6 @@ impl RevSystemsPlugin {
 
 impl Plugin for RevSystemsPlugin {
     fn build(&self, app: &mut App) {
-        UndoRedoBuffer::init(app.world_mut());
         match self {
             Self::AddMeta(meta, ..)
             | Self::AddMetaAndRunner(meta, ..)
@@ -106,7 +103,7 @@ impl Plugin for RevSystemsPlugin {
             Self::AddMetaAndRunnerInSet(_, schedule, set) | Self::AddRunnerInSet(schedule, set) => {
                 app.add_systems(*schedule, RevMeta::update_world.in_set(*set));
             }
-            Self::AddMeta(..) | Self::AddNothing => {}
+            Self::AddMeta(..) => {}
         }
     }
 }

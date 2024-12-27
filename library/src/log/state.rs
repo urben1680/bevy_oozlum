@@ -253,9 +253,9 @@ mod test {
     use super::*;
 
     use crate::{
+        frame::RevFrame,
         log::test::{shorten_strategy, ShortenStrategy},
         meta::RevMeta,
-        RevFrame,
     };
 
     #[test]

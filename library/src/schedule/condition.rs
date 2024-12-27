@@ -211,5 +211,3 @@ impl<T: ReadOnlySystem<Out = bool>> System for RevCondition<T> {
 // SAFETY:
 // todo
 unsafe impl<T: ReadOnlySystem<Out = bool>> ReadOnlySystem for RevCondition<T> {}
-
-// todo: distributive_run_if variant
