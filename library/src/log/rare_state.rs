@@ -315,8 +315,8 @@ mod test {
     use serde::{Deserialize, Serialize};
 
     use crate::{
+        frame::RevFrame,
         log::test::{shorten_strategy, ShortenStrategy},
-        RevFrame,
     };
 
     use super::*;

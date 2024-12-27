@@ -10,8 +10,6 @@ use super::{
     set_configs::{IntoRevSystemSetConfigs, RevSystemSetConfigs},
 };
 
-mod system;
-
 pub struct RevSystemConfigs {
     pub(crate) systems: SystemConfigs,
     pub(crate) sets: RevSystemSetConfigs,

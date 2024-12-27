@@ -349,16 +349,19 @@ impl<T> InitNoneLog<T> {
             }
         }
     }
-    pub fn forward_log(&mut self) -> Result<(), OutOfLog> {
-        match self.0 {
+    pub fn forward_log(&mut self) -> Result<&T, OutOfLog> {
+        match &mut self.0 {
             Inner::Ran {
-                undone_first_run: Some(ref mut undone),
-                ..
-            } if *undone => {
-                *undone = false;
-                Ok(())
+                log,
+                undone_first_run,
+            } => {
+                if *undone_first_run == Some(true) {
+                    *undone_first_run = Some(false);
+                    Ok(&*log)
+                } else {
+                    log.forward_log().map(|()| &**log)
+                }
             }
-            Inner::Ran { ref mut log, .. } => log.forward_log(),
             Inner::NeverRan { .. } => Err(OutOfLog),
         }
     }
@@ -454,9 +457,9 @@ mod test {
     use super::*;
 
     use crate::{
+        frame::RevFrame,
         log::test::{shorten_strategy, ShortenStrategy},
         meta::RevMeta,
-        RevFrame,
     };
 
     #[test]
@@ -689,10 +692,10 @@ mod test {
         ) {
             let before = self.clone();
             if out_of_log {
-                let result = self.forward_log();
+                let result = self.forward_log().err();
                 assert_eq!(
                     result,
-                    Err(OutOfLog),
+                    Some(OutOfLog),
                     "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
                 );
             } else {
@@ -701,10 +704,9 @@ mod test {
                     panic!("\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}")
                 });
                 meta.update(|_, _| {});
-                let result = self.forward_log();
+                let ok = self.forward_log().ok().map(|(state, _)| *state);
                 assert_eq!(
-                    result,
-                    Ok(()),
+                    ok, expected_state,
                     "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
                 );
             }

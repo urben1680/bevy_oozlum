@@ -18,11 +18,12 @@ use bevy::{
 #[cfg(feature = "serde")]
 use bevy::reflect::{ReflectDeserialize, ReflectSerialize};
 
-use crate::{log::OutOfLog, RevFrame, RevUpdate, REV_FRAME_AS_U32_MAX};
-
-mod verifying;
-
-pub use verifying::{VerifyError, VerifyingRevMeta};
+use crate::{
+    frame::{RevFrame, REV_FRAME_AS_U32_MAX},
+    log::OutOfLog,
+    undo_redo::UndoRedoBuffer,
+    RevUpdate,
+};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum RevTryRunScheduleError {
@@ -359,7 +360,9 @@ impl RevMeta {
     pub fn queue_pause(&mut self) {
         self.queue = Some(InternalDirection::Pause);
     }
-    pub fn try_update_world(world: &mut World) -> Result<(), RevTryRunScheduleError> {
+    pub fn try_update_world(
+        world: &mut World,
+    ) -> Result<Option<UndoRedoBuffer>, RevTryRunScheduleError> {
         #[derive(Resource, Clone, Copy)]
         struct Existed(bool);
 
@@ -377,6 +380,8 @@ impl RevMeta {
         }
 
         world.resource_scope(|world: &mut World, mut meta: Mut<Self>| {
+            let buffer = world.remove_resource::<UndoRedoBuffer>();
+            world.init_resource::<UndoRedoBuffer>();
             if meta.get_direction().is_some() {
                 return Err(RevTryRunScheduleError::UnexpectedInitialRunning {
                     meta: meta.clone(),
@@ -407,7 +412,7 @@ impl RevMeta {
                     };
                     meta.max_world_states = updated.max_world_states;
                     meta.queue = updated.queue;
-                    Ok(())
+                    Ok(buffer)
                 }
                 Err(err) => {
                     world.remove_resource::<Self>();
@@ -428,6 +433,9 @@ impl RevMeta {
             Err(RevTryRunScheduleError::RevUpdateMissing { .. }) => warn_once!(
                 "RevMeta cannot find reversible schedule RevUpdate, make sure to not call RevMeta::update_world recursively"
             ),
+            Ok(Some(mut buffer)) => if !buffer.is_empty() {
+                warn_once!("`UndoRedoBuffer` was discovered non-empty at the start of the reversible schedule run")
+            },
             _ => {}
         }
     }
@@ -466,6 +474,13 @@ impl RevMeta {
         })
     }
     fn update_internal(&mut self) -> Option<CheckLoggedAt> {
+        /// Reduces `updates_until_pause` by one and returns `true` wether that was successful without reaching zero.
+        fn reduction_successful(updates_until_pause: &mut NonZeroU32) -> bool {
+            NonZeroU32::new(updates_until_pause.get() - 1)
+                .map(|reduced| *updates_until_pause = reduced)
+                .is_some()
+        }
+
         match self.queue.take() {
             Some(queue) => {
                 self.direction = queue;
@@ -566,12 +581,6 @@ impl RevMeta {
     }
 }
 
-fn reduction_successful(updates_until_pause: &mut NonZeroU32) -> bool {
-    NonZeroU32::new(updates_until_pause.get() - 1)
-        .map(|reduced| *updates_until_pause = reduced)
-        .is_some()
-}
-
 /// Returns len of wrapping range `start..end`
 fn range_len(start: RevFrame, end: RevFrame) -> u32 {
     if REV_FRAME_AS_U32_MAX != u32::MAX && start.0 > end.0 {
@@ -593,7 +602,7 @@ mod test {
         system::ResMut,
     };
 
-    use crate::{commands::UndoRedoBuffer, log::TransitionLog};
+    use crate::{log::TransitionLog, undo_redo::UndoRedoBuffer};
 
     use super::*;
 
@@ -752,7 +761,7 @@ mod test {
         schedules.insert(Schedule::new(RevUpdate));
 
         let mut world = World::new();
-        UndoRedoBuffer::init(&mut world);
+        world.init_resource::<UndoRedoBuffer>();
         world.insert_resource(meta);
         world.insert_resource(res);
         world.insert_resource(schedules);
@@ -763,7 +772,7 @@ mod test {
         );
         world.flush();
 
-        assert_eq!(RevMeta::try_update_world(&mut world), Ok(()));
+        assert!(RevMeta::try_update_world(&mut world).is_ok());
         let res = world.remove_resource::<CheckLoggedAtRes>().unwrap();
         assert_eq!(res.0.transitions_len(), 0);
     }

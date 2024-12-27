@@ -20,10 +20,10 @@ use bevy::{
 };
 
 use crate::{
-    commands::CommandsLog,
     error_per_flag,
     meta::{CheckLoggedAt, RevMeta},
     schedule::{BackwardSet, BwdCmdSet, BwdCmdSysSet, BwdSysSet, ForwardSet, FwdSysSet},
+    undo_redo::{UndoRedoBuffer, UndoRedoLog},
 };
 
 use super::{IntoRevSystemConfigs, RevSystemConfigs, RevSystemSetConfigs};
@@ -171,7 +171,7 @@ struct Shared<T> {
 struct Inner<T> {
     system: T,
     initialized: bool,
-    commands_log: CommandsLog,
+    commands_log: UndoRedoLog,
     observer_name: String,
 }
 
@@ -456,6 +456,7 @@ fn initialize_arc_system<'a, T: System>(
     name: &String,
     world: &mut World,
 ) -> MutexGuard<'a, Inner<T>> {
+    world.init_resource::<UndoRedoBuffer>();
     *tick = world.change_tick();
     let arc = shared.clone();
     let mut shared = shared.inner.try_lock().unwrap_or_else(expect_lock(name));
