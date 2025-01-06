@@ -238,7 +238,7 @@ impl<T: LoggedAt> StateLog<T> {
         let past_len = meta.past_world_states();
         let to = self
             .states
-            .partition_point(|entry| meta.frames_before_present(entry.logged_at()) > past_len);
+            .partition_point(|entry| entry.logged_at() - meta.present_world_state() > past_len);
         self.index -= to;
         self.states.drain(..to)
     }

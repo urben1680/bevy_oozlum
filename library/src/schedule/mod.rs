@@ -1,8 +1,11 @@
 use std::fmt::Debug;
 
-use bevy::ecs::schedule::{InternedSystemSet, IntoSystemSetConfigs, Schedule, SystemSet};
+use bevy::ecs::{
+    change_detection::Res,
+    schedule::{InternedSystemSet, IntoSystemSetConfigs, Schedule, SystemSet},
+};
 
-use crate::meta::RevDirection;
+use crate::meta::RevMeta;
 
 mod condition;
 mod set_configs;
@@ -93,12 +96,13 @@ impl RevSchedule for Schedule {
         sets: impl IntoRevSystemSetConfigs<Marker>,
     ) -> &mut Self {
         if !self.graph().contains_set(ForwardSet) {
-            // run conditions return false if RevMeta is missing or not in a running RevDirection
-            fn if_forward(direction: RevDirection) -> bool {
-                matches!(direction, RevDirection::Forward { .. })
+            fn if_forward(meta: Option<Res<RevMeta>>) -> bool {
+                meta.and_then(|meta| meta.get_direction())
+                    .is_some_and(|direction| direction.is_forward())
             }
-            fn if_backward(direction: RevDirection) -> bool {
-                matches!(direction, RevDirection::BackwardLog)
+            fn if_backward(meta: Option<Res<RevMeta>>) -> bool {
+                meta.and_then(|meta| meta.get_direction())
+                    .is_some_and(|direction| !direction.is_forward())
             }
             self.configure_sets(
                 (

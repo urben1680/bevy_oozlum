@@ -106,16 +106,10 @@ impl UndoRedoLog {
             .get_resource::<RevMeta>()
             .ok_or(UndoRedoErr::RevMetaMissing)?
             .clone();
-        let log = SyncCell::get(&mut self.0);
         match meta.get_direction() {
             Some(RevDirection::NotLog) => {
-                for command in log.drain_future().0.rev() {
-                    command.finalize(world, true);
-                }
-                // should this be reversed too? recent commands may rely on side effects of older commands that are affected here
-                for command in log.truncate_future_drain_past_by_logged_at(&meta) {
-                    command.finalize(world, false);
-                }
+                self.truncate_future_drain_past_by_logged_at(world, &meta);
+                let log = SyncCell::get(&mut self.0);
                 let mut buffer = world
                     .get_resource_mut::<UndoRedoBuffer>()
                     .ok_or_else(|| UndoRedoErr::UndoRedoBufferMissing(meta.clone()))?;
@@ -129,6 +123,7 @@ impl UndoRedoLog {
                 Ok(())
             }
             Some(RevDirection::ForwardLog) => {
+                let log = SyncCell::get(&mut self.0);
                 for command in log
                     .forward_log()
                     .map_err(|OutOfLog| UndoRedoErr::OutOfLog(meta))?
@@ -159,9 +154,13 @@ impl UndoRedoLog {
         }
         Ok(())
     }
-    pub fn reduce_logged_at(&mut self, world: &mut World, meta: &RevMeta) {
+    pub fn truncate_future_drain_past_by_logged_at(&mut self, world: &mut World, meta: &RevMeta) {
         let log = SyncCell::get(&mut self.0);
-        for command in log.truncate_future_drain_past_by_logged_at(meta) {
+        for command in log.drain_future().0.rev() {
+            command.finalize(world, true);
+        }
+        // should this be reversed too? recent commands may rely on side effects of older commands that are affected here
+        for command in log.truncate_future_drain_past_by_logged_at(&meta) {
             command.finalize(world, false);
         }
     }

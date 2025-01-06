@@ -22,7 +22,7 @@ use bevy::{
 
 use crate::{
     frame::RevFrame,
-    meta::RevMeta,
+    meta::RevDirection,
     undo_redo::{BuffersUndoRedo, UndoRedo, UndoRedoBuffer},
     RevUpdate,
 };
@@ -986,7 +986,7 @@ fn run_if() {
 }
 
 #[test]
-fn check_logged_at() {
+fn finalize_undo_redo() {
     #[derive(Resource, Copy, Clone, Debug, PartialEq)]
     enum TestCommand {
         Applied,

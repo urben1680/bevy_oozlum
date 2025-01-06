@@ -1,13 +1,9 @@
-use std::{fmt::Debug, hash::Hash};
+use std::{fmt::Debug, hash::Hash, ops::Sub};
 
 use bevy::reflect::Reflect;
 
 #[cfg(feature = "serde")]
 use bevy::reflect::{ReflectDeserialize, ReflectSerialize};
-
-mod last_run;
-
-pub use last_run::{FrameMismatch, LastRunError, RevLastRun};
 
 #[cfg(all(
     feature = "packed_rev_frame_size_1",
@@ -67,6 +63,40 @@ impl RevFrame {
     }
     pub(crate) const fn first_half(self) -> bool {
         self.0 <= REV_FRAME_AS_U32_MAX / 2
+    }
+}
+
+impl Sub for RevFrame {
+    type Output = u32;
+    fn sub(self, rhs: Self) -> Self::Output {
+        if REV_FRAME_AS_U32_MAX != u32::MAX && self.0 > rhs.0 {
+            // 0 ## rhs .. self ## REV_FRAME_AS_U32_MAX .. u32::MAX
+            REV_FRAME_AS_U32_MAX - self.0 + rhs.0
+        } else {
+            // 0 .. self ## rhs .. REV_FRAME_AS_U32_MAX .. u32::MAX
+            rhs.0.wrapping_sub(self.0)
+        }
+    }
+}
+
+impl Sub<PackedRevFrame> for RevFrame {
+    type Output = u32;
+    fn sub(self, rhs: PackedRevFrame) -> Self::Output {
+        self - RevFrame::from(rhs)
+    }
+}
+
+impl Sub for PackedRevFrame {
+    type Output = u32;
+    fn sub(self, rhs: Self) -> Self::Output {
+        RevFrame::from(self) - RevFrame::from(rhs)
+    }
+}
+
+impl Sub<RevFrame> for PackedRevFrame {
+    type Output = u32;
+    fn sub(self, rhs: RevFrame) -> Self::Output {
+        RevFrame::from(self) - rhs
     }
 }
 
