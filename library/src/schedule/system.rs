@@ -21,7 +21,7 @@ use bevy::{
 
 use crate::{
     error_per_flag,
-    meta::{CheckLoggedAt, RevMeta},
+    meta::{DrainPastByLoggedAt, RevMeta},
     schedule::{BackwardSet, BwdCmdSet, BwdCmdSysSet, BwdSysSet, ForwardSet, FwdSysSet},
     undo_redo::{UndoRedoBuffer, UndoRedoLog},
 };
@@ -471,7 +471,7 @@ fn initialize_arc_system<'a, T: System>(
     // add observer for reducing commands using the logged_at mechanism
     let name = shared.observer_name.clone();
     world.add_observer(
-        move |trigger: Trigger<CheckLoggedAt>, mut commands: Commands| {
+        move |trigger: Trigger<DrainPastByLoggedAt>, mut commands: Commands| {
             let meta: RevMeta = trigger.event().meta().clone();
             let arc = arc.clone();
             let name = name.clone();
@@ -481,7 +481,7 @@ fn initialize_arc_system<'a, T: System>(
                     .try_lock()
                     .unwrap_or_else(expect_lock(&name))
                     .commands_log
-                    .reduce_logged_at(world, &meta)
+                    .truncate_future_drain_past_by_logged_at(world, &meta)
             });
         },
     );

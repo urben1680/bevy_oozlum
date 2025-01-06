@@ -15,8 +15,6 @@ Enhancements:
 - reduce todo!() and //todo
 - impl Error for relevant structs/enums via thiserror
 - #[inline]s
-- unify wording: reduce_logged_at / check_logged_at
-- last_run tests
 - examples
 -- folder next to src
 --- how to have cargo check look at it?
@@ -24,6 +22,10 @@ Enhancements:
 -- hooks https://github.com/bevyengine/bevy/blob/main/examples/ecs/component_hooks.rs
 -- observers https://github.com/bevyengine/bevy/blob/main/examples/ecs/observers.rs
 -- ecs, commands https://github.com/bevyengine/bevy/blob/main/examples/ecs/ecs_guide.rs
+
+Example
+- ideally contains scheduling, commands, hooks and observers
+- without reversible entity commands this may be difficuilt to do now
 
 Docs
 - documentations
@@ -55,8 +57,8 @@ pub mod undo_redo;
 /// Contains all extension traits `as _` and common types.
 pub mod prelude {
     pub use crate::app::{RevApp as _, RevSystemsPlugin};
-    pub use crate::frame::{PackedRevFrame, RevFrame, RevLastRun};
-    pub use crate::meta::{CheckLoggedAt, RevDirection, RevMeta};
+    pub use crate::frame::{PackedRevFrame, RevFrame};
+    pub use crate::meta::{DrainPastByLoggedAt, RevDirection, RevMeta};
     pub use crate::schedule::{
         IntoRevSystemConfigs as _, IntoRevSystemSetConfigs as _, RevSchedule as _,
     };

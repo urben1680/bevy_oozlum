@@ -295,7 +295,7 @@ impl<T: LoggedAt> RareStateLog<T> {
         // but simplicity is favored here to keep lookups, operations and maintenance burden lower.
         let to = self
             .states
-            .partition_point(|entry| meta.frames_before_present(entry.logged_at()) > past_len)
+            .partition_point(|entry| entry.logged_at() - meta.present_world_state() > past_len)
             .saturating_sub(1);
         self.past_len -= to // `to` plus sum of `RareValue::skips` == sum of `RareValue::len` but with less operations 
             + self

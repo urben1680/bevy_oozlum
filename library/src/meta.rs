@@ -4,11 +4,11 @@ use bevy::{
     ecs::{
         archetype::ArchetypeComponentId,
         change_detection::Mut,
-        component::ComponentId,
+        component::{ComponentId, Tick},
         event::Event,
         query::Access,
-        system::{IntoSystem, ReadOnlySystemParam, Res, Resource, System, SystemParam},
-        world::World,
+        system::{IntoSystem, ReadOnlySystemParam, Res, Resource, System, SystemMeta, SystemParam},
+        world::{unsafe_world_cell::UnsafeWorldCell, World},
     },
     log::warn_once,
     reflect::{std_traits::ReflectDefault, Reflect},
@@ -54,8 +54,8 @@ impl RevDirection {
     pub fn is_forward(self) -> bool {
         matches!(self, Self::Forward { .. })
     }
-    pub fn is_backward(self) -> bool {
-        matches!(self, Self::BackwardLog)
+    pub fn is_log(self) -> bool {
+        !matches!(self, Self::NotLog)
     }
 }
 
@@ -63,37 +63,37 @@ impl RevDirection {
 unsafe impl SystemParam for RevDirection {
     type Item<'world, 'state> = Self;
     type State = ComponentId;
-    fn init_state(
-        world: &mut World,
-        system_meta: &mut bevy::ecs::system::SystemMeta,
-    ) -> Self::State {
-        <Res<'static, RevMeta> as SystemParam>::init_state(world, system_meta)
+    fn init_state(world: &mut World, system_meta: &mut SystemMeta) -> Self::State {
+        <Res<RevMeta> as SystemParam>::init_state(world, system_meta)
     }
+    // todo: update implementation and doc for bevy 0.16 as the behavior of Res changes then again
     unsafe fn validate_param(
-        state: &Self::State,
-        system_meta: &bevy::ecs::system::SystemMeta,
-        world: bevy::ecs::world::unsafe_world_cell::UnsafeWorldCell,
+        &component_id: &Self::State,
+        system_meta: &SystemMeta,
+        world: UnsafeWorldCell,
     ) -> bool {
-        if !<Res<'static, RevMeta> as SystemParam>::validate_param(state, system_meta, world) {
+        // SAFETY: Read-only access is registered in init_state for this id and ptr read access is finished before return.
+        let Some(ptr) = world.get_resource_by_id(component_id) else {
+            system_meta.try_warn_param::<Res<RevMeta>>();
+            return false;
+        };
+        if ptr.deref::<RevMeta>().get_direction().is_none() {
+            system_meta.try_warn_param::<Self>();
             return false;
         }
-        world
-            .get_resource_by_id(*state)
-            .map(|ptr| ptr.deref::<RevMeta>())
-            .and_then(RevMeta::get_direction)
-            .is_some()
+        true
     }
     unsafe fn get_param<'world, 'state>(
         state: &'state mut Self::State,
-        _system_meta: &bevy::ecs::system::SystemMeta,
-        world: bevy::ecs::world::unsafe_world_cell::UnsafeWorldCell<'world>,
-        _change_tick: bevy::ecs::component::Tick,
+        _system_meta: &SystemMeta,
+        world: UnsafeWorldCell<'world>,
+        _change_tick: Tick,
     ) -> Self::Item<'world, 'state> {
         world
             .get_resource_by_id(*state)
             .map(|ptr| ptr.deref::<RevMeta>())
-            .and_then(RevMeta::get_direction)
             .unwrap()
+            .direction()
     }
 }
 
@@ -161,9 +161,9 @@ impl InternalDirection {
 }
 
 #[derive(Clone, Debug, Event)]
-pub struct CheckLoggedAt(RevMeta);
+pub struct DrainPastByLoggedAt(RevMeta);
 
-impl CheckLoggedAt {
+impl DrainPastByLoggedAt {
     pub fn meta(&self) -> &RevMeta {
         &self.0
     }
@@ -243,14 +243,13 @@ impl RevMeta {
         self.present_frame
     }
     pub fn past_world_states(&self) -> u32 {
-        range_len(self.oldest_frame, self.present_frame)
+        self.oldest_frame - self.present_frame
     }
     pub fn future_world_states(&self) -> u32 {
-        range_len(self.present_frame, self.youngest_frame)
+        self.present_frame - self.youngest_frame
     }
     pub fn world_states(&self) -> u32 {
-        let len = range_len(self.oldest_frame, self.youngest_frame);
-        len + 1 // both ends are inclusive
+        self.oldest_frame - self.youngest_frame + 1 // both ends are inclusive
     }
     pub fn contains(&self, frame: RevFrame) -> bool {
         self.contains_in(frame, true, true)
@@ -320,12 +319,10 @@ impl RevMeta {
         if frame == end {
             return end_inclusive;
         }
-        let start_to_end = range_len(start, end);
-        let start_to_frame = range_len(start, frame);
-        start_to_end > start_to_frame
+        (start - end) > (start - frame)
     }
-    pub(crate) fn frames_before_present(&self, frame: RevFrame) -> u32 {
-        range_len(frame, self.present_frame)
+    pub fn frame_cmp(&self, lhs: RevFrame, rhs: RevFrame) -> std::cmp::Ordering {
+        (self.oldest_frame - lhs).cmp(&(self.oldest_frame - rhs))
     }
     pub fn clear(&mut self) {
         self.oldest_frame = self.present_frame;
@@ -338,8 +335,8 @@ impl RevMeta {
         self.queue = Some(InternalDirection::RunningForward);
     }
     pub fn queue_log(&mut self, to: RevFrame) -> Result<u32, OutOfLog> {
-        let to_past = range_len(to, self.present_frame);
-        let to_future = range_len(self.present_frame, to);
+        let to_past = to - self.present_frame;
+        let to_future = self.present_frame - to;
         if to_past > self.past_world_states() && to_future > self.future_world_states() {
             return Err(OutOfLog);
         }
@@ -380,21 +377,25 @@ impl RevMeta {
         }
 
         world.resource_scope(|world: &mut World, mut meta: Mut<Self>| {
-            let buffer = world.remove_resource::<UndoRedoBuffer>();
+            let buffer = world
+                .get_resource_mut::<UndoRedoBuffer>()
+                .is_some_and(|mut buffer| !buffer.is_empty())
+                .then(|| world.remove_resource::<UndoRedoBuffer>().unwrap());
             world.init_resource::<UndoRedoBuffer>();
+
             if meta.get_direction().is_some() {
                 return Err(RevTryRunScheduleError::UnexpectedInitialRunning {
                     meta: meta.clone(),
                 });
             }
             let previous = meta.clone();
-            let result = meta.update(|meta, reduce_logged_at| {
+            let result = meta.update(|meta, drain_past_by_logged_at| {
                 world
                     .try_schedule_scope(RevUpdate, |world, schedule| {
                         world.insert_resource(meta.clone());
 
-                        if let Some(reduce_logged_at) = reduce_logged_at {
-                            world.trigger(reduce_logged_at);
+                        if let Some(drain_past_by_logged_at) = drain_past_by_logged_at {
+                            world.trigger(drain_past_by_logged_at);
                             world.flush();
                         }
 
@@ -433,9 +434,9 @@ impl RevMeta {
             Err(RevTryRunScheduleError::RevUpdateMissing { .. }) => warn_once!(
                 "RevMeta cannot find reversible schedule RevUpdate, make sure to not call RevMeta::update_world recursively"
             ),
-            Ok(Some(mut buffer)) => if !buffer.is_empty() {
-                warn_once!("`UndoRedoBuffer` was discovered non-empty at the start of the reversible schedule run")
-            },
+            Ok(Some(_)) => warn_once!(
+                "`UndoRedoBuffer` was discovered non-empty at the start of the reversible schedule run"
+            ),
             _ => {}
         }
     }
@@ -453,7 +454,7 @@ impl RevMeta {
     ///
     /// If this method is not manually called and instead ([`try_`](Self::try_update_world))[`update_world`](Self::update_world)
     /// is used as a system to call the [`RevUpdate`] schedule, the above mechanism is triggered via an observer.
-    /// See [`CheckLoggedAt`]
+    /// See [`DrainPastByLoggedAt`]
     ///
     /// # Panics
     ///
@@ -461,19 +462,19 @@ impl RevMeta {
     /// this will panic. The same can happen if `RevMeta` is in an invalid state, cloned from inside the closure for example.
     pub fn update<Out>(
         &mut self,
-        c: impl FnOnce(&mut Self, Option<CheckLoggedAt>) -> Out,
+        c: impl FnOnce(&mut Self, Option<DrainPastByLoggedAt>) -> Out,
     ) -> Option<Out> {
         if self.get_direction().is_some() {
             panic!("unexpected initial direction, expected pause or ran variant, do not call this method recursively\n{self:#?}");
         }
-        let reduce_logged_at = self.update_internal();
+        let drain_past_by_logged_at = self.update_internal();
         self.get_direction().map(|_| {
-            let out = c(self, reduce_logged_at);
+            let out = c(self, drain_past_by_logged_at);
             self.direction.end_running();
             out
         })
     }
-    fn update_internal(&mut self) -> Option<CheckLoggedAt> {
+    fn update_internal(&mut self) -> Option<DrainPastByLoggedAt> {
         /// Reduces `updates_until_pause` by one and returns `true` wether that was successful without reaching zero.
         fn reduction_successful(updates_until_pause: &mut NonZeroU32) -> bool {
             NonZeroU32::new(updates_until_pause.get() - 1)
@@ -513,7 +514,7 @@ impl RevMeta {
         }
         None
     }
-    fn update_forward(&mut self) -> Option<CheckLoggedAt> {
+    fn update_forward(&mut self) -> Option<DrainPastByLoggedAt> {
         self.present_frame = self.present_frame.wrapping_add(1);
         let max_world_states = self
             .max_world_states
@@ -526,7 +527,7 @@ impl RevMeta {
             let first_half = self.oldest_frame.first_half();
             self.oldest_frame = self.present_frame.wrapping_sub(max_world_states - 1);
             if self.oldest_frame.first_half() != first_half {
-                return Some(CheckLoggedAt(self.clone()));
+                return Some(DrainPastByLoggedAt(self.clone()));
             }
         }
         None
@@ -578,17 +579,6 @@ impl RevMeta {
         {
             archetype_component_access.extend(&access.archarchetype_component_access);
         }
-    }
-}
-
-/// Returns len of wrapping range `start..end`
-fn range_len(start: RevFrame, end: RevFrame) -> u32 {
-    if REV_FRAME_AS_U32_MAX != u32::MAX && start.0 > end.0 {
-        // 0 ## end .. start ## PackedRevFrame::MAX_AS_USIZE .. usize::MAX
-        REV_FRAME_AS_U32_MAX - start.0 + end.0
-    } else {
-        // 0 .. start ## end .. PackedRevFrame::MAX_AS_USIZE .. usize::MAX
-        end.0.wrapping_sub(start.0)
     }
 }
 
@@ -746,14 +736,14 @@ mod test {
     }
 
     #[test]
-    fn check_logged_at() {
+    fn drain_past_by_logged_at() {
         #[derive(Resource)]
-        struct CheckLoggedAtRes(TransitionLog<RevFrame>);
+        struct DrainPastByLoggedAtRes(TransitionLog<RevFrame>);
 
         let now = RevFrame::checked_new(RevMeta::MAX_WORLD_STATES - 1);
         let mut meta = RevMeta::new(NonZeroU32::new(1), Some(now), false);
         meta.update(|_, _| ()); // bring oldest_state to edge of first half
-        let mut res = CheckLoggedAtRes(TransitionLog::new());
+        let mut res = DrainPastByLoggedAtRes(TransitionLog::new());
         res.0.push_present(RevFrame::checked_new(0));
         assert_eq!(res.0.transitions_len(), 1);
 
@@ -766,14 +756,14 @@ mod test {
         world.insert_resource(res);
         world.insert_resource(schedules);
         world.add_observer(
-            |trigger: Trigger<CheckLoggedAt>, mut res: ResMut<CheckLoggedAtRes>| {
+            |trigger: Trigger<DrainPastByLoggedAt>, mut res: ResMut<DrainPastByLoggedAtRes>| {
                 res.0.pop_past_by_logged_at(trigger.event().meta());
             },
         );
         world.flush();
 
         assert!(RevMeta::try_update_world(&mut world).is_ok());
-        let res = world.remove_resource::<CheckLoggedAtRes>().unwrap();
+        let res = world.remove_resource::<DrainPastByLoggedAtRes>().unwrap();
         assert_eq!(res.0.transitions_len(), 0);
     }
 }
