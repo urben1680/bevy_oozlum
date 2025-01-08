@@ -33,6 +33,7 @@ const PACKED_REV_FRAME_SIZE: usize = 3;
 )))]
 const PACKED_REV_FRAME_SIZE: usize = 4;
 
+/// Maximum value a frame can be internally, can be used as a bitmask that is 1 for all relevant bits.
 pub(crate) const REV_FRAME_AS_U32_MAX: u32 = {
     let bits = PACKED_REV_FRAME_SIZE * 8;
     let shift = 32 - bits;
@@ -69,13 +70,7 @@ impl RevFrame {
 impl Sub for RevFrame {
     type Output = u32;
     fn sub(self, rhs: Self) -> Self::Output {
-        if REV_FRAME_AS_U32_MAX != u32::MAX && self.0 > rhs.0 {
-            // 0 ## rhs .. self ## REV_FRAME_AS_U32_MAX .. u32::MAX
-            REV_FRAME_AS_U32_MAX - self.0 + rhs.0
-        } else {
-            // 0 .. self ## rhs .. REV_FRAME_AS_U32_MAX .. u32::MAX
-            rhs.0.wrapping_sub(self.0)
-        }
+        self.0.wrapping_sub(rhs.0) & REV_FRAME_AS_U32_MAX
     }
 }
 
