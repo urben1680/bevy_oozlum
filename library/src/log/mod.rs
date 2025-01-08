@@ -256,6 +256,19 @@ fn index_oob() -> OutOfLog {
     OutOfLog
 }
 
+/// See [`VecDeque::partition_point`], is limited to the first `max` entries.
+fn partition_point<T>(deque: &VecDeque<T>, max: usize, pred: impl Fn(&T) -> bool) -> usize {
+    let (mut front, mut back) = deque.as_slices();
+    front = &front[..max];
+    back = &back[..(max - front.len())];
+
+    if back.first().map(|v| pred(v)) == Some(true) {
+        back.partition_point(pred) + front.len()
+    } else {
+        front.partition_point(pred)
+    }
+}
+
 /// Logged types that contain the information when these were logged, for example
 /// by containing [`RevFrame`] or the more compact [`PackedRevFrame`] from
 /// [`RevMeta::present_world_state`](crate::meta::RevMeta::present_world_state).
@@ -516,7 +529,7 @@ mod test {
                             $log.drain_past_by_len($len as usize).collect()
                         }
                         ShortenStrategy::DrainPastByLoggedAt => {
-                            $log.truncate_future_drain_past_by_logged_at($meta).collect()
+                            $log.drain_past_by_logged_at($meta).collect()
                         }
                         _ => unreachable!(),
                     };
