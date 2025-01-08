@@ -2,7 +2,7 @@ use std::fmt::Debug;
 
 use bevy::ecs::{
     change_detection::Res,
-    schedule::{InternedSystemSet, IntoSystemSetConfigs, Schedule, SystemSet},
+    schedule::{InternedSystemSet, IntoSystemSetConfigs, Schedule, ScheduleLabel, SystemSet},
 };
 
 use crate::meta::RevMeta;
@@ -17,6 +17,9 @@ mod test;
 
 pub use set_configs::*;
 pub use system_configs::*;
+
+#[derive(ScheduleLabel, Copy, Clone, Debug, Hash, PartialEq, Eq)]
+pub struct RevUpdate;
 
 /// Contains a forward and a backward set that run depending on the current [`RevDirection`] in [`RevMeta`].
 #[derive(SystemSet, Copy, Clone, Debug, Hash, PartialEq, Eq)]
