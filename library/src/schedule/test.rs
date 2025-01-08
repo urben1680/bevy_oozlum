@@ -23,8 +23,8 @@ use bevy::{
 use crate::{
     frame::RevFrame,
     meta::RevDirection,
+    schedule::RevUpdate,
     undo_redo::{BuffersUndoRedo, UndoRedo, UndoRedoBuffer},
-    RevUpdate,
 };
 
 use super::*;
@@ -420,7 +420,10 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
     // run tests backward log
     let mut meta = world.resource_mut::<RevMeta>();
     let end_frame = meta.present_world_state();
-    assert!(meta.queue_log(RevFrame::checked_new(0)).is_ok());
+    assert!(
+        meta.queue_log(RevFrame::checked_new(0)).is_ok(),
+        "{meta:#?}"
+    );
     for (step, expected) in expected.iter().enumerate().rev() {
         test_step(
             &mut world,
@@ -434,7 +437,7 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
 
     // run tests forward log
     let mut meta = world.resource_mut::<RevMeta>();
-    assert!(meta.queue_log(end_frame).is_ok());
+    assert!(meta.queue_log(end_frame).is_ok(), "{meta:#?}");
     for (step, expected) in expected.iter().enumerate() {
         test_step(
             &mut world,
