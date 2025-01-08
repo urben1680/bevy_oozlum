@@ -8,7 +8,7 @@ use bevy::reflect::Reflect;
 
 use crate::meta::RevMeta;
 
-use super::{index_oob, LoggedAt, OutOfLog, RareDrain, RareValue};
+use super::{index_oob, partition_point, LoggedAt, OutOfLog, RareDrain, RareValue};
 
 #[derive(Debug, Clone, Reflect)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -283,20 +283,17 @@ impl<T: LoggedAt> RareStateLog<T> {
             None
         }
     }
-    pub fn truncate_future_drain_past_by_logged_at(&mut self, meta: &RevMeta) -> RareDrain<T> {
-        // May be redundant but if not improves partition_point performance
-        self.states.truncate(self.index);
-
-        let past_len = meta.past_world_states();
+    pub fn drain_past_by_logged_at(&mut self, meta: &RevMeta) -> RareDrain<T> {
         // The user might call `push_present` multiple times per frame, so `RareValue::skips`
         // cannot be reliably interpreted as frame offsets from `RareValue::logged_at`.
         // Instead `RareValue::skips` is ignored here and one entry less is removed.
         // It might be possible to ignore this issue if the entry at the partition point has no skips,
         // but simplicity is favored here to keep lookups, operations and maintenance burden lower.
-        let to = self
-            .states
-            .partition_point(|entry| entry.logged_at() - meta.present_world_state() > past_len)
-            .saturating_sub(1);
+        let past_len = meta.past_world_states();
+        let to = partition_point(&self.states, self.index, |entry: &RareValue<T>| {
+            meta.present_world_state() - entry.logged_at() > past_len
+        })
+        .saturating_sub(1);
         self.past_len -= to // `to` plus sum of `RareValue::skips` == sum of `RareValue::len` but with less operations 
             + self
                 .states
@@ -304,6 +301,7 @@ impl<T: LoggedAt> RareStateLog<T> {
                 .map(RareValue::skips)
                 .sum::<usize>();
         self.index -= to;
+
         RareDrain(self.states.drain(..to))
     }
 }
