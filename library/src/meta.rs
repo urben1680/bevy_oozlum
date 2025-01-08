@@ -21,8 +21,8 @@ use bevy::reflect::{ReflectDeserialize, ReflectSerialize};
 use crate::{
     frame::{RevFrame, REV_FRAME_AS_U32_MAX},
     log::OutOfLog,
+    schedule::RevUpdate,
     undo_redo::UndoRedoBuffer,
-    RevUpdate,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -234,22 +234,20 @@ impl RevMeta {
     pub fn get_direction(&self) -> Option<RevDirection> {
         self.direction.get_direction()
     }
-    pub fn get_direction_after_run(&self) -> Option<RevDirection> {
-        let mut direction = self.direction;
-        direction.end_running();
-        direction.get_direction()
+    pub fn paused(&self) -> bool {
+        self.direction == InternalDirection::Pause
     }
     pub fn present_world_state(&self) -> RevFrame {
         self.present_frame
     }
     pub fn past_world_states(&self) -> u32 {
-        self.oldest_frame - self.present_frame
+        self.present_frame - self.oldest_frame
     }
     pub fn future_world_states(&self) -> u32 {
-        self.present_frame - self.youngest_frame
+        self.youngest_frame - self.present_frame
     }
     pub fn world_states(&self) -> u32 {
-        self.oldest_frame - self.youngest_frame + 1 // both ends are inclusive
+        self.youngest_frame - self.oldest_frame + 1 // both ends are inclusive
     }
     pub fn contains(&self, frame: RevFrame) -> bool {
         self.contains_in(frame, true, true)
@@ -260,14 +258,13 @@ impl RevMeta {
         past_end_inclusive: bool,
         future_end_inclusive: bool,
     ) -> bool {
-        self.contains_inner(
-            frame,
-            self.oldest_frame,
-            self.youngest_frame,
-            past_end_inclusive,
-            true,
-            future_end_inclusive,
-        )
+        if frame == self.oldest_frame {
+            return past_end_inclusive;
+        }
+        if frame == self.youngest_frame {
+            return future_end_inclusive;
+        }
+        (self.youngest_frame - frame) < (self.youngest_frame - self.oldest_frame)
     }
     pub fn contains_in_past(
         &self,
@@ -275,14 +272,13 @@ impl RevMeta {
         past_end_inclusive: bool,
         present_inclusive: bool,
     ) -> bool {
-        self.contains_inner(
-            frame,
-            self.oldest_frame,
-            self.present_frame,
-            past_end_inclusive,
-            present_inclusive,
-            present_inclusive,
-        )
+        if frame == self.oldest_frame {
+            return past_end_inclusive;
+        }
+        if frame == self.present_frame {
+            return present_inclusive;
+        }
+        (self.present_frame - frame) < (self.present_frame - self.oldest_frame)
     }
     pub fn contains_in_future(
         &self,
@@ -290,36 +286,13 @@ impl RevMeta {
         present_inclusive: bool,
         future_end_inclusive: bool,
     ) -> bool {
-        self.contains_inner(
-            frame,
-            self.present_frame,
-            self.youngest_frame,
-            present_inclusive,
-            present_inclusive,
-            future_end_inclusive,
-        )
-    }
-    #[inline(always)]
-    fn contains_inner(
-        &self,
-        frame: RevFrame,
-        start: RevFrame,
-        end: RevFrame,
-        start_inclusive: bool,
-        present_inclusive: bool,
-        end_inclusive: bool,
-    ) -> bool {
-        // needs to come first because `Self::contains_in` should always return `true` here
         if frame == self.present_frame {
             return present_inclusive;
         }
-        if frame == start {
-            return start_inclusive;
+        if frame == self.youngest_frame {
+            return future_end_inclusive;
         }
-        if frame == end {
-            return end_inclusive;
-        }
-        (start - end) > (start - frame)
+        (self.youngest_frame - frame) < (self.youngest_frame - self.present_frame)
     }
     pub fn frame_cmp(&self, lhs: RevFrame, rhs: RevFrame) -> std::cmp::Ordering {
         (self.oldest_frame - lhs).cmp(&(self.oldest_frame - rhs))
@@ -335,20 +308,23 @@ impl RevMeta {
         self.queue = Some(InternalDirection::RunningForward);
     }
     pub fn queue_log(&mut self, to: RevFrame) -> Result<u32, OutOfLog> {
-        let to_past = to - self.present_frame;
-        let to_future = self.present_frame - to;
+        let to_past = self.present_frame - to;
+        let to_future = to - self.present_frame;
         if to_past > self.past_world_states() && to_future > self.future_world_states() {
             return Err(OutOfLog);
         }
         let from_present = to_past.min(to_future);
-        self.queue = NonZeroU32::new(from_present).map(|updates_until_pause| {
-            if to_past == from_present {
-                InternalDirection::RunningBackwardLog {
-                    updates_until_pause,
-                }
-            } else {
-                InternalDirection::RunningForwardLog {
-                    updates_until_pause,
+        self.queue = Some(match NonZeroU32::new(from_present) {
+            None => InternalDirection::Pause,
+            Some(updates_until_pause) => {
+                if to_past == from_present {
+                    InternalDirection::RunningBackwardLog {
+                        updates_until_pause,
+                    }
+                } else {
+                    InternalDirection::RunningForwardLog {
+                        updates_until_pause,
+                    }
                 }
             }
         });
@@ -717,6 +693,108 @@ mod test {
     }
 
     #[test]
+    fn queue_log_to_in_range_succeeds() {
+        let mut meta = arrange(None, 2, 1..=3, InternalDirection::Pause);
+
+        assert_eq!(meta.queue_log(RevFrame::checked_new(1)), Ok(1));
+        assert_eq!(meta.queue_log(RevFrame::checked_new(3)), Ok(1));
+    }
+
+    #[test]
+    fn queue_log_to_present_pauses() {
+        let mut meta = arrange(
+            None,
+            2,
+            1..=3,
+            InternalDirection::RunningForwardLog {
+                updates_until_pause: NonZeroU32::new(2).unwrap(),
+            },
+        );
+        assert_eq!(meta.queue_log(RevFrame::checked_new(2)), Ok(0));
+        meta.update_internal();
+        assert!(meta.paused());
+    }
+
+    #[test]
+    fn contains_returns_expected() {
+        let meta = arrange(None, 3, 1..=5, InternalDirection::Pause);
+
+        let frame: [RevFrame; 7] = std::array::from_fn(|n| RevFrame::checked_new(n as u32));
+
+        let contains = || {
+            assert_eq!(meta.contains(frame[0]), false, "{meta:#?}");
+            assert_eq!(meta.contains(frame[1]), true, "{meta:#?}");
+            assert_eq!(meta.contains(frame[2]), true, "{meta:#?}");
+            assert_eq!(meta.contains(frame[3]), true, "{meta:#?}");
+            assert_eq!(meta.contains(frame[4]), true, "{meta:#?}");
+            assert_eq!(meta.contains(frame[5]), true, "{meta:#?}");
+            assert_eq!(meta.contains(frame[6]), false, "{meta:#?}");
+        };
+
+        let contains_in = |past_end_inclusive, future_end_inclusive| {
+            let test = |n: usize, expected: bool| {
+                assert_eq!(
+                meta.contains_in(frame[n], past_end_inclusive, future_end_inclusive),
+                expected, "past_end_inclusive:{past_end_inclusive}, future_end_inclusive:{future_end_inclusive}\n{meta:#?}"
+            )
+            };
+            test(0, false);
+            test(1, past_end_inclusive);
+            test(2, true);
+            test(3, true);
+            test(4, true);
+            test(5, future_end_inclusive);
+            test(6, false);
+        };
+
+        let contains_in_past = |past_end_inclusive, present_inclusive| {
+            let test = |n: usize, expected: bool| {
+                assert_eq!(
+                meta.contains_in_past(frame[n], past_end_inclusive, present_inclusive),
+                expected, "past_end_inclusive:{past_end_inclusive}, present_inclusive:{present_inclusive}\n{meta:#?}"
+            )
+            };
+            test(0, false);
+            test(1, past_end_inclusive);
+            test(2, true);
+            test(3, present_inclusive);
+            test(4, false);
+            test(5, false);
+            test(6, false);
+        };
+
+        let contains_in_future = |present_inclusive, future_end_inclusive| {
+            let test = |n: usize, expected: bool| {
+                assert_eq!(
+                meta.contains_in_future(frame[n], present_inclusive, future_end_inclusive),
+                expected, "present_inclusive:{present_inclusive}, future_end_inclusive:{future_end_inclusive}\n{meta:#?}"
+            )
+            };
+            test(0, false);
+            test(1, false);
+            test(2, false);
+            test(3, present_inclusive);
+            test(4, true);
+            test(5, future_end_inclusive);
+            test(6, false);
+        };
+
+        contains();
+        contains_in(false, false);
+        contains_in(false, true);
+        contains_in(true, false);
+        contains_in(true, true);
+        contains_in_past(false, false);
+        contains_in_past(false, true);
+        contains_in_past(true, false);
+        contains_in_past(true, true);
+        contains_in_future(false, false);
+        contains_in_future(false, true);
+        contains_in_future(true, false);
+        contains_in_future(true, true);
+    }
+
+    #[test]
     fn non_log_forward_truncates_future() {
         let mut meta = arrange(
             None,
@@ -729,10 +807,10 @@ mod test {
 
         meta.update_internal();
         meta.update_internal();
-        assert_eq!(meta.world_states(), 3);
+        assert_eq!(meta.world_states(), 3, "{meta:#?}");
         meta.queue_forward();
         meta.update_internal();
-        assert_eq!(meta.world_states(), 2);
+        assert_eq!(meta.world_states(), 2, "{meta:#?}");
     }
 
     #[test]
