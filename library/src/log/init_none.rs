@@ -427,7 +427,7 @@ impl<T: LoggedAt> InitNoneLog<T> {
                 .inspect(|_| *undone_first_run = None),
         }
     }
-    pub fn truncate_future_drain_past_by_logged_at(&mut self, meta: &RevMeta) -> Drain<T> {
+    pub fn drain_past_by_logged_at(&mut self, meta: &RevMeta) -> Drain<T> {
         match self.0 {
             Inner::NeverRan { ref mut empty } => empty.drain(..0),
             Inner::Ran {
@@ -438,7 +438,7 @@ impl<T: LoggedAt> InitNoneLog<T> {
                 ref mut log,
                 ref mut undone_first_run,
             } => {
-                let iter = log.truncate_future_drain_past_by_logged_at(meta);
+                let iter = log.drain_past_by_logged_at(meta);
                 if iter.len() != 0 {
                     *undone_first_run = None;
                 }
