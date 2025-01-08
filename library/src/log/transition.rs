@@ -5,7 +5,7 @@ use bevy::reflect::{std_traits::ReflectDefault, Reflect};
 
 use crate::meta::RevMeta;
 
-use super::{index_oob, LoggedAt, OutOfLog};
+use super::{index_oob, partition_point, LoggedAt, OutOfLog};
 
 #[derive(Debug, Clone, Reflect)]
 #[reflect(Default)]
@@ -157,14 +157,11 @@ impl<T: LoggedAt> TransitionLog<T> {
             None
         }
     }
-    pub fn truncate_future_drain_past_by_logged_at(&mut self, meta: &RevMeta) -> Drain<T> {
-        // may be redundant but if not improves partition_point performance
-        self.transitions.truncate(self.index);
-
+    pub fn drain_past_by_logged_at(&mut self, meta: &RevMeta) -> Drain<T> {
         let past_len = meta.past_world_states();
-        let to = self
-            .transitions
-            .partition_point(|entry| entry.logged_at() - meta.present_world_state() >= past_len);
+        let to = partition_point(&self.transitions, self.index, |entry: &T| {
+            meta.present_world_state() - entry.logged_at() >= past_len
+        });
         self.index -= to;
         self.transitions.drain(..to)
     }
