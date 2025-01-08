@@ -43,10 +43,6 @@ ISSUES/DISCUSSIONS:
 - rare_init_none
 */
 
-use std::{fmt::Debug, hash::Hash};
-
-use bevy::ecs::schedule::ScheduleLabel;
-
 pub mod app;
 pub mod frame;
 pub mod log;
@@ -60,14 +56,10 @@ pub mod prelude {
     pub use crate::frame::{PackedRevFrame, RevFrame};
     pub use crate::meta::{DrainPastByLoggedAt, RevDirection, RevMeta};
     pub use crate::schedule::{
-        IntoRevSystemConfigs as _, IntoRevSystemSetConfigs as _, RevSchedule as _,
+        IntoRevSystemConfigs as _, IntoRevSystemSetConfigs as _, RevSchedule as _, RevUpdate,
     };
     pub use crate::undo_redo::{BuffersUndoRedo as _, RevCommands as _};
-    pub use crate::RevUpdate;
 }
-
-#[derive(ScheduleLabel, Copy, Clone, Debug, Hash, PartialEq, Eq)]
-pub struct RevUpdate;
 
 macro_rules! error_per_flag {
     ($flag:expr, $($arg:tt)+) => ({
