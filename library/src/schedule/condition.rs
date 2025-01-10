@@ -65,14 +65,14 @@ impl<T: ReadOnlySystem<Out = bool>> RevCondition<T> {
         eval_cond: impl FnOnce(&mut T) -> bool,
     ) -> bool {
         match meta.direction() {
-            RevDirection::NotLog => {
+            RevDirection::NOT_LOG => {
                 let out = valid && eval_cond(&mut self.condition);
                 self.log.pop_past_by_len(meta.past_world_states().saturating_sub(1) as usize);
                 self.log.push_present(out.then_some(()));
                 out
             },
             // todo, simplify error msg, can only be internal bug
-            RevDirection::ForwardLog => {
+            RevDirection::FORWARD_LOG => {
                 match self.log.forward_log() {
                     Ok(option) => option.is_some(),
                     Err(OutOfLog) => error_per_flag!(&mut self.out_of_log_err, "Reversible condition {} got out of log. \
