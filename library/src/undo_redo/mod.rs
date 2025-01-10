@@ -5,7 +5,8 @@ use bevy::{
         system::Resource,
         world::{DeferredWorld, World},
     },
-    utils::{default, synccell::SyncCell},
+    prelude::Commands,
+    utils::synccell::SyncCell,
 };
 
 use crate::{
@@ -20,10 +21,24 @@ mod commands;
 pub use commands::RevCommands;
 
 pub trait BuffersUndoRedo {
-    /// Should only be called in sync points of reversible schedules, for example in:
-    /// - Commands
-    /// - Observers
-    /// - Hooks
+    /// Buffers an [`UndoRedo`] implementor in a resource to be collected by the reversible system's state during sync points.
+    ///
+    /// Logic applied in sync points are in:
+    /// - commands
+    /// - hooks
+    /// - observers
+    /// - [`SystemParam::apply`](bevy::ecs::system::SystemParam::apply)
+    /// - [`SystemBuffer::apply`](bevy::ecs::system::SystemBuffer::apply)
+    /// - [`System::apply_deferred`](bevy::ecs::system::System::apply_deferred)
+    ///
+    /// The effect should be immediate in the sync point. Because of this, refer the following table for how to call this method:
+    ///
+    /// | | Sync Point | Non-Observer System |
+    /// | - | - | - |
+    /// | [`&mut World`](World) | ✅ | ❌ |
+    /// | [`DeferredWorld`] | ✅ | ❌ |
+    /// | [`UndoRedoBuffer`] | ✅ | ❌ |
+    /// | [`Commands`] | ❌ | ✅ |
     fn buffer_undo_redo(&mut self, undo_redo: impl UndoRedo);
 }
 
@@ -35,62 +50,70 @@ impl BuffersUndoRedo for World {
 
 impl<'w> BuffersUndoRedo for DeferredWorld<'w> {
     fn buffer_undo_redo(&mut self, undo_redo: impl UndoRedo) {
-        let undo_redo: Box<dyn UndoRedo> = Box::new(undo_redo);
-        let buffer = &mut self.get_resource_mut::<UndoRedoBuffer>().expect("todo").0;
-        SyncCell::get(buffer).push_back(undo_redo);
+        self.get_resource_mut::<UndoRedoBuffer>()
+            .expect("todo")
+            .buffer_undo_redo(undo_redo);
     }
 }
 
+impl<'w, 's> BuffersUndoRedo for Commands<'w, 's> {
+    fn buffer_undo_redo(&mut self, undo_redo: impl UndoRedo) {
+        self.queue(move |world: &mut World| world.buffer_undo_redo(undo_redo))
+    }
+}
 /// For usages in reversible observer systems.
 ///
 /// Commands and hooks can buffer [`UndoRedo`] implementors via [`&mut World`](World)/[`DeferredWorld`] instead.
 ///
 /// Do not remove or overwrite this resource.
 // uses a VecDeque so `CommandsLog` can use `VecDeque::append`
-#[derive(Resource)]
-pub struct UndoRedoBuffer(SyncCell<VecDeque<Box<dyn UndoRedo>>>);
+#[derive(Resource, Default)]
+pub struct UndoRedoBuffer(VecDeque<SyncCell<Box<dyn UndoRedo>>>);
 
 impl BuffersUndoRedo for UndoRedoBuffer {
     fn buffer_undo_redo(&mut self, undo_redo: impl UndoRedo) {
-        let undo_redo: Box<dyn UndoRedo> = Box::new(undo_redo);
-        SyncCell::get(&mut self.0).push_back(undo_redo);
-    }
-}
-
-impl Default for UndoRedoBuffer {
-    fn default() -> Self {
-        Self(SyncCell::new(default()))
+        self.0.push_back(SyncCell::new(Box::new(undo_redo)));
     }
 }
 
 impl UndoRedoBuffer {
-    pub fn is_empty(&mut self) -> bool {
-        self.0.get().is_empty()
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
     }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub enum UndoRedoDirection {
+    Undo,
+    Redo,
+    FinalizeUndone,
+    FinalizeRedone,
 }
 
 pub trait UndoRedo: Send + 'static {
     fn undo(&mut self, world: &mut World);
     fn redo(&mut self, world: &mut World);
-    fn finalize(self: Box<Self>, _world: &mut World, _undone: bool) {}
+    fn finalize_undone(self: Box<Self>, _world: &mut World) {}
+    fn finalize_redone(self: Box<Self>, _world: &mut World) {}
 }
 
-impl<F: FnMut(&mut World, bool) + Send + 'static> UndoRedo for F {
+impl<F: FnMut(&mut World, UndoRedoDirection) + Send + 'static> UndoRedo for F {
     fn undo(&mut self, world: &mut World) {
-        self(world, false)
+        self(world, UndoRedoDirection::Undo)
     }
     fn redo(&mut self, world: &mut World) {
-        self(world, true)
+        self(world, UndoRedoDirection::Redo)
+    }
+    fn finalize_undone(mut self: Box<Self>, world: &mut World) {
+        self(world, UndoRedoDirection::FinalizeUndone)
+    }
+    fn finalize_redone(mut self: Box<Self>, world: &mut World) {
+        self(world, UndoRedoDirection::FinalizeRedone)
     }
 }
 
-pub struct UndoRedoLog(SyncCell<TransitionsLog<Box<dyn UndoRedo>, RevFrame>>);
-
-impl Default for UndoRedoLog {
-    fn default() -> Self {
-        Self(SyncCell::new(default()))
-    }
-}
+#[derive(Default)]
+pub struct UndoRedoLog(TransitionsLog<SyncCell<Box<dyn UndoRedo>>, RevFrame>);
 
 #[derive(Clone, Debug)]
 pub enum UndoRedoErr {
@@ -107,27 +130,26 @@ impl UndoRedoLog {
             .ok_or(UndoRedoErr::RevMetaMissing)?
             .clone();
         match meta.get_direction() {
-            Some(RevDirection::NotLog) => {
-                self.truncate_future_drain_past_by_logged_at(world, &meta);
-                let log = SyncCell::get(&mut self.0);
+            Some(RevDirection::NOT_LOG) => {
+                self.clamp_log(world, &meta);
                 let mut buffer = world
                     .get_resource_mut::<UndoRedoBuffer>()
                     .ok_or_else(|| UndoRedoErr::UndoRedoBufferMissing(meta.clone()))?;
-                let buffer = SyncCell::get(&mut buffer.0);
-                if !buffer.is_empty() {
-                    log.push_present(|mut log| {
-                        log.append(buffer);
+                if !buffer.0.is_empty() {
+                    self.0.push_present(|mut log| {
+                        log.append(&mut buffer.0);
                         meta.present_world_state()
                     });
                 }
                 Ok(())
             }
-            Some(RevDirection::ForwardLog) => {
-                let log = SyncCell::get(&mut self.0);
-                for command in log
+            Some(RevDirection::FORWARD_LOG) => {
+                for command in self
+                    .0
                     .forward_log()
                     .map_err(|OutOfLog| UndoRedoErr::OutOfLog(meta))?
                     .into_iter()
+                    .map(SyncCell::get)
                 {
                     command.redo(world);
                 }
@@ -143,25 +165,29 @@ impl UndoRedoLog {
         if meta.get_direction() != Some(RevDirection::BackwardLog) {
             return Err(UndoRedoErr::RevMetaWrongDirection(meta.clone()));
         }
-        let log = SyncCell::get(&mut self.0);
-        for command in log
+        for command in self
+            .0
             .backward_log()
             .map_err(|OutOfLog| UndoRedoErr::OutOfLog(meta.clone()))?
             .into_iter()
             .rev()
+            .map(SyncCell::get)
         {
             command.undo(world);
         }
         Ok(())
     }
-    pub fn truncate_future_drain_past_by_logged_at(&mut self, world: &mut World, meta: &RevMeta) {
-        let log = SyncCell::get(&mut self.0);
-        for command in log.drain_future().0.rev() {
-            command.finalize(world, true);
+    pub fn clamp_log(&mut self, world: &mut World, meta: &RevMeta) {
+        for command in self.0.drain_future().0.rev().map(SyncCell::to_inner) {
+            command.finalize_undone(world);
         }
         // should this be reversed too? recent commands may rely on side effects of older commands that are affected here
-        for command in log.truncate_future_drain_past_by_logged_at(&meta) {
-            command.finalize(world, false);
+        for command in self
+            .0
+            .drain_past_by_logged_at(&meta)
+            .map(SyncCell::to_inner)
+        {
+            command.finalize_redone(world);
         }
     }
 }
