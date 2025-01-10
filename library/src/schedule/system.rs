@@ -481,7 +481,7 @@ fn initialize_arc_system<'a, T: System>(
                     .try_lock()
                     .unwrap_or_else(expect_lock(&name))
                     .commands_log
-                    .truncate_future_drain_past_by_logged_at(world, &meta)
+                    .clamp_log(world, &meta)
             });
         },
     );
