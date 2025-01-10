@@ -565,7 +565,7 @@ mod test {
                             $log.drain_past_by_len($len as usize).collect()
                         }
                         ShortenStrategy::DrainPastByLoggedAt => {
-                            $log.truncate_future_drain_past_by_logged_at($meta).collect()
+                            $log.drain_past_by_logged_at($meta).collect()
                         }
                         _ => unreachable!(),
                     };
