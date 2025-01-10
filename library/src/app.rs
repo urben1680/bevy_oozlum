@@ -92,16 +92,19 @@ impl Plugin for RevSystemsPlugin {
             Self::AddMeta(meta, ..)
             | Self::AddMetaAndRunner(meta, ..)
             | Self::AddMetaAndRunnerInSet(meta, ..) => {
+                if app.world().get_resource::<RevMeta>().is_some_and(|existing| existing != meta) {
+                    bevy::log::info!("`RevSystemsPlugin::build` overwrote existing `RevMeta`");
+                }
                 app.insert_resource(meta.clone());
             }
             _ => {}
         };
         match self {
             Self::AddMetaAndRunner(_, schedule) | Self::AddRunner(schedule) => {
-                app.add_systems(*schedule, RevMeta::update_world);
+                app.add_systems(*schedule, RevMeta::run_rev_update);
             }
             Self::AddMetaAndRunnerInSet(_, schedule, set) | Self::AddRunnerInSet(schedule, set) => {
-                app.add_systems(*schedule, RevMeta::update_world.in_set(*set));
+                app.add_systems(*schedule, RevMeta::run_rev_update.in_set(*set));
             }
             Self::AddMeta(..) => {}
         }
