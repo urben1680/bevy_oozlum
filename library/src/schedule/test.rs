@@ -24,7 +24,7 @@ use crate::{
     frame::RevFrame,
     meta::RevDirection,
     schedule::RevUpdate,
-    undo_redo::{BuffersUndoRedo, UndoRedo, UndoRedoBuffer},
+    undo_redo::{BuffersUndoRedo, UndoRedo, UndoRedoBuffer, UndoRedoDirection},
 };
 
 use super::*;
@@ -66,6 +66,21 @@ impl<T> Test<T> {
             Test::SysCmdHook(value) => Test::SysCmdHook(map(value)),
             Test::SysCmdObsv(value) => Test::SysCmdObsv(map(value)),
         }
+    }
+}
+
+impl UndoRedo for Test<u8> {
+    fn undo(&mut self, world: &mut World) {
+        world
+            .resource_mut::<TestLog>()
+            .0
+            .push(self.map(|n| (n, RevDirection::BackwardLog)));
+    }
+    fn redo(&mut self, world: &mut World) {
+        world
+            .resource_mut::<TestLog>()
+            .0
+            .push(self.map(|n| (n, RevDirection::FORWARD_LOG)));
     }
 }
 
@@ -143,7 +158,7 @@ fn non_exclusive_system_commands_only<const N: u8>(
     direction: RevDirection,
     mut commands: Commands,
 ) {
-    if direction != RevDirection::NotLog {
+    if direction != RevDirection::NOT_LOG {
         return;
     }
 
@@ -164,7 +179,7 @@ fn exclusive_system<const N: u8>(world: &mut World) {
         .resource_mut::<TestLog>()
         .0
         .push(Test::Sys((N, direction)));
-    if direction != RevDirection::NotLog {
+    if direction != RevDirection::NOT_LOG {
         return;
     }
 
@@ -186,18 +201,9 @@ fn system_command<const N: u8>(world: &mut World) {
     world
         .resource_mut::<TestLog>()
         .0
-        .push(Test::SysCmd((N, RevDirection::NotLog)));
+        .push(Test::SysCmd((N, RevDirection::NOT_LOG)));
 
-    world.buffer_undo_redo(|world: &mut World, forward: bool| {
-        let direction = match forward {
-            true => RevDirection::ForwardLog,
-            false => RevDirection::BackwardLog,
-        };
-        world
-            .resource_mut::<TestLog>()
-            .0
-            .push(Test::SysCmd((N, direction)));
-    });
+    world.buffer_undo_redo(Test::SysCmd(N));
 }
 
 fn test_run<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
@@ -208,13 +214,6 @@ fn test_run<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
         for apply_final_deferred in [true, false] {
             test_run_variant(variant, &config, apply_final_deferred, &expected);
         }
-    }
-}
-
-fn direction_from_forward(forward: bool) -> RevDirection {
-    match forward {
-        true => RevDirection::ForwardLog,
-        false => RevDirection::BackwardLog,
     }
 }
 
@@ -231,7 +230,7 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
 
     // set up schedules
     let mut schedule = Schedule::new(FixedUpdate);
-    schedule.add_systems(RevMeta::update_world);
+    schedule.add_systems(RevMeta::run_rev_update);
     let err = schedule.initialize(&mut world).err();
     assert!(err.is_none(), "{:?}", err.unwrap());
     world.add_schedule(schedule);
@@ -250,7 +249,7 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
         world
             .resource_mut::<TestLog>()
             .0
-            .push(Test::SysObsv((n, RevDirection::NotLog)));
+            .push(Test::SysObsv((n, RevDirection::NOT_LOG)));
 
         // trigger observer in observer
         world.trigger::<SysObsvObsv>(SysObsvObsv(n));
@@ -260,40 +259,21 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
             world
                 .resource_mut::<TestLog>()
                 .0
-                .push(Test::SysObsvCmd((n, RevDirection::NotLog)));
+                .push(Test::SysObsvCmd((n, RevDirection::NOT_LOG)));
 
-            world.buffer_undo_redo(move |world: &mut World, forward: bool| {
-                let direction = match forward {
-                    true => RevDirection::ForwardLog,
-                    false => RevDirection::BackwardLog,
-                };
-                world
-                    .resource_mut::<TestLog>()
-                    .0
-                    .push(Test::SysObsvCmd((n, direction)));
-            });
+            world.buffer_undo_redo(Test::SysObsvCmd(n));
         });
 
         // buffer reversible observer
-        world.buffer_undo_redo(move |world: &mut World, forward: bool| {
-            world
-                .resource_mut::<TestLog>()
-                .0
-                .push(Test::SysObsv((n, direction_from_forward(forward))));
-        });
+        world.buffer_undo_redo(Test::SysObsv(n));
     });
     world.add_observer(
         |event: Trigger<SysHookObsv>,
          mut log: ResMut<TestLog>,
          mut buffer: ResMut<UndoRedoBuffer>| {
             let n = event.0;
-            log.0.push(Test::SysHookObsv((n, RevDirection::NotLog)));
-            buffer.buffer_undo_redo(move |world: &mut World, forward: bool| {
-                world
-                    .resource_mut::<TestLog>()
-                    .0
-                    .push(Test::SysHookObsv((n, direction_from_forward(forward))));
-            });
+            log.0.push(Test::SysHookObsv((n, RevDirection::NOT_LOG)));
+            buffer.buffer_undo_redo(Test::SysHookObsv(n));
         },
     );
     world.add_observer(
@@ -301,13 +281,8 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
          mut log: ResMut<TestLog>,
          mut buffer: ResMut<UndoRedoBuffer>| {
             let n = event.0;
-            log.0.push(Test::SysObsvObsv((n, RevDirection::NotLog)));
-            buffer.buffer_undo_redo(move |world: &mut World, forward: bool| {
-                world
-                    .resource_mut::<TestLog>()
-                    .0
-                    .push(Test::SysObsvObsv((n, direction_from_forward(forward))));
-            });
+            log.0.push(Test::SysObsvObsv((n, RevDirection::NOT_LOG)));
+            buffer.buffer_undo_redo(Test::SysObsvObsv(n));
         },
     );
     world.add_observer(
@@ -315,13 +290,8 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
          mut log: ResMut<TestLog>,
          mut buffer: ResMut<UndoRedoBuffer>| {
             let n = event.0;
-            log.0.push(Test::SysCmdObsv((n, RevDirection::NotLog)));
-            buffer.buffer_undo_redo(move |world: &mut World, forward: bool| {
-                world
-                    .resource_mut::<TestLog>()
-                    .0
-                    .push(Test::SysCmdObsv((n, direction_from_forward(forward))));
-            });
+            log.0.push(Test::SysCmdObsv((n, RevDirection::NOT_LOG)));
+            buffer.buffer_undo_redo(Test::SysCmdObsv(n));
         },
     );
 
@@ -333,7 +303,7 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
             world
                 .resource_mut::<TestLog>()
                 .0
-                .push(Test::SysHook((n, RevDirection::NotLog)));
+                .push(Test::SysHook((n, RevDirection::NOT_LOG)));
 
             // trigger observer in hook
             world.trigger::<SysHookObsv>(SysHookObsv(n));
@@ -343,27 +313,13 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
                 world
                     .resource_mut::<TestLog>()
                     .0
-                    .push(Test::SysHookCmd((n, RevDirection::NotLog)));
+                    .push(Test::SysHookCmd((n, RevDirection::NOT_LOG)));
 
-                world.buffer_undo_redo(move |world: &mut World, forward: bool| {
-                    let direction = match forward {
-                        true => RevDirection::ForwardLog,
-                        false => RevDirection::BackwardLog,
-                    };
-                    world
-                        .resource_mut::<TestLog>()
-                        .0
-                        .push(Test::SysHookCmd((n, direction)));
-                });
+                world.buffer_undo_redo(Test::SysHookCmd(n));
             });
 
             // buffer reversible hook
-            world.buffer_undo_redo(move |world: &mut World, forward: bool| {
-                world
-                    .resource_mut::<TestLog>()
-                    .0
-                    .push(Test::SysHook((n, direction_from_forward(forward))));
-            });
+            world.buffer_undo_redo(Test::SysHook(n));
         });
     world
         .register_component_hooks::<SysCmdHook>()
@@ -372,15 +328,10 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
             world
                 .resource_mut::<TestLog>()
                 .0
-                .push(Test::SysCmdHook((n, RevDirection::NotLog)));
+                .push(Test::SysCmdHook((n, RevDirection::NOT_LOG)));
 
             // buffer reversible hook
-            world.buffer_undo_redo(move |world: &mut World, forward: bool| {
-                world
-                    .resource_mut::<TestLog>()
-                    .0
-                    .push(Test::SysCmdHook((n, direction_from_forward(forward))));
-            });
+            world.buffer_undo_redo(Test::SysCmdHook(n));
         });
 
     fn test_step(
@@ -413,7 +364,7 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
             apply_final_deferred,
             step,
             expected,
-            RevDirection::NotLog,
+            RevDirection::NOT_LOG,
         );
     }
 
@@ -445,7 +396,7 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
             apply_final_deferred,
             step,
             expected,
-            RevDirection::ForwardLog,
+            RevDirection::FORWARD_LOG,
         );
     }
 }
@@ -996,25 +947,14 @@ fn finalize_undo_redo() {
         Finalized,
     }
 
-    struct LogFinalize;
-
-    impl UndoRedo for LogFinalize {
-        fn redo(&mut self, _world: &mut World) {
-            unimplemented!()
-        }
-        fn undo(&mut self, _world: &mut World) {
-            unimplemented!()
-        }
-        fn finalize(self: Box<Self>, world: &mut World, undone: bool) {
-            assert!(!undone);
-            world.insert_resource(TestCommand::Finalized);
-        }
-    }
-
     fn system(mut commands: Commands) {
         commands.queue(|world: &mut World| {
             world.insert_resource(TestCommand::Applied);
-            world.buffer_undo_redo(LogFinalize);
+            world.buffer_undo_redo(|world: &mut World, finalize: UndoRedoDirection| {
+                if finalize == UndoRedoDirection::FinalizeRedone {
+                    world.insert_resource(TestCommand::Finalized);
+                }
+            });
         });
     }
 
@@ -1028,7 +968,7 @@ fn finalize_undo_redo() {
 
     // setup schedules
     let mut schedule = Schedule::new(FixedUpdate);
-    schedule.add_systems(RevMeta::update_world);
+    schedule.add_systems(RevMeta::run_rev_update);
     let err = schedule.initialize(&mut world).err();
     assert!(err.is_none(), "{:?}", err.unwrap());
     world.add_schedule(schedule);
