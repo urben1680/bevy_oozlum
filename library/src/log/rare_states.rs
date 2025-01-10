@@ -509,7 +509,7 @@ where
             .pop_past_by_logged_at(meta)
             .map(|entry_amount| self.drain_past_by_amount(entry_amount))
     }
-    pub fn truncate_future_drain_past_by_logged_at(&mut self, meta: &RevMeta) -> Drain<T> {
+    pub fn drain_past_by_logged_at(&mut self, meta: &RevMeta) -> Drain<T> {
         let amount: usize = self
             .amounts
             .drain_past_by_logged_at(meta)
