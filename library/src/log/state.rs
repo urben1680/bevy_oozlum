@@ -232,10 +232,7 @@ impl<T: LoggedAt> StateLog<T> {
         }
     }
     pub fn drain_past_by_logged_at(&mut self, meta: &RevMeta) -> Drain<T> {
-        let past_len = meta.past_world_states();
-        let to = partition_point(&self.states, self.index, |entry: &T| {
-            meta.present_world_state() - entry.logged_at() > past_len
-        });
+        let to = partition_point(&self.states, self.index, meta);
         self.index -= to;
         self.states.drain(..to)
     }

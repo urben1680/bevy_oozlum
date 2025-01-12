@@ -150,7 +150,7 @@ impl<T: LoggedAt> TransitionLog<T> {
             return None;
         }
         let logged_at = self.transitions.front()?.logged_at();
-        if !meta.contains_in_past(logged_at, false, true) {
+        if !meta.contains_in_past(logged_at, true, true) {
             self.index -= 1;
             self.transitions.pop_front()
         } else {
@@ -158,10 +158,7 @@ impl<T: LoggedAt> TransitionLog<T> {
         }
     }
     pub fn drain_past_by_logged_at(&mut self, meta: &RevMeta) -> Drain<T> {
-        let past_len = meta.past_world_states();
-        let to = partition_point(&self.transitions, self.index, |entry: &T| {
-            meta.present_world_state() - entry.logged_at() >= past_len
-        });
+        let to = partition_point(&self.transitions, self.index, meta);
         self.index -= to;
         self.transitions.drain(..to)
     }

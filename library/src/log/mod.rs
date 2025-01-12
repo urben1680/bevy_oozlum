@@ -7,7 +7,10 @@ use std::{
 
 use bevy::{log::error, reflect::Reflect, utils::all_tuples};
 
-use crate::frame::{PackedRevFrame, RevFrame};
+use crate::{
+    frame::{PackedRevFrame, RevFrame},
+    meta::RevMeta,
+};
 
 mod init_none;
 mod rare_state;
@@ -257,10 +260,15 @@ fn index_oob() -> OutOfLog {
 }
 
 /// See [`VecDeque::partition_point`], is limited to the first `max` entries.
-fn partition_point<T>(deque: &VecDeque<T>, max: usize, pred: impl Fn(&T) -> bool) -> usize {
+fn partition_point<T: LoggedAt>(deque: &VecDeque<T>, max: usize, meta: &RevMeta) -> usize {
     let (mut front, mut back) = deque.as_slices();
-    front = &front[..max];
-    back = &back[..(max - front.len())];
+    let front_max = front.len().min(max);
+    let back_max = back.len().min(max - front_max);
+    front = &front[..front_max];
+    back = &back[..back_max];
+
+    let past_len = meta.past_world_states();
+    let pred = |entry: &T| meta.present_world_state() - entry.logged_at() > past_len;
 
     if back.first().map(|v| pred(v)) == Some(true) {
         back.partition_point(pred) + front.len()
