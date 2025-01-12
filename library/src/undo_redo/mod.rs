@@ -11,7 +11,7 @@ use bevy::{
 
 use crate::{
     frame::RevFrame,
-    log::{OutOfLog, TransitionsLog},
+    log::{OutOfLog, TransitionsLog, ValueEntry},
     meta::{RevDirection, RevMeta},
 };
 
@@ -120,6 +120,7 @@ pub enum UndoRedoErr {
     RevMetaMissing,
     RevMetaWrongDirection(RevMeta),
     UndoRedoBufferMissing(RevMeta),
+    FrameMismatch { expected: RevFrame, meta: RevMeta },
     OutOfLog(RevMeta),
 }
 
@@ -144,16 +145,20 @@ impl UndoRedoLog {
                 Ok(())
             }
             Some(RevDirection::FORWARD_LOG) => {
-                for command in self
+                let ValueEntry { value, entry } = self
                     .0
                     .forward_log()
-                    .map_err(|OutOfLog| UndoRedoErr::OutOfLog(meta))?
-                    .into_iter()
-                    .map(SyncCell::get)
-                {
-                    command.redo(world);
+                    .map_err(|OutOfLog| UndoRedoErr::OutOfLog(meta.clone()))?;
+                let expected = *entry;
+                if expected != meta.present_world_state() {
+                    let _ok = self.0.backward_log();
+                    Err(UndoRedoErr::FrameMismatch { expected, meta })
+                } else {
+                    for command in value.into_iter().map(SyncCell::get) {
+                        command.redo(world);
+                    }
+                    Ok(())
                 }
-                Ok(())
             }
             _ => Err(UndoRedoErr::RevMetaWrongDirection(meta)),
         }
@@ -165,17 +170,23 @@ impl UndoRedoLog {
         if meta.get_direction() != Some(RevDirection::BackwardLog) {
             return Err(UndoRedoErr::RevMetaWrongDirection(meta.clone()));
         }
-        for command in self
+        let ValueEntry { value, entry } = self
             .0
             .backward_log()
-            .map_err(|OutOfLog| UndoRedoErr::OutOfLog(meta.clone()))?
-            .into_iter()
-            .rev()
-            .map(SyncCell::get)
-        {
-            command.undo(world);
+            .map_err(|OutOfLog| UndoRedoErr::OutOfLog(meta.clone()))?;
+        let expected = entry.wrapping_sub(1);
+        if expected != meta.present_world_state() {
+            let _ok = self.0.forward_log();
+            Err(UndoRedoErr::FrameMismatch {
+                expected,
+                meta: meta.clone(),
+            })
+        } else {
+            for command in value.into_iter().rev().map(SyncCell::get) {
+                command.undo(world);
+            }
+            Ok(())
         }
-        Ok(())
     }
     pub fn clamp_log(&mut self, world: &mut World, meta: &RevMeta) {
         for command in self.0.drain_future().0.rev().map(SyncCell::to_inner) {

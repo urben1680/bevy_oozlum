@@ -23,7 +23,7 @@ use crate::{
     error_per_flag,
     meta::{DrainPastByLoggedAt, RevMeta},
     schedule::{BackwardSet, BwdCmdSet, BwdCmdSysSet, BwdSysSet, ForwardSet, FwdSysSet},
-    undo_redo::{UndoRedoBuffer, UndoRedoLog},
+    undo_redo::{UndoRedoBuffer, UndoRedoErr, UndoRedoLog},
 };
 
 use super::{IntoRevSystemConfigs, RevSystemConfigs, RevSystemSetConfigs};
@@ -289,7 +289,12 @@ impl<T: System> System for ArcSystem<T> {
         }
 
         // reverisble commands are now in the buffer resource so commands_log can take them
-        if let Err(err) = shared.commands_log.forward(world) {
+        let result = shared.commands_log.forward(world);
+        if matches!(result, Err(UndoRedoErr::FrameMismatch { .. })) {
+            // ignore this error because bevy calls apply_deferred regardless if update ran
+            return;
+        }
+        if let Err(err) = result {
             error_per_flag!(
                 &mut self.commands_err,
                 "Reversible commands from reversible system {} could not be done/redone: {err:?}",
@@ -415,6 +420,10 @@ impl<T: System> System for CommandsBackward<T> {
             .unwrap_or_else(expect_lock(&self.name))
             .commands_log
             .backward(world);
+        if matches!(result, Err(UndoRedoErr::FrameMismatch { .. })) {
+            // ignore this error because bevy calls apply_deferred regardless if update ran
+            return;
+        }
         if let Err(err) = result {
             error_per_flag!(
                 &mut self.commands_err,

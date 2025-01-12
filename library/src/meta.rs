@@ -271,6 +271,7 @@ impl RevMeta {
     pub fn contains(&self, frame: RevFrame) -> bool {
         self.contains_in(frame, true, true)
     }
+    // todo: no longer needed to have that many options, deprecate
     pub fn contains_in(
         &self,
         frame: RevFrame,
@@ -285,6 +286,7 @@ impl RevMeta {
         }
         (self.future_end - frame) < (self.future_end - self.past_end)
     }
+    // todo: no longer needed to have that many options, simplify
     pub fn contains_in_past(
         &self,
         frame: RevFrame,
@@ -299,6 +301,7 @@ impl RevMeta {
         }
         (self.present - frame) < (self.present - self.past_end)
     }
+    // todo: no longer needed to have that many options, simplify
     pub fn contains_in_future(
         &self,
         frame: RevFrame,
@@ -577,6 +580,52 @@ impl RevMeta {
         }
     }
 }
+
+/*
+Testing different approach of periodic cleanup:
+- lazy, done by user
+- downsides:
+-- is called every non-log update
+- upsides:
+-- easier to do than observers
+-- rare logs likely do not run often enough for extra call to matter
+
+max log len <= 4
+half:  first  | second
+frame: 0 1 2 3|4 5 6 7
+meta:  # # # #|# # # #
+       # # # #|# 5 6 # cleanup id 3, log start 5, present 6
+log1:  0 s 2 #|# # # #
+       # # # #|# # 6 # cleanup id 0, should be updated and then cleaned
+log2:  # # # #|# # # #
+       # 1 # 3|4 # 6 # cleanup id 2, can be updated any order to clean which reduces part of log
+log3:  # # # #|# # # #
+       # # # #|4 # 6 # cleanup id 3, can be updated any order to clean which reduces part of log
+
+splitting in halves may be not needed, cleanup id could be the # of times the log start overflowed
+
+fixed len logs remain as they are
+
+logged at changes:
+- if own log start has same id
+-- check from start how much to drain, be aware overflow may happen along the way
+- if own log start has 1 less id
+-- find overflow in log, check from here how much to drain
+- if own log start has >1 less id
+-- clean entire past
+
+where to store id in log?
+TLog:
+TsLog:
+RareTLog:
+RareTsLog:
+
+all a RareLog next to it?
+
+It might be more economic to just behave like fixed len logs? 
+robably not with extreme examples of huge T or U
+
+*/
 
 #[cfg(test)]
 mod test {

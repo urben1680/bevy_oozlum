@@ -842,9 +842,9 @@ fn exclusive_then_non_exclusive_ignore_deferred() {
 }
 
 #[test]
-#[ignore] // TODO: Find cause and maybe report an issue at bevy.
+#[ignore] // FIXME: Find cause and maybe report an issue at bevy.
 fn non_exclusive_then_exclusive_ignore_deferred() {
-    // For some reason bevy adds a sync point between non_exclusive::<1> and fwd exclusive::<2> in ForwardSet.
+    // For some reason bevy adds a sync point between non_exclusive::<1> and exclusive::<2> in ForwardSet.
     // The implemention is simple here, using the vanilla before_ignore_deferred in the case of config #0.
     // The sync point disappears if the BackwardSet is empty.
     // Chaining ForwardSet and BackwardSet has no effect.

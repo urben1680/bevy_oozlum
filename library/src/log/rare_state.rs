@@ -289,11 +289,7 @@ impl<T: LoggedAt> RareStateLog<T> {
         // Instead `RareValue::skips` is ignored here and one entry less is removed.
         // It might be possible to ignore this issue if the entry at the partition point has no skips,
         // but simplicity is favored here to keep lookups, operations and maintenance burden lower.
-        let past_len = meta.past_world_states();
-        let to = partition_point(&self.states, self.index, |entry: &RareValue<T>| {
-            meta.present_world_state() - entry.logged_at() > past_len
-        })
-        .saturating_sub(1);
+        let to = partition_point(&self.states, self.index, meta).saturating_sub(1);
         self.past_len -= to // `to` plus sum of `RareValue::skips` == sum of `RareValue::len` but with less operations 
             + self
                 .states
