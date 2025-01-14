@@ -383,7 +383,7 @@ fn render_game(
     let padding = " ".repeat(padding);
 
     for Trash { row, tossed_at } in trash.iter().cloned() {
-        if row == 3 && !meta.contains_in_past(tossed_at, true, true) {
+        if row == 3 && !meta.past_contains(tossed_at) { // todo: no longer includes present
             // The log in system_3 is only cleaned up when the system runs.
             // As the system does not run every frame, it might not despawn as early as possible but remains in the world.
             // These trashs would cause a panic further down, so we skip them.
