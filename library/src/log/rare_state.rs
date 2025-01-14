@@ -277,7 +277,7 @@ impl<T: LoggedAt> RareStateLog<T> {
         // It might be possible to ignore this issue if the oldest entry has no skips,
         // but simplicity is favored here to keep lookups, operations and maintenance burden lower.
         let logged_at = self.states.get(1)?.logged_at();
-        if !meta.contains_in_past(logged_at, true, true) {
+        if !meta.past_contains(logged_at) {
             self.pop_past()
         } else {
             None
