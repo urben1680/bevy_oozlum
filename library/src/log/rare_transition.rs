@@ -245,7 +245,7 @@ impl<T: LoggedAt> RareTransitionLog<T> {
             return None;
         }
         let logged_at = self.transitions.front()?.logged_at();
-        if !meta.contains_in_past(logged_at, true, true) {
+        if !meta.past_contains(logged_at) {
             self.pop_past()
         } else {
             None
