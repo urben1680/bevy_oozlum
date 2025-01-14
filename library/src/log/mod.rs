@@ -24,6 +24,19 @@ mod states;
 mod transition;
 mod transitions;
 
+mod dense_state;
+mod dense_states;
+mod dense_transition;
+mod dense_transitions;
+mod sparse_state;
+mod sparse_states;
+mod sparse_transition;
+mod sparse_transitions;
+mod framed_state;
+mod framed_states;
+mod framed_transition;
+mod framed_transitions;
+
 pub use init_none::InitNoneLog;
 pub use rare_state::RareStateLog;
 pub use rare_states::RareStatesLog;
