@@ -224,7 +224,7 @@ impl<T: LoggedAt> StateLog<T> {
             return None;
         }
         let logged_at = self.states.front()?.logged_at();
-        if !meta.contains_in_past(logged_at, true, true) {
+        if !meta.past_contains(logged_at) {
             self.index -= 1;
             self.states.pop_front()
         } else {
