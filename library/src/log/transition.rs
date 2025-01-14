@@ -150,7 +150,7 @@ impl<T: LoggedAt> TransitionLog<T> {
             return None;
         }
         let logged_at = self.transitions.front()?.logged_at();
-        if !meta.contains_in_past(logged_at, true, true) {
+        if !meta.past_contains(logged_at) {
             self.index -= 1;
             self.transitions.pop_front()
         } else {
