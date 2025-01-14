@@ -269,51 +269,20 @@ impl RevMeta {
         self.future_end - self.past_end + 1 // both ends are inclusive
     }
     pub fn contains(&self, frame: RevFrame) -> bool {
-        self.contains_in(frame, true, true)
-    }
-    // todo: no longer needed to have that many options, deprecate
-    pub fn contains_in(
-        &self,
-        frame: RevFrame,
-        past_end_inclusive: bool,
-        future_end_inclusive: bool,
-    ) -> bool {
-        if frame == self.past_end {
-            return past_end_inclusive;
-        }
-        if frame == self.future_end {
-            return future_end_inclusive;
-        }
-        (self.future_end - frame) < (self.future_end - self.past_end)
+        (self.future_end - frame) <= (self.future_end - self.past_end)
     }
     // todo: no longer needed to have that many options, simplify
-    pub fn contains_in_past(
+    pub fn past_contains(
         &self,
-        frame: RevFrame,
-        past_end_inclusive: bool,
-        present_inclusive: bool,
+        frame: RevFrame
     ) -> bool {
-        if frame == self.past_end {
-            return past_end_inclusive;
-        }
-        if frame == self.present {
-            return present_inclusive;
-        }
-        (self.present - frame) < (self.present - self.past_end)
+        (self.present - frame).wrapping_sub(1) < (self.present - self.past_end)
     }
     // todo: no longer needed to have that many options, simplify
-    pub fn contains_in_future(
+    pub fn future_contains(
         &self,
         frame: RevFrame,
-        present_inclusive: bool,
-        future_end_inclusive: bool,
     ) -> bool {
-        if frame == self.present {
-            return present_inclusive;
-        }
-        if frame == self.future_end {
-            return future_end_inclusive;
-        }
         (self.future_end - frame) < (self.future_end - self.present)
     }
     pub fn frame_cmp(&self, lhs: RevFrame, rhs: RevFrame) -> std::cmp::Ordering {
@@ -590,6 +559,9 @@ Testing different approach of periodic cleanup:
 -- easier to do than observers
 -- rare logs likely do not run often enough for extra call to matter
 
+deprecate Rare logs with logged_at functionality
+logged_at functionality in new log wrapper
+
 max log len <= 4
 half:  first  | second
 frame: 0 1 2 3|4 5 6 7
@@ -603,6 +575,7 @@ log3:  # # # #|# # # #
        # # # #|4 # 6 # cleanup id 3, can be updated any order to clean which reduces part of log
 
 splitting in halves may be not needed, cleanup id could be the # of times the log start overflowed
+but then the contains check is harder/impossible?
 
 fixed len logs remain as they are
 
@@ -614,17 +587,79 @@ logged at changes:
 - if own log start has >1 less id
 -- clean entire past
 
-where to store id in log?
-TLog:
-TsLog:
-RareTLog:
-RareTsLog:
+because logic is moved to push place, the log methods need to be merged, push + drains
+complicated drain logic undesired because vec_deque::Drain cannot be stored with &mut VecDeque
+so push always happens first, then a drain is returned
 
-all a RareLog next to it?
+for entry in log.future_drain() { ... }
+for entry in log.push_drain_past(("abs", now)) { ... }
 
-It might be more economic to just behave like fixed len logs? 
-robably not with extreme examples of huge T or U
+since there is no VecDeque::truncate_front, no push method without drain is useful
+borrow checker wont complain if drain is not assigned to a variable
 
+because push+drain is combined, there can be no overflow in the log after the call,
+the overflow id is valid for the whole log including present
+                limited by  push
+DenseStateLog   len         push_drain_past(max_len, T) -> Option<T>
+DenseStatesLog  len         push_drain_past(max_len, impl FnOnce(LogMut) -> U) -> Drain
+                            try_push_drain_past(max_len, impl FnOnce(LogMut) -> U) -> Result<Drain, AmountErr>
+SparseStateLog  len         push_drain_past(max_len, Option<T>) -> Drain
+SparseStatesLog len         push_drain_past(max_len, impl FnOnce(LogMut) -> U) -> Drain
+                            try_push_drain_past(max_len, impl FnOnce(LogMut) -> U) -> Result<Drain, AmountErr>
+FramedStateLog  frame       push_drain_past(meta, T) -> Drain
+FramedStatesLog frame       push_drain_past(meta, impl FnOnce(LogMut) -> U) -> Drain
+                            try_push_drain_past(meta, impl FnOnce(LogMut) -> U) -> Result<Drain, AmountErr>
+
+// idea: example that shows behavior of all log variants, transition variants are missing yet, rewrite to be a system
+fn state_update(
+    value: i32,
+    meta: &RevMeta,
+    mut condition_log: Local<SparseTransitionLog<()>>,
+
+    mut dense_state: Local<DenseStateLog<i32>>,
+    mut sparse_state: Local<SparseStateLog<i32>>,
+    mut framed_state: Local<FramedStateLog<i32>>,
+
+    mut dense_xor: Local<DenseTransitionLog<i32>>,
+    mut sparse_xor: Local<SparseTransitionLog<i32>>,
+    mut framed_xor: Local<FramedTransitionLog<i32>>,
+) {
+    let past_len = meta.past_log_len() as usize;
+
+    match meta.direction() {
+        RevDirection::NOT_LOG => if condition {
+            dense.push_drain_past(past_len, value);
+            sparse.push_drain_past(past_len, Some(value));
+            framed.push_drain_past(meta, value);
+        } else {
+            let previous_value = *dense;
+            dense.push_drain_past(past_len, previous_value);
+            sparse.push_drain_past(past_len, None);
+        },
+        RevDirection::FORWARD_LOG => if condition {
+            assert_eq!(dense.forward_log(), Ok(()));
+            assert_eq!(sparse.forward_log(), Ok(true));
+            assert_eq!(framed.forward_log()), Ok(()));
+        } else {
+            assert_eq!(dense.forward_log()), Ok(()));
+            assert_eq!(sparse.forward_log(), Ok(false));
+        },
+        RevDirection::BackwardLog => if condition {
+            assert_eq!(dense.backward_log()), Ok(()));
+            assert_eq!(sparse.backward_log(), Ok(true));
+            assert_eq!(framed.checked_backward_log(meta.present_world_state())), Ok(()));
+        } else {
+            assert_eq!(dense.backward_log()), Ok(()));
+            assert_eq!(sparse.backward_log(), Ok(false));
+        }
+    }
+
+    assert_eq!(*dense, *sparse);
+    assert_eq!(*sparse, *framed);
+}
+
+if vec_deque::Drain could be iterated twice, U could be returned as well at *StatesLog
+does not need to, just iterate regularily and return a drain
 */
 
 #[cfg(test)]
@@ -787,80 +822,37 @@ mod test {
     #[test]
     fn contains_returns_expected() {
         let meta = arrange(None, 3, 1..=5, InternalDirection::Pause);
+        assert_eq!(meta.contains(RevFrame::checked_new(0)), false, "{meta:#?}");
+        assert_eq!(meta.contains(RevFrame::checked_new(1)), true, "{meta:#?}");
+        assert_eq!(meta.contains(RevFrame::checked_new(2)), true, "{meta:#?}");
+        assert_eq!(meta.contains(RevFrame::checked_new(3)), true, "{meta:#?}");
+        assert_eq!(meta.contains(RevFrame::checked_new(4)), true, "{meta:#?}");
+        assert_eq!(meta.contains(RevFrame::checked_new(5)), true, "{meta:#?}");
+        assert_eq!(meta.contains(RevFrame::checked_new(6)), false, "{meta:#?}");
+    }
 
-        let frame: [RevFrame; 7] = std::array::from_fn(|n| RevFrame::checked_new(n as u32));
+    #[test]
+    fn past_contains_returns_expected() {
+        let meta = arrange(None, 3, 1..=5, InternalDirection::Pause);
+        assert_eq!(meta.past_contains(RevFrame::checked_new(0)), false, "{meta:#?}");
+        assert_eq!(meta.past_contains(RevFrame::checked_new(1)), true, "{meta:#?}");
+        assert_eq!(meta.past_contains(RevFrame::checked_new(2)), true, "{meta:#?}");
+        assert_eq!(meta.past_contains(RevFrame::checked_new(3)), false, "{meta:#?}");
+        assert_eq!(meta.past_contains(RevFrame::checked_new(4)), false, "{meta:#?}");
+        assert_eq!(meta.past_contains(RevFrame::checked_new(5)), false, "{meta:#?}");
+        assert_eq!(meta.past_contains(RevFrame::checked_new(6)), false, "{meta:#?}");
+    }
 
-        let contains = || {
-            assert_eq!(meta.contains(frame[0]), false, "{meta:#?}");
-            assert_eq!(meta.contains(frame[1]), true, "{meta:#?}");
-            assert_eq!(meta.contains(frame[2]), true, "{meta:#?}");
-            assert_eq!(meta.contains(frame[3]), true, "{meta:#?}");
-            assert_eq!(meta.contains(frame[4]), true, "{meta:#?}");
-            assert_eq!(meta.contains(frame[5]), true, "{meta:#?}");
-            assert_eq!(meta.contains(frame[6]), false, "{meta:#?}");
-        };
-
-        let contains_in = |past_end_inclusive, future_end_inclusive| {
-            let test = |n: usize, expected: bool| {
-                assert_eq!(
-                meta.contains_in(frame[n], past_end_inclusive, future_end_inclusive),
-                expected, "past_end_inclusive:{past_end_inclusive}, future_end_inclusive:{future_end_inclusive}\n{meta:#?}"
-            )
-            };
-            test(0, false);
-            test(1, past_end_inclusive);
-            test(2, true);
-            test(3, true);
-            test(4, true);
-            test(5, future_end_inclusive);
-            test(6, false);
-        };
-
-        let contains_in_past = |past_end_inclusive, present_inclusive| {
-            let test = |n: usize, expected: bool| {
-                assert_eq!(
-                meta.contains_in_past(frame[n], past_end_inclusive, present_inclusive),
-                expected, "past_end_inclusive:{past_end_inclusive}, present_inclusive:{present_inclusive}\n{meta:#?}"
-            )
-            };
-            test(0, false);
-            test(1, past_end_inclusive);
-            test(2, true);
-            test(3, present_inclusive);
-            test(4, false);
-            test(5, false);
-            test(6, false);
-        };
-
-        let contains_in_future = |present_inclusive, future_end_inclusive| {
-            let test = |n: usize, expected: bool| {
-                assert_eq!(
-                meta.contains_in_future(frame[n], present_inclusive, future_end_inclusive),
-                expected, "present_inclusive:{present_inclusive}, future_end_inclusive:{future_end_inclusive}\n{meta:#?}"
-            )
-            };
-            test(0, false);
-            test(1, false);
-            test(2, false);
-            test(3, present_inclusive);
-            test(4, true);
-            test(5, future_end_inclusive);
-            test(6, false);
-        };
-
-        contains();
-        contains_in(false, false);
-        contains_in(false, true);
-        contains_in(true, false);
-        contains_in(true, true);
-        contains_in_past(false, false);
-        contains_in_past(false, true);
-        contains_in_past(true, false);
-        contains_in_past(true, true);
-        contains_in_future(false, false);
-        contains_in_future(false, true);
-        contains_in_future(true, false);
-        contains_in_future(true, true);
+    #[test]
+    fn future_contains_returns_expected() {
+        let meta = arrange(None, 3, 1..=5, InternalDirection::Pause);
+        assert_eq!(meta.future_contains(RevFrame::checked_new(0)), false, "{meta:#?}");
+        assert_eq!(meta.future_contains(RevFrame::checked_new(1)), false, "{meta:#?}");
+        assert_eq!(meta.future_contains(RevFrame::checked_new(2)), false, "{meta:#?}");
+        assert_eq!(meta.future_contains(RevFrame::checked_new(3)), false, "{meta:#?}");
+        assert_eq!(meta.future_contains(RevFrame::checked_new(4)), true, "{meta:#?}");
+        assert_eq!(meta.future_contains(RevFrame::checked_new(5)), true, "{meta:#?}");
+        assert_eq!(meta.future_contains(RevFrame::checked_new(6)), false, "{meta:#?}");
     }
 
     #[test]
