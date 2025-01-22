@@ -10,6 +10,7 @@ use bevy::{log::error, reflect::Reflect, utils::all_tuples};
 use crate::{
     frame::{PackedRevFrame, RevFrame},
     meta::RevMeta,
+    resize_ne_bytes,
 };
 
 mod init_none;
@@ -28,14 +29,14 @@ mod dense_state;
 mod dense_states;
 mod dense_transition;
 mod dense_transitions;
-mod sparse_state;
-mod sparse_states;
-mod sparse_transition;
-mod sparse_transitions;
 mod framed_state;
 mod framed_states;
 mod framed_transition;
 mod framed_transitions;
+mod sparse_state;
+mod sparse_states;
+mod sparse_transition;
+mod sparse_transitions;
 
 pub use init_none::InitNoneLog;
 pub use rare_state::RareStateLog;
@@ -48,6 +49,11 @@ pub use state::StateLog;
 pub use states::StatesLog;
 pub use transition::TransitionLog;
 pub use transitions::TransitionsLog;
+
+pub use dense_state::DenseStateLog;
+pub use dense_states::DenseStatesLog;
+pub use dense_transition::DenseTransitionLog;
+pub use dense_transitions::DenseTransitionsLog;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct OutOfLog;
@@ -104,7 +110,7 @@ impl<'a, T> Extend<T> for LogMut<'a, T> {
     }
 }
 
-pub struct AmountErr<I, Log: WithAmount> {
+pub struct AmountErrOld<I, Log: WithAmount> {
     pub values: I,
     pub entry: Log::Entry,
     pub pushed_amount: usize,
@@ -114,7 +120,7 @@ pub struct AmountErr<I, Log: WithAmount> {
 }
 
 #[allow(private_bounds)]
-impl<I, Log: WithAmountInternal> AmountErr<I, Log> {
+impl<I, Log: WithAmountInternal> AmountErrOld<I, Log> {
     // taking &self makes it easier to call this method
     pub fn max_amount(&self) -> usize {
         Log::amount_to_usize(Log::MAX)
@@ -123,10 +129,34 @@ impl<I, Log: WithAmountInternal> AmountErr<I, Log> {
 
 // makes unwrap possible without requiring additional Debug bounds everywhere
 #[allow(private_bounds)]
-impl<I, Log: WithAmountInternal> Debug for AmountErr<I, Log> {
+impl<I, Log: WithAmountInternal> Debug for AmountErrOld<I, Log> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct(std::any::type_name::<Self>())
             .field("pushed_amount", &self.pushed_amount)
+            .field("max_amount", &self.max_amount())
+            .finish_non_exhaustive()
+    }
+}
+
+pub struct AmountErr<I, U, const AMOUNT_BYTES: usize> {
+    pub values: I,
+    pub entry_amount: EntryAmount<U, AMOUNT_BYTES>,
+}
+
+impl<I, U, const AMOUNT_BYTES: usize> AmountErr<I, U, AMOUNT_BYTES> {
+    pub const MAX_AMOUNT: usize = usize::MAX >> ((USIZE_BYTES - AMOUNT_BYTES) * 8);
+    // easier to call with &self during error handling
+    pub fn max_amount(&self) -> usize {
+        Self::MAX_AMOUNT
+    }
+}
+
+// makes unwrap possible without requiring additional Debug bounds everywhere
+#[allow(private_bounds)]
+impl<I, U, const AMOUNT_BYTES: usize> Debug for AmountErr<I, U, AMOUNT_BYTES> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct(std::any::type_name::<Self>())
+            .field("pushed_amount", &self.entry_amount.amount())
             .field("max_amount", &self.max_amount())
             .finish_non_exhaustive()
     }
@@ -149,7 +179,6 @@ impl<'a, T: Iterator, U> IntoIterator for &'a mut ValueEntry<T, U> {
 const USIZE_BYTES: usize = usize::BITS as usize / 8;
 
 #[derive(Clone, PartialEq, Reflect)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] // todo: manual impl with usize as intermediate skips value
 struct RareValue<T> {
     value: T,
     /// If `T` is a state, then these are the skips _after_ the state.
@@ -161,7 +190,27 @@ struct RareValue<T> {
     ///
     /// This value never gets reduced by `pop`/`drain_past_by_len` to be consistent with the behavior
     /// of `pop`/`drain_past_by_logged_at` which cannot interpret these skips as frames as pointed out.
-    skips_ne: [u8; USIZE_BYTES as usize],
+    skips_ne: [u8; USIZE_BYTES],
+}
+
+#[cfg(feature = "serde")]
+impl<T: serde::Serialize> serde::Serialize for RareValue<T> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        (&self.value, &self.skips()).serialize(serializer)
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de, T: serde::Deserialize<'de>> serde::Deserialize<'de> for RareValue<T> {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let (value, skips) = <(T, usize) as serde::Deserialize<'de>>::deserialize(deserializer)?;
+        let rare_value = Self::new(value, skips);
+        if skips == rare_value.skips() {
+            Ok(rare_value)
+        } else {
+            Err(serde::de::Error::custom("todo"))
+        }
+    }
 }
 
 impl<T: Debug> Debug for RareValue<T> {
@@ -224,13 +273,13 @@ impl<T> FusedIterator for RareDrain<'_, T> {}
 // methods which return this type document these bounds themselves.
 #[allow(private_bounds)]
 #[derive(Debug, Clone, Reflect)]
-pub struct EntryAmount<Log: WithAmountInternal> {
+pub struct EntryAmountOld<Log: WithAmountInternal> {
     pub entry: Log::Entry,
     amount: Log::Amount,
 }
 
 #[allow(private_bounds)]
-impl<Log: WithAmountInternal> EntryAmount<Log> {
+impl<Log: WithAmountInternal> EntryAmountOld<Log> {
     const fn zero(entry: <Log as WithAmount>::Entry) -> Self {
         Self {
             entry,
@@ -244,7 +293,7 @@ impl<Log: WithAmountInternal> EntryAmount<Log> {
 }
 
 #[cfg(feature = "serde")]
-impl<Log: WithAmountInternal<Entry: serde::Serialize>> serde::Serialize for EntryAmount<Log> {
+impl<Log: WithAmountInternal<Entry: serde::Serialize>> serde::Serialize for EntryAmountOld<Log> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         (&self.entry, self.amount()).serialize(serializer)
     }
@@ -252,7 +301,7 @@ impl<Log: WithAmountInternal<Entry: serde::Serialize>> serde::Serialize for Entr
 
 #[cfg(feature = "serde")]
 impl<'de, Log: WithAmountInternal<Entry: serde::Deserialize<'de>>> serde::Deserialize<'de>
-    for EntryAmount<Log>
+    for EntryAmountOld<Log>
 {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let (entry, amount) =
@@ -260,6 +309,55 @@ impl<'de, Log: WithAmountInternal<Entry: serde::Deserialize<'de>>> serde::Deseri
         match <Log as WithAmountInternal>::usize_to_amount(amount) {
             Ok(amount) => Ok(Self { entry, amount }),
             Err(_) => Err(serde::de::Error::custom("todo")),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Reflect)]
+pub struct EntryAmount<U, const AMOUNT_BYTES: usize = USIZE_BYTES> {
+    pub entry: U,
+    amount: [u8; AMOUNT_BYTES],
+}
+
+impl<U, const AMOUNT_BYTES: usize> EntryAmount<U, AMOUNT_BYTES> {
+    const fn zero(entry: U) -> Self {
+        Self {
+            entry,
+            amount: [0; AMOUNT_BYTES],
+        }
+    }
+    fn new(entry: U, amount: usize) -> Self {
+        Self {
+            entry,
+            amount: resize_ne_bytes(amount.to_ne_bytes()),
+        }
+    }
+    // todo: doc example with Iterator::take
+    pub fn amount(&self) -> usize {
+        usize::from_ne_bytes(resize_ne_bytes(self.amount))
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<U: serde::Serialize, const AMOUNT_BYTES: usize> serde::Serialize
+    for EntryAmount<U, AMOUNT_BYTES>
+{
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        (&self.entry, self.amount()).serialize(serializer)
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de, U: serde::Deserialize<'de>, const AMOUNT_BYTES: usize> serde::Deserialize<'de>
+    for EntryAmount<U, AMOUNT_BYTES>
+{
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let (entry, amount) = <(U, usize) as serde::Deserialize<'de>>::deserialize(deserializer)?;
+        let entry_amount = Self::new(entry, amount);
+        if amount == entry_amount.amount() {
+            Ok(entry_amount)
+        } else {
+            Err(serde::de::Error::custom("todo"))
         }
     }
 }
@@ -309,7 +407,7 @@ impl LoggedAt for PackedRevFrame {
     }
 }
 
-impl<Log: WithAmountInternal<Entry: LoggedAt>> LoggedAt for EntryAmount<Log> {
+impl<Log: WithAmountInternal<Entry: LoggedAt>> LoggedAt for EntryAmountOld<Log> {
     fn logged_at(&self) -> RevFrame {
         self.entry.logged_at()
     }
