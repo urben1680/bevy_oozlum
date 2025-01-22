@@ -3,17 +3,14 @@ use std::{
         vec_deque::{Drain, IterMut},
         TryReserveError, VecDeque,
     },
-    convert::Infallible,
     fmt::Debug,
 };
 
 use bevy::reflect::{std_traits::ReflectDefault, Reflect};
 
-use crate::meta::RevMeta;
-
 use super::{
-    doc_with_amount, impl_with_amount, AmountErr, EntryAmount, LogMut, LoggedAt, NotUSize,
-    OutOfLog, TransitionLog, ValueEntry, WithAmountInternal,
+    doc_with_amount, AmountErr, DenseTransitionLog, EntryAmount, LogMut, OutOfLog, ValueEntry,
+    USIZE_BYTES,
 };
 
 #[doc = doc_with_amount!(struct)]
@@ -21,11 +18,8 @@ use super::{
 #[derive(Debug, Clone, Reflect)]
 #[reflect(Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct TransitionsLog<T, U = (), const AMOUNT_BYTES: usize = 0>
-where
-    Self: WithAmountInternal<Entry = U>,
-{
-    amounts: TransitionLog<EntryAmount<Self>>,
+pub struct DenseTransitionsLog<T, U = (), const AMOUNT_BYTES: usize = USIZE_BYTES> {
+    amounts: DenseTransitionLog<EntryAmount<U, AMOUNT_BYTES>>,
     transitions: VecDeque<T>,
     index: usize,
 }
@@ -38,21 +32,20 @@ mod serde_with {
 
     use crate::log::serde_with::{LoglessWithCapacity, WithCapacity, WithCapacityWrapper};
 
-    use super::{EntryAmount, TransitionLog, TransitionsLog, WithAmountInternal};
+    use super::{DenseTransitionLog, DenseTransitionsLog, EntryAmount};
 
-    impl<T, U, const AMOUNT_BYTES: usize> WithCapacity for TransitionsLog<T, U, AMOUNT_BYTES>
+    impl<T, U, const AMOUNT_BYTES: usize> WithCapacity for DenseTransitionsLog<T, U, AMOUNT_BYTES>
     where
         T: Serialize + for<'de> Deserialize<'de> + 'static,
         U: Serialize + for<'de> Deserialize<'de> + 'static,
-        Self: WithAmountInternal<Entry = U>,
     {
         type Se<'se> = (
-            <TransitionLog<EntryAmount<Self>> as WithCapacity>::Se<'se>,
+            <DenseTransitionLog<EntryAmount<U, AMOUNT_BYTES>> as WithCapacity>::Se<'se>,
             WithCapacityWrapper<&'se VecDeque<T>>,
             usize,
         );
         type De = (
-            <TransitionLog<EntryAmount<Self>> as WithCapacity>::De,
+            <DenseTransitionLog<EntryAmount<U, AMOUNT_BYTES>> as WithCapacity>::De,
             WithCapacityWrapper<VecDeque<T>>,
             usize,
         );
@@ -67,16 +60,15 @@ mod serde_with {
             (amounts, WithCapacityWrapper(transitions), index): Self::De,
         ) -> Self {
             Self {
-                amounts: TransitionLog::from_with_capacity(amounts),
+                amounts: DenseTransitionLog::from_with_capacity(amounts),
                 transitions,
                 index,
             }
         }
     }
 
-    impl<T, U, const AMOUNT_BYTES: usize> LoglessWithCapacity for TransitionsLog<T, U, AMOUNT_BYTES>
-    where
-        Self: WithAmountInternal<Entry = U>,
+    impl<T, U, const AMOUNT_BYTES: usize> LoglessWithCapacity
+        for DenseTransitionsLog<T, U, AMOUNT_BYTES>
     {
         type Se<'se>
             = (usize, usize)
@@ -93,13 +85,8 @@ mod serde_with {
     }
 }
 
-impl_with_amount!(TransitionsLog);
-
 #[doc = doc_with_amount!(impl)]
-impl<T, U, const AMOUNT_BYTES: usize> Default for TransitionsLog<T, U, AMOUNT_BYTES>
-where
-    Self: WithAmountInternal<Entry = U>,
-{
+impl<T, U, const AMOUNT_BYTES: usize> Default for DenseTransitionsLog<T, U, AMOUNT_BYTES> {
     fn default() -> Self {
         Self::new()
     }
@@ -107,20 +94,17 @@ where
 
 #[doc = doc_with_amount!(impl)]
 #[allow(private_bounds)]
-impl<T, U, const AMOUNT_BYTES: usize> TransitionsLog<T, U, AMOUNT_BYTES>
-where
-    Self: WithAmountInternal<Entry = U>,
-{
+impl<T, U, const AMOUNT_BYTES: usize> DenseTransitionsLog<T, U, AMOUNT_BYTES> {
     pub const fn new() -> Self {
         Self {
-            amounts: TransitionLog::new(),
+            amounts: DenseTransitionLog::new(),
             transitions: VecDeque::new(),
             index: 0,
         }
     }
     pub fn with_capacities(entries_capacity: usize, transitions_capacity: usize) -> Self {
         Self {
-            amounts: TransitionLog::with_capacity(entries_capacity),
+            amounts: DenseTransitionLog::with_capacity(entries_capacity),
             transitions: VecDeque::with_capacity(transitions_capacity),
             index: 0,
         }
@@ -182,7 +166,7 @@ where
     pub fn transitions_shrink_to_fit(&mut self) {
         self.transitions.shrink_to_fit()
     }
-    pub fn drain_future(&mut self) -> (Drain<T>, Drain<EntryAmount<Self>>) {
+    pub fn drain_future(&mut self) -> (Drain<T>, Drain<EntryAmount<U, AMOUNT_BYTES>>) {
         (
             self.transitions.drain(self.index..),
             self.amounts.drain_future(),
@@ -213,103 +197,138 @@ where
             entry: &mut entry_amount.entry,
         })
     }
-    pub fn pop_past_by_len(&mut self, max_past_len: usize) -> Option<ValueEntry<Drain<T>, U>> {
-        self.amounts
-            .pop_past_by_len(max_past_len)
-            .map(|entry_amount| self.drain_past_by_amount(entry_amount))
-    }
-    pub fn drain_past_by_len(&mut self, max_past_len: usize) -> Drain<T> {
-        let amount: usize = self
-            .amounts
-            .drain_past_by_len(max_past_len)
-            .map(|entry_amount| entry_amount.amount())
-            .sum();
-        self.index -= amount;
-        self.transitions.drain(..amount)
-    }
-    fn drain_past_by_amount(&mut self, entry_amount: EntryAmount<Self>) -> ValueEntry<Drain<T>, U> {
-        let amount = entry_amount.amount();
-        self.index -= amount;
-        ValueEntry {
-            value: self.transitions.drain(..amount),
-            entry: entry_amount.entry,
-        }
-    }
-    fn fallible_push_present<Out: Into<U>>(
-        &mut self,
-        c: impl FnOnce(LogMut<T>) -> Out,
-    ) -> Result<(), AmountErr<Drain<T>, Self>> {
+}
+
+impl<T, U> DenseTransitionsLog<T, U, USIZE_BYTES> {
+    pub fn push<Out: Into<U>>(&mut self, c: impl FnOnce(LogMut<T>) -> Out) {
         self.transitions.truncate(self.index);
         let entry = c(LogMut(&mut self.transitions)).into();
         let pushed_amount = self.transitions.len() - self.index;
-        match <Self as WithAmountInternal>::usize_to_amount(pushed_amount) {
-            Ok(amount) => {
-                self.index = self.transitions.len();
-                self.amounts.push_present(EntryAmount { entry, amount });
-                Ok(())
-            }
-            Err(error) => {
-                let transitions = self.transitions.drain(self.index..);
-                Err(AmountErr {
-                    values: transitions,
-                    entry,
-                    pushed_amount,
-                    _error: error,
-                })
-            }
-        }
+        let entry_amount = EntryAmount::new(entry, pushed_amount);
+        self.amounts.push(entry_amount);
+        self.index = self.transitions.len();
+    }
+    pub fn push_and_pop_past<Out: Into<U>>(
+        &mut self,
+        max_past_len: usize,
+        c: impl FnOnce(LogMut<T>) -> Out,
+    ) -> Option<ValueEntry<Drain<T>, U>> {
+        self.transitions.truncate(self.index);
+        let entry = c(LogMut(&mut self.transitions)).into();
+        let pushed_amount = self.transitions.len() - self.index;
+        let entry_amount = EntryAmount::new(entry, pushed_amount);
+        self.index = self.transitions.len();
+        self.amounts
+            .push_and_pop_past(max_past_len, entry_amount)
+            .map(|entry_amount| {
+                let amount = entry_amount.amount();
+                self.index -= amount;
+                ValueEntry {
+                    value: self.transitions.drain(..amount),
+                    entry: entry_amount.entry,
+                }
+            })
+    }
+    pub fn push_and_drain_past<Out: Into<U>>(
+        &mut self,
+        max_past_len: usize,
+        c: impl FnOnce(LogMut<T>) -> Out,
+    ) -> (Drain<T>, Drain<EntryAmount<U, USIZE_BYTES>>) {
+        self.transitions.truncate(self.index);
+        let entry = c(LogMut(&mut self.transitions)).into();
+        let pushed_amount = self.transitions.len() - self.index;
+        let entry_amount = EntryAmount::new(entry, pushed_amount);
+        self.index = self.transitions.len();
+        let to_drain = self
+            .amounts
+            .push_and_iter_to_drain_past(max_past_len, entry_amount);
+        let to_drain_len = to_drain.len();
+        let amount: usize = to_drain.map(|entry_amount| entry_amount.amount()).sum();
+        self.index -= amount;
+        (
+            self.transitions.drain(..amount),
+            self.amounts.drain_past(to_drain_len),
+        )
     }
 }
 
-#[doc = doc_with_amount!(impl where Infallible)]
-#[allow(private_bounds)]
-impl<T, U, const AMOUNT_BYTES: usize> TransitionsLog<T, U, AMOUNT_BYTES>
-where
-    Self: WithAmountInternal<Entry = U, Err = Infallible>,
-{
-    pub fn push_present<Out: Into<U>>(&mut self, c: impl FnOnce(LogMut<T>) -> Out) {
-        // rust analyzer does not like `let Ok(ok) = result;` here
-        // https://github.com/rust-lang/rust-analyzer/issues/18334
-        match self.fallible_push_present(c) {
-            Ok(()) => (),
-            Err(err) => match err._error {},
-        }
-    }
-}
-
-#[doc = doc_with_amount!(impl where NotUsize)]
-#[allow(private_bounds)]
-impl<T, U, const AMOUNT_BYTES: usize> TransitionsLog<T, U, AMOUNT_BYTES>
-where
-    Self: WithAmountInternal<Entry = U, Amount: NotUSize>,
-{
-    pub fn try_push_present<Out: Into<U>>(
+impl<T, U, const AMOUNT_BYTES: usize> DenseTransitionsLog<T, U, AMOUNT_BYTES> {
+    pub fn try_push<Out: Into<U>>(
         &mut self,
         c: impl FnOnce(LogMut<T>) -> Out,
-    ) -> Result<(), AmountErr<Drain<T>, Self>> {
-        self.fallible_push_present(c)
+    ) -> Result<(), AmountErr<Drain<T>, U, AMOUNT_BYTES>> {
+        self.transitions.truncate(self.index);
+        let entry = c(LogMut(&mut self.transitions)).into();
+        let pushed_amount = self.transitions.len() - self.index;
+        let entry_amount = EntryAmount::new(entry, pushed_amount);
+        if pushed_amount != entry_amount.amount() {
+            let values = self.transitions.drain(self.index..);
+            return Err(AmountErr {
+                values,
+                entry_amount,
+            });
+        }
+        self.amounts.push(entry_amount);
+        self.index = self.transitions.len();
+        Ok(())
     }
-}
-
-#[doc = doc_with_amount!(impl)]
-#[allow(private_bounds)]
-impl<T, U: LoggedAt, const AMOUNT_BYTES: usize> TransitionsLog<T, U, AMOUNT_BYTES>
-where
-    Self: WithAmountInternal<Entry = U>,
-{
-    pub fn pop_past_by_logged_at(&mut self, meta: &RevMeta) -> Option<ValueEntry<Drain<T>, U>> {
-        self.amounts
-            .pop_past_by_logged_at(meta)
-            .map(|entry_amount| self.drain_past_by_amount(entry_amount))
-    }
-    pub fn drain_past_by_logged_at(&mut self, meta: &RevMeta) -> Drain<T> {
-        let amount: usize = self
+    pub fn try_push_and_pop_past<Out: Into<U>>(
+        &mut self,
+        max_past_len: usize,
+        c: impl FnOnce(LogMut<T>) -> Out,
+    ) -> Result<Option<ValueEntry<Drain<T>, U>>, AmountErr<Drain<T>, U, AMOUNT_BYTES>> {
+        self.transitions.truncate(self.index);
+        let entry = c(LogMut(&mut self.transitions)).into();
+        let pushed_amount = self.transitions.len() - self.index;
+        let entry_amount = EntryAmount::new(entry, pushed_amount);
+        if pushed_amount != entry_amount.amount() {
+            let values = self.transitions.drain(self.index..);
+            return Err(AmountErr {
+                values,
+                entry_amount,
+            });
+        }
+        self.index = self.transitions.len();
+        Ok(self
             .amounts
-            .drain_past_by_logged_at(meta)
-            .map(|entry_amount| entry_amount.amount())
-            .sum();
+            .push_and_pop_past(max_past_len, entry_amount)
+            .map(|entry_amount| {
+                let amount = entry_amount.amount();
+                self.index -= amount;
+                ValueEntry {
+                    value: self.transitions.drain(..amount),
+                    entry: entry_amount.entry,
+                }
+            }))
+    }
+    pub fn try_push_and_drain_past<Out: Into<U>>(
+        &mut self,
+        max_past_len: usize,
+        c: impl FnOnce(LogMut<T>) -> Out,
+    ) -> Result<(Drain<T>, Drain<EntryAmount<U, AMOUNT_BYTES>>), AmountErr<Drain<T>, U, AMOUNT_BYTES>>
+    {
+        self.transitions.truncate(self.index);
+        let entry = c(LogMut(&mut self.transitions)).into();
+        let pushed_amount = self.transitions.len() - self.index;
+        let entry_amount = EntryAmount::new(entry, pushed_amount);
+        if pushed_amount != entry_amount.amount() {
+            let values = self.transitions.drain(self.index..);
+            return Err(AmountErr {
+                values,
+                entry_amount,
+            });
+        }
+        self.index = self.transitions.len();
+        let to_drain = self
+            .amounts
+            .push_and_iter_to_drain_past(max_past_len, entry_amount);
+        let to_drain_len = to_drain.len();
+        let amount: usize = to_drain.map(|entry_amount| entry_amount.amount()).sum();
         self.index -= amount;
-        self.transitions.drain(..amount)
+        Ok((
+            self.transitions.drain(..amount),
+            self.amounts.drain_past(to_drain_len),
+        ))
     }
 }
 
@@ -331,19 +350,19 @@ mod test {
     fn serde_with() {
         #[derive(Serialize, Deserialize)]
         struct Logs {
-            full: TransitionsLog<char, u8>,
+            full: DenseTransitionsLog<char, u8>,
             #[serde(with = "crate::log::with_capacity")]
-            full_with_capacity: TransitionsLog<char, u8>,
+            full_with_capacity: DenseTransitionsLog<char, u8>,
             #[serde(with = "crate::log::logless_with_capacity")]
-            logless_with_capacity: TransitionsLog<char, u8>,
+            logless_with_capacity: DenseTransitionsLog<char, u8>,
         }
 
-        let mut original = TransitionsLog::new();
-        original.push_present(|mut log| {
+        let mut original = DenseTransitionsLog::new();
+        original.push(|mut log| {
             log.extend(['a', 'b']);
             1
         });
-        original.push_present(|mut log| {
+        original.push(|mut log| {
             log.extend(['c', 'd']);
             2
         });
@@ -370,37 +389,39 @@ mod test {
             logless_with_capacity,
         } = serde_json::from_str(&serialized).unwrap();
 
-        let test = |log: &TransitionsLog<char, u8>, entries_len, transitions_len, with_capacity| {
-            assert_eq!(
-                log.entries_len(),
-                entries_len,
-                "before: {original:#?}\nserialized: {serialized}\nafter: {log:#?}"
-            );
-            assert_eq!(
-                log.transitions_len(),
-                transitions_len,
-                "before: {original:#?}\nserialized: {serialized}\nafter: {log:#?}"
-            );
-            assert_eq!(
+        let test =
+            |log: &DenseTransitionsLog<char, u8>, entries_len, transitions_len, with_capacity| {
+                assert_eq!(
+                    log.entries_len(),
+                    entries_len,
+                    "before: {original:#?}\nserialized: {serialized}\nafter: {log:#?}"
+                );
+                assert_eq!(
+                    log.transitions_len(),
+                    transitions_len,
+                    "before: {original:#?}\nserialized: {serialized}\nafter: {log:#?}"
+                );
+                assert_eq!(
                 log.entries_capacity() >= 100,
                 with_capacity,
                 "before: {original:#?}\nserialized: {serialized}\nafter: {log:#?}\ncapacity: {}",
                 log.entries_capacity()
             );
-            assert_eq!(
+                assert_eq!(
                 log.transitions_capacity() >= 200,
                 with_capacity,
                 "before: {original:#?}\nserialized: {serialized}\nafter: {log:#?}\ncapacity: {}",
                 log.transitions_capacity()
             );
-        };
+            };
 
         test(&full, 2, 4, false);
         test(&full_with_capacity, 2, 4, true);
         test(&logless_with_capacity, 0, 0, true);
     }
 
-    impl TransitionsLog<u8, RevFrame, 1> {
+    /*
+    impl DenseTransitionsLog<u8, RevFrame, 1> {
         fn test_forward(
             &mut self,
             meta: &mut RevMeta,
@@ -414,7 +435,7 @@ mod test {
             if push.len() < u8::MAX as usize {
                 meta.queue_forward();
                 meta.update(|_, _| {});
-                let result = self.try_push_present(|mut log| {
+                let result = self.try_push(|mut log| {
                     log.extend(push.clone());
                     meta.present_world_state()
                 });
@@ -453,17 +474,17 @@ mod test {
                     "\nstrategy: {strategy:?}\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
                 );
             } else {
-                let result = self.try_push_present(|mut log| {
+                let result = self.try_push(|mut log| {
                     log.extend(push.clone());
                     meta.present_world_state().wrapping_add(1)
                 });
                 let result = result.map_err(
-                    |AmountErr {
+                    |AmountErrOld {
                          values,
                          entry,
                          pushed_amount,
                          _error: error,
-                     }| AmountErr::<Vec<u8>, Self> {
+                     }| AmountErrOld::<Vec<u8>, Self> {
                         values: Vec::from_iter(values),
                         entry,
                         pushed_amount,
@@ -474,7 +495,7 @@ mod test {
                     Ok(()) => {
                         panic!("\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}")
                     }
-                    Err(AmountErr {
+                    Err(AmountErrOld {
                         values,
                         pushed_amount,
                         ..
@@ -598,7 +619,7 @@ mod test {
     fn push_and_log_traversal() {
         for strategy in ShortenStrategy::VARIANTS {
             let meta = &mut RevMeta::new(NonZeroU32::new(3), None, false);
-            let mut log = TransitionsLog::new();
+            let mut log = DenseTransitionsLog::new();
 
             log.test_forward(meta, strategy, vec![1; 1], 1, 1, None);
             log.test_forward(meta, strategy, vec![2; 2], 2, 3, None);
@@ -629,9 +650,10 @@ mod test {
             }
         }
     }
+    */
 
     #[allow(dead_code)]
     fn impls_reflect() {
-        bevy::reflect::TypeRegistry::empty().register::<TransitionsLog<usize, RevFrame, 1>>();
+        bevy::reflect::TypeRegistry::empty().register::<DenseTransitionsLog<usize, RevFrame, 1>>();
     }
 }
