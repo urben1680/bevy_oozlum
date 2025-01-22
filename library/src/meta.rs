@@ -272,17 +272,11 @@ impl RevMeta {
         (self.future_end - frame) <= (self.future_end - self.past_end)
     }
     // todo: no longer needed to have that many options, simplify
-    pub fn past_contains(
-        &self,
-        frame: RevFrame
-    ) -> bool {
+    pub fn past_contains(&self, frame: RevFrame) -> bool {
         (self.present - frame).wrapping_sub(1) < (self.present - self.past_end)
     }
     // todo: no longer needed to have that many options, simplify
-    pub fn future_contains(
-        &self,
-        frame: RevFrame,
-    ) -> bool {
+    pub fn future_contains(&self, frame: RevFrame) -> bool {
         (self.future_end - frame) < (self.future_end - self.present)
     }
     pub fn frame_cmp(&self, lhs: RevFrame, rhs: RevFrame) -> std::cmp::Ordering {
@@ -834,25 +828,81 @@ mod test {
     #[test]
     fn past_contains_returns_expected() {
         let meta = arrange(None, 3, 1..=5, InternalDirection::Pause);
-        assert_eq!(meta.past_contains(RevFrame::checked_new(0)), false, "{meta:#?}");
-        assert_eq!(meta.past_contains(RevFrame::checked_new(1)), true, "{meta:#?}");
-        assert_eq!(meta.past_contains(RevFrame::checked_new(2)), true, "{meta:#?}");
-        assert_eq!(meta.past_contains(RevFrame::checked_new(3)), false, "{meta:#?}");
-        assert_eq!(meta.past_contains(RevFrame::checked_new(4)), false, "{meta:#?}");
-        assert_eq!(meta.past_contains(RevFrame::checked_new(5)), false, "{meta:#?}");
-        assert_eq!(meta.past_contains(RevFrame::checked_new(6)), false, "{meta:#?}");
+        assert_eq!(
+            meta.past_contains(RevFrame::checked_new(0)),
+            false,
+            "{meta:#?}"
+        );
+        assert_eq!(
+            meta.past_contains(RevFrame::checked_new(1)),
+            true,
+            "{meta:#?}"
+        );
+        assert_eq!(
+            meta.past_contains(RevFrame::checked_new(2)),
+            true,
+            "{meta:#?}"
+        );
+        assert_eq!(
+            meta.past_contains(RevFrame::checked_new(3)),
+            false,
+            "{meta:#?}"
+        );
+        assert_eq!(
+            meta.past_contains(RevFrame::checked_new(4)),
+            false,
+            "{meta:#?}"
+        );
+        assert_eq!(
+            meta.past_contains(RevFrame::checked_new(5)),
+            false,
+            "{meta:#?}"
+        );
+        assert_eq!(
+            meta.past_contains(RevFrame::checked_new(6)),
+            false,
+            "{meta:#?}"
+        );
     }
 
     #[test]
     fn future_contains_returns_expected() {
         let meta = arrange(None, 3, 1..=5, InternalDirection::Pause);
-        assert_eq!(meta.future_contains(RevFrame::checked_new(0)), false, "{meta:#?}");
-        assert_eq!(meta.future_contains(RevFrame::checked_new(1)), false, "{meta:#?}");
-        assert_eq!(meta.future_contains(RevFrame::checked_new(2)), false, "{meta:#?}");
-        assert_eq!(meta.future_contains(RevFrame::checked_new(3)), false, "{meta:#?}");
-        assert_eq!(meta.future_contains(RevFrame::checked_new(4)), true, "{meta:#?}");
-        assert_eq!(meta.future_contains(RevFrame::checked_new(5)), true, "{meta:#?}");
-        assert_eq!(meta.future_contains(RevFrame::checked_new(6)), false, "{meta:#?}");
+        assert_eq!(
+            meta.future_contains(RevFrame::checked_new(0)),
+            false,
+            "{meta:#?}"
+        );
+        assert_eq!(
+            meta.future_contains(RevFrame::checked_new(1)),
+            false,
+            "{meta:#?}"
+        );
+        assert_eq!(
+            meta.future_contains(RevFrame::checked_new(2)),
+            false,
+            "{meta:#?}"
+        );
+        assert_eq!(
+            meta.future_contains(RevFrame::checked_new(3)),
+            false,
+            "{meta:#?}"
+        );
+        assert_eq!(
+            meta.future_contains(RevFrame::checked_new(4)),
+            true,
+            "{meta:#?}"
+        );
+        assert_eq!(
+            meta.future_contains(RevFrame::checked_new(5)),
+            true,
+            "{meta:#?}"
+        );
+        assert_eq!(
+            meta.future_contains(RevFrame::checked_new(6)),
+            false,
+            "{meta:#?}"
+        );
     }
 
     #[test]
