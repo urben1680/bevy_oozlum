@@ -1,21 +1,22 @@
 use core::fmt::Debug;
 use std::{
-    collections::{vec_deque::Drain, TryReserveError, VecDeque},
+    collections::{
+        vec_deque::{Drain, Iter},
+        TryReserveError, VecDeque,
+    },
     ops::Deref,
 };
 
 use bevy::reflect::Reflect;
 
-use crate::{log::index_oob, meta::RevMeta};
-
-use super::{partition_point, LoggedAt, OutOfLog};
+use super::{index_oob, OutOfLog};
 
 #[derive(Debug, Default, Clone, Reflect)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DenseStateLog<T> {
     /// The log of states, with two partitions:
-    /// - Past states in the indices `[0, self.index[`
-    /// - Future states in the indices `[self.index, self.states.len()[`
+    /// - Past states in `..self.index`
+    /// - Future states in `self.index..`
     ///
     /// The present state is not part of this deque and traversing the log swaps
     /// the present state from before and now while keeping the above partitions.
@@ -110,19 +111,8 @@ impl<T> DenseStateLog<T> {
             index: 0,
         }
     }
-    pub(super) fn with_alloc(present: T, mut empty: VecDeque<T>) -> Self {
-        empty.clear();
-        Self {
-            states: empty,
-            present,
-            index: 0,
-        }
-    }
     pub fn into_inner(self) -> T {
         self.present
-    }
-    pub(super) fn into_inner_with_log(self) -> (T, VecDeque<T>) {
-        (self.present, self.states)
     }
     pub fn states_len(&self) -> usize {
         self.states.len()
@@ -151,11 +141,43 @@ impl<T> DenseStateLog<T> {
     pub fn states_shrink_to_fit(&mut self) {
         self.states.shrink_to_fit()
     }
-    pub fn push_present(&mut self, state: T) {
+    pub fn push(&mut self, state: T) {
         self.states.truncate(self.index);
         let before = core::mem::replace(&mut self.present, state);
         self.states.push_back(before);
         self.index += 1;
+    }
+    pub fn push_and_pop_past(&mut self, max_past_len: usize, state: T) -> Option<T> {
+        self.states.truncate(self.index);
+        let before = core::mem::replace(&mut self.present, state);
+        self.states.push_back(before);
+        if self.index >= max_past_len {
+            self.states.pop_front()
+        } else {
+            self.index += 1;
+            None
+        }
+    }
+    pub fn push_and_drain_past(&mut self, max_past_len: usize, state: T) -> Drain<T> {
+        self.states.truncate(self.index);
+        let before = core::mem::replace(&mut self.present, state);
+        self.states.push_back(before);
+        self.index += 1;
+        let excessive = self.index.saturating_sub(max_past_len);
+        self.index -= excessive;
+        self.states.drain(..excessive)
+    }
+    pub(super) fn push_and_iter_to_drain_past(&mut self, max_past_len: usize, state: T) -> Iter<T> {
+        self.states.truncate(self.index);
+        let before = core::mem::replace(&mut self.present, state);
+        self.states.push_back(before);
+        self.index += 1;
+        let excessive = self.index.saturating_sub(max_past_len);
+        self.index -= excessive;
+        self.states.range(..excessive)
+    }
+    pub(super) fn drain_past(&mut self, to_drain: usize) -> Drain<T> {
+        self.states.drain(..to_drain)
     }
     pub fn drain_future(&mut self) -> Drain<T> {
         self.states.drain(self.index..)
@@ -200,57 +222,13 @@ impl<T> DenseStateLog<T> {
         self.index += 1;
         return Ok(());
     }
-    pub fn pop_past_by_len(&mut self, max_past_len: usize) -> Option<T> {
-        if self.index == 0 {
-            return None;
-        }
-        if self.index > max_past_len {
-            self.index -= 1;
-            self.states.pop_front()
-        } else {
-            None
-        }
-    }
-    pub fn drain_past_by_len(&mut self, max_past_len: usize) -> Drain<T> {
-        let excessive = self.index.saturating_sub(max_past_len);
-        self.index -= excessive;
-        self.states.drain(..excessive)
-    }
-}
-
-impl<T: LoggedAt> DenseStateLog<T> {
-    pub fn pop_past_by_logged_at(&mut self, meta: &RevMeta) -> Option<T> {
-        if self.index == 0 {
-            return None;
-        }
-        let logged_at = self.states.front()?.logged_at();
-        if !meta.past_contains(logged_at) {
-            self.index -= 1;
-            self.states.pop_front()
-        } else {
-            None
-        }
-    }
-    pub fn drain_past_by_logged_at(&mut self, meta: &RevMeta) -> Drain<T> {
-        let to = partition_point(&self.states, self.index, meta);
-        self.index -= to;
-        self.states.drain(..to)
-    }
 }
 
 #[cfg(test)]
 mod test {
-    use std::num::NonZeroU32;
-
     use serde::{Deserialize, Serialize};
 
     use super::*;
-
-    use crate::{
-        frame::RevFrame,
-        log::test::{shorten_strategy, ShortenStrategy},
-        meta::RevMeta,
-    };
 
     #[test]
     fn serde_with() {
@@ -266,8 +244,8 @@ mod test {
         }
 
         let mut original = DenseStateLog::from('a');
-        original.push_present('b');
-        original.push_present('c');
+        original.push('b');
+        original.push('c');
         original.backward_log().expect("in log");
 
         let mut logs = Logs {
@@ -293,17 +271,17 @@ mod test {
         let test = |log: &DenseStateLog<char>, len, with_capacity| {
             assert_eq!(
                 **log, 'b',
-                "before: {original:#?}\nserialized: {serialized}\nafter: {log:#?}"
+                "\nbefore: {original:#?}\nserialized: {serialized}\nafter: {log:#?}"
             );
             assert_eq!(
                 log.states_len(),
                 len,
-                "before: {original:#?}\nserialized: {serialized}\nafter: {log:#?}"
+                "\nbefore: {original:#?}\nserialized: {serialized}\nafter: {log:#?}"
             );
             assert_eq!(
                 log.states_capacity() >= 100,
                 with_capacity,
-                "before: {original:#?}\nserialized: {serialized}\nafter: {log:#?}\ncapacity: {}",
+                "\nbefore: {original:#?}\nserialized: {serialized}\nafter: {log:#?}\ncapacity: {}",
                 log.states_capacity()
             );
         };
@@ -317,177 +295,145 @@ mod test {
     #[test]
     fn clear() {
         let mut original = DenseStateLog::new(1);
-        original.push_present(2);
-        original.push_present(3);
+        original.push(2);
+        original.push(3);
         original.backward_log().expect("in log");
 
         let mut log = original.clone();
         log.clear();
-        assert_eq!(*log, 2, "log: {log:#?}\noriginal: {original:#?}");
+        assert_eq!(*log, 2, "\nlog: {log:#?}\noriginal: {original:#?}");
         assert_eq!(
             log.states_len(),
             0,
-            "log: {log:#?}\noriginal: {original:#?}"
+            "\nlog: {log:#?}\noriginal: {original:#?}"
         );
 
         let mut log = original.clone();
         log.clear_with(4);
-        assert_eq!(*log, 4, "log: {log:#?}\noriginal: {original:#?}");
+        assert_eq!(*log, 4, "\nlog: {log:#?}\noriginal: {original:#?}");
         assert_eq!(
             log.states_len(),
             0,
-            "log: {log:#?}\noriginal: {original:#?}"
+            "\nlog: {log:#?}\noriginal: {original:#?}"
         );
     }
 
-    impl DenseStateLog<(u8, RevFrame)> {
-        fn test_forward(
+    struct Logs(Vec<[DenseStateLog<char>; 2]>);
+
+    impl Logs {
+        fn new(state: char) -> Self {
+            Self(vec![[state.into(), state.into()]])
+        }
+        fn forward(
             &mut self,
-            meta: &mut RevMeta,
-            strategy: ShortenStrategy,
-            push: u8,
+            max_past_len: usize,
+            push: char,
             expected_states_len: usize,
-            expected_popped: Option<(u8, u32)>,
+            expected_popped: Option<char>,
         ) {
-            meta.queue_forward();
-            meta.update(|_, _| {});
-            let before = self.clone();
-            let push = (push, meta.present_world_state());
-            self.push_present(push);
-            let after_push = self.clone();
-            let actual_popped = shorten_strategy!(
-                self,
-                meta,
-                strategy,
-                meta.past_world_states(),
-                before,
-                after_push
-            );
-            assert_eq!(
-                actual_popped, expected_popped,
-                "\nstrategy: {strategy:#?}\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
-            );
-            assert_eq!(
-                self.states_len(),
-                expected_states_len,
-                "\nstrategy: {strategy:#?}\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
-            );
-            assert_eq!(
-                **self, push,
-                "\nstrategy: {strategy:#?}\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
-            );
-        }
-        fn test_forward_log(&mut self, meta: &mut RevMeta, expected_state: u8, out_of_log: bool) {
-            let before = self.clone();
-            if out_of_log {
-                let result = self.forward_log();
+            for [log1, log2] in self.0.iter_mut() {
+                let before = log1.clone();
+                let actual_popped = log1.push_and_pop_past(max_past_len, push);
+                assert_eq!(**log1, push, "\nbefore: {before:#?}\nafter: {log1:#?}");
                 assert_eq!(
-                    result,
-                    Err(OutOfLog),
-                    "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
+                    actual_popped, expected_popped,
+                    "\nbefore: {before:#?}\nafter: {log1:#?}"
                 );
-            } else {
-                let frame = meta.present_world_state().wrapping_add(1);
-                meta.queue_log(frame).unwrap();
-                meta.update(|_, _| {});
-                let result = self.forward_log();
                 assert_eq!(
-                    result,
-                    Ok(()),
-                    "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
+                    log1.states_len(),
+                    expected_states_len,
+                    "\nbefore: {before:#?}\nafter: {log1:#?}"
+                );
+
+                let before = log2.clone();
+                let actual_popped: Vec<_> = log2.push_and_drain_past(max_past_len, push).collect();
+                assert_eq!(**log2, push, "\nbefore: {before:#?}\nafter: {log2:#?}");
+                assert_eq!(
+                    actual_popped.as_slice(),
+                    expected_popped.as_slice(),
+                    "\nbefore: {before:#?}\nafter: {log2:#?}"
+                );
+                assert_eq!(
+                    log2.states_len(),
+                    expected_states_len,
+                    "\nbefore: {before:#?}\nafter: {log2:#?}"
                 );
             }
-            self.test_state(before, meta, expected_state);
         }
-        fn test_backward_log(&mut self, meta: &mut RevMeta, expected_state: u8, out_of_log: bool) {
-            let before = self.clone();
-            if out_of_log {
-                let result = self.backward_log();
+        fn forward_log(&mut self, expected_state: char, expected_out_of_log: bool) {
+            for log in self.0.iter_mut().flatten() {
+                let before = log.clone();
+                let actual_out_of_log = log.forward_log().is_err();
                 assert_eq!(
-                    result,
-                    Err(OutOfLog),
-                    "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
+                    actual_out_of_log, expected_out_of_log,
+                    "\nbefore: {before:#?}\nafter: {log:#?}"
                 );
-            } else {
-                let frame = meta.present_world_state().wrapping_sub(1);
-                meta.queue_log(frame).unwrap();
-                meta.update(|_, _| {});
-                let result = self.backward_log();
                 assert_eq!(
-                    result,
-                    Ok(()),
-                    "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
+                    **log, expected_state,
+                    "\nbefore: {before:#?}\nafter: {log:#?}"
                 );
             }
-            self.test_state(before, meta, expected_state);
         }
-        fn test_state(&self, before: Self, meta: &RevMeta, state: u8) {
-            assert_eq!(
-                **self,
-                (state, meta.present_world_state()),
-                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
-            );
+        fn backward_log(&mut self, expected_state: char, expected_out_of_log: bool) {
+            for log in self.0.iter_mut().flatten() {
+                let before = log.clone();
+                let actual_out_of_log = log.backward_log().is_err();
+                assert_eq!(
+                    actual_out_of_log, expected_out_of_log,
+                    "\nbefore: {before:#?}\nafter: {log:#?}"
+                );
+                assert_eq!(
+                    **log, expected_state,
+                    "\nbefore: {before:#?}\nafter: {log:#?}"
+                );
+            }
         }
-        fn test_drain_future(
-            &self,
-            expected_future: impl IntoIterator<Item = (u8, u32)>,
-            expected_states_len: usize,
-        ) -> Self {
-            let before = self.clone();
-            let mut clone = self.clone();
-            let actual_future: Vec<_> = clone.drain_future().collect();
-            let expected_future: Vec<_> = expected_future
+        fn drain_future(&mut self, expected_future: Vec<char>, expected_states_len: usize) {
+            self.0 = std::mem::take(&mut self.0)
                 .into_iter()
-                .map(|(state, frame)| (state, RevFrame(frame)))
+                .flatten()
+                .map(|mut log| {
+                    let before = log.clone();
+                    let actual_future: Vec<_> = log.drain_future().collect();
+                    assert_eq!(
+                        actual_future, expected_future,
+                        "\nbefore: {before:#?}\nafter: {log:#?}"
+                    );
+                    assert_eq!(
+                        log.states_len(),
+                        expected_states_len,
+                        "\nbefore: {before:#?}\nafter: {log:#?}"
+                    );
+                    [before, log]
+                })
                 .collect();
-            assert_eq!(
-                actual_future, expected_future,
-                "\nbefore: {before:#?}\nafter_drain_future: {clone:#?}"
-            );
-            assert_eq!(
-                clone.states_len(),
-                expected_states_len,
-                "\nbefore: {before:#?}\nafter_drain_future: {clone:#?}"
-            );
-            clone
         }
     }
 
     #[test]
-    fn push_and_log_traversal() {
-        for strategy in ShortenStrategy::VARIANTS {
-            let meta = &mut RevMeta::new(NonZeroU32::new(3), None, false);
-            let mut log = DenseStateLog::new((0, meta.present_world_state()));
+    fn log_traversal_works() {
+        let mut logs = Logs::new('a');
+        logs.forward(2, 'b', 1, None);
+        logs.forward(2, 'c', 2, None);
+        // shortened log
+        logs.forward(2, 'd', 2, Some('a'));
 
-            log.test_forward(meta, strategy, 1, 1, None);
-            log.test_forward(meta, strategy, 2, 2, None);
-            // shortened log
-            log.test_forward(meta, strategy, 3, 2, Some((0, 0)));
+        logs.backward_log('c', false);
+        logs.backward_log('b', false);
+        // out of log, no mutations happend to the logs here
+        logs.backward_log('b', true);
 
-            log.test_backward_log(meta, 2, false);
-            log.test_backward_log(meta, 1, false);
-            // out of log, no mutations happend to both meta and log here
-            log.test_backward_log(meta, 1, true);
+        logs.forward_log('c', false);
+        logs.forward_log('d', false);
+        // nothing ever logged past 'd', no mutations happend to the logs here
+        logs.forward_log('d', true);
 
-            log.test_forward_log(meta, 2, false);
-            log.test_forward_log(meta, 3, false);
-            // nothing ever logged past 3, no mutations happend to both meta and log here
-            log.test_forward_log(meta, 3, true);
+        logs.backward_log('c', false);
+        logs.backward_log('b', false);
 
-            log.test_backward_log(meta, 2, false);
-            log.test_backward_log(meta, 1, false);
+        logs.drain_future(vec!['c', 'd'], 0);
 
-            let clone = log.test_drain_future([(2, 2), (3, 3)], 0);
-
-            for mut log in [log, clone] {
-                // all entries are truncated as they are in the future
-                log.test_forward(meta, strategy, 4, 1, None);
-            }
-        }
-    }
-
-    #[allow(dead_code)]
-    fn impls_reflect() {
-        bevy::reflect::TypeRegistry::empty().register::<DenseStateLog<RevFrame>>();
+        // all entries are truncated as they are in the future
+        logs.forward(2, 'e', 1, None);
     }
 }
