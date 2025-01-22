@@ -5,6 +5,8 @@ use bevy::reflect::Reflect;
 #[cfg(feature = "serde")]
 use bevy::reflect::{ReflectDeserialize, ReflectSerialize};
 
+use crate::resize_ne_bytes;
+
 #[cfg(all(
     feature = "packed_rev_frame_size_1",
     not(feature = "packed_rev_frame_size_2"),
@@ -109,21 +111,14 @@ impl From<PackedRevFrame> for u32 {
 
 impl From<PackedRevFrame> for RevFrame {
     fn from(value: PackedRevFrame) -> Self {
-        Self(u32::from_le_bytes(resize_le_bytes(value.0)))
+        Self(u32::from_ne_bytes(resize_ne_bytes(value.0)))
     }
 }
 
 impl From<RevFrame> for PackedRevFrame {
     fn from(value: RevFrame) -> Self {
-        Self(resize_le_bytes(value.0.to_le_bytes()))
+        Self(resize_ne_bytes(value.0.to_ne_bytes()))
     }
-}
-
-/// Assumes cut-off bytes, if any, are `0`.
-#[inline(always)]
-fn resize_le_bytes<const N: usize, const M: usize>(arr: [u8; N]) -> [u8; M] {
-    let mut i = arr.into_iter();
-    std::array::from_fn(|_| i.next().unwrap_or(0))
 }
 
 impl PartialEq<RevFrame> for PackedRevFrame {
