@@ -27,6 +27,11 @@ Enhancements:
 -local log that can react on DrainPastByLoggedAt
 -- deprecate event? last RevMeta at trigger + count, if count is equal, call drain_past_by_logged_at, otherwise clear log
 - test cfg with forward_set
+- deprecate init_none, Option::get_or_* methods are enough
+- expects_forward_log/backward_log for framed logs
+- idea: Arc system stores system state in resource, not Mutex
+-- might be incompatible with System::update_archetype_component_access as UnsafeWorldCell may only be used to read (archetype) metadata
+-- register write access of dynamic resources is impossible because methods are not pub
 
 Docs
 - documentations
@@ -59,10 +64,27 @@ pub mod prelude {
     pub use crate::frame::{PackedRevFrame, RevFrame};
     pub use crate::meta::{DrainPastByLoggedAt, RevDirection, RevMeta};
     pub use crate::schedule::{
-        forward_set, IntoRevSystemConfigs as _, IntoRevSystemSetConfigs as _, RevSchedule as _,
-        RevSystemsSet, RevUpdate,
+        BackwardNoop as _, IntoRevSystemConfigs as _, IntoRevSystemSetConfigs as _,
+        RevSchedule as _, RevSystemsSet, RevUpdate,
     };
     pub use crate::undo_redo::{BuffersUndoRedo as _, RevCommands as _, UndoRedoDirection};
+}
+
+/// Assumes cut-off bytes, if any, are `0`.
+#[inline(always)]
+fn resize_ne_bytes<const N: usize, const M: usize>(arr: [u8; N]) -> [u8; M] {
+    let min = N.min(M);
+    let mut result = [0; M];
+    let (source, target);
+    if cfg!(target_endian = "little") {
+        source = &arr[..min];
+        target = &mut result[..min];
+    } else {
+        source = &arr[N - min..];
+        target = &mut result[M - min..];
+    };
+    target.copy_from_slice(source);
+    result
 }
 
 macro_rules! error_per_flag {
