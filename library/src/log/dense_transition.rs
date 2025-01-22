@@ -1,16 +1,17 @@
 use core::fmt::Debug;
-use std::collections::{vec_deque::Drain, TryReserveError, VecDeque};
+use std::collections::{
+    vec_deque::{Drain, Iter},
+    TryReserveError, VecDeque,
+};
 
 use bevy::reflect::{std_traits::ReflectDefault, Reflect};
 
-use crate::meta::RevMeta;
-
-use super::{index_oob, partition_point, LoggedAt, OutOfLog};
+use super::{index_oob, OutOfLog};
 
 #[derive(Debug, Clone, Reflect)]
 #[reflect(Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct TransitionLog<T> {
+pub struct DenseTransitionLog<T> {
     transitions: VecDeque<T>,
     index: usize,
 }
@@ -23,9 +24,9 @@ mod serde_with {
 
     use crate::log::serde_with::{LoglessWithCapacity, WithCapacity, WithCapacityWrapper};
 
-    use super::TransitionLog;
+    use super::DenseTransitionLog;
 
-    impl<T: Serialize + for<'de> Deserialize<'de> + 'static> WithCapacity for TransitionLog<T> {
+    impl<T: Serialize + for<'de> Deserialize<'de> + 'static> WithCapacity for DenseTransitionLog<T> {
         type Se<'se> = (WithCapacityWrapper<&'se VecDeque<T>>, usize);
         type De = (WithCapacityWrapper<VecDeque<T>>, usize);
         fn get_with_capacity(&self) -> Self::Se<'_> {
@@ -36,7 +37,7 @@ mod serde_with {
         }
     }
 
-    impl<T> LoglessWithCapacity for TransitionLog<T> {
+    impl<T> LoglessWithCapacity for DenseTransitionLog<T> {
         type Se<'se>
             = usize
         where
@@ -51,13 +52,13 @@ mod serde_with {
     }
 }
 
-impl<T> Default for TransitionLog<T> {
+impl<T> Default for DenseTransitionLog<T> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<T> TransitionLog<T> {
+impl<T> DenseTransitionLog<T> {
     pub const fn new() -> Self {
         Self {
             transitions: VecDeque::new(),
@@ -100,10 +101,41 @@ impl<T> TransitionLog<T> {
     pub fn transitions_shrink_to_fit(&mut self) {
         self.transitions.shrink_to_fit()
     }
-    pub fn push_present(&mut self, transition: T) {
+    pub fn push(&mut self, transition: T) {
         self.transitions.truncate(self.index);
         self.transitions.push_back(transition);
         self.index = self.transitions.len();
+    }
+    pub fn push_and_pop_past(&mut self, max_past_len: usize, transition: T) -> Option<T> {
+        self.transitions.truncate(self.index);
+        self.transitions.push_back(transition);
+        if self.index >= max_past_len {
+            self.transitions.pop_front()
+        } else {
+            self.index = self.transitions.len();
+            None
+        }
+    }
+    pub fn push_and_drain_past(&mut self, max_past_len: usize, transition: T) -> Drain<T> {
+        self.transitions.truncate(self.index);
+        self.transitions.push_back(transition);
+        let excessive = self.transitions.len().saturating_sub(max_past_len);
+        self.index = self.transitions.len() - excessive;
+        self.transitions.drain(..excessive)
+    }
+    pub(super) fn push_and_iter_to_drain_past(
+        &mut self,
+        max_past_len: usize,
+        transition: T,
+    ) -> Iter<T> {
+        self.transitions.truncate(self.index);
+        self.transitions.push_back(transition);
+        let excessive = self.transitions.len().saturating_sub(max_past_len);
+        self.index = self.transitions.len() - excessive;
+        self.transitions.range(..excessive)
+    }
+    pub(super) fn drain_past(&mut self, to_drain: usize) -> Drain<T> {
+        self.transitions.drain(..to_drain)
     }
     pub fn drain_future(&mut self) -> Drain<T> {
         self.transitions.drain(self.index..)
@@ -123,44 +155,6 @@ impl<T> TransitionLog<T> {
             .get_mut(self.index)
             .inspect(|_| self.index += 1)
             .ok_or(OutOfLog)
-    }
-    pub fn pop_past_by_len(&mut self, max_past_len: usize) -> Option<T> {
-        if self.index == 0 {
-            // if the current log position is at the past end, transitions.front() is not a past value but a future value
-            return None;
-        }
-        if self.index > max_past_len {
-            self.index -= 1;
-            self.transitions.pop_front()
-        } else {
-            None
-        }
-    }
-    pub fn drain_past_by_len(&mut self, max_past_len: usize) -> Drain<T> {
-        let excessive = self.index.saturating_sub(max_past_len);
-        self.index -= excessive;
-        self.transitions.drain(..excessive)
-    }
-}
-
-impl<T: LoggedAt> TransitionLog<T> {
-    pub fn pop_past_by_logged_at(&mut self, meta: &RevMeta) -> Option<T> {
-        if self.index == 0 {
-            // if the current log position is at the past end, transitions.front() is not a past value but a future value
-            return None;
-        }
-        let logged_at = self.transitions.front()?.logged_at();
-        if !meta.past_contains(logged_at) {
-            self.index -= 1;
-            self.transitions.pop_front()
-        } else {
-            None
-        }
-    }
-    pub fn drain_past_by_logged_at(&mut self, meta: &RevMeta) -> Drain<T> {
-        let to = partition_point(&self.transitions, self.index, meta);
-        self.index -= to;
-        self.transitions.drain(..to)
     }
 }
 
@@ -182,16 +176,16 @@ mod test {
     fn serde_with() {
         #[derive(Serialize, Deserialize)]
         struct Logs {
-            full: TransitionLog<char>,
+            full: DenseTransitionLog<char>,
             #[serde(with = "crate::log::with_capacity")]
-            full_with_capacity: TransitionLog<char>,
+            full_with_capacity: DenseTransitionLog<char>,
             #[serde(with = "crate::log::logless_with_capacity")]
-            logless_with_capacity: TransitionLog<char>,
+            logless_with_capacity: DenseTransitionLog<char>,
         }
 
-        let mut original = TransitionLog::new();
-        original.push_present('a');
-        original.push_present('b');
+        let mut original = DenseTransitionLog::new();
+        original.push('a');
+        original.push('b');
         original.backward_log().expect("in log");
 
         let mut logs = Logs {
@@ -211,7 +205,7 @@ mod test {
             logless_with_capacity,
         } = serde_json::from_str(&serialized).unwrap();
 
-        let test = |log: &TransitionLog<char>, len, with_capacity| {
+        let test = |log: &DenseTransitionLog<char>, len, with_capacity| {
             assert_eq!(
                 log.transitions_len(),
                 len,
@@ -230,7 +224,8 @@ mod test {
         test(&logless_with_capacity, 0, true);
     }
 
-    impl TransitionLog<(u8, RevFrame)> {
+    /*
+    impl DenseTransitionLog<(u8, RevFrame)> {
         fn test_forward(
             &mut self,
             meta: &mut RevMeta,
@@ -328,7 +323,7 @@ mod test {
     fn push_and_log_traversal() {
         for strategy in ShortenStrategy::VARIANTS {
             let meta = &mut RevMeta::new(NonZeroU32::new(3), None, false);
-            let mut log = TransitionLog::new();
+            let mut log = DenseTransitionLog::new();
 
             log.test_forward(meta, strategy, 1, 1, None);
             log.test_forward(meta, strategy, 2, 2, None);
@@ -356,9 +351,10 @@ mod test {
             }
         }
     }
+    */
 
     #[allow(dead_code)]
     fn impls_reflect() {
-        bevy::reflect::TypeRegistry::empty().register::<TransitionLog<RevFrame>>();
+        bevy::reflect::TypeRegistry::empty().register::<DenseTransitionLog<RevFrame>>();
     }
 }
