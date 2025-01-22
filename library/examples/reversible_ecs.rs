@@ -27,20 +27,14 @@ fn main() {
         .rev_add_systems(
             RevUpdate,
             (
-                system_1,
-                system_2,
+                (system_1, system_2).rev_chain(),
                 system_3.rev_run_if(pressed_3),
                 system_4.rev_after(system_3),
+                system_5.backward_noop(),
+                system_6.backward_noop(),
             ),
         )
-        .add_systems(
-            RevUpdate,
-            (
-                (system_5, system_6).after(forward_set(system_4)),
-                clear_input.after(RevSystemsSet),
-            )
-                .chain(),
-        )
+        .add_systems(RevUpdate, clear_input.after(RevSystemsSet))
         .add_systems(
             FixedUpdate,
             (
@@ -383,7 +377,8 @@ fn render_game(
     let padding = " ".repeat(padding);
 
     for Trash { row, tossed_at } in trash.iter().cloned() {
-        if row == 3 && !meta.past_contains(tossed_at) { // todo: no longer includes present
+        if row == 3 && !meta.past_contains(tossed_at) {
+            // todo: no longer includes present
             // The log in system_3 is only cleaned up when the system runs.
             // As the system does not run every frame, it might not despawn as early as possible but remains in the world.
             // These trashs would cause a panic further down, so we skip them.
