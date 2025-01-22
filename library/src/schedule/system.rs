@@ -28,6 +28,7 @@ use crate::{
 
 use super::{IntoRevSystemConfigs, RevSystemConfigs, RevSystemSetConfigs};
 
+// needed to not collide with all_tuples!
 #[doc(hidden)]
 pub struct ReversibleSystem<Marker>(PhantomData<Marker>);
 
@@ -303,7 +304,7 @@ impl<T: System> System for ArcSystem<T> {
         }
     }
     fn queue_deferred(&mut self, _world: DeferredWorld) {
-        unreachable!("{} used as an observer", std::any::type_name::<T>())
+        unimplemented!("{} used as an observer", std::any::type_name::<T>())
     }
     fn initialize(&mut self, world: &mut World) {
         let shared = initialize_arc_system(&mut self.shared, &mut self.tick, &self.name, world);
