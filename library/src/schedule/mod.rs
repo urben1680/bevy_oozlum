@@ -1,9 +1,6 @@
-use bevy::{
-    ecs::{
-        change_detection::Res,
-        schedule::{InternedSystemSet, IntoSystemSetConfigs, Schedule, ScheduleLabel, SystemSet},
-    },
-    prelude::IntoSystemSet,
+use bevy::ecs::{
+    change_detection::Res,
+    schedule::{InternedSystemSet, IntoSystemSetConfigs, Schedule, ScheduleLabel, SystemSet},
 };
 
 use crate::meta::RevMeta;
@@ -80,10 +77,6 @@ impl_set_debug!(FwdSysSet);
 impl_set_debug!(BwdCmdSet);
 impl_set_debug!(BwdSysSet);
 impl_set_debug!(BwdCmdSysSet);
-
-pub fn forward_set<Marker>(s: impl IntoSystemSet<Marker>) -> impl SystemSet {
-    FwdSysSet(s.into_system_set().intern())
-}
 
 pub trait RevSchedule {
     fn rev_add_systems<Marker>(&mut self, systems: impl IntoRevSystemConfigs<Marker>) -> &mut Self;
