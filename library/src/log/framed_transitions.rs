@@ -12,7 +12,7 @@ use bevy::reflect::{std_traits::ReflectDefault, Reflect};
 use crate::meta::RevMeta;
 
 use super::{
-    doc_with_amount, impl_with_amount, AmountErr, EntryAmount, LogMut, LoggedAt, NotUSize,
+    doc_with_amount, impl_with_amount, AmountErrOld, EntryAmountOld, LogMut, LoggedAt, NotUSize,
     OutOfLog, TransitionLog, ValueEntry, WithAmountInternal,
 };
 
@@ -25,7 +25,7 @@ pub struct TransitionsLog<T, U = (), const AMOUNT_BYTES: usize = 0>
 where
     Self: WithAmountInternal<Entry = U>,
 {
-    amounts: TransitionLog<EntryAmount<Self>>,
+    amounts: TransitionLog<EntryAmountOld<Self>>,
     transitions: VecDeque<T>,
     index: usize,
 }
@@ -38,7 +38,7 @@ mod serde_with {
 
     use crate::log::serde_with::{LoglessWithCapacity, WithCapacity, WithCapacityWrapper};
 
-    use super::{EntryAmount, TransitionLog, TransitionsLog, WithAmountInternal};
+    use super::{EntryAmountOld, TransitionLog, TransitionsLog, WithAmountInternal};
 
     impl<T, U, const AMOUNT_BYTES: usize> WithCapacity for TransitionsLog<T, U, AMOUNT_BYTES>
     where
@@ -47,12 +47,12 @@ mod serde_with {
         Self: WithAmountInternal<Entry = U>,
     {
         type Se<'se> = (
-            <TransitionLog<EntryAmount<Self>> as WithCapacity>::Se<'se>,
+            <TransitionLog<EntryAmountOld<Self>> as WithCapacity>::Se<'se>,
             WithCapacityWrapper<&'se VecDeque<T>>,
             usize,
         );
         type De = (
-            <TransitionLog<EntryAmount<Self>> as WithCapacity>::De,
+            <TransitionLog<EntryAmountOld<Self>> as WithCapacity>::De,
             WithCapacityWrapper<VecDeque<T>>,
             usize,
         );
@@ -182,7 +182,7 @@ where
     pub fn transitions_shrink_to_fit(&mut self) {
         self.transitions.shrink_to_fit()
     }
-    pub fn drain_future(&mut self) -> (Drain<T>, Drain<EntryAmount<Self>>) {
+    pub fn drain_future(&mut self) -> (Drain<T>, Drain<EntryAmountOld<Self>>) {
         (
             self.transitions.drain(self.index..),
             self.amounts.drain_future(),
@@ -227,7 +227,10 @@ where
         self.index -= amount;
         self.transitions.drain(..amount)
     }
-    fn drain_past_by_amount(&mut self, entry_amount: EntryAmount<Self>) -> ValueEntry<Drain<T>, U> {
+    fn drain_past_by_amount(
+        &mut self,
+        entry_amount: EntryAmountOld<Self>,
+    ) -> ValueEntry<Drain<T>, U> {
         let amount = entry_amount.amount();
         self.index -= amount;
         ValueEntry {
@@ -238,19 +241,19 @@ where
     fn fallible_push_present<Out: Into<U>>(
         &mut self,
         c: impl FnOnce(LogMut<T>) -> Out,
-    ) -> Result<(), AmountErr<Drain<T>, Self>> {
+    ) -> Result<(), AmountErrOld<Drain<T>, Self>> {
         self.transitions.truncate(self.index);
         let entry = c(LogMut(&mut self.transitions)).into();
         let pushed_amount = self.transitions.len() - self.index;
         match <Self as WithAmountInternal>::usize_to_amount(pushed_amount) {
             Ok(amount) => {
                 self.index = self.transitions.len();
-                self.amounts.push_present(EntryAmount { entry, amount });
+                self.amounts.push_present(EntryAmountOld { entry, amount });
                 Ok(())
             }
             Err(error) => {
                 let transitions = self.transitions.drain(self.index..);
-                Err(AmountErr {
+                Err(AmountErrOld {
                     values: transitions,
                     entry,
                     pushed_amount,
@@ -286,7 +289,7 @@ where
     pub fn try_push_present<Out: Into<U>>(
         &mut self,
         c: impl FnOnce(LogMut<T>) -> Out,
-    ) -> Result<(), AmountErr<Drain<T>, Self>> {
+    ) -> Result<(), AmountErrOld<Drain<T>, Self>> {
         self.fallible_push_present(c)
     }
 }
@@ -458,12 +461,12 @@ mod test {
                     meta.present_world_state().wrapping_add(1)
                 });
                 let result = result.map_err(
-                    |AmountErr {
+                    |AmountErrOld {
                          values,
                          entry,
                          pushed_amount,
                          _error: error,
-                     }| AmountErr::<Vec<u8>, Self> {
+                     }| AmountErrOld::<Vec<u8>, Self> {
                         values: Vec::from_iter(values),
                         entry,
                         pushed_amount,
@@ -474,7 +477,7 @@ mod test {
                     Ok(()) => {
                         panic!("\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}")
                     }
-                    Err(AmountErr {
+                    Err(AmountErrOld {
                         values,
                         pushed_amount,
                         ..
