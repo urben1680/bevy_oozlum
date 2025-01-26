@@ -744,7 +744,7 @@ mod test {
             push_ok: bool,
             expected_entries_len: usize,
             expected_states_len: usize,
-            expected_popped: Option<(Vec<u8>, u32)>,
+            expected_pop: Option<(Vec<u8>, u32)>,
         ) {
             let before = self.clone();
             if push_ok {
@@ -763,10 +763,10 @@ mod test {
                 );
                 let (actual_states, actual_entry) =
                     shorten_strategy!(self, meta, strategy, meta.past_world_states());
-                let (expected_states, expected_entry) = expected_popped.unzip();
+                let (expected_states, expected_entry) = expected_pop.unzip();
                 assert_eq!(
                     actual_states.unwrap_or_default(),
-                    expected_states.map(|popped| Vec::from_iter(popped)).unwrap_or_default(),
+                    expected_states.map(|pop| Vec::from_iter(pop)).unwrap_or_default(),
                     "\nstrategy: {strategy:?}\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
                 );
                 if matches!(

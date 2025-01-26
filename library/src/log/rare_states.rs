@@ -14,7 +14,7 @@ use crate::meta::RevMeta;
 
 use super::{
     doc_with_amount, impl_with_amount, AmountErrOld, EntryAmountOld, LogMut, LoggedAt, NotUSize,
-    OutOfLog, RareDrain, RareStateLog, ValueEntry, WithAmountInternal,
+    OutOfLog, RareStateLog, SparseDrain, ValueEntry, WithAmountInternal,
 };
 
 #[doc = doc_with_amount!(struct)]
@@ -266,7 +266,7 @@ where
         let states = self.states.range(range);
         (states, entry)
     }
-    pub fn drain_future(&mut self) -> (Drain<T>, RareDrain<EntryAmountOld<Self>>) {
+    pub fn drain_future(&mut self) -> (Drain<T>, SparseDrain<EntryAmountOld<Self>>) {
         (self.states.drain(self.index..), self.amounts.drain_future())
     }
     pub fn clear(&mut self) {

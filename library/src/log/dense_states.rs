@@ -245,8 +245,8 @@ impl<T, U, const AMOUNT_BYTES: usize> DenseStatesLog<T, U, AMOUNT_BYTES> {
 }
 
 impl<T, U> DenseStatesLog<T, U, USIZE_BYTES> {
-    pub fn new(iter: impl IntoIterator<Item = T>, entry: U) -> Self {
-        let states = VecDeque::from_iter(iter);
+    pub fn new(states: impl IntoIterator<Item = T>, entry: U) -> Self {
+        let states = VecDeque::from_iter(states);
         let amount = states.len();
         let entry_amount = EntryAmount::new(entry, amount);
         let amounts = DenseStateLog::new(entry_amount);
@@ -257,19 +257,19 @@ impl<T, U> DenseStatesLog<T, U, USIZE_BYTES> {
         }
     }
     pub fn with_capacities(
-        iter: impl IntoIterator<Item = T>,
+        states: impl IntoIterator<Item = T>,
         entry: U,
         states_capacity: usize,
         entries_capacity: usize,
     ) -> Self {
-        let mut states = VecDeque::with_capacity(states_capacity);
-        states.extend(iter);
-        let amount = states.len();
+        let mut states_deque = VecDeque::with_capacity(states_capacity);
+        states_deque.extend(states);
+        let amount = states_deque.len();
         let entry_amount = EntryAmount::new(entry, amount);
         let amounts = DenseStateLog::with_capacity(entry_amount, entries_capacity);
         Self {
             amounts,
-            states,
+            states: states_deque,
             index: amount,
         }
     }
@@ -306,7 +306,7 @@ impl<T, U> DenseStatesLog<T, U, USIZE_BYTES> {
         &mut self,
         max_past_len: usize,
         c: impl FnOnce(LogMut<T>) -> Out,
-    ) -> (Drain<T>, Drain<EntryAmount<U, USIZE_BYTES>>) {
+    ) -> (Drain<T>, Drain<EntryAmount<U>>) {
         self.states.truncate(self.index);
         let entry = c(LogMut(&mut self.states)).into();
         let pushed_amount = self.states.len() - self.index;
@@ -340,33 +340,32 @@ impl<T, U, const AMOUNT_BYTES: usize> DenseStatesLog<T, U, AMOUNT_BYTES> {
                 entry_amount,
             });
         }
-        let amounts = DenseStateLog::new(entry_amount);
         Ok(Self {
-            amounts,
+            amounts: DenseStateLog::new(entry_amount),
             states,
             index: pushed_amount,
         })
     }
     pub fn try_with_capacities(
-        iter: impl IntoIterator<Item = T>,
+        states: impl IntoIterator<Item = T>,
         entry: U,
         states_capacity: usize,
         entries_capacity: usize,
     ) -> Result<Self, AmountErr<VecDeque<T>, U, AMOUNT_BYTES>> {
-        let mut states = VecDeque::with_capacity(states_capacity);
-        states.extend(iter);
-        let pushed_amount = states.len();
+        let mut states_deque = VecDeque::with_capacity(states_capacity);
+        states_deque.extend(states);
+        let pushed_amount = states_deque.len();
         let entry_amount = EntryAmount::new(entry, pushed_amount);
         if pushed_amount != entry_amount.amount() {
             return Err(AmountErr {
-                values: states,
+                values: states_deque,
                 entry_amount,
             });
         }
         let amounts = DenseStateLog::with_capacity(entry_amount, entries_capacity);
         Ok(Self {
             amounts,
-            states,
+            states: states_deque,
             index: pushed_amount,
         })
     }
@@ -474,6 +473,8 @@ mod test {
     use serde::{Deserialize, Serialize};
 
     use super::*;
+
+    use crate::log::test::{collect_drain, collect_drain_result, collect_pop_result};
 
     #[test]
     fn serde_with() {
@@ -703,151 +704,93 @@ mod test {
             expected_entries_len: usize,
             expected_pop_or_err_state: Result<Option<(Vec<char>, char)>, (Vec<char>, char)>,
         ) {
-            let iter = self.0.iter_mut();
-            match expected_pop_or_err_state {
-                Ok(expected_pop) => {
-                    for [log1, log2] in iter {
-                        let before = log1.clone();
-                        let actual_pop = log1
-                            .try_push_and_pop_past(max_past_len, |mut log| {
-                                log.extend(push_states.clone());
-                                push_entry
-                            })
-                            .unwrap()
-                            .map(|actual_pop| {
-                                (actual_pop.value.collect::<Vec<_>>(), actual_pop.entry)
-                            });
+            let expected_drain_or_err_state = expected_pop_or_err_state
+                .clone()
+                .map(|drain| drain.into_iter().collect::<Vec<_>>());
+            for [log1, log2] in self.0.iter_mut() {
+                let before = log1.clone();
+                let actual_pop = log1.try_push_and_pop_past(max_past_len, |mut log| {
+                    log.extend(push_states.clone());
+                    push_entry
+                });
+                let actual_pop = match collect_pop_result(actual_pop) {
+                    Ok(ok) => {
                         let actual_get = log1.get();
                         let actual_get = (actual_get.0.cloned().collect::<Vec<_>>(), *actual_get.1);
-                        assert_eq!(
-                            actual_pop,
-                            expected_pop.clone(),
-                            "\nbefore: {before:#?}\nafter: {log1:#?}"
-                        );
                         assert_eq!(
                             actual_get,
                             (push_states.clone(), push_entry),
                             "\nbefore: {before:#?}\nafter: {log1:#?}"
                         );
+                        Ok(ok)
+                    }
+                    Err(err) => {
                         assert_eq!(
-                            log1.states_len(),
-                            expected_states_len,
+                            err,
+                            (push_states.clone(), push_entry),
                             "\nbefore: {before:#?}\nafter: {log1:#?}"
                         );
-                        assert_eq!(
-                            log1.entries_len(),
-                            expected_entries_len,
-                            "\nbefore: {before:#?}\nafter: {log1:#?}"
-                        );
+                        let actual_get = log1.get();
+                        Err((actual_get.0.cloned().collect::<Vec<_>>(), *actual_get.1))
+                    }
+                };
+                assert_eq!(
+                    actual_pop,
+                    expected_pop_or_err_state.clone(),
+                    "\nbefore: {before:#?}\nafter: {log1:#?}"
+                );
+                assert_eq!(
+                    log1.states_len(),
+                    expected_states_len,
+                    "\nbefore: {before:#?}\nafter: {log1:#?}"
+                );
+                assert_eq!(
+                    log1.entries_len(),
+                    expected_entries_len,
+                    "\nbefore: {before:#?}\nafter: {log1:#?}"
+                );
 
-                        let before = log2.clone();
-                        let mut actual_drain = Vec::<(Vec<char>, char)>::new();
-                        {
-                            let (mut past_states_drain, past_entry_amounts) = log2
-                                .try_push_and_drain_past(max_past_len, |mut log| {
-                                    log.extend(push_states.clone());
-                                    push_entry
-                                })
-                                .unwrap();
-                            let past_states_drain = &mut past_states_drain;
-                            for entry_amount in past_entry_amounts {
-                                actual_drain.push((
-                                    past_states_drain.take(entry_amount.amount()).collect(),
-                                    entry_amount.entry,
-                                ));
-                            }
-                        }
-                        let expected_drain: Vec<_> = expected_pop.iter().cloned().collect();
+                let before = log2.clone();
+                let actual_drain = log2.try_push_and_drain_past(max_past_len, |mut log| {
+                    log.extend(push_states.clone());
+                    push_entry
+                });
+                let actual_drain = match collect_drain_result(actual_drain) {
+                    Ok(ok) => {
                         let actual_get = log2.get();
                         let actual_get = (actual_get.0.cloned().collect::<Vec<_>>(), *actual_get.1);
-                        assert_eq!(
-                            actual_drain, expected_drain,
-                            "\nbefore: {before:#?}\nafter: {log2:#?}"
-                        );
                         assert_eq!(
                             actual_get,
                             (push_states.clone(), push_entry),
                             "\nbefore: {before:#?}\nafter: {log2:#?}"
                         );
-                        assert_eq!(
-                            log2.states_len(),
-                            expected_states_len,
-                            "\nbefore: {before:#?}\nafter: {log2:#?}"
-                        );
-                        assert_eq!(
-                            log2.entries_len(),
-                            expected_entries_len,
-                            "\nbefore: {before:#?}\nafter: {log2:#?}"
-                        );
+                        Ok(ok)
                     }
-                }
-                Err(expected_get) => {
-                    for [log1, log2] in iter {
-                        let before = log1.clone();
-                        let err = {
-                            let err = log1
-                                .try_push_and_pop_past(max_past_len, |mut log| {
-                                    log.extend(push_states.clone());
-                                    push_entry
-                                })
-                                .unwrap_err();
-                            (err.values.collect::<Vec<_>>(), err.entry_amount.entry)
-                        };
-                        let actual_get = log1.get();
-                        let actual_get = (actual_get.0.cloned().collect::<Vec<_>>(), *actual_get.1);
+                    Err(err) => {
                         assert_eq!(
                             err,
                             (push_states.clone(), push_entry),
-                            "\nbefore: {before:#?}\nafter: {log1:#?}"
+                            "\nbefore: {before:#?}\nafter: {log2:#?}"
                         );
-                        assert_eq!(
-                            actual_get, expected_get,
-                            "\nbefore: {before:#?}\nafter: {log1:#?}"
-                        );
-                        assert_eq!(
-                            log1.states_len(),
-                            expected_states_len,
-                            "\nbefore: {before:#?}\nafter: {log1:#?}"
-                        );
-                        assert_eq!(
-                            log1.entries_len(),
-                            expected_entries_len,
-                            "\nbefore: {before:#?}\nafter: {log1:#?}"
-                        );
-
-                        let before = log2.clone();
-                        let err = {
-                            let err = log2
-                                .try_push_and_drain_past(max_past_len, |mut log| {
-                                    log.extend(push_states.clone());
-                                    push_entry
-                                })
-                                .unwrap_err();
-                            (err.values.collect::<Vec<_>>(), err.entry_amount.entry)
-                        };
                         let actual_get = log2.get();
-                        let actual_get = (actual_get.0.cloned().collect::<Vec<_>>(), *actual_get.1);
-                        assert_eq!(
-                            err,
-                            (push_states.clone(), push_entry),
-                            "\nbefore: {before:#?}\nafter: {log2:#?}"
-                        );
-                        assert_eq!(
-                            actual_get, expected_get,
-                            "\nbefore: {before:#?}\nafter: {log2:#?}"
-                        );
-                        assert_eq!(
-                            log2.states_len(),
-                            expected_states_len,
-                            "\nbefore: {before:#?}\nafter: {log2:#?}"
-                        );
-                        assert_eq!(
-                            log2.entries_len(),
-                            expected_entries_len,
-                            "\nbefore: {before:#?}\nafter: {log2:#?}"
-                        );
+                        Err((actual_get.0.cloned().collect::<Vec<_>>(), *actual_get.1))
                     }
-                }
+                };
+                assert_eq!(
+                    actual_drain,
+                    expected_drain_or_err_state.clone(),
+                    "\nbefore: {before:#?}\nafter: {log2:#?}"
+                );
+                assert_eq!(
+                    log2.states_len(),
+                    expected_states_len,
+                    "\nbefore: {before:#?}\nafter: {log2:#?}"
+                );
+                assert_eq!(
+                    log2.entries_len(),
+                    expected_entries_len,
+                    "\nbefore: {before:#?}\nafter: {log2:#?}"
+                );
             }
         }
         fn forward_log(
@@ -902,8 +845,7 @@ mod test {
         }
         fn drain_future(
             &mut self,
-            expected_future_states: Vec<Vec<char>>,
-            expected_future_entries: Vec<char>,
+            expected_future: Vec<(Vec<char>, char)>,
             expected_states_len: usize,
             expected_entries_len: usize,
         ) {
@@ -912,23 +854,9 @@ mod test {
                 .flatten()
                 .map(|mut log| {
                     let before = log.clone();
-                    let mut actual_future_states = Vec::<Vec<char>>::new();
-                    let mut actual_future_entries = Vec::new();
-                    {
-                        let (mut future_states_drain, entry_amounts) = log.drain_future();
-                        let future_states_drain = &mut future_states_drain;
-                        for entry_amount in entry_amounts {
-                            actual_future_states
-                                .push(future_states_drain.take(entry_amount.amount()).collect());
-                            actual_future_entries.push(entry_amount.entry);
-                        }
-                    }
+                    let actual_future = collect_drain(log.drain_future());
                     assert_eq!(
-                        actual_future_states, expected_future_states,
-                        "\nbefore: {before:#?}\nafter: {log:#?}"
-                    );
-                    assert_eq!(
-                        actual_future_entries, expected_future_entries,
+                        actual_future, expected_future,
                         "\nbefore: {before:#?}\nafter: {log:#?}"
                     );
                     assert_eq!(
@@ -957,7 +885,7 @@ mod test {
 
         logs.backward_log(vec!['c'; 4], 'C', false);
         logs.backward_log(vec!['b'; 3], 'B', false);
-        // out of log, no mutations happend to both meta and log here
+        // out of log, no mutations happend the logs here
         logs.backward_log(vec!['b'; 3], 'B', true);
 
         logs.forward_log(vec!['c'; 4], 'C', false);
@@ -968,7 +896,7 @@ mod test {
         logs.backward_log(vec!['c'; 4], 'C', false);
         logs.backward_log(vec!['b'; 3], 'B', false);
 
-        logs.drain_future(vec![vec!['c'; 4], vec!['d'; 5]], vec!['C', 'D'], 3, 0);
+        logs.drain_future(vec![(vec!['c'; 4], 'C'), (vec!['d'; 5], 'D')], 3, 0);
 
         // all entries are truncated as they are in the future
         logs.forward(2, vec!['e'; 6], 'E', 9, 1, Ok(None));

@@ -329,14 +329,14 @@ mod test {
             max_past_len: usize,
             push: char,
             expected_states_len: usize,
-            expected_popped: Option<char>,
+            expected_pop: Option<char>,
         ) {
             for [log1, log2] in self.0.iter_mut() {
                 let before = log1.clone();
-                let actual_popped = log1.push_and_pop_past(max_past_len, push);
+                let actual_pop = log1.push_and_pop_past(max_past_len, push);
                 assert_eq!(**log1, push, "\nbefore: {before:#?}\nafter: {log1:#?}");
                 assert_eq!(
-                    actual_popped, expected_popped,
+                    actual_pop, expected_pop,
                     "\nbefore: {before:#?}\nafter: {log1:#?}"
                 );
                 assert_eq!(
@@ -346,11 +346,11 @@ mod test {
                 );
 
                 let before = log2.clone();
-                let actual_popped: Vec<_> = log2.push_and_drain_past(max_past_len, push).collect();
+                let actual_drain: Vec<_> = log2.push_and_drain_past(max_past_len, push).collect();
                 assert_eq!(**log2, push, "\nbefore: {before:#?}\nafter: {log2:#?}");
                 assert_eq!(
-                    actual_popped.as_slice(),
-                    expected_popped.as_slice(),
+                    actual_drain.as_slice(),
+                    expected_pop.as_slice(),
                     "\nbefore: {before:#?}\nafter: {log2:#?}"
                 );
                 assert_eq!(

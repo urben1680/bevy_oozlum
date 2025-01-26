@@ -166,6 +166,7 @@ impl InternalDirection {
     }
 }
 
+// todo: deprecate
 #[derive(Clone, Debug, Event)]
 pub struct DrainPastByLoggedAt(RevMeta);
 
@@ -207,6 +208,8 @@ pub struct RevMeta {
     /// If Some, is either a Running* variant or Pause
     queue: Option<InternalDirection>,
     direction: InternalDirection,
+    /// Amount of times [`self.past_end.first_half`](RevFrame::first_half) changed
+    log_start_half: u32,
 }
 
 impl Default for RevMeta {
@@ -226,6 +229,10 @@ impl RevMeta {
             Some(now) => now,
             None => RevFrame(0),
         };
+        let log_start_half = match now.first_half() {
+            true => 0,
+            false => 1,
+        };
         Self {
             max_world_states,
             present: now,
@@ -236,7 +243,11 @@ impl RevMeta {
                 false => InternalDirection::RanForward,
             },
             queue: None,
+            log_start_half,
         }
+    }
+    pub(crate) fn log_start_half(&self) -> u32 {
+        self.log_start_half
     }
     pub fn direction(&self) -> RevDirection {
         self.get_direction().expect("todo")
@@ -489,6 +500,8 @@ impl RevMeta {
             let first_half = self.past_end.first_half();
             self.past_end = self.present.wrapping_sub(max_world_states - 1);
             if self.past_end.first_half() != first_half {
+                self.log_start_half = self.log_start_half.checked_add(1).expect("todo");
+                //todo deprecate
                 return Some(DrainPastByLoggedAt(self.clone()));
             }
         }
@@ -684,6 +697,10 @@ mod test {
         let present = RevFrame::checked_new(now);
         let past_end = RevFrame::checked_new(*range.start());
         let future_end = RevFrame::checked_new(*range.end());
+        let log_start_half = match past_end.first_half() {
+            true => 0,
+            false => 1,
+        };
         let meta = RevMeta {
             max_world_states: max_len,
             present,
@@ -691,6 +708,7 @@ mod test {
             future_end,
             direction,
             queue: None,
+            log_start_half,
         };
         assert!(*range.start() <= now, "{meta:?}");
         match direction {

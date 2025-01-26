@@ -13,7 +13,7 @@ use crate::meta::RevMeta;
 
 use super::{
     doc_with_amount, impl_with_amount, AmountErrOld, EntryAmountOld, LogMut, LoggedAt, NotUSize,
-    OutOfLog, RareDrain, RareTransitionLog, ValueEntry, WithAmountInternal,
+    OutOfLog, RareTransitionLog, SparseDrain, ValueEntry, WithAmountInternal,
 };
 
 #[doc = doc_with_amount!(struct)]
@@ -182,7 +182,7 @@ where
     pub fn transitions_shrink_to_fit(&mut self) {
         self.transitions.shrink_to_fit()
     }
-    pub fn drain_future(&mut self) -> (Drain<T>, RareDrain<EntryAmountOld<Self>>) {
+    pub fn drain_future(&mut self) -> (Drain<T>, SparseDrain<EntryAmountOld<Self>>) {
         (
             self.transitions.drain(self.index..),
             self.amounts.drain_future(),

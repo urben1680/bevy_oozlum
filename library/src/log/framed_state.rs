@@ -347,7 +347,7 @@ mod test {
             strategy: ShortenStrategy,
             push: u8,
             expected_states_len: usize,
-            expected_popped: Option<(u8, u32)>,
+            expected_pop: Option<(u8, u32)>,
         ) {
             meta.queue_forward();
             meta.update(|_, _| {});
@@ -355,7 +355,7 @@ mod test {
             let push = (push, meta.present_world_state());
             self.push_present(push);
             let after_push = self.clone();
-            let actual_popped = shorten_strategy!(
+            let actual_pop = shorten_strategy!(
                 self,
                 meta,
                 strategy,
@@ -364,7 +364,7 @@ mod test {
                 after_push
             );
             assert_eq!(
-                actual_popped, expected_popped,
+                actual_pop, expected_pop,
                 "\nstrategy: {strategy:#?}\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
             );
             assert_eq!(
