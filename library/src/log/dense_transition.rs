@@ -160,17 +160,9 @@ impl<T> DenseTransitionLog<T> {
 
 #[cfg(test)]
 mod test {
-    use std::num::NonZeroU32;
-
     use serde::{Deserialize, Serialize};
 
     use super::*;
-
-    use crate::{
-        frame::RevFrame,
-        log::test::{shorten_strategy, ShortenStrategy},
-        meta::RevMeta,
-    };
 
     #[test]
     fn serde_with() {
@@ -224,137 +216,112 @@ mod test {
         test(&logless_with_capacity, 0, true);
     }
 
-    /*
-    impl DenseTransitionLog<(u8, RevFrame)> {
-        fn test_forward(
+    struct Logs(Vec<[DenseTransitionLog<char>; 2]>);
+
+    impl Logs {
+        fn new() -> Self {
+            Self(vec![Default::default()])
+        }
+        fn forward(
             &mut self,
-            meta: &mut RevMeta,
-            strategy: ShortenStrategy,
-            push: u8,
+            max_past_len: usize,
+            push: char,
             expected_transitions_len: usize,
-            expected_popped: Option<(u8, u32)>,
+            expected_pop: Option<char>,
         ) {
-            meta.queue_forward();
-            meta.update(|_, _| {});
-            let before = self.clone();
-            let push = (push, meta.present_world_state());
-            self.push_present(push);
-            let after_push = self.clone();
-            let actual_popped = shorten_strategy!(
-                self,
-                meta,
-                strategy,
-                meta.past_world_states(),
-                before,
-                after_push
-            );
-            assert_eq!(
-                actual_popped, expected_popped,
-                "\nstrategy: {strategy:#?}\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
-            );
-            assert_eq!(
-                self.transitions_len(),
-                expected_transitions_len,
-                "\nstrategy: {strategy:#?}\nmeta: {meta:#?}\nbefore: {before:#?}\nafter_push: {after_push:#?}\nafter_pop: {self:#?}",
-            );
+            for [log1, log2] in self.0.iter_mut() {
+                let before = log1.clone();
+                let actual_pop = log1.push_and_pop_past(max_past_len, push);
+                assert_eq!(
+                    log1.transitions_len(),
+                    expected_transitions_len,
+                    "\nbefore: {before:#?}\nafter: {log1:#?}"
+                );
+                assert_eq!(
+                    actual_pop, expected_pop,
+                    "\nbefore: {before:#?}\nafter: {log1:#?}"
+                );
+
+                let before = log2.clone();
+                let actual_drain: Vec<_> = log2.push_and_drain_past(max_past_len, push).collect();
+                assert_eq!(
+                    log2.transitions_len(),
+                    expected_transitions_len,
+                    "\nbefore: {before:#?}\nafter: {log2:#?}"
+                );
+                assert_eq!(
+                    actual_drain.as_slice(),
+                    expected_pop.as_slice(),
+                    "\nbefore: {before:#?}\nafter: {log2:#?}"
+                );
+            }
         }
-        fn test_forward_log(
-            &mut self,
-            meta: &mut RevMeta,
-            expected_transition: Result<u8, OutOfLog>,
-        ) {
-            let before = self.clone();
-            let expected_transition = expected_transition.map(|transition| {
-                let frame = meta.present_world_state().wrapping_add(1);
-                meta.queue_log(frame).unwrap();
-                meta.update(|_, _| {});
-                (transition, frame)
-            });
-            let actual_transition = self.forward_log().map(|transition| *transition);
-            assert_eq!(
-                actual_transition, expected_transition,
-                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
-            )
+        fn forward_log(&mut self, expected_transition: Result<char, OutOfLog>) {
+            for log in self.0.iter_mut().flatten() {
+                let before = log.clone();
+                let actual_transition = log.forward_log().cloned();
+                assert_eq!(
+                    actual_transition, expected_transition,
+                    "\nbefore: {before:#?}\nafter: {log:#?}"
+                );
+            }
         }
-        fn test_backward_log(
-            &mut self,
-            meta: &mut RevMeta,
-            expected_transition: Result<u8, OutOfLog>,
-        ) {
-            let before = self.clone();
-            let expected_transition = expected_transition.map(|transition| {
-                let frame = meta.present_world_state();
-                meta.queue_log(frame.wrapping_sub(1)).unwrap();
-                meta.update(|_, _| {});
-                (transition, frame)
-            });
-            let actual_transition = self.backward_log().map(|transition| *transition);
-            assert_eq!(
-                actual_transition, expected_transition,
-                "\nmeta: {meta:#?}\nbefore: {before:#?}\nafter: {self:#?}",
-            )
+        fn backward_log(&mut self, expected_transition: Result<char, OutOfLog>) {
+            for log in self.0.iter_mut().flatten() {
+                let before = log.clone();
+                let actual_transition = log.backward_log().cloned();
+                assert_eq!(
+                    actual_transition, expected_transition,
+                    "\nbefore: {before:#?}\nafter: {log:#?}"
+                );
+            }
         }
-        fn test_drain_future(
-            &self,
-            expected_future: impl IntoIterator<Item = (u8, u32)>,
-            expected_transitions_len: usize,
-        ) -> Self {
-            let before = self.clone();
-            let mut clone = self.clone();
-            let actual_future: Vec<_> = clone.drain_future().collect();
-            let expected_future: Vec<_> = expected_future
+        fn drain_future(&mut self, expected_future: Vec<char>, expected_transitions_len: usize) {
+            self.0 = std::mem::take(&mut self.0)
                 .into_iter()
-                .map(|(state, frame)| (state, RevFrame(frame)))
+                .flatten()
+                .map(|mut log| {
+                    let before = log.clone();
+                    let actual_future: Vec<_> = log.drain_future().collect();
+                    assert_eq!(
+                        log.transitions_len(),
+                        expected_transitions_len,
+                        "\nbefore: {before:#?}\nafter: {log:#?}"
+                    );
+                    assert_eq!(
+                        actual_future, expected_future,
+                        "\nbefore: {before:#?}\nafter: {log:#?}"
+                    );
+                    [before, log]
+                })
                 .collect();
-            assert_eq!(
-                actual_future, expected_future,
-                "\nbefore: {before:#?}\nafter: {clone:#?}"
-            );
-            assert_eq!(
-                clone.transitions_len(),
-                expected_transitions_len,
-                "\nbefore: {before:#?}\nafter: {clone:#?}"
-            );
-            clone
         }
     }
 
     #[test]
-    fn push_and_log_traversal() {
-        for strategy in ShortenStrategy::VARIANTS {
-            let meta = &mut RevMeta::new(NonZeroU32::new(3), None, false);
-            let mut log = DenseTransitionLog::new();
+    fn log_traversal_works() {
+        let mut logs = Logs::new();
+        logs.forward(2, 'a', 1, None);
+        logs.forward(2, 'b', 2, None);
+        // shortened log
+        logs.forward(2, 'c', 2, Some('a'));
 
-            log.test_forward(meta, strategy, 1, 1, None);
-            log.test_forward(meta, strategy, 2, 2, None);
-            // shortened log
-            log.test_forward(meta, strategy, 3, 2, Some((1, 1)));
+        logs.backward_log(Ok('c'));
+        logs.backward_log(Ok('b'));
+        // out of log, no mutations happend to the logs here
+        logs.backward_log(Err(OutOfLog));
 
-            log.test_backward_log(meta, Ok(3));
-            log.test_backward_log(meta, Ok(2));
-            // out of log, no mutations happend to both meta and log here
-            log.test_backward_log(meta, Err(OutOfLog));
+        logs.forward_log(Ok('b'));
+        logs.forward_log(Ok('c'));
+        // nothing ever logged past 'c', no mutations happend to the logs here
+        logs.forward_log(Err(OutOfLog));
 
-            log.test_forward_log(meta, Ok(2));
-            log.test_forward_log(meta, Ok(3));
-            // out of log, no mutations happend to both meta and log here
-            log.test_forward_log(meta, Err(OutOfLog));
+        logs.backward_log(Ok('c'));
+        logs.backward_log(Ok('b'));
 
-            log.test_backward_log(meta, Ok(3));
-            log.test_backward_log(meta, Ok(2));
+        logs.drain_future(vec!['b', 'c'], 0);
 
-            let clone = log.test_drain_future([(2, 2), (3, 3)], 0);
-
-            for mut log in [log, clone] {
-                // all entries are truncated as they are in the future
-                log.test_forward(meta, strategy, 4, 1, None);
-            }
-        }
-    }
-    */
-
-    #[allow(dead_code)]
-    fn impls_reflect() {
-        bevy::reflect::TypeRegistry::empty().register::<DenseTransitionLog<RevFrame>>();
+        // all entries are truncated as they are in the future
+        logs.forward(2, 'd', 1, None);
     }
 }

@@ -54,6 +54,10 @@ pub use dense_state::DenseStateLog;
 pub use dense_states::DenseStatesLog;
 pub use dense_transition::DenseTransitionLog;
 pub use dense_transitions::DenseTransitionsLog;
+pub use sparse_state::SparseStateLog;
+pub use sparse_states::SparseStatesLog;
+pub use sparse_transition::SparseTransitionLog;
+pub use sparse_transitions::SparseTransitionsLog;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct OutOfLog;
@@ -64,34 +68,6 @@ pub struct LogMut<'a, T>(&'a mut VecDeque<T>);
 impl<'a, T> LogMut<'a, T> {
     pub fn append(&mut self, other: &mut VecDeque<T>) {
         self.0.append(other);
-    }
-    pub fn push_back(&mut self, value: T) {
-        self.0.push_back(value);
-    }
-    pub fn reserve(&mut self, additional: usize) {
-        self.0.reserve(additional)
-    }
-    pub fn reserve_exact(&mut self, additional: usize) {
-        self.0.reserve_exact(additional)
-    }
-    pub fn try_reserve(&mut self, additional: usize) -> Result<(), TryReserveError> {
-        self.0.try_reserve(additional)
-    }
-    pub fn try_reserve_exact(&mut self, additional: usize) -> Result<(), TryReserveError> {
-        self.0.try_reserve_exact(additional)
-    }
-    pub fn shrink_to(&mut self, min_capacity: usize) {
-        self.0.shrink_to(min_capacity)
-    }
-    pub fn shrink_to_fit(&mut self) {
-        self.0.shrink_to_fit()
-    }
-}
-
-impl<'a, T> Deref for LogMut<'a, T> {
-    type Target = VecDeque<T>;
-    fn deref(&self) -> &Self::Target {
-        self.0
     }
 }
 
@@ -107,6 +83,18 @@ where
 impl<'a, T> Extend<T> for LogMut<'a, T> {
     fn extend<I: IntoIterator<Item = T>>(&mut self, iter: I) {
         self.0.extend(iter);
+    }
+}
+
+pub struct SparseLogMut<'a, T, U> {
+    values: &'a mut VecDeque<T>,
+    entry: &'a mut Option<U>,
+}
+
+impl<'a, T, U> SparseLogMut<'a, T, U> {
+    pub fn push(self, entry: U) -> LogMut<'a, T> {
+        *self.entry = Some(entry);
+        LogMut(self.values)
     }
 }
 
@@ -179,7 +167,7 @@ impl<'a, T: Iterator, U> IntoIterator for &'a mut ValueEntry<T, U> {
 const USIZE_BYTES: usize = usize::BITS as usize / 8;
 
 #[derive(Clone, PartialEq, Reflect)]
-struct RareValue<T> {
+struct SparseValue<T> {
     value: T,
     /// If `T` is a state, then these are the skips _after_ the state.
     ///
@@ -194,26 +182,24 @@ struct RareValue<T> {
 }
 
 #[cfg(feature = "serde")]
-impl<T: serde::Serialize> serde::Serialize for RareValue<T> {
+impl<T: serde::Serialize> serde::Serialize for SparseValue<T> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         (&self.value, &self.skips()).serialize(serializer)
     }
 }
 
 #[cfg(feature = "serde")]
-impl<'de, T: serde::Deserialize<'de>> serde::Deserialize<'de> for RareValue<T> {
+impl<'de, T: serde::Deserialize<'de>> serde::Deserialize<'de> for SparseValue<T> {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let (value, skips) = <(T, usize) as serde::Deserialize<'de>>::deserialize(deserializer)?;
         let rare_value = Self::new(value, skips);
-        if skips == rare_value.skips() {
-            Ok(rare_value)
-        } else {
-            Err(serde::de::Error::custom("todo"))
-        }
+        // skips == rare_value.skips() is always true, if this platform's usize lacks the bytes to store the
+        // serialized value, that information was lost at usize::deserialize already and needs to be handled by serde
+        Ok(rare_value)
     }
 }
 
-impl<T: Debug> Debug for RareValue<T> {
+impl<T: Debug> Debug for SparseValue<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct(std::any::type_name::<Self>())
             .field("value", &self.value)
@@ -222,7 +208,7 @@ impl<T: Debug> Debug for RareValue<T> {
     }
 }
 
-impl<T> RareValue<T> {
+impl<T> SparseValue<T> {
     fn new(value: T, skips: usize) -> Self {
         Self {
             value,
@@ -237,14 +223,14 @@ impl<T> RareValue<T> {
     }
 }
 
-/// Draining iterator used by some methods of rare logs.
+/// Draining iterator used by some methods of sparse logs.
 ///
 /// See [`vec_deque::Drain`](Drain), that is wrapped here, for further information.
 #[derive(Debug)]
-// Nameable alternative to `Map<Drain<RareValue<T>>, impl FnMut(RareValue<T>) -> T>`
-pub struct RareDrain<'a, T>(Drain<'a, RareValue<T>>);
+// Nameable alternative to `Map<Drain<SparseValue<T>>, impl FnMut(RareValue<T>) -> T>`
+pub struct SparseDrain<'a, T>(Drain<'a, SparseValue<T>>);
 
-impl<T> Iterator for RareDrain<'_, T> {
+impl<T> Iterator for SparseDrain<'_, T> {
     type Item = T;
 
     #[inline]
@@ -258,16 +244,16 @@ impl<T> Iterator for RareDrain<'_, T> {
     }
 }
 
-impl<T> DoubleEndedIterator for RareDrain<'_, T> {
+impl<T> DoubleEndedIterator for SparseDrain<'_, T> {
     #[inline]
     fn next_back(&mut self) -> Option<T> {
         self.0.next_back().map(|rare| rare.value)
     }
 }
 
-impl<T> ExactSizeIterator for RareDrain<'_, T> {}
+impl<T> ExactSizeIterator for SparseDrain<'_, T> {}
 
-impl<T> FusedIterator for RareDrain<'_, T> {}
+impl<T> FusedIterator for SparseDrain<'_, T> {}
 
 // Private bounds need no documentation because the `drain_future`
 // methods which return this type document these bounds themselves.
@@ -313,6 +299,12 @@ impl<'de, Log: WithAmountInternal<Entry: serde::Deserialize<'de>>> serde::Deseri
     }
 }
 
+/// `EntryAmount` is usually encountered in draining methods of logs with multiple states/transitions per update,
+/// for example [`DenseStatesLog`] which will be behind the `log` variable in the following code snippets.
+///
+/// These methods return two draining iterators, the first with the states/transitions of all updates that are
+/// drained, and the second with `EntryAmount`, containing the entry type `U` of the log (if specified) and the
+/// amount of states/transitions per update, returned by the [`amount`](Self::amount) method.
 #[derive(Debug, Clone, Reflect)]
 pub struct EntryAmount<U, const AMOUNT_BYTES: usize = USIZE_BYTES> {
     pub entry: U,
@@ -332,7 +324,40 @@ impl<U, const AMOUNT_BYTES: usize> EntryAmount<U, AMOUNT_BYTES> {
             amount: resize_ne_bytes(amount.to_ne_bytes()),
         }
     }
-    // todo: doc example with Iterator::take
+
+    /// Returns the amount of states/transitions of an update.
+    ///
+    /// # Examples
+    ///
+    /// With `log` being [`&mut DenseStatesLog`](DenseStatesLog) and [`DenseStatesLog::drain_future`] returning the
+    /// draining iterators, do this to slice them by updates:
+    ///
+    /// ```
+    /// # let mut log = library::log::DenseStatesLog::new([0], 0);
+    /// let (mut future_states, future_entry_amounts) = log.drain_future();
+    /// ```
+    ///
+    /// Now iterate the updates:
+    /// ```
+    /// # let mut log = library::log::DenseStatesLog::new([0], 0);
+    /// # let (mut future_states, future_entry_amounts) = log.drain_future();
+    /// for entry_amount in future_entry_amounts {
+    ///     for future_states in future_states.by_ref().take(entry_amount.amount()) {
+    ///         let entry = entry_amount.entry;
+    ///         // logic
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// Or collect the updates:
+    /// ```
+    /// # let mut log = library::log::DenseStatesLog::new([0], 0);
+    /// # let (mut future_states, future_entry_amounts) = log.drain_future();
+    /// let updates: Vec<(Vec<_>, _)> = future_entry_amounts.map(|entry_amount| (
+    ///     future_states.by_ref().take(entry_amount.amount()).collect(),
+    ///     entry_amount.entry
+    /// )).collect();
+    /// ```
     pub fn amount(&self) -> usize {
         usize::from_ne_bytes(resize_ne_bytes(self.amount))
     }
@@ -413,7 +438,7 @@ impl<Log: WithAmountInternal<Entry: LoggedAt>> LoggedAt for EntryAmountOld<Log> 
     }
 }
 
-impl<T: LoggedAt> LoggedAt for RareValue<T> {
+impl<T: LoggedAt> LoggedAt for SparseValue<T> {
     fn logged_at(&self) -> RevFrame {
         self.value.logged_at()
     }
@@ -619,6 +644,47 @@ use impl_with_amount;
 
 #[cfg(test)]
 mod test {
+    pub(super) fn collect_pop_result<I1: Iterator<Item = char>, I2: Iterator<Item = char>>(
+        actual_pop: Result<Option<ValueEntry<I1, char>>, AmountErr<I2, char, 1>>,
+    ) -> Result<Option<(Vec<char>, char)>, (Vec<char>, char)> {
+        match actual_pop {
+            Ok(None) => Ok(None),
+            Ok(Some(value_entry)) => Ok(Some((value_entry.value.collect(), value_entry.entry))),
+            Err(err) => Err((err.values.collect(), err.entry_amount.entry)),
+        }
+    }
+
+    pub(super) fn collect_drain_result<
+        I1: ExactSizeIterator<Item = char>,
+        I2: Iterator<Item = EntryAmount<char, 1>>,
+        I3: Iterator<Item = char>,
+    >(
+        actual_drain: Result<(I1, I2), AmountErr<I3, char, 1>>,
+    ) -> Result<Vec<(Vec<char>, char)>, (Vec<char>, char)> {
+        match actual_drain {
+            Ok(ok) => Ok(collect_drain(ok)),
+            Err(err) => Err((err.values.collect(), err.entry_amount.entry)),
+        }
+    }
+
+    pub(super) fn collect_drain<
+        I1: ExactSizeIterator<Item = char>,
+        I2: Iterator<Item = EntryAmount<char, 1>>,
+    >(
+        (mut values, entry_amounts): (I1, I2),
+    ) -> Vec<(Vec<char>, char)> {
+        let collected = entry_amounts
+            .map(|entry_amount| {
+                let amount = entry_amount.amount();
+                let values: Vec<_> = values.by_ref().take(amount).collect();
+                assert_eq!(values.len(), amount);
+                (values, entry_amount.entry)
+            })
+            .collect();
+        assert_eq!(values.len(), 0);
+        collected
+    }
+
     #[derive(Debug, Clone, Copy)]
     pub(super) enum ShortenStrategy {
         PopPastByLen,
@@ -695,4 +761,6 @@ mod test {
     }
 
     pub(super) use shorten_strategy;
+
+    use super::{AmountErr, EntryAmount, ValueEntry};
 }

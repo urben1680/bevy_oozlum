@@ -5,14 +5,14 @@ use bevy::reflect::{std_traits::ReflectDefault, Reflect};
 
 use crate::meta::RevMeta;
 
-use super::{index_oob, partition_point, LoggedAt, OutOfLog, RareDrain, RareValue};
+use super::{index_oob, partition_point, LoggedAt, OutOfLog, SparseDrain, SparseValue};
 
 #[derive(Debug, Clone, Reflect)]
 #[reflect(Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct RareTransitionLog<T> {
     /// RareValue.skips represents the number of None pushes before the transition in the struct.
-    transitions: VecDeque<RareValue<T>>,
+    transitions: VecDeque<SparseValue<T>>,
     index: usize,
     /// For simplicity, this never gets reduced by `pop`/`drain_past_by_len`/`logged_at`.
     skips: usize,
@@ -31,18 +31,18 @@ mod serde_with {
 
     use crate::log::serde_with::{LoglessWithCapacity, WithCapacity, WithCapacityWrapper};
 
-    use super::{RareTransitionLog, RareValue};
+    use super::{RareTransitionLog, SparseValue};
 
     impl<T: Serialize + for<'de> Deserialize<'de> + 'static> WithCapacity for RareTransitionLog<T> {
         type Se<'se> = (
-            WithCapacityWrapper<&'se VecDeque<RareValue<T>>>,
+            WithCapacityWrapper<&'se VecDeque<SparseValue<T>>>,
             usize,
             usize,
             usize,
             usize,
         );
         type De = (
-            WithCapacityWrapper<VecDeque<RareValue<T>>>,
+            WithCapacityWrapper<VecDeque<SparseValue<T>>>,
             usize,
             usize,
             usize,
@@ -140,9 +140,9 @@ impl<T> RareTransitionLog<T> {
     pub fn transitions_shrink_to_fit(&mut self) {
         self.transitions.shrink_to_fit()
     }
-    pub fn drain_future(&mut self) -> RareDrain<T> {
+    pub fn drain_future(&mut self) -> SparseDrain<T> {
         self.skips_max = self.skips;
-        RareDrain(self.transitions.drain(self.index..))
+        SparseDrain(self.transitions.drain(self.index..))
     }
     pub fn clear(&mut self) {
         self.transitions.clear();
@@ -160,7 +160,7 @@ impl<T> RareTransitionLog<T> {
             }
             Some(transition) => {
                 self.transitions
-                    .push_back(RareValue::new(transition, self.skips));
+                    .push_back(SparseValue::new(transition, self.skips));
                 self.index += 1;
                 self.skips = 0;
                 self.past_len += 1;
@@ -216,7 +216,7 @@ impl<T> RareTransitionLog<T> {
             None
         }
     }
-    pub fn drain_past_by_len(&mut self, max_past_len: usize) -> RareDrain<T> {
+    pub fn drain_past_by_len(&mut self, max_past_len: usize) -> SparseDrain<T> {
         let mut drain_amount = 0;
         for entry in self.transitions.iter() {
             let less = self.past_len - entry.len();
@@ -227,7 +227,7 @@ impl<T> RareTransitionLog<T> {
             drain_amount += 1;
         }
         self.index -= drain_amount;
-        RareDrain(self.transitions.drain(..drain_amount))
+        SparseDrain(self.transitions.drain(..drain_amount))
     }
     fn pop_past(&mut self) -> Option<T> {
         self.transitions.pop_front().map(|rare| {
@@ -251,16 +251,16 @@ impl<T: LoggedAt> RareTransitionLog<T> {
             None
         }
     }
-    pub fn drain_past_by_logged_at(&mut self, meta: &RevMeta) -> RareDrain<T> {
+    pub fn drain_past_by_logged_at(&mut self, meta: &RevMeta) -> SparseDrain<T> {
         let to = partition_point(&self.transitions, self.index, meta);
         self.past_len -= to // `to` plus sum of `RareValue::skips` == sum of `RareValue::len` but with less operations 
             + self
                 .transitions
                 .range(..to)
-                .map(RareValue::skips)
+                .map(SparseValue::skips)
                 .sum::<usize>();
         self.index -= to;
-        RareDrain(self.transitions.drain(..to))
+        SparseDrain(self.transitions.drain(..to))
     }
 }
 

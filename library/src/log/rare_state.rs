@@ -8,13 +8,13 @@ use bevy::reflect::Reflect;
 
 use crate::meta::RevMeta;
 
-use super::{index_oob, partition_point, LoggedAt, OutOfLog, RareDrain, RareValue};
+use super::{index_oob, partition_point, LoggedAt, OutOfLog, SparseDrain, SparseValue};
 
 #[derive(Debug, Clone, Reflect)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct RareStateLog<T> {
     /// RareValue.skips represents the number of None pushes after the state in the struct
-    states: VecDeque<RareValue<T>>,
+    states: VecDeque<SparseValue<T>>,
     present: T,
     index: usize,
     skips: usize,
@@ -32,7 +32,7 @@ mod serde_with {
         LoglessState, LoglessWithCapacity, WithCapacity, WithCapacityWrapper,
     };
 
-    use super::{RareStateLog, RareValue};
+    use super::{RareStateLog, SparseValue};
 
     impl<T: Serialize + for<'de> Deserialize<'de> + 'static> LoglessState for RareStateLog<T> {
         type Se<'se> = &'se T;
@@ -47,7 +47,7 @@ mod serde_with {
 
     impl<T: Serialize + for<'de> Deserialize<'de> + 'static> WithCapacity for RareStateLog<T> {
         type Se<'se> = (
-            WithCapacityWrapper<&'se VecDeque<RareValue<T>>>,
+            WithCapacityWrapper<&'se VecDeque<SparseValue<T>>>,
             &'se T,
             usize,
             usize,
@@ -55,7 +55,7 @@ mod serde_with {
             usize,
         );
         type De = (
-            WithCapacityWrapper<VecDeque<RareValue<T>>>,
+            WithCapacityWrapper<VecDeque<SparseValue<T>>>,
             T,
             usize,
             usize,
@@ -158,8 +158,8 @@ impl<T> RareStateLog<T> {
     pub fn states_shrink_to_fit(&mut self) {
         self.states.shrink_to_fit()
     }
-    pub fn drain_future(&mut self) -> RareDrain<T> {
-        RareDrain(self.states.drain(self.index..))
+    pub fn drain_future(&mut self) -> SparseDrain<T> {
+        SparseDrain(self.states.drain(self.index..))
     }
     pub fn clear(&mut self) {
         self.states.clear();
@@ -181,7 +181,8 @@ impl<T> RareStateLog<T> {
             }
             Some(state) => {
                 let previous = core::mem::replace(&mut self.present, state);
-                self.states.push_back(RareValue::new(previous, self.skips));
+                self.states
+                    .push_back(SparseValue::new(previous, self.skips));
                 self.skips = 0;
                 self.index += 1;
                 self.past_len += 1;
@@ -244,7 +245,7 @@ impl<T> RareStateLog<T> {
             None
         }
     }
-    pub fn drain_past_by_len(&mut self, max_past_len: usize) -> RareDrain<T> {
+    pub fn drain_past_by_len(&mut self, max_past_len: usize) -> SparseDrain<T> {
         let mut drain_amount = 0;
         for entry in self.states.iter() {
             let less = self.past_len - entry.len();
@@ -255,7 +256,7 @@ impl<T> RareStateLog<T> {
             drain_amount += 1;
         }
         self.index -= drain_amount;
-        RareDrain(self.states.drain(..drain_amount))
+        SparseDrain(self.states.drain(..drain_amount))
     }
     fn pop_past(&mut self) -> Option<T> {
         self.states.pop_front().map(|rare| {
@@ -283,7 +284,7 @@ impl<T: LoggedAt> RareStateLog<T> {
             None
         }
     }
-    pub fn drain_past_by_logged_at(&mut self, meta: &RevMeta) -> RareDrain<T> {
+    pub fn drain_past_by_logged_at(&mut self, meta: &RevMeta) -> SparseDrain<T> {
         // The user might call `push_present` multiple times per frame, so `RareValue::skips`
         // cannot be reliably interpreted as frame offsets from `RareValue::logged_at`.
         // Instead `RareValue::skips` is ignored here and one entry less is removed.
@@ -294,11 +295,11 @@ impl<T: LoggedAt> RareStateLog<T> {
             + self
                 .states
                 .range(..to)
-                .map(RareValue::skips)
+                .map(SparseValue::skips)
                 .sum::<usize>();
         self.index -= to;
 
-        RareDrain(self.states.drain(..to))
+        SparseDrain(self.states.drain(..to))
     }
 }
 
