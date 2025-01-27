@@ -35,9 +35,11 @@ const PACKED_REV_FRAME_SIZE: usize = 3;
 )))]
 const PACKED_REV_FRAME_SIZE: usize = 4;
 
+const PACKED_REV_FRAME_BITS: u32 = PACKED_REV_FRAME_SIZE as u32 * 8;
+
 /// Maximum value a frame can be internally, can be used as a bitmask that is 1 for all relevant bits.
 pub(crate) const REV_FRAME_AS_U32_MAX: u32 = {
-    let bits = PACKED_REV_FRAME_SIZE * 8;
+    let bits = PACKED_REV_FRAME_BITS;
     let shift = 32 - bits;
     u32::MAX >> shift
 };
@@ -186,5 +188,42 @@ impl<'de> serde::Deserialize<'de> for PackedRevFrame {
                 PACKED_REV_FRAME_SIZE,
             )))
         }
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct RevFrameGen(u64);
+
+#[derive(Copy, Clone)]
+pub struct RevFrameNew(u64);
+
+impl RevFrameNew {
+    pub(crate) const ZERO_FIRST_GEN: Self = Self(0);
+    pub(crate) fn increase(self) -> Self {
+        Self(self.0 + 1)
+    }
+    pub(crate) fn decrease(self) -> Self {
+        Self(self.0 - 1)
+    }
+    pub(crate) fn first_of_gen(self) -> bool {
+        self.0 & (REV_FRAME_AS_U32_MAX as u64) == 0
+    }
+}
+
+impl From<RevFrameNew> for u64 {
+    fn from(value: RevFrameNew) -> Self {
+        value.0
+    }
+}
+
+impl From<RevFrameNew> for PackedRevFrame {
+    fn from(value: RevFrameNew) -> Self {
+        Self(resize_ne_bytes(value.0.to_ne_bytes()))
+    }
+}
+
+impl From<RevFrameNew> for RevFrameGen {
+    fn from(value: RevFrameNew) -> Self {
+        Self(value.0 & !(REV_FRAME_AS_U32_MAX as u64))
     }
 }
