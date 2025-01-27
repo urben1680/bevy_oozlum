@@ -32,6 +32,9 @@ Enhancements:
 - idea: Arc system stores system state in resource, not Mutex
 -- might be incompatible with System::update_archetype_component_access as UnsafeWorldCell may only be used to read (archetype) metadata
 -- register write access of dynamic resources is impossible because methods are not pub
+- make PackedRevFrame the RevFrame or private
+-- PackedRevFrame becomes private, RevFrame contains overflow number, effectively a u64
+-- RevFrame can be split up by internal code
 
 Docs
 - documentations
