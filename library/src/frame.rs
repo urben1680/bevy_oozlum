@@ -199,6 +199,7 @@ pub struct RevFrameNew(u64);
 
 impl RevFrameNew {
     pub(crate) const ZERO_FIRST_GEN: Self = Self(0);
+    // constructor can be fine because crate does not read any frames constructed by the user
     pub(crate) fn increase(self) -> Self {
         Self(self.0 + 1)
     }
