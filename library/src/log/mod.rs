@@ -1,8 +1,8 @@
 use std::{
-    collections::{vec_deque::Drain, TryReserveError, VecDeque},
+    collections::{vec_deque::Drain, VecDeque},
     fmt::Debug,
     iter::FusedIterator,
-    ops::Deref,
+    ops::{Deref, DerefMut},
 };
 
 use bevy::{log::error, reflect::Reflect, utils::all_tuples};
@@ -54,6 +54,9 @@ pub use dense_state::DenseStateLog;
 pub use dense_states::DenseStatesLog;
 pub use dense_transition::DenseTransitionLog;
 pub use dense_transitions::DenseTransitionsLog;
+
+pub use framed_state::FramedStateLog;
+
 pub use sparse_state::SparseStateLog;
 pub use sparse_states::SparseStatesLog;
 pub use sparse_transition::SparseTransitionLog;
@@ -227,7 +230,7 @@ impl<T> SparseValue<T> {
 ///
 /// See [`vec_deque::Drain`](Drain), that is wrapped here, for further information.
 #[derive(Debug)]
-// Nameable alternative to `Map<Drain<SparseValue<T>>, impl FnMut(RareValue<T>) -> T>`
+// Nameable alternative to `Map<Drain<SparseValue<T>>, impl FnMut(SparseValue<T>) -> T>`
 pub struct SparseDrain<'a, T>(Drain<'a, SparseValue<T>>);
 
 impl<T> Iterator for SparseDrain<'_, T> {
@@ -254,6 +257,40 @@ impl<T> DoubleEndedIterator for SparseDrain<'_, T> {
 impl<T> ExactSizeIterator for SparseDrain<'_, T> {}
 
 impl<T> FusedIterator for SparseDrain<'_, T> {}
+
+/// Draining iterator used by some methods of framed logs.
+///
+/// The frame that the value was logged at is intentionally hidden here as the frame may be invalid.
+///
+/// See [`vec_deque::Drain`](Drain), that is wrapped here, for further information.
+#[derive(Debug)]
+// Nameable alternative to `Map<Drain<ValueLoggedAt<T>>, impl FnMut(ValueLoggedAt<T>) -> T>`
+pub struct FramedDrain<'a, T>(Drain<'a, ValueLoggedAt<T>>);
+
+impl<T> Iterator for FramedDrain<'_, T> {
+    type Item = T;
+
+    #[inline]
+    fn next(&mut self) -> Option<T> {
+        self.0.next().map(|rare| rare.value)
+    }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.0.size_hint()
+    }
+}
+
+impl<T> DoubleEndedIterator for FramedDrain<'_, T> {
+    #[inline]
+    fn next_back(&mut self) -> Option<T> {
+        self.0.next_back().map(|rare| rare.value)
+    }
+}
+
+impl<T> ExactSizeIterator for FramedDrain<'_, T> {}
+
+impl<T> FusedIterator for FramedDrain<'_, T> {}
 
 // Private bounds need no documentation because the `drain_future`
 // methods which return this type document these bounds themselves.
@@ -363,6 +400,47 @@ impl<U, const AMOUNT_BYTES: usize> EntryAmount<U, AMOUNT_BYTES> {
     }
 }
 
+#[derive(Debug, Clone, Reflect)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct ValueLoggedAt<T> {
+    value: T,
+    logged_at: PackedRevFrame,
+}
+
+impl<T> ValueLoggedAt<T> {
+    fn new(meta: &RevMeta, value: T) -> Self {
+        Self {
+            value,
+            logged_at: meta.present_world_state().into(),
+        }
+    }
+    pub fn logged_at(&self) -> RevFrame {
+        self.logged_at.into()
+    }
+    pub fn into_inner(self) -> T {
+        self.value
+    }
+}
+
+impl<T> Deref for ValueLoggedAt<T> {
+    type Target = T;
+    fn deref(&self) -> &Self::Target {
+        &self.value
+    }
+}
+
+impl<T> DerefMut for ValueLoggedAt<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.value
+    }
+}
+
+impl<T> LoggedAt for ValueLoggedAt<T> {
+    fn logged_at(&self) -> RevFrame {
+        ValueLoggedAt::logged_at(&self)
+    }
+}
+
 #[cfg(feature = "serde")]
 impl<U: serde::Serialize, const AMOUNT_BYTES: usize> serde::Serialize
     for EntryAmount<U, AMOUNT_BYTES>
@@ -403,13 +481,88 @@ fn partition_point<T: LoggedAt>(deque: &VecDeque<T>, max: usize, meta: &RevMeta)
     front = &front[..front_max];
     back = &back[..back_max];
 
-    let past_len = meta.past_world_states();
-    let pred = |entry: &T| meta.present_world_state() - entry.logged_at() > past_len;
+    let pred =
+        |entry: &T| meta.present_world_state() - entry.logged_at() > meta.past_world_states();
 
     if back.first().map(|v| pred(v)) == Some(true) {
         back.partition_point(pred) + front.len()
     } else {
         front.partition_point(pred)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Reflect)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+struct FramedMeta {
+    log_start_half: u32,
+    deque_elems_of_this_frame: usize,
+}
+
+impl FramedMeta {
+    fn new(meta: &RevMeta) -> Self {
+        Self {
+            log_start_half: meta.log_start_half(),
+            deque_elems_of_this_frame: 0,
+        }
+    }
+    fn push_and_len_to_drain_past<T>(
+        &mut self,
+        meta: &RevMeta,
+        deque: &mut VecDeque<ValueLoggedAt<T>>,
+        present_state: Option<&mut ValueLoggedAt<T>>,
+        index: &mut usize,
+        value: T,
+    ) -> usize {
+        let now = meta.present_world_state();
+        let half = meta.log_start_half();
+
+        // update `deque` and `deque_elems_of_this_frame`
+        deque.truncate(*index);
+        let mut value = ValueLoggedAt::new(meta, value);
+        match (present_state, self.log_start_half == half) {
+            (Some(state), true) if state.logged_at() == now => {
+                value = core::mem::replace(state, value);
+                self.deque_elems_of_this_frame += 1;
+            }
+            (Some(state), _) => {
+                value = core::mem::replace(state, value);
+                // `value` is not of this frame, pushing it does not set this to 1
+                self.deque_elems_of_this_frame = 0;
+            }
+            (None, true) if deque.back().map(ValueLoggedAt::logged_at) == Some(now) => {
+                self.deque_elems_of_this_frame += 1;
+            }
+            (None, _) => {
+                self.deque_elems_of_this_frame = 1;
+            }
+        }
+        deque.push_back(value);
+
+        // find amount of past entries out of log
+        let max_drain = deque.len() - self.deque_elems_of_this_frame;
+        let mut to_drain = max_drain;
+        if half - self.log_start_half < 2 {
+            // used `VecDeque::partition_point` source with an upper limit `max_drain`
+            let (mut front, mut back) = deque.as_slices();
+            let front_max = front.len().min(max_drain);
+            let back_max = back.len().min(max_drain - front_max);
+            front = &front[..front_max];
+            back = &back[..back_max];
+
+            let past_frames = meta.past_world_states();
+            let pred = |value: &ValueLoggedAt<T>| now - value.logged_at() > past_frames;
+            if back.first().map(|v| pred(v)) == Some(true) {
+                to_drain = back.partition_point(pred) + front.len();
+            } else {
+                to_drain = front.partition_point(pred);
+            }
+        }
+
+        // update values for after the draining
+        self.log_start_half = half;
+        *index = deque.len() - to_drain;
+
+        to_drain
     }
 }
 
