@@ -246,7 +246,7 @@ impl RevMeta {
             log_start_half,
         }
     }
-    pub(crate) fn log_start_half(&self) -> u32 {
+    pub(crate) const fn log_start_half(&self) -> u32 {
         self.log_start_half
     }
     pub fn direction(&self) -> RevDirection {
