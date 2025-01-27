@@ -35,11 +35,9 @@ const PACKED_REV_FRAME_SIZE: usize = 3;
 )))]
 const PACKED_REV_FRAME_SIZE: usize = 4;
 
-const PACKED_REV_FRAME_BITS: u32 = PACKED_REV_FRAME_SIZE as u32 * 8;
-
 /// Maximum value a frame can be internally, can be used as a bitmask that is 1 for all relevant bits.
 pub(crate) const REV_FRAME_AS_U32_MAX: u32 = {
-    let bits = PACKED_REV_FRAME_BITS;
+    let bits = PACKED_REV_FRAME_SIZE * 8;
     let shift = 32 - bits;
     u32::MAX >> shift
 };
@@ -191,29 +189,78 @@ impl<'de> serde::Deserialize<'de> for PackedRevFrame {
     }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Reflect, PartialEq, Eq, PartialOrd, Ord)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    reflect(Serialize, Deserialize)
+)]
 pub struct RevFrameGen(u64);
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Reflect, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    reflect(Serialize, Deserialize)
+)]
 pub struct RevFrameNew(u64);
 
 impl RevFrameNew {
-    pub(crate) const ZERO_FIRST_GEN: Self = Self(0);
-    // constructor can be fine because crate does not read any frames constructed by the user
-    pub(crate) fn increase(self) -> Self {
+    pub(crate) const GENERATION_STEP: u64 = (REV_FRAME_AS_U32_MAX as u64) + 1;
+    pub const fn from_raw(raw: u64) -> Self {
+        Self(raw)
+    }
+    pub fn from_parts(frame: PackedRevFrame, generation: RevFrameGen) -> Self {
+        let frame = u64::from_ne_bytes(resize_ne_bytes(frame.0));
+        Self(frame & generation.0)
+    }
+    pub(crate) const fn increase_frame(self) -> Self {
         Self(self.0 + 1)
     }
-    pub(crate) fn decrease(self) -> Self {
+    pub(crate) const fn decrease_frame(self) -> Self {
         Self(self.0 - 1)
     }
-    pub(crate) fn first_of_gen(self) -> bool {
+    pub(crate) const fn increase_generation(self) -> Self {
+        Self(self.0 + Self::GENERATION_STEP)
+    }
+    pub(crate) const fn sub_by_frames(self, rhs: u32) -> Self {
+        Self(self.0 - rhs as u64)
+    }
+    pub(crate) const fn first_of_gen(self) -> bool {
         self.0 & (REV_FRAME_AS_U32_MAX as u64) == 0
     }
-}
-
-impl From<RevFrameNew> for u64 {
-    fn from(value: RevFrameNew) -> Self {
-        value.0
+    pub(crate) const fn frame_raw(self) -> u32 {
+        (self.0 & (REV_FRAME_AS_U32_MAX as u64)) as u32
+    }
+    pub const fn to_generation(self) -> RevFrameGen {
+        RevFrameGen(self.generation_raw())
+    }
+    pub fn without_generation(self) -> PackedRevFrame {
+        PackedRevFrame(resize_ne_bytes(self.0.to_ne_bytes()))
+    }
+    pub(crate) const fn generation_raw(self) -> u64 {
+        self.0 & !(REV_FRAME_AS_U32_MAX as u64)
+    }
+    pub(crate) const fn raw(self) -> u64 {
+        self.0
+    }
+    pub(crate) fn of_future_packed(self, frame: PackedRevFrame) -> Self {
+        let lhs_frame = self.0 & (REV_FRAME_AS_U32_MAX as u64);
+        let rhs_frame = u64::from_ne_bytes(resize_ne_bytes(frame.0));
+        let mut generation = self.generation_raw();
+        if rhs_frame < lhs_frame {
+            generation += Self::GENERATION_STEP;
+        }
+        Self(rhs_frame & generation)
+    }
+    pub(crate) fn of_past_packed(self, frame: PackedRevFrame) -> Self {
+        let lhs_frame = self.0 & (REV_FRAME_AS_U32_MAX as u64);
+        let rhs_frame = u64::from_ne_bytes(resize_ne_bytes(frame.0));
+        let mut generation = self.generation_raw();
+        if rhs_frame > lhs_frame {
+            generation -= Self::GENERATION_STEP;
+        }
+        Self(rhs_frame & generation)
     }
 }
 
@@ -225,6 +272,13 @@ impl From<RevFrameNew> for PackedRevFrame {
 
 impl From<RevFrameNew> for RevFrameGen {
     fn from(value: RevFrameNew) -> Self {
-        Self(value.0 & !(REV_FRAME_AS_U32_MAX as u64))
+        value.to_generation()
+    }
+}
+
+impl Sub for RevFrameNew {
+    type Output = u32;
+    fn sub(self, rhs: Self) -> Self::Output {
+        self.frame_raw() - rhs.frame_raw()
     }
 }

@@ -19,7 +19,7 @@ use bevy::{
 use bevy::reflect::{ReflectDeserialize, ReflectSerialize};
 
 use crate::{
-    frame::{RevFrame, REV_FRAME_AS_U32_MAX},
+    frame::{PackedRevFrame, RevFrame, RevFrameNew, REV_FRAME_AS_U32_MAX},
     log::OutOfLog,
     schedule::RevUpdate,
     undo_redo::UndoRedoBuffer,
@@ -202,14 +202,12 @@ pub struct RevMeta {
     ///
     /// **Note** that there is a hard limit of [`Self::MAX_WORLD_STATES`] this value is clamped to when read internally.
     pub max_world_states: Option<NonZeroU32>,
-    past_end: RevFrame,
-    present: RevFrame,
-    future_end: RevFrame,
+    past_end: RevFrameNew,
+    present: RevFrameNew,
+    future_end: RevFrameNew,
     /// If Some, is either a Running* variant or Pause
     queue: Option<InternalDirection>,
     direction: InternalDirection,
-    /// Amount of times [`self.past_end.first_half`](RevFrame::first_half) changed
-    log_start_half: u32,
 }
 
 impl Default for RevMeta {
@@ -222,16 +220,12 @@ impl RevMeta {
     pub const MAX_WORLD_STATES: u32 = REV_FRAME_AS_U32_MAX / 2;
     pub const fn new(
         max_world_states: Option<NonZeroU32>,
-        now: Option<RevFrame>,
+        now: Option<RevFrameNew>,
         paused: bool,
     ) -> Self {
         let now = match now {
             Some(now) => now,
-            None => RevFrame(0),
-        };
-        let log_start_half = match now.first_half() {
-            true => 0,
-            false => 1,
+            None => RevFrameNew::from_raw(0),
         };
         Self {
             max_world_states,
@@ -243,11 +237,7 @@ impl RevMeta {
                 false => InternalDirection::RanForward,
             },
             queue: None,
-            log_start_half,
         }
-    }
-    pub(crate) const fn log_start_half(&self) -> u32 {
-        self.log_start_half
     }
     pub fn direction(&self) -> RevDirection {
         self.get_direction().expect("todo")
@@ -261,13 +251,13 @@ impl RevMeta {
     pub fn paused(&self) -> bool {
         self.direction == InternalDirection::Pause
     }
-    pub fn future_end_world_state(&self) -> RevFrame {
+    pub fn future_end_world_state(&self) -> RevFrameNew {
         self.future_end
     }
-    pub fn present_world_state(&self) -> RevFrame {
+    pub fn present_world_state(&self) -> RevFrameNew {
         self.present
     }
-    pub fn past_end_world_state(&self) -> RevFrame {
+    pub fn past_end_world_state(&self) -> RevFrameNew {
         self.past_end
     }
     pub fn past_world_states(&self) -> u32 {
@@ -279,19 +269,16 @@ impl RevMeta {
     pub fn world_states(&self) -> u32 {
         self.future_end - self.past_end + 1 // both ends are inclusive
     }
-    pub fn contains(&self, frame: RevFrame) -> bool {
+    pub fn contains(&self, frame: RevFrameNew) -> bool {
         (self.future_end - frame) <= (self.future_end - self.past_end)
     }
     // todo: no longer needed to have that many options, simplify
-    pub fn past_contains(&self, frame: RevFrame) -> bool {
+    pub fn past_contains(&self, frame: RevFrameNew) -> bool {
         (self.present - frame).wrapping_sub(1) < (self.present - self.past_end)
     }
     // todo: no longer needed to have that many options, simplify
-    pub fn future_contains(&self, frame: RevFrame) -> bool {
+    pub fn future_contains(&self, frame: RevFrameNew) -> bool {
         (self.future_end - frame) < (self.future_end - self.present)
-    }
-    pub fn frame_cmp(&self, lhs: RevFrame, rhs: RevFrame) -> std::cmp::Ordering {
-        (self.past_end - lhs).cmp(&(self.past_end - rhs))
     }
     pub fn clear(&mut self) {
         self.past_end = self.present;
@@ -303,7 +290,7 @@ impl RevMeta {
     pub fn queue_forward(&mut self) {
         self.queue = Some(InternalDirection::RunningForward);
     }
-    pub fn queue_log(&mut self, to: RevFrame) -> Result<u32, OutOfLog> {
+    pub fn queue_log(&mut self, to: RevFrameNew) -> Result<u32, OutOfLog> {
         let to_past = self.present - to;
         let to_future = to - self.present;
 
@@ -362,16 +349,10 @@ impl RevMeta {
                 });
             }
             let previous = meta.clone();
-            let result = meta.update(|meta, drain_past_by_logged_at| {
+            let result = meta.update(|meta| {
                 world
                     .try_schedule_scope(RevUpdate, |world, schedule| {
                         world.insert_resource(meta.clone());
-
-                        if let Some(drain_past_by_logged_at) = drain_past_by_logged_at {
-                            world.trigger(drain_past_by_logged_at);
-                            world.flush();
-                        }
-
                         schedule.run(world);
                     })
                     .map_err(|_| RevTryRunScheduleError::RevUpdateMissing { meta: meta.clone() })
@@ -435,19 +416,19 @@ impl RevMeta {
     /// this will panic. The same can happen if `RevMeta` is in an invalid state, cloned from inside the closure for example.
     pub fn update<Out>(
         &mut self,
-        c: impl FnOnce(&mut Self, Option<DrainPastByLoggedAt>) -> Out,
+        c: impl FnOnce(&mut Self) -> Out,
     ) -> Option<Out> {
         if self.get_direction().is_some() {
             panic!("unexpected initial direction, expected pause or ran variant, do not call this method recursively\n{self:#?}");
         }
-        let drain_past_by_logged_at = self.update_internal();
+        self.update_internal();
         self.get_direction().map(|_| {
-            let out = c(self, drain_past_by_logged_at);
+            let out = c(self);
             self.direction.end_running();
             out
         })
     }
-    fn update_internal(&mut self) -> Option<DrainPastByLoggedAt> {
+    fn update_internal(&mut self) {
         /// Reduces `updates_until_pause` by one and returns `true` wether that was successful without reaching zero.
         fn reduction_successful(updates_until_pause: &mut NonZeroU32) -> bool {
             NonZeroU32::new(updates_until_pause.get() - 1)
@@ -460,8 +441,8 @@ impl RevMeta {
                 self.direction = queue;
                 self.present = match self.get_direction() {
                     Some(RevDirection::NOT_LOG) => return self.update_forward(),
-                    Some(RevDirection::FORWARD_LOG) => self.present.wrapping_add(1),
-                    Some(RevDirection::BackwardLog) => self.present.wrapping_sub(1),
+                    Some(RevDirection::FORWARD_LOG) => self.present.increase_frame(),
+                    Some(RevDirection::BackwardLog) => self.present.decrease_frame(),
                     None => self.present,
                 };
             }
@@ -472,11 +453,11 @@ impl RevMeta {
                     InternalDirection::RunningForwardLog {
                         updates_until_pause,
                     } => reduction_successful(updates_until_pause)
-                        .then(|| self.present.wrapping_add(1)),
+                        .then(|| self.present.increase_frame()),
                     InternalDirection::RunningBackwardLog {
                         updates_until_pause,
                     } => reduction_successful(updates_until_pause)
-                        .then(|| self.present.wrapping_sub(1)),
+                        .then(|| self.present.decrease_frame()),
                     _ /* Pause */ => None,
                 };
                 match updated_at_log {
@@ -485,10 +466,9 @@ impl RevMeta {
                 }
             }
         }
-        None
     }
-    fn update_forward(&mut self) -> Option<DrainPastByLoggedAt> {
-        self.present = self.present.wrapping_add(1);
+    fn update_forward(&mut self) {
+        self.present = self.present.increase_frame();
         let max_world_states = self
             .max_world_states
             .map(NonZeroU32::get)
@@ -497,25 +477,7 @@ impl RevMeta {
         self.future_end = self.present;
         // past states equal to max states is too many as the present state has to be added to the comparision
         if self.past_world_states() >= max_world_states {
-            let first_half = self.past_end.first_half();
-            self.past_end = self.present.wrapping_sub(max_world_states - 1);
-            if self.past_end.first_half() != first_half {
-                self.log_start_half = self.log_start_half.checked_add(1).expect("todo");
-                //todo deprecate
-                return Some(DrainPastByLoggedAt(self.clone()));
-            }
-        }
-        None
-    }
-    #[cfg(test)]
-    pub(crate) fn set_oldest_frame(&mut self, oldest_frame: u32) {
-        self.past_end = RevFrame::checked_new(oldest_frame);
-        let past_world_states = self.past_world_states();
-        if self
-            .max_world_states
-            .is_some_and(|max_world_states| max_world_states.get() < past_world_states)
-        {
-            self.max_world_states = NonZeroU32::new(past_world_states);
+            self.past_end = self.past_end.sub_by_frames(max_world_states - 1);
         }
     }
     pub(crate) fn add_read_if_no_write(

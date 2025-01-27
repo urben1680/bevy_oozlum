@@ -8,22 +8,25 @@ use std::{
 use bevy::{log::error, reflect::Reflect, utils::all_tuples};
 
 use crate::{
-    frame::{PackedRevFrame, RevFrame},
+    frame::{PackedRevFrame, RevFrame, RevFrameGen, RevFrameNew},
     meta::RevMeta,
     resize_ne_bytes,
 };
 
+#[cfg(feature = "serde")]
+mod serde_with;
+
+/*
 mod init_none;
 mod rare_state;
 mod rare_states;
 mod rare_transition;
 mod rare_transitions;
-#[cfg(feature = "serde")]
-mod serde_with;
 mod state;
 mod states;
 mod transition;
 mod transitions;
+*/
 
 mod dense_state;
 mod dense_states;
@@ -38,17 +41,20 @@ mod sparse_states;
 mod sparse_transition;
 mod sparse_transitions;
 
+#[cfg(feature = "serde")]
+pub use serde_with::{logless_state, logless_with_capacity, with_capacity};
+
+/*
 pub use init_none::InitNoneLog;
 pub use rare_state::RareStateLog;
 pub use rare_states::RareStatesLog;
 pub use rare_transition::RareTransitionLog;
 pub use rare_transitions::RareTransitionsLog;
-#[cfg(feature = "serde")]
-pub use serde_with::{logless_state, logless_with_capacity, with_capacity};
 pub use state::StateLog;
 pub use states::StatesLog;
 pub use transition::TransitionLog;
 pub use transitions::TransitionsLog;
+*/
 
 pub use dense_state::DenseStateLog;
 pub use dense_states::DenseStatesLog;
@@ -402,7 +408,7 @@ impl<U, const AMOUNT_BYTES: usize> EntryAmount<U, AMOUNT_BYTES> {
 
 #[derive(Debug, Clone, Reflect)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct ValueLoggedAt<T> {
+struct ValueLoggedAt<T> {
     value: T,
     logged_at: PackedRevFrame,
 }
@@ -414,10 +420,10 @@ impl<T> ValueLoggedAt<T> {
             logged_at: meta.present_world_state().into(),
         }
     }
-    pub fn logged_at(&self) -> RevFrame {
-        self.logged_at.into()
+    fn logged_at(&self) -> PackedRevFrame {
+        self.logged_at
     }
-    pub fn into_inner(self) -> T {
+    fn into_inner(self) -> T {
         self.value
     }
 }
@@ -432,12 +438,6 @@ impl<T> Deref for ValueLoggedAt<T> {
 impl<T> DerefMut for ValueLoggedAt<T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.value
-    }
-}
-
-impl<T> LoggedAt for ValueLoggedAt<T> {
-    fn logged_at(&self) -> RevFrame {
-        ValueLoggedAt::logged_at(&self)
     }
 }
 
@@ -473,6 +473,7 @@ fn index_oob() -> OutOfLog {
     OutOfLog
 }
 
+/* 
 /// See [`VecDeque::partition_point`], is limited to the first `max` entries.
 fn partition_point<T: LoggedAt>(deque: &VecDeque<T>, max: usize, meta: &RevMeta) -> usize {
     let (mut front, mut back) = deque.as_slices();
@@ -490,18 +491,19 @@ fn partition_point<T: LoggedAt>(deque: &VecDeque<T>, max: usize, meta: &RevMeta)
         front.partition_point(pred)
     }
 }
+*/
 
 #[derive(Clone, Copy, Debug, Reflect)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 struct FramedMeta {
-    log_start_half: u32,
+    last_push: RevFrameNew,
     deque_elems_of_this_frame: usize,
 }
 
 impl FramedMeta {
     fn new(meta: &RevMeta) -> Self {
         Self {
-            log_start_half: meta.log_start_half(),
+            last_push: meta.present_world_state(),
             deque_elems_of_this_frame: 0,
         }
     }
@@ -513,14 +515,11 @@ impl FramedMeta {
         index: &mut usize,
         value: T,
     ) -> usize {
-        let now = meta.present_world_state();
-        let half = meta.log_start_half();
-
         // update `deque` and `deque_elems_of_this_frame`
         deque.truncate(*index);
         let mut value = ValueLoggedAt::new(meta, value);
-        match (present_state, self.log_start_half == half) {
-            (Some(state), true) if state.logged_at() == now => {
+        match (present_state, self.last_push == meta.present_world_state()) {
+            (Some(state), true) => {
                 value = core::mem::replace(state, value);
                 self.deque_elems_of_this_frame += 1;
             }
@@ -529,7 +528,7 @@ impl FramedMeta {
                 // `value` is not of this frame, pushing it does not set this to 1
                 self.deque_elems_of_this_frame = 0;
             }
-            (None, true) if deque.back().map(ValueLoggedAt::logged_at) == Some(now) => {
+            (None, true) => {
                 self.deque_elems_of_this_frame += 1;
             }
             (None, _) => {
@@ -541,7 +540,7 @@ impl FramedMeta {
         // find amount of past entries out of log
         let max_drain = deque.len() - self.deque_elems_of_this_frame;
         let mut to_drain = max_drain;
-        if half - self.log_start_half < 2 {
+        if meta.past_contains(self.last_push) {
             // used `VecDeque::partition_point` source with an upper limit `max_drain`
             let (mut front, mut back) = deque.as_slices();
             let front_max = front.len().min(max_drain);
@@ -549,20 +548,29 @@ impl FramedMeta {
             front = &front[..front_max];
             back = &back[..back_max];
 
+            let now_packed = meta.present_world_state().without_generation();
             let past_frames = meta.past_world_states();
-            let pred = |value: &ValueLoggedAt<T>| now - value.logged_at() > past_frames;
-            if back.first().map(|v| pred(v)) == Some(true) {
-                to_drain = back.partition_point(pred) + front.len();
+            let pred = |value: &ValueLoggedAt<T>| now_packed - value.logged_at() > past_frames;
+            if let Some(true) = back.first().map(|v| pred(v)) {
+                to_drain = back[1..].partition_point(pred) + front.len() + 1;
             } else {
                 to_drain = front.partition_point(pred);
             }
         }
 
         // update values for after the draining
-        self.log_start_half = half;
+        self.last_push = meta.present_world_state();
         *index = deque.len() - to_drain;
 
         to_drain
+    }
+    fn forward_log(&mut self, frame: PackedRevFrame) {
+        self.last_push = self.last_push.of_future_packed(frame);
+        self.deque_elems_of_this_frame = 0;
+    }
+    fn backward_log(&mut self, frame: PackedRevFrame) {
+        self.last_push = self.last_push.of_past_packed(frame);
+        self.deque_elems_of_this_frame = 0;
     }
 }
 
