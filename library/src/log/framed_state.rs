@@ -11,7 +11,7 @@ use bevy::reflect::Reflect;
 
 use crate::{log::index_oob, meta::RevMeta};
 
-use super::{partition_point, FramedDrain, FramedMeta, LoggedAt, OutOfLog, ValueLoggedAt};
+use super::{FramedDrain, FramedMeta, OutOfLog, ValueLoggedAt};
 
 #[derive(Debug, Clone, Reflect)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -111,9 +111,9 @@ mod serde_with {
 }
 
 impl<T> Deref for FramedStateLog<T> {
-    type Target = ValueLoggedAt<T>;
+    type Target = T;
     fn deref(&self) -> &Self::Target {
-        &self.present
+        &self.present.value
     }
 }
 
@@ -191,8 +191,8 @@ impl<T> FramedStateLog<T> {
     pub(super) fn drain_past(&mut self, to_drain: usize) -> FramedDrain<T> {
         FramedDrain(self.states.drain(..to_drain))
     }
-    pub fn drain_future(&mut self) -> Drain<ValueLoggedAt<T>> {
-        self.states.drain(self.index..)
+    pub fn drain_future(&mut self) -> FramedDrain<T> {
+        FramedDrain(self.states.drain(self.index..))
     }
     pub fn clear(&mut self) {
         self.states.clear();
@@ -218,6 +218,7 @@ impl<T> FramedStateLog<T> {
         let now_future = self.states.get_mut(index).ok_or_else(index_oob)?;
         self.index = index;
         core::mem::swap(&mut self.present, now_future);
+        self.framed.backward_log(self.present.logged_at);
         Ok(())
     }
     pub fn forward_log(&mut self) -> Result<(), OutOfLog> {
@@ -232,6 +233,7 @@ impl<T> FramedStateLog<T> {
 
         let now_future = self.states.get_mut(self.index).ok_or(OutOfLog)?;
         core::mem::swap(&mut self.present, now_future);
+        self.framed.forward_log(self.present.logged_at);
         self.index += 1;
         return Ok(());
     }
@@ -292,7 +294,7 @@ mod test {
 
         let test = |log: &FramedStateLog<char>, len, with_capacity| {
             assert_eq!(
-                ***log, 'b',
+                **log, 'b',
                 "before: {original:#?}\nserialized: {serialized}\nafter: {log:#?}"
             );
             assert_eq!(
@@ -324,7 +326,7 @@ mod test {
 
         let mut log = original.clone();
         log.clear();
-        assert_eq!(**log, 2, "log: {log:#?}\noriginal: {original:#?}");
+        assert_eq!(*log, 2, "log: {log:#?}\noriginal: {original:#?}");
         assert_eq!(
             log.states_len(),
             0,
@@ -333,7 +335,7 @@ mod test {
 
         let mut log = original.clone();
         log.clear_with(meta, 4);
-        assert_eq!(**log, 4, "log: {log:#?}\noriginal: {original:#?}");
+        assert_eq!(*log, 4, "log: {log:#?}\noriginal: {original:#?}");
         assert_eq!(
             log.states_len(),
             0,
