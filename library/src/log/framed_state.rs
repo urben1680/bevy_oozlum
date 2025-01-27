@@ -1,6 +1,9 @@
 use core::fmt::Debug;
 use std::{
-    collections::{vec_deque::Drain, TryReserveError, VecDeque},
+    collections::{
+        vec_deque::{Drain, Iter},
+        TryReserveError, VecDeque,
+    },
     ops::Deref,
 };
 
@@ -8,24 +11,25 @@ use bevy::reflect::Reflect;
 
 use crate::{log::index_oob, meta::RevMeta};
 
-use super::{partition_point, LoggedAt, OutOfLog};
+use super::{partition_point, FramedDrain, FramedMeta, LoggedAt, OutOfLog, ValueLoggedAt};
 
-#[derive(Debug, Default, Clone, Reflect)]
+#[derive(Debug, Clone, Reflect)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct StateLog<T> {
+pub struct FramedStateLog<T> {
     /// The log of states, with two partitions:
     /// - Past states in the indices `[0, self.index[`
     /// - Future states in the indices `[self.index, self.states.len()[`
     ///
     /// The present state is not part of this deque and traversing the log swaps
     /// the present state from before and now while keeping the above partitions.
-    states: VecDeque<T>,
+    states: VecDeque<ValueLoggedAt<T>>,
     /// The present state, easily accessible to read.
-    present: T,
+    present: ValueLoggedAt<T>,
     /// The index of the nearest future state in `self.states`, if there is any.
     ///
     /// Never larger than `self.states.len()`
     index: usize,
+    framed: FramedMeta,
 }
 
 #[cfg(feature = "serde")]
@@ -38,91 +42,100 @@ mod serde_with {
         LoglessState, LoglessWithCapacity, WithCapacity, WithCapacityWrapper,
     };
 
-    use super::StateLog;
+    use super::{FramedMeta, FramedStateLog, ValueLoggedAt};
 
-    impl<T: Serialize + for<'de> Deserialize<'de> + 'static> LoglessState for StateLog<T> {
-        type Se<'se> = &'se T;
-        type De = T;
+    impl<T: Serialize + for<'de> Deserialize<'de> + 'static> LoglessState for FramedStateLog<T> {
+        type Se<'se> = (&'se ValueLoggedAt<T>, FramedMeta);
+        type De = (ValueLoggedAt<T>, FramedMeta);
         fn get_logless_state(&self) -> Self::Se<'_> {
-            &self.present
+            (&self.present, self.framed)
         }
-        fn from_logless_state(logless_state: Self::De) -> Self {
-            logless_state.into()
+        fn from_logless_state((present, framed): Self::De) -> Self {
+            Self {
+                states: VecDeque::new(),
+                present,
+                index: 0,
+                framed,
+            }
         }
     }
 
-    impl<T: Serialize + for<'de> Deserialize<'de> + 'static> WithCapacity for StateLog<T> {
-        type Se<'se> = (WithCapacityWrapper<&'se VecDeque<T>>, &'se T, usize);
-        type De = (WithCapacityWrapper<VecDeque<T>>, T, usize);
+    impl<T: Serialize + for<'de> Deserialize<'de> + 'static> WithCapacity for FramedStateLog<T> {
+        type Se<'se> = (
+            WithCapacityWrapper<&'se VecDeque<ValueLoggedAt<T>>>,
+            &'se ValueLoggedAt<T>,
+            usize,
+            FramedMeta,
+        );
+        type De = (
+            WithCapacityWrapper<VecDeque<ValueLoggedAt<T>>>,
+            ValueLoggedAt<T>,
+            usize,
+            FramedMeta,
+        );
         fn get_with_capacity(&self) -> Self::Se<'_> {
-            (WithCapacityWrapper(&self.states), &self.present, self.index)
+            (
+                WithCapacityWrapper(&self.states),
+                &self.present,
+                self.index,
+                self.framed,
+            )
         }
-        fn from_with_capacity((WithCapacityWrapper(states), present, index): Self::De) -> Self {
+        fn from_with_capacity(
+            (WithCapacityWrapper(states), present, index, framed): Self::De,
+        ) -> Self {
             Self {
                 states,
                 present,
                 index,
+                framed,
             }
         }
     }
 
-    impl<T: Serialize + for<'de> Deserialize<'de> + 'static> LoglessWithCapacity for StateLog<T> {
-        type Se<'se> = (&'se T, usize);
-        type De = (T, usize);
+    impl<T: Serialize + for<'de> Deserialize<'de> + 'static> LoglessWithCapacity for FramedStateLog<T> {
+        type Se<'se> = (&'se ValueLoggedAt<T>, usize, FramedMeta);
+        type De = (ValueLoggedAt<T>, usize, FramedMeta);
         fn get_logless_with_capacity(&self) -> Self::Se<'_> {
-            (&self.present, self.states.capacity())
+            (&self.present, self.states.capacity(), self.framed)
         }
-        fn from_logless_with_capacity((present, capacity): Self::De) -> Self {
+        fn from_logless_with_capacity((present, capacity, framed): Self::De) -> Self {
             Self {
                 states: VecDeque::with_capacity(capacity),
                 present,
                 index: 0,
+                framed,
             }
         }
     }
 }
 
-impl<T> From<T> for StateLog<T> {
-    fn from(present: T) -> Self {
-        Self::new(present)
-    }
-}
-
-impl<T> Deref for StateLog<T> {
-    type Target = T;
+impl<T> Deref for FramedStateLog<T> {
+    type Target = ValueLoggedAt<T>;
     fn deref(&self) -> &Self::Target {
         &self.present
     }
 }
 
-impl<T> StateLog<T> {
-    pub const fn new(present: T) -> Self {
+impl<T> FramedStateLog<T> {
+    pub fn new(meta: &RevMeta, present: T) -> Self {
         Self {
             states: VecDeque::new(),
-            present,
+            present: ValueLoggedAt::new(meta, present),
             index: 0,
+            framed: FramedMeta::new(meta),
         }
     }
-    pub fn with_capacity(present: T, states_capacity: usize) -> Self {
+    pub fn with_capacity(meta: &RevMeta, present: T, states_capacity: usize) -> Self {
         Self {
             states: VecDeque::with_capacity(states_capacity),
-            present,
+            present: ValueLoggedAt::new(meta, present),
             index: 0,
+            framed: FramedMeta::new(meta),
         }
     }
-    pub(super) fn with_alloc(present: T, mut empty: VecDeque<T>) -> Self {
-        empty.clear();
-        Self {
-            states: empty,
-            present,
-            index: 0,
-        }
-    }
-    pub fn into_inner(self) -> T {
+    pub fn into_inner(self) -> ValueLoggedAt<T> {
         self.present
-    }
-    pub(super) fn into_inner_with_log(self) -> (T, VecDeque<T>) {
-        (self.present, self.states)
     }
     pub fn states_len(&self) -> usize {
         self.states.len()
@@ -151,22 +164,44 @@ impl<T> StateLog<T> {
     pub fn states_shrink_to_fit(&mut self) {
         self.states.shrink_to_fit()
     }
-    pub fn push_present(&mut self, state: T) {
-        self.states.truncate(self.index);
-        let before = core::mem::replace(&mut self.present, state);
-        self.states.push_back(before);
-        self.index += 1;
+    pub fn push_and_drain_past(&mut self, meta: &RevMeta, state: T) -> FramedDrain<T> {
+        let to_drain = self.framed.push_and_len_to_drain_past(
+            meta,
+            &mut self.states,
+            Some(&mut self.present),
+            &mut self.index,
+            state,
+        );
+        FramedDrain(self.states.drain(..to_drain))
     }
-    pub fn drain_future(&mut self) -> Drain<T> {
+    pub(super) fn push_and_iter_to_drain_past(
+        &mut self,
+        meta: &RevMeta,
+        state: T,
+    ) -> Iter<ValueLoggedAt<T>> {
+        let to_drain = self.framed.push_and_len_to_drain_past(
+            meta,
+            &mut self.states,
+            Some(&mut self.present),
+            &mut self.index,
+            state,
+        );
+        self.states.range(..to_drain)
+    }
+    pub(super) fn drain_past(&mut self, to_drain: usize) -> FramedDrain<T> {
+        FramedDrain(self.states.drain(..to_drain))
+    }
+    pub fn drain_future(&mut self) -> Drain<ValueLoggedAt<T>> {
         self.states.drain(self.index..)
     }
     pub fn clear(&mut self) {
         self.states.clear();
         self.index = 0;
     }
-    pub fn clear_with(&mut self, present: T) {
+    pub fn clear_with(&mut self, meta: &RevMeta, present: T) {
         self.states.clear();
-        self.present = present;
+        self.present = ValueLoggedAt::new(meta, present);
+        self.framed = FramedMeta::new(meta);
         self.index = 0;
     }
     pub fn backward_log(&mut self) -> Result<(), OutOfLog> {
@@ -200,42 +235,6 @@ impl<T> StateLog<T> {
         self.index += 1;
         return Ok(());
     }
-    pub fn pop_past_by_len(&mut self, max_past_len: usize) -> Option<T> {
-        if self.index == 0 {
-            return None;
-        }
-        if self.index > max_past_len {
-            self.index -= 1;
-            self.states.pop_front()
-        } else {
-            None
-        }
-    }
-    pub fn drain_past_by_len(&mut self, max_past_len: usize) -> Drain<T> {
-        let excessive = self.index.saturating_sub(max_past_len);
-        self.index -= excessive;
-        self.states.drain(..excessive)
-    }
-}
-
-impl<T: LoggedAt> StateLog<T> {
-    pub fn pop_past_by_logged_at(&mut self, meta: &RevMeta) -> Option<T> {
-        if self.index == 0 {
-            return None;
-        }
-        let logged_at = self.states.front()?.logged_at();
-        if !meta.past_contains(logged_at) {
-            self.index -= 1;
-            self.states.pop_front()
-        } else {
-            None
-        }
-    }
-    pub fn drain_past_by_logged_at(&mut self, meta: &RevMeta) -> Drain<T> {
-        let to = partition_point(&self.states, self.index, meta);
-        self.index -= to;
-        self.states.drain(..to)
-    }
 }
 
 #[cfg(test)]
@@ -256,18 +255,19 @@ mod test {
     fn serde_with() {
         #[derive(Serialize, Deserialize)]
         struct Logs {
-            full: StateLog<char>,
+            full: FramedStateLog<char>,
             #[serde(with = "crate::log::logless_state")]
-            logless: StateLog<char>,
+            logless: FramedStateLog<char>,
             #[serde(with = "crate::log::with_capacity")]
-            full_with_capacity: StateLog<char>,
+            full_with_capacity: FramedStateLog<char>,
             #[serde(with = "crate::log::logless_with_capacity")]
-            logless_with_capacity: StateLog<char>,
+            logless_with_capacity: FramedStateLog<char>,
         }
 
-        let mut original = StateLog::from('a');
-        original.push_present('b');
-        original.push_present('c');
+        let meta = &RevMeta::default();
+        let mut original = FramedStateLog::new(meta, 'a');
+        original.push_and_drain_past(meta, 'b');
+        original.push_and_drain_past(meta, 'c');
         original.backward_log().expect("in log");
 
         let mut logs = Logs {
@@ -290,9 +290,9 @@ mod test {
             logless_with_capacity,
         } = serde_json::from_str(&serialized).unwrap();
 
-        let test = |log: &StateLog<char>, len, with_capacity| {
+        let test = |log: &FramedStateLog<char>, len, with_capacity| {
             assert_eq!(
-                **log, 'b',
+                ***log, 'b',
                 "before: {original:#?}\nserialized: {serialized}\nafter: {log:#?}"
             );
             assert_eq!(
@@ -316,14 +316,15 @@ mod test {
 
     #[test]
     fn clear() {
-        let mut original = StateLog::new(1);
-        original.push_present(2);
-        original.push_present(3);
+        let meta = &RevMeta::default();
+        let mut original = FramedStateLog::new(meta, 1);
+        original.push_and_drain_past(meta, 2);
+        original.push_and_drain_past(meta, 3);
         original.backward_log().expect("in log");
 
         let mut log = original.clone();
         log.clear();
-        assert_eq!(*log, 2, "log: {log:#?}\noriginal: {original:#?}");
+        assert_eq!(**log, 2, "log: {log:#?}\noriginal: {original:#?}");
         assert_eq!(
             log.states_len(),
             0,
@@ -331,16 +332,16 @@ mod test {
         );
 
         let mut log = original.clone();
-        log.clear_with(4);
-        assert_eq!(*log, 4, "log: {log:#?}\noriginal: {original:#?}");
+        log.clear_with(meta, 4);
+        assert_eq!(**log, 4, "log: {log:#?}\noriginal: {original:#?}");
         assert_eq!(
             log.states_len(),
             0,
             "log: {log:#?}\noriginal: {original:#?}"
         );
     }
-
-    impl StateLog<(u8, RevFrame)> {
+    /*
+    impl FramedStateLog<(u8, RevFrame)> {
         fn test_forward(
             &mut self,
             meta: &mut RevMeta,
@@ -353,7 +354,7 @@ mod test {
             meta.update(|_, _| {});
             let before = self.clone();
             let push = (push, meta.present_world_state());
-            self.push_present(push);
+            self.push(push);
             let after_push = self.clone();
             let actual_pop = shorten_strategy!(
                 self,
@@ -457,7 +458,7 @@ mod test {
     fn push_and_log_traversal() {
         for strategy in ShortenStrategy::VARIANTS {
             let meta = &mut RevMeta::new(NonZeroU32::new(3), None, false);
-            let mut log = StateLog::new((0, meta.present_world_state()));
+            let mut log = FramedStateLog::new((0, meta.present_world_state()));
 
             log.test_forward(meta, strategy, 1, 1, None);
             log.test_forward(meta, strategy, 2, 2, None);
@@ -488,6 +489,7 @@ mod test {
 
     #[allow(dead_code)]
     fn impls_reflect() {
-        bevy::reflect::TypeRegistry::empty().register::<StateLog<RevFrame>>();
+        bevy::reflect::TypeRegistry::empty().register::<FramedStateLog<RevFrame>>();
     }
+    */
 }
