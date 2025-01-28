@@ -10,8 +10,7 @@ use bevy::{
 };
 
 use crate::{
-    frame::RevFrame,
-    log::{DenseStateLog, DenseTransitionsLog},
+    log::{DenseTransitionsLog, FrameStateLog},
     meta::{RevDirection, RevMeta},
 };
 
@@ -115,7 +114,7 @@ impl<F: FnMut(&mut World, UndoRedoDirection) + Send + 'static> UndoRedo for F {
 #[derive(Default)]
 pub(crate) struct UndoRedoLog{
     undo_redo_log: DenseTransitionsLog<SyncCell<Box<dyn UndoRedo>>>,
-    frame_log: Option<DenseStateLog<RevFrame>>
+    frame_log: Option<FrameStateLog>
 }
 
 #[derive(Debug)]
@@ -125,8 +124,7 @@ pub(crate) enum UndoRedoLogErr {
     UndoRedoBufferMissing(RevMeta),
     RevDirectionMismatch(RevMeta),
     UnexpectedUpdate(RevMeta),
-    FrameLogOutOfLog(RevMeta),
-    UndoRedoLogOutOfLog(RevMeta),
+    OutOfLog(RevMeta),
     UninitFrameLog(RevMeta),
 }
 
@@ -140,11 +138,11 @@ impl UndoRedoLog {
                 }
                 let max_past_len = match self.frame_log.as_mut() {
                     Some(frame_log) => {
-                        frame_log.push_and_truncate_past(&meta);
-                        frame_log.states_len()
+                        frame_log.push_and_drain_past(&meta);
+                        frame_log.past_len()
                     },
                     None => {
-                        self.frame_log = Some(meta.present_world_state().into());
+                        self.frame_log = Some(FrameStateLog::new(&meta));
                         0
                     }
                 };
@@ -158,13 +156,10 @@ impl UndoRedoLog {
             }
             Some(RevDirection::FORWARD_LOG) => {
                 let frame_log = self.frame_log.as_mut().ok_or_else(|| UndoRedoLogErr::UninitFrameLog(meta.clone()))?;
-                if !frame_log.expects_forward_log(&meta) {
+                if !frame_log.forward_log(&meta) {
                     return Err(UndoRedoLogErr::UnexpectedUpdate(meta));
                 };
-                if frame_log.forward_log().is_err() {
-                    return Err(UndoRedoLogErr::FrameLogOutOfLog(meta));
-                }
-                let iter = self.undo_redo_log.forward_log().map_err(|_| UndoRedoLogErr::UndoRedoLogOutOfLog(meta))?;
+                let iter = self.undo_redo_log.forward_log().map_err(|_| UndoRedoLogErr::OutOfLog(meta))?;
                 for command in iter.value.map(SyncCell::get) {
                     command.redo(world);
                 }
@@ -179,13 +174,10 @@ impl UndoRedoLog {
             return Err(UndoRedoLogErr::RevDirectionMismatch(meta));
         }
         let frame_log = self.frame_log.as_mut().ok_or_else(|| UndoRedoLogErr::UninitFrameLog(meta.clone()))?;
-        if !frame_log.expects_backward_log(&meta) {
+        if !frame_log.backward_log(&meta) {
             return Err(UndoRedoLogErr::UnexpectedUpdate(meta));
         };
-        if frame_log.backward_log().is_err() {
-            return Err(UndoRedoLogErr::FrameLogOutOfLog(meta));
-        }
-        let iter = self.undo_redo_log.backward_log().map_err(|_| UndoRedoLogErr::UndoRedoLogOutOfLog(meta))?;
+        let iter = self.undo_redo_log.backward_log().map_err(|_| UndoRedoLogErr::OutOfLog(meta))?;
         for command in iter.value.rev().map(SyncCell::get) {
             command.undo(world);
         }

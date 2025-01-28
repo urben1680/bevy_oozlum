@@ -56,7 +56,6 @@ ISSUES/DISCUSSIONS:
 mod example {}
 
 pub mod app;
-pub mod frame;
 pub mod log;
 pub mod meta;
 pub mod schedule;
@@ -65,7 +64,6 @@ pub mod undo_redo;
 /// Contains all extension traits `as _` and common types.
 pub mod prelude {
     pub use crate::app::{RevApp as _, RevSystemsPlugin};
-    pub use crate::frame::RevFrame;
     pub use crate::meta::{RevDirection, RevMeta};
     pub use crate::schedule::{
         BackwardNoop as _, IntoRevSystemConfigs as _, IntoRevSystemSetConfigs as _,

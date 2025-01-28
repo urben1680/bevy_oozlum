@@ -1,4 +1,4 @@
-use std::{num::NonZeroU32, time::Duration};
+use std::{num::NonZeroU64, time::Duration};
 
 use bevy::{
     app::App,
@@ -7,17 +7,17 @@ use bevy::{
 };
 
 use library::{
-    log::{RareTransitionLog, TransitionLog},
+    log::{SparseTransitionLog, DenseTransitionLog},
     prelude::*,
 };
 
-const MAX_LOG_LEN: u32 = 71;
+const MAX_LOG_LEN: u64 = 71;
 const FIXED_DURATION_MS: u64 = 100;
 
 // todo: modules per system (if more than the system)
 
 fn main() {
-    let meta = RevMeta::new(NonZeroU32::new(MAX_LOG_LEN), None, false);
+    let meta = RevMeta::new(NonZeroU64::new(MAX_LOG_LEN), None, false);
     App::new()
         .add_plugins((
             RevSystemsPlugin::add_meta_and_runner(meta, FixedUpdate),
@@ -55,7 +55,7 @@ fn main() {
 #[component(on_add = on_add_5)]
 #[component(on_remove = on_remove)]
 struct Trash {
-    tossed_at: RevFrame,
+    tossed_at: u64,
     row: usize,
 }
 
@@ -82,7 +82,7 @@ fn system_1(meta: Res<RevMeta>, pressed: Res<KeysPressed>, mut commands: Command
 fn system_2(
     meta: Res<RevMeta>,
     pressed: Res<KeysPressed>,
-    mut log: Local<RareTransitionLog<Entity>>,
+    mut log: Local<SparseTransitionLog<Entity>>,
     mut commands: Commands,
 ) {
     let trash = Trash {
@@ -91,14 +91,13 @@ fn system_2(
     };
     match meta.direction() {
         RevDirection::NOT_LOG => {
-            if let Some(entity) = log.pop_past_by_len(meta.past_world_states() as usize) {
-                commands.entity(entity).despawn();
-            }
+            let entity = pressed.num2.then(|| commands.spawn(trash).id());
             for entity in log.drain_future() {
                 commands.entity(entity).despawn();
             }
-            let entity = pressed.num2.then(|| commands.spawn(trash).id());
-            log.push_present(entity);
+            if let Some(entity) = log.push_and_pop_past(meta.past_world_states() as usize, entity) {
+                commands.entity(entity).despawn();
+            }
         }
         RevDirection::FORWARD_LOG => {
             if let Some(entity) = log.forward_log().unwrap() {
@@ -116,34 +115,36 @@ fn system_2(
 // todo: system that despawns stones
 fn system_3(
     meta: Res<RevMeta>,
-    mut log: Local<TransitionLog<(Entity, RevFrame)>>,
+    mut entity_log: Local<DenseTransitionLog<Entity>>,
     mut commands: Commands,
 ) {
+    /* todo
     let trash = Trash {
         tossed_at: meta.present_world_state(),
         row: 3,
     };
     match meta.direction() {
         RevDirection::NOT_LOG => {
-            // todo: needs observer
-            if let Some((entity, _)) = log.pop_past_by_logged_at(&meta) {
-                commands.entity(entity).despawn();
-            }
-            for (entity, _) in log.drain_future() {
+            for (entity, _) in entity_log.drain_future() {
                 commands.entity(entity).despawn();
             }
             let entity = commands.spawn(trash).id();
-            log.push_present((entity, meta.present_world_state()));
+            for (entity, _) in entity_log.push_and_drain_past()
+            if let Some((entity, _)) = entity_log.pop_past_by_logged_at(&meta) {
+                commands.entity(entity).despawn();
+            }
+            entity_log.push_present((entity, meta.present_world_state()));
         }
         RevDirection::FORWARD_LOG => {
-            let (entity, _) = *log.forward_log().unwrap();
+            let (entity, _) = *entity_log.forward_log().unwrap();
             commands.entity(entity).insert(trash);
         }
         RevDirection::BackwardLog => {
-            let (entity, _) = *log.backward_log().unwrap();
+            let (entity, _) = *entity_log.backward_log().unwrap();
             commands.entity(entity).remove::<Trash>();
         }
     }
+    */
 }
 
 fn pressed_3(pressed: Res<KeysPressed>) -> bool {
@@ -335,7 +336,7 @@ fn render_game(
     meta: Res<RevMeta>,
     trash: Query<&Trash>,
     lost: Res<LostTrash>,
-    mut last_future_end: Local<Option<RevFrame>>,
+    mut last_future_end: Local<Option<u64>>,
 ) {
     print!("\x1B[2J"); // this clears the last frame
     println!();
@@ -343,11 +344,11 @@ fn render_game(
     println!("No worry, it is okay if you can undo it. Just don't wait for too long...");
     println!();
 
-    let wave = |phase: RevFrame| {
+    let wave = |phase: u64| {
         "`-._,~'"
             .chars()
             .cycle()
-            .skip(7 - u32::from(phase) as usize % 7)
+            .skip(7 - phase as usize % 7)
     };
 
     let row_future: String = wave(meta.future_end_world_state())

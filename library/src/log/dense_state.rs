@@ -9,7 +9,7 @@ use std::{
 
 use bevy::reflect::Reflect;
 
-use crate::{meta::RevMeta, frame::RevFrame};
+use crate::meta::RevMeta;
 
 use super::{index_oob, OutOfLog};
 
@@ -226,23 +226,32 @@ impl<T> DenseStateLog<T> {
     }
 }
 
-// todo newtype to prevent pushing manually constructed frames
-impl DenseStateLog<RevFrame> {
-    // todo return drain because frames are valid
-    pub fn push_and_truncate_past(&mut self, meta: &RevMeta) {
+impl DenseStateLog<u64> {
+    pub(super) fn frame_push_and_drain_past(&mut self, meta: &RevMeta) -> Drain<u64> {
         self.states.truncate(self.index);
         let before = core::mem::replace(&mut self.present, meta.present_world_state());
         self.states.push_back(before);
         self.index += 1;
         let to_drain = self.states.partition_point(|frame| *frame < meta.past_end_world_state());
         self.index -= to_drain;
-        self.states.drain(..to_drain);
+        self.states.drain(..to_drain)
     }
-    pub fn expects_forward_log(&self, meta: &RevMeta) -> bool {
-        self.states.get(self.index).is_some_and(|frame| *frame == meta.present_world_state())
+    pub(super) fn frame_forward_log(&mut self, meta: &RevMeta) -> bool {
+        let expects_forward = self.states.get(self.index).is_some_and(|frame| *frame == meta.present_world_state());
+        if expects_forward {
+            let _ok = self.forward_log();
+        }
+        expects_forward
     }
-    pub fn expects_backward_log(&self, meta: &RevMeta) -> bool {
-        self.present == meta.present_world_state().increase()
+    pub(super) fn frame_backward_log(&mut self, meta: &RevMeta) -> bool {
+        let expects_backward = self.present == meta.present_world_state() + 1;
+        if expects_backward {
+            let _ok = self.backward_log();
+        }
+        expects_backward
+    }
+    pub(super) fn past_len(&self) -> usize {
+        self.index
     }
 }
 

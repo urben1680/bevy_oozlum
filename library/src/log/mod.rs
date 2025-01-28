@@ -21,6 +21,8 @@ mod sparse_states;
 mod sparse_transition;
 mod sparse_transitions;
 
+mod frame_state;
+
 #[cfg(feature = "serde")]
 pub use serde_with::{logless_state, logless_with_capacity, with_capacity};
 
@@ -33,6 +35,8 @@ pub use sparse_state::SparseStateLog;
 pub use sparse_states::SparseStatesLog;
 pub use sparse_transition::SparseTransitionLog;
 pub use sparse_transitions::SparseTransitionsLog;
+
+pub use frame_state::FrameStateLog;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct OutOfLog;
