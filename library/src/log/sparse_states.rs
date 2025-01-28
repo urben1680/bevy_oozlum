@@ -11,7 +11,7 @@ use bevy::{reflect::Reflect, utils::default};
 
 use super::{
     AmountErr, EntryAmount, OutOfLog, SparseDrain, SparseLogMut, SparseStateLog, ValueEntry,
-    WithAmountInternal, USIZE_BYTES,
+    USIZE_BYTES,
 };
 
 #[derive(Debug, Clone, Reflect)]
@@ -125,8 +125,6 @@ mod serde_with {
 }
 
 impl<T, U: Default, const AMOUNT_BYTES: usize> Default for SparseStatesLog<T, U, AMOUNT_BYTES>
-where
-    Self: WithAmountInternal<Entry = U>,
 {
     fn default() -> Self {
         Self::new_empty(default())
@@ -134,8 +132,6 @@ where
 }
 
 impl<T, U, const AMOUNT_BYTES: usize> Deref for SparseStatesLog<T, U, AMOUNT_BYTES>
-where
-    Self: WithAmountInternal<Entry = U>,
 {
     type Target = U;
     fn deref(&self) -> &Self::Target {
