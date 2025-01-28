@@ -35,6 +35,7 @@ Enhancements:
 - make PackedRevFrame the RevFrame or private
 -- PackedRevFrame becomes private, RevFrame contains overflow number, effectively a u64
 -- RevFrame can be split up by internal code
+- NonZero inside RevFrameNew to enable smaller enum storage
 
 Docs
 - documentations
@@ -64,8 +65,8 @@ pub mod undo_redo;
 /// Contains all extension traits `as _` and common types.
 pub mod prelude {
     pub use crate::app::{RevApp as _, RevSystemsPlugin};
-    pub use crate::frame::{PackedRevFrame, RevFrame};
-    pub use crate::meta::{DrainPastByLoggedAt, RevDirection, RevMeta};
+    pub use crate::frame::RevFrame;
+    pub use crate::meta::{RevDirection, RevMeta};
     pub use crate::schedule::{
         BackwardNoop as _, IntoRevSystemConfigs as _, IntoRevSystemSetConfigs as _,
         RevSchedule as _, RevSystemsSet, RevUpdate,
