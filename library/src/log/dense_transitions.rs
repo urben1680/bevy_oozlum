@@ -9,12 +9,10 @@ use std::{
 use bevy::reflect::{std_traits::ReflectDefault, Reflect};
 
 use super::{
-    doc_with_amount, AmountErr, DenseTransitionLog, EntryAmount, LogMut, OutOfLog, ValueEntry,
+    AmountErr, DenseTransitionLog, EntryAmount, LogMut, OutOfLog, ValueEntry,
     USIZE_BYTES,
 };
 
-#[doc = doc_with_amount!(struct)]
-#[allow(private_bounds)]
 #[derive(Debug, Clone, Reflect)]
 #[reflect(Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -85,15 +83,12 @@ mod serde_with {
     }
 }
 
-#[doc = doc_with_amount!(impl)]
 impl<T, U, const AMOUNT_BYTES: usize> Default for DenseTransitionsLog<T, U, AMOUNT_BYTES> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-#[doc = doc_with_amount!(impl)]
-#[allow(private_bounds)]
 impl<T, U, const AMOUNT_BYTES: usize> DenseTransitionsLog<T, U, AMOUNT_BYTES> {
     pub const fn new() -> Self {
         Self {
