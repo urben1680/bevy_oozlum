@@ -10,10 +10,9 @@ use bevy::{
     ecs::{
         archetype::ArchetypeComponentId,
         component::{ComponentId, Tick},
-        observer::Trigger,
         query::Access,
         schedule::{InternedSystemSet, IntoSystemConfigs, IntoSystemSetConfigs, SystemSetConfigs},
-        system::{Commands, IntoSystem, ReadOnlySystem, System, SystemIn},
+        system::{IntoSystem, ReadOnlySystem, System, SystemIn},
         world::{unsafe_world_cell::UnsafeWorldCell, DeferredWorld, World},
     },
     utils::default,
@@ -21,9 +20,9 @@ use bevy::{
 
 use crate::{
     error_per_flag,
-    meta::{DrainPastByLoggedAt, RevMeta},
+    meta::RevMeta,
     schedule::{BackwardSet, BwdCmdSet, BwdCmdSysSet, BwdSysSet, ForwardSet, FwdSysSet},
-    undo_redo::{UndoRedoBuffer, UndoRedoErr, UndoRedoLog},
+    undo_redo::{UndoRedoBuffer, UndoRedoLogErr, UndoRedoLog},
 };
 
 use super::{IntoRevSystemConfigs, RevSystemConfigs, RevSystemSetConfigs};
@@ -47,7 +46,6 @@ where
         let fwd_sys_name = name(" (forward system)");
         let bwd_sys_name = name(" (backward system)");
         let bwd_cmd_name = name(" (backward commands)");
-        let observer_name = name(" (backward commands observer)");
 
         let default_system_sets: Vec<InternedSystemSet> = system.default_system_sets();
 
@@ -55,7 +53,6 @@ where
             system,
             initialized: false,
             commands_log: default(),
-            observer_name,
         });
 
         let shared = Arc::new(Shared {
@@ -173,7 +170,6 @@ struct Inner<T> {
     system: T,
     initialized: bool,
     commands_log: UndoRedoLog,
-    observer_name: String,
 }
 
 impl<T: System> System for ArcSystem<T> {
@@ -290,13 +286,9 @@ impl<T: System> System for ArcSystem<T> {
         }
 
         // reverisble commands are now in the buffer resource so commands_log can take them
-        let result = shared.commands_log.forward(world);
-        if matches!(result, Err(UndoRedoErr::FrameMismatch { .. })) {
-            // ignore this error because bevy calls apply_deferred regardless if update ran
-            return;
-        }
-        if let Err(err) = result {
-            error_per_flag!(
+        match shared.commands_log.forward(world) {
+            Ok(()) | Err(UndoRedoLogErr::UnexpectedUpdate(_)) => {},
+            Err(err) => error_per_flag!(
                 &mut self.commands_err,
                 "Reversible commands from reversible system {} could not be done/redone: {err:?}",
                 self.name
@@ -421,12 +413,9 @@ impl<T: System> System for CommandsBackward<T> {
             .unwrap_or_else(expect_lock(&self.name))
             .commands_log
             .backward(world);
-        if matches!(result, Err(UndoRedoErr::FrameMismatch { .. })) {
-            // ignore this error because bevy calls apply_deferred regardless if update ran
-            return;
-        }
-        if let Err(err) = result {
-            error_per_flag!(
+        match result {
+            Ok(()) | Err(UndoRedoLogErr::UnexpectedUpdate(_)) => {},
+            Err(err) => error_per_flag!(
                 &mut self.commands_err,
                 "Reversible commands from reversible system {} could not be undone: {err:?}",
                 self.name
@@ -468,34 +457,11 @@ fn initialize_arc_system<'a, T: System>(
 ) -> MutexGuard<'a, Inner<T>> {
     world.init_resource::<UndoRedoBuffer>();
     *tick = world.change_tick();
-    let arc = shared.clone();
     let mut shared = shared.inner.try_lock().unwrap_or_else(expect_lock(name));
-    if shared.initialized {
-        return shared;
+    if !shared.initialized {
+        shared.system.initialize(world);
+        shared.initialized = true;
     }
-
-    // init system
-    shared.system.initialize(world);
-    shared.initialized = true;
-
-    // add observer for reducing commands using the logged_at mechanism
-    let name = shared.observer_name.clone();
-    world.add_observer(
-        move |trigger: Trigger<DrainPastByLoggedAt>, mut commands: Commands| {
-            let meta: RevMeta = trigger.event().meta().clone();
-            let arc = arc.clone();
-            let name = name.clone();
-            commands.queue(move |world: &mut World| {
-                arc.clone()
-                    .inner
-                    .try_lock()
-                    .unwrap_or_else(expect_lock(&name))
-                    .commands_log
-                    .clamp_log(world, &meta)
-            });
-        },
-    );
-
     shared
 }
 
