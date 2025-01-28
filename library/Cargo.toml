@@ -19,6 +19,3 @@ crossterm = "0.28"
 [features]
 default = ["serde"] # todo: remove line before release
 serde = ["dep:serde"]
-packed_rev_frame_size_1 = []
-packed_rev_frame_size_2 = []
-packed_rev_frame_size_3 = []
