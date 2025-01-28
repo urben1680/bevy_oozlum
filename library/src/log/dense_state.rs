@@ -9,6 +9,8 @@ use std::{
 
 use bevy::reflect::Reflect;
 
+use crate::{meta::RevMeta, frame::RevFrame};
+
 use super::{index_oob, OutOfLog};
 
 #[derive(Debug, Default, Clone, Reflect)]
@@ -221,6 +223,26 @@ impl<T> DenseStateLog<T> {
         core::mem::swap(&mut self.present, now_future);
         self.index += 1;
         return Ok(());
+    }
+}
+
+// todo newtype to prevent pushing manually constructed frames
+impl DenseStateLog<RevFrame> {
+    // todo return drain because frames are valid
+    pub fn push_and_truncate_past(&mut self, meta: &RevMeta) {
+        self.states.truncate(self.index);
+        let before = core::mem::replace(&mut self.present, meta.present_world_state());
+        self.states.push_back(before);
+        self.index += 1;
+        let to_drain = self.states.partition_point(|frame| *frame < meta.past_end_world_state());
+        self.index -= to_drain;
+        self.states.drain(..to_drain);
+    }
+    pub fn expects_forward_log(&self, meta: &RevMeta) -> bool {
+        self.states.get(self.index).is_some_and(|frame| *frame == meta.present_world_state())
+    }
+    pub fn expects_backward_log(&self, meta: &RevMeta) -> bool {
+        self.present == meta.present_world_state().increase()
     }
 }
 
