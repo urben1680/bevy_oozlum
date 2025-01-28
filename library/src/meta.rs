@@ -1,11 +1,10 @@
-use core::num::NonZeroU32;
+use core::num::NonZeroU64;
 
 use bevy::{
     ecs::{
         archetype::ArchetypeComponentId,
         change_detection::Mut,
         component::{ComponentId, Tick},
-        event::Event,
         query::Access,
         system::{IntoSystem, ReadOnlySystemParam, Res, Resource, System, SystemMeta, SystemParam},
         world::{unsafe_world_cell::UnsafeWorldCell, World},
@@ -19,7 +18,7 @@ use bevy::{
 use bevy::reflect::{ReflectDeserialize, ReflectSerialize};
 
 use crate::{
-    frame::{PackedRevFrame, RevFrame, RevFrameNew, REV_FRAME_AS_U32_MAX},
+    frame::RevFrame,
     log::OutOfLog,
     schedule::RevUpdate,
     undo_redo::UndoRedoBuffer,
@@ -107,11 +106,11 @@ unsafe impl ReadOnlySystemParam for RevDirection {}
 )]
 enum InternalDirection {
     RunningForward,
-    RunningForwardLog { updates_until_pause: NonZeroU32 },
-    RunningBackwardLog { updates_until_pause: NonZeroU32 },
+    RunningForwardLog { updates_until_pause: NonZeroU64 },
+    RunningBackwardLog { updates_until_pause: NonZeroU64 },
     RanForward,
-    RanForwardLog { updates_until_pause: NonZeroU32 },
-    RanBackwardLog { updates_until_pause: NonZeroU32 },
+    RanForwardLog { updates_until_pause: NonZeroU64 },
+    RanBackwardLog { updates_until_pause: NonZeroU64 },
     Pause,
 }
 
@@ -166,16 +165,6 @@ impl InternalDirection {
     }
 }
 
-// todo: deprecate
-#[derive(Clone, Debug, Event)]
-pub struct DrainPastByLoggedAt(RevMeta);
-
-impl DrainPastByLoggedAt {
-    pub fn meta(&self) -> &RevMeta {
-        &self.0
-    }
-}
-
 /// RevMeta is used to control the processing of reversible systems.
 ///
 /// It keepts track what the current frame is and to which frame one can go forward and backward in time.
@@ -201,10 +190,10 @@ pub struct RevMeta {
     /// Changing this value is always possible but only comes into effect when updating the world during [`RevDirection::NotLog`].
     ///
     /// **Note** that there is a hard limit of [`Self::MAX_WORLD_STATES`] this value is clamped to when read internally.
-    pub max_world_states: Option<NonZeroU32>,
-    past_end: RevFrameNew,
-    present: RevFrameNew,
-    future_end: RevFrameNew,
+    pub max_world_states: Option<NonZeroU64>,
+    past_end: RevFrame,
+    present: RevFrame,
+    future_end: RevFrame,
     /// If Some, is either a Running* variant or Pause
     queue: Option<InternalDirection>,
     direction: InternalDirection,
@@ -212,20 +201,19 @@ pub struct RevMeta {
 
 impl Default for RevMeta {
     fn default() -> Self {
-        Self::new(Some(NonZeroU32::MIN), None, false)
+        Self::new(Some(NonZeroU64::MIN), None, false)
     }
 }
 
 impl RevMeta {
-    pub const MAX_WORLD_STATES: u32 = REV_FRAME_AS_U32_MAX / 2;
     pub const fn new(
-        max_world_states: Option<NonZeroU32>,
-        now: Option<RevFrameNew>,
+        max_world_states: Option<NonZeroU64>,
+        now: Option<RevFrame>,
         paused: bool,
     ) -> Self {
         let now = match now {
             Some(now) => now,
-            None => RevFrameNew::from_raw(0),
+            None => RevFrame(0),
         };
         Self {
             max_world_states,
@@ -251,33 +239,33 @@ impl RevMeta {
     pub fn paused(&self) -> bool {
         self.direction == InternalDirection::Pause
     }
-    pub fn future_end_world_state(&self) -> RevFrameNew {
+    pub fn future_end_world_state(&self) -> RevFrame {
         self.future_end
     }
-    pub fn present_world_state(&self) -> RevFrameNew {
+    pub fn present_world_state(&self) -> RevFrame {
         self.present
     }
-    pub fn past_end_world_state(&self) -> RevFrameNew {
+    pub fn past_end_world_state(&self) -> RevFrame {
         self.past_end
     }
-    pub fn past_world_states(&self) -> u32 {
+    pub fn past_world_states(&self) -> u64 {
         self.present - self.past_end
     }
-    pub fn future_world_states(&self) -> u32 {
+    pub fn future_world_states(&self) -> u64 {
         self.future_end - self.present
     }
-    pub fn world_states(&self) -> u32 {
+    pub fn world_states(&self) -> u64 {
         self.future_end - self.past_end + 1 // both ends are inclusive
     }
-    pub fn contains(&self, frame: RevFrameNew) -> bool {
+    pub fn contains(&self, frame: RevFrame) -> bool {
         (self.future_end - frame) <= (self.future_end - self.past_end)
     }
     // todo: no longer needed to have that many options, simplify
-    pub fn past_contains(&self, frame: RevFrameNew) -> bool {
+    pub fn past_contains(&self, frame: RevFrame) -> bool {
         (self.present - frame).wrapping_sub(1) < (self.present - self.past_end)
     }
     // todo: no longer needed to have that many options, simplify
-    pub fn future_contains(&self, frame: RevFrameNew) -> bool {
+    pub fn future_contains(&self, frame: RevFrame) -> bool {
         (self.future_end - frame) < (self.future_end - self.present)
     }
     pub fn clear(&mut self) {
@@ -290,12 +278,12 @@ impl RevMeta {
     pub fn queue_forward(&mut self) {
         self.queue = Some(InternalDirection::RunningForward);
     }
-    pub fn queue_log(&mut self, to: RevFrameNew) -> Result<u32, OutOfLog> {
+    pub fn queue_log(&mut self, to: RevFrame) -> Result<u64, OutOfLog> {
         let to_past = self.present - to;
         let to_future = to - self.present;
 
         if to_past <= self.past_world_states() {
-            self.queue = Some(match NonZeroU32::new(to_past) {
+            self.queue = Some(match NonZeroU64::new(to_past) {
                 Some(updates_until_pause) => InternalDirection::RunningBackwardLog {
                     updates_until_pause,
                 },
@@ -303,7 +291,7 @@ impl RevMeta {
             });
             Ok(to_past)
         } else if to_future <= self.future_world_states() {
-            self.queue = Some(match NonZeroU32::new(to_future) {
+            self.queue = Some(match NonZeroU64::new(to_future) {
                 Some(updates_until_pause) => InternalDirection::RunningForwardLog {
                     updates_until_pause,
                 },
@@ -414,10 +402,7 @@ impl RevMeta {
     ///
     /// If this is called recursively in the closure and the closure is called because the updated direction is not paused,
     /// this will panic. The same can happen if `RevMeta` is in an invalid state, cloned from inside the closure for example.
-    pub fn update<Out>(
-        &mut self,
-        c: impl FnOnce(&mut Self) -> Out,
-    ) -> Option<Out> {
+    pub fn update<Out>(&mut self, c: impl FnOnce(&mut Self) -> Out) -> Option<Out> {
         if self.get_direction().is_some() {
             panic!("unexpected initial direction, expected pause or ran variant, do not call this method recursively\n{self:#?}");
         }
@@ -430,8 +415,8 @@ impl RevMeta {
     }
     fn update_internal(&mut self) {
         /// Reduces `updates_until_pause` by one and returns `true` wether that was successful without reaching zero.
-        fn reduction_successful(updates_until_pause: &mut NonZeroU32) -> bool {
-            NonZeroU32::new(updates_until_pause.get() - 1)
+        fn reduction_successful(updates_until_pause: &mut NonZeroU64) -> bool {
+            NonZeroU64::new(updates_until_pause.get() - 1)
                 .map(|reduced| *updates_until_pause = reduced)
                 .is_some()
         }
@@ -441,8 +426,8 @@ impl RevMeta {
                 self.direction = queue;
                 self.present = match self.get_direction() {
                     Some(RevDirection::NOT_LOG) => return self.update_forward(),
-                    Some(RevDirection::FORWARD_LOG) => self.present.increase_frame(),
-                    Some(RevDirection::BackwardLog) => self.present.decrease_frame(),
+                    Some(RevDirection::FORWARD_LOG) => self.present.increase(),
+                    Some(RevDirection::BackwardLog) => self.present.decrease(),
                     None => self.present,
                 };
             }
@@ -453,11 +438,11 @@ impl RevMeta {
                     InternalDirection::RunningForwardLog {
                         updates_until_pause,
                     } => reduction_successful(updates_until_pause)
-                        .then(|| self.present.increase_frame()),
+                        .then(|| self.present.increase()),
                     InternalDirection::RunningBackwardLog {
                         updates_until_pause,
                     } => reduction_successful(updates_until_pause)
-                        .then(|| self.present.decrease_frame()),
+                        .then(|| self.present.decrease()),
                     _ /* Pause */ => None,
                 };
                 match updated_at_log {
@@ -468,16 +453,13 @@ impl RevMeta {
         }
     }
     fn update_forward(&mut self) {
-        self.present = self.present.increase_frame();
-        let max_world_states = self
-            .max_world_states
-            .map(NonZeroU32::get)
-            .unwrap_or(Self::MAX_WORLD_STATES)
-            .min(Self::MAX_WORLD_STATES);
+        self.present = self.present.increase();
         self.future_end = self.present;
-        // past states equal to max states is too many as the present state has to be added to the comparision
-        if self.past_world_states() >= max_world_states {
-            self.past_end = self.past_end.sub_by_frames(max_world_states - 1);
+        if let Some(max_world_states) = self.max_world_states.map(NonZeroU64::get) {
+            // past states equal to max states is too many as the present state has to be added to the comparision
+            if self.past_world_states() >= max_world_states {
+                self.past_end = RevFrame(self.past_end.0 - max_world_states + 1);
+            }
         }
     }
     pub(crate) fn add_read_if_no_write(
@@ -635,34 +617,22 @@ does not need to, just iterate regularily and return a drain
 mod test {
     use std::ops::RangeInclusive;
 
-    use bevy::ecs::{
-        observer::Trigger,
-        schedule::{Schedule, Schedules},
-        system::ResMut,
-    };
-
-    use crate::{log::TransitionLog, undo_redo::UndoRedoBuffer};
-
     use super::*;
 
-    const ONE: NonZeroU32 = NonZeroU32::MIN;
-    const TWO: NonZeroU32 = unsafe { NonZeroU32::new_unchecked(2) };
-    const THREE: NonZeroU32 = unsafe { NonZeroU32::new_unchecked(3) };
+    const ONE: NonZeroU64 = NonZeroU64::MIN;
+    const TWO: NonZeroU64 = unsafe { NonZeroU64::new_unchecked(2) };
+    const THREE: NonZeroU64 = unsafe { NonZeroU64::new_unchecked(3) };
 
     /// Constructs [`RevMeta`] and asserts the values are valid
     fn arrange(
-        max_len: Option<NonZeroU32>,
-        now: u32,
-        range: RangeInclusive<u32>,
+        max_len: Option<NonZeroU64>,
+        now: u64,
+        range: RangeInclusive<u64>,
         direction: InternalDirection,
     ) -> RevMeta {
-        let present = RevFrame::checked_new(now);
-        let past_end = RevFrame::checked_new(*range.start());
-        let future_end = RevFrame::checked_new(*range.end());
-        let log_start_half = match past_end.first_half() {
-            true => 0,
-            false => 1,
-        };
+        let present = RevFrame(now);
+        let past_end = RevFrame(*range.start());
+        let future_end = RevFrame(*range.end());
         let meta = RevMeta {
             max_world_states: max_len,
             present,
@@ -670,7 +640,6 @@ mod test {
             future_end,
             direction,
             queue: None,
-            log_start_half,
         };
         assert!(*range.start() <= now, "{meta:?}");
         match direction {
@@ -680,7 +649,7 @@ mod test {
             } => {
                 assert!(now <= *range.end(), "{meta:?}");
                 assert!(
-                    now + updates_until_pause.get() - 1 <= *range.end(),
+                    now + updates_until_pause.get() as u64 - 1 <= *range.end(),
                     "{meta:?}"
                 );
             }
@@ -689,7 +658,7 @@ mod test {
             } => {
                 assert!(now <= *range.end(), "{meta:?}");
                 assert!(
-                    range.start() + updates_until_pause.get() - 1 <= now,
+                    range.start() + updates_until_pause.get() as u64 - 1 <= now,
                     "{meta:?}"
                 );
             }
@@ -766,16 +735,16 @@ mod test {
     fn queue_log_to_out_of_range_fails() {
         let mut meta = arrange(None, 2, 1..=3, InternalDirection::Pause);
 
-        assert_eq!(meta.queue_log(RevFrame::checked_new(0)), Err(OutOfLog));
-        assert_eq!(meta.queue_log(RevFrame::checked_new(4)), Err(OutOfLog));
+        assert_eq!(meta.queue_log(RevFrame(0)), Err(OutOfLog));
+        assert_eq!(meta.queue_log(RevFrame(4)), Err(OutOfLog));
     }
 
     #[test]
     fn queue_log_to_in_range_succeeds() {
         let mut meta = arrange(None, 2, 1..=3, InternalDirection::Pause);
 
-        assert_eq!(meta.queue_log(RevFrame::checked_new(1)), Ok(1));
-        assert_eq!(meta.queue_log(RevFrame::checked_new(3)), Ok(1));
+        assert_eq!(meta.queue_log(RevFrame(1)), Ok(1));
+        assert_eq!(meta.queue_log(RevFrame(3)), Ok(1));
     }
 
     #[test]
@@ -785,10 +754,10 @@ mod test {
             2,
             1..=3,
             InternalDirection::RunningForwardLog {
-                updates_until_pause: NonZeroU32::new(2).unwrap(),
+                updates_until_pause: NonZeroU64::new(2).unwrap(),
             },
         );
-        assert_eq!(meta.queue_log(RevFrame::checked_new(2)), Ok(0));
+        assert_eq!(meta.queue_log(RevFrame(2)), Ok(0));
         meta.update_internal();
         assert!(meta.paused());
     }
@@ -796,50 +765,50 @@ mod test {
     #[test]
     fn contains_returns_expected() {
         let meta = arrange(None, 3, 1..=5, InternalDirection::Pause);
-        assert_eq!(meta.contains(RevFrame::checked_new(0)), false, "{meta:#?}");
-        assert_eq!(meta.contains(RevFrame::checked_new(1)), true, "{meta:#?}");
-        assert_eq!(meta.contains(RevFrame::checked_new(2)), true, "{meta:#?}");
-        assert_eq!(meta.contains(RevFrame::checked_new(3)), true, "{meta:#?}");
-        assert_eq!(meta.contains(RevFrame::checked_new(4)), true, "{meta:#?}");
-        assert_eq!(meta.contains(RevFrame::checked_new(5)), true, "{meta:#?}");
-        assert_eq!(meta.contains(RevFrame::checked_new(6)), false, "{meta:#?}");
+        assert_eq!(meta.contains(RevFrame(0)), false, "{meta:#?}");
+        assert_eq!(meta.contains(RevFrame(1)), true, "{meta:#?}");
+        assert_eq!(meta.contains(RevFrame(2)), true, "{meta:#?}");
+        assert_eq!(meta.contains(RevFrame(3)), true, "{meta:#?}");
+        assert_eq!(meta.contains(RevFrame(4)), true, "{meta:#?}");
+        assert_eq!(meta.contains(RevFrame(5)), true, "{meta:#?}");
+        assert_eq!(meta.contains(RevFrame(6)), false, "{meta:#?}");
     }
 
     #[test]
     fn past_contains_returns_expected() {
         let meta = arrange(None, 3, 1..=5, InternalDirection::Pause);
         assert_eq!(
-            meta.past_contains(RevFrame::checked_new(0)),
+            meta.past_contains(RevFrame(0)),
             false,
             "{meta:#?}"
         );
         assert_eq!(
-            meta.past_contains(RevFrame::checked_new(1)),
+            meta.past_contains(RevFrame(1)),
             true,
             "{meta:#?}"
         );
         assert_eq!(
-            meta.past_contains(RevFrame::checked_new(2)),
+            meta.past_contains(RevFrame(2)),
             true,
             "{meta:#?}"
         );
         assert_eq!(
-            meta.past_contains(RevFrame::checked_new(3)),
+            meta.past_contains(RevFrame(3)),
             false,
             "{meta:#?}"
         );
         assert_eq!(
-            meta.past_contains(RevFrame::checked_new(4)),
+            meta.past_contains(RevFrame(4)),
             false,
             "{meta:#?}"
         );
         assert_eq!(
-            meta.past_contains(RevFrame::checked_new(5)),
+            meta.past_contains(RevFrame(5)),
             false,
             "{meta:#?}"
         );
         assert_eq!(
-            meta.past_contains(RevFrame::checked_new(6)),
+            meta.past_contains(RevFrame(6)),
             false,
             "{meta:#?}"
         );
@@ -849,37 +818,37 @@ mod test {
     fn future_contains_returns_expected() {
         let meta = arrange(None, 3, 1..=5, InternalDirection::Pause);
         assert_eq!(
-            meta.future_contains(RevFrame::checked_new(0)),
+            meta.future_contains(RevFrame(0)),
             false,
             "{meta:#?}"
         );
         assert_eq!(
-            meta.future_contains(RevFrame::checked_new(1)),
+            meta.future_contains(RevFrame(1)),
             false,
             "{meta:#?}"
         );
         assert_eq!(
-            meta.future_contains(RevFrame::checked_new(2)),
+            meta.future_contains(RevFrame(2)),
             false,
             "{meta:#?}"
         );
         assert_eq!(
-            meta.future_contains(RevFrame::checked_new(3)),
+            meta.future_contains(RevFrame(3)),
             false,
             "{meta:#?}"
         );
         assert_eq!(
-            meta.future_contains(RevFrame::checked_new(4)),
+            meta.future_contains(RevFrame(4)),
             true,
             "{meta:#?}"
         );
         assert_eq!(
-            meta.future_contains(RevFrame::checked_new(5)),
+            meta.future_contains(RevFrame(5)),
             true,
             "{meta:#?}"
         );
         assert_eq!(
-            meta.future_contains(RevFrame::checked_new(6)),
+            meta.future_contains(RevFrame(6)),
             false,
             "{meta:#?}"
         );
@@ -902,37 +871,5 @@ mod test {
         meta.queue_forward();
         meta.update_internal();
         assert_eq!(meta.world_states(), 2, "{meta:#?}");
-    }
-
-    #[test]
-    fn drain_past_by_logged_at() {
-        #[derive(Resource)]
-        struct DrainPastByLoggedAtRes(TransitionLog<RevFrame>);
-
-        let now = RevFrame::checked_new(RevMeta::MAX_WORLD_STATES - 1);
-        let mut meta = RevMeta::new(NonZeroU32::new(1), Some(now), false);
-        meta.update(|_, _| ()); // bring oldest_state to edge of first half
-        let mut res = DrainPastByLoggedAtRes(TransitionLog::new());
-        res.0.push_present(RevFrame::checked_new(0));
-        assert_eq!(res.0.transitions_len(), 1);
-
-        let mut schedules = Schedules::new();
-        schedules.insert(Schedule::new(RevUpdate));
-
-        let mut world = World::new();
-        world.init_resource::<UndoRedoBuffer>();
-        world.insert_resource(meta);
-        world.insert_resource(res);
-        world.insert_resource(schedules);
-        world.add_observer(
-            |trigger: Trigger<DrainPastByLoggedAt>, mut res: ResMut<DrainPastByLoggedAtRes>| {
-                res.0.pop_past_by_logged_at(trigger.event().meta());
-            },
-        );
-        world.flush();
-
-        assert!(RevMeta::try_run_rev_update(&mut world).is_ok());
-        let res = world.remove_resource::<DrainPastByLoggedAtRes>().unwrap();
-        assert_eq!(res.0.transitions_len(), 0);
     }
 }
