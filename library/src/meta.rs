@@ -18,7 +18,6 @@ use bevy::{
 use bevy::reflect::{ReflectDeserialize, ReflectSerialize};
 
 use crate::{
-    frame::RevFrame,
     log::OutOfLog,
     schedule::RevUpdate,
     undo_redo::UndoRedoBuffer,
@@ -191,9 +190,9 @@ pub struct RevMeta {
     ///
     /// **Note** that there is a hard limit of [`Self::MAX_WORLD_STATES`] this value is clamped to when read internally.
     pub max_world_states: Option<NonZeroU64>,
-    past_end: RevFrame,
-    present: RevFrame,
-    future_end: RevFrame,
+    past_end: u64,
+    present: u64,
+    future_end: u64,
     /// If Some, is either a Running* variant or Pause
     queue: Option<InternalDirection>,
     direction: InternalDirection,
@@ -208,12 +207,12 @@ impl Default for RevMeta {
 impl RevMeta {
     pub const fn new(
         max_world_states: Option<NonZeroU64>,
-        now: Option<RevFrame>,
+        now: Option<u64>,
         paused: bool,
     ) -> Self {
         let now = match now {
             Some(now) => now,
-            None => RevFrame(0),
+            None => 0,
         };
         Self {
             max_world_states,
@@ -239,13 +238,13 @@ impl RevMeta {
     pub fn paused(&self) -> bool {
         self.direction == InternalDirection::Pause
     }
-    pub fn future_end_world_state(&self) -> RevFrame {
+    pub fn future_end_world_state(&self) -> u64 {
         self.future_end
     }
-    pub fn present_world_state(&self) -> RevFrame {
+    pub const fn present_world_state(&self) -> u64 {
         self.present
     }
-    pub fn past_end_world_state(&self) -> RevFrame {
+    pub fn past_end_world_state(&self) -> u64 {
         self.past_end
     }
     pub fn past_world_states(&self) -> u64 {
@@ -257,16 +256,16 @@ impl RevMeta {
     pub fn world_states(&self) -> u64 {
         self.future_end - self.past_end + 1 // both ends are inclusive
     }
-    pub fn contains(&self, frame: RevFrame) -> bool {
-        (self.future_end - frame) <= (self.future_end - self.past_end)
+    pub fn contains(&self, frame: u64) -> bool {
+        self.future_end.wrapping_sub(frame) <= (self.future_end - self.past_end)
     }
     // todo: no longer needed to have that many options, simplify
-    pub fn past_contains(&self, frame: RevFrame) -> bool {
-        (self.present - frame).wrapping_sub(1) < (self.present - self.past_end)
+    pub fn past_contains(&self, frame: u64) -> bool {
+        self.present.wrapping_sub(frame).wrapping_sub(1) < (self.present - self.past_end)
     }
     // todo: no longer needed to have that many options, simplify
-    pub fn future_contains(&self, frame: RevFrame) -> bool {
-        (self.future_end - frame) < (self.future_end - self.present)
+    pub fn future_contains(&self, frame: u64) -> bool {
+        self.future_end.wrapping_sub(frame) < (self.future_end - self.present)
     }
     pub fn clear(&mut self) {
         self.past_end = self.present;
@@ -278,9 +277,9 @@ impl RevMeta {
     pub fn queue_forward(&mut self) {
         self.queue = Some(InternalDirection::RunningForward);
     }
-    pub fn queue_log(&mut self, to: RevFrame) -> Result<u64, OutOfLog> {
-        let to_past = self.present - to;
-        let to_future = to - self.present;
+    pub fn queue_log(&mut self, to: u64) -> Result<u64, OutOfLog> {
+        let to_past = self.present.wrapping_sub(to);
+        let to_future = to.wrapping_sub(self.present);
 
         if to_past <= self.past_world_states() {
             self.queue = Some(match NonZeroU64::new(to_past) {
@@ -426,8 +425,8 @@ impl RevMeta {
                 self.direction = queue;
                 self.present = match self.get_direction() {
                     Some(RevDirection::NOT_LOG) => return self.update_forward(),
-                    Some(RevDirection::FORWARD_LOG) => self.present.increase(),
-                    Some(RevDirection::BackwardLog) => self.present.decrease(),
+                    Some(RevDirection::FORWARD_LOG) => self.present + 1,
+                    Some(RevDirection::BackwardLog) => self.present - 1,
                     None => self.present,
                 };
             }
@@ -438,11 +437,11 @@ impl RevMeta {
                     InternalDirection::RunningForwardLog {
                         updates_until_pause,
                     } => reduction_successful(updates_until_pause)
-                        .then(|| self.present.increase()),
+                        .then(|| self.present + 1),
                     InternalDirection::RunningBackwardLog {
                         updates_until_pause,
                     } => reduction_successful(updates_until_pause)
-                        .then(|| self.present.decrease()),
+                        .then(|| self.present - 1),
                     _ /* Pause */ => None,
                 };
                 match updated_at_log {
@@ -453,12 +452,12 @@ impl RevMeta {
         }
     }
     fn update_forward(&mut self) {
-        self.present = self.present.increase();
+        self.present += 1;
         self.future_end = self.present;
         if let Some(max_world_states) = self.max_world_states.map(NonZeroU64::get) {
             // past states equal to max states is too many as the present state has to be added to the comparision
             if self.past_world_states() >= max_world_states {
-                self.past_end = RevFrame(self.past_end.0 - max_world_states + 1);
+                self.past_end = self.present + 1 - max_world_states;
             }
         }
     }
@@ -626,13 +625,12 @@ mod test {
     /// Constructs [`RevMeta`] and asserts the values are valid
     fn arrange(
         max_len: Option<NonZeroU64>,
-        now: u64,
+        present: u64,
         range: RangeInclusive<u64>,
         direction: InternalDirection,
     ) -> RevMeta {
-        let present = RevFrame(now);
-        let past_end = RevFrame(*range.start());
-        let future_end = RevFrame(*range.end());
+        let past_end = *range.start();
+        let future_end = *range.end();
         let meta = RevMeta {
             max_world_states: max_len,
             present,
@@ -641,28 +639,28 @@ mod test {
             direction,
             queue: None,
         };
-        assert!(*range.start() <= now, "{meta:?}");
+        assert!(*range.start() <= present, "{meta:?}");
         match direction {
-            InternalDirection::RunningForward => assert_eq!(now, range.end() + 2, "{meta:?}"),
+            InternalDirection::RunningForward => assert_eq!(present, range.end() + 2, "{meta:?}"),
             InternalDirection::RunningForwardLog {
                 updates_until_pause,
             } => {
-                assert!(now <= *range.end(), "{meta:?}");
+                assert!(present <= *range.end(), "{meta:?}");
                 assert!(
-                    now + updates_until_pause.get() as u64 - 1 <= *range.end(),
+                    present + updates_until_pause.get() as u64 - 1 <= *range.end(),
                     "{meta:?}"
                 );
             }
             InternalDirection::RunningBackwardLog {
                 updates_until_pause,
             } => {
-                assert!(now <= *range.end(), "{meta:?}");
+                assert!(present <= *range.end(), "{meta:?}");
                 assert!(
-                    range.start() + updates_until_pause.get() as u64 - 1 <= now,
+                    range.start() + updates_until_pause.get() as u64 - 1 <= present,
                     "{meta:?}"
                 );
             }
-            InternalDirection::Pause => assert!(now <= *range.end(), "{meta:?}"),
+            InternalDirection::Pause => assert!(present <= *range.end(), "{meta:?}"),
             _ => unimplemented!(),
         }
         meta
@@ -686,11 +684,11 @@ mod test {
                 updates_until_pause: ONE
             }
         );
-        assert_eq!(meta.present.0, 1);
+        assert_eq!(meta.present, 1);
 
         meta.update_internal();
         assert_eq!(meta.get_direction(), None);
-        assert_eq!(meta.present.0, 1);
+        assert_eq!(meta.present, 1);
     }
 
     #[test]
@@ -711,11 +709,11 @@ mod test {
                 updates_until_pause: ONE
             }
         );
-        assert_eq!(meta.present.0, 0);
+        assert_eq!(meta.present, 0);
 
         meta.update_internal();
         assert_eq!(meta.get_direction(), None);
-        assert_eq!(meta.present.0, 0);
+        assert_eq!(meta.present, 0);
     }
 
     #[test]
@@ -723,11 +721,11 @@ mod test {
         let mut meta = RevMeta::new(Some(TWO), None, false);
 
         meta.update_internal();
-        assert_eq!(meta.present.0, 1);
+        assert_eq!(meta.present, 1);
         assert_eq!(meta.world_states(), 2);
 
         meta.update_internal();
-        assert_eq!(meta.present.0, 2);
+        assert_eq!(meta.present, 2);
         assert_eq!(meta.world_states(), 2);
     }
 
@@ -735,16 +733,16 @@ mod test {
     fn queue_log_to_out_of_range_fails() {
         let mut meta = arrange(None, 2, 1..=3, InternalDirection::Pause);
 
-        assert_eq!(meta.queue_log(RevFrame(0)), Err(OutOfLog));
-        assert_eq!(meta.queue_log(RevFrame(4)), Err(OutOfLog));
+        assert_eq!(meta.queue_log(0), Err(OutOfLog));
+        assert_eq!(meta.queue_log(4), Err(OutOfLog));
     }
 
     #[test]
     fn queue_log_to_in_range_succeeds() {
         let mut meta = arrange(None, 2, 1..=3, InternalDirection::Pause);
 
-        assert_eq!(meta.queue_log(RevFrame(1)), Ok(1));
-        assert_eq!(meta.queue_log(RevFrame(3)), Ok(1));
+        assert_eq!(meta.queue_log(1), Ok(1));
+        assert_eq!(meta.queue_log(3), Ok(1));
     }
 
     #[test]
@@ -757,7 +755,7 @@ mod test {
                 updates_until_pause: NonZeroU64::new(2).unwrap(),
             },
         );
-        assert_eq!(meta.queue_log(RevFrame(2)), Ok(0));
+        assert_eq!(meta.queue_log(2), Ok(0));
         meta.update_internal();
         assert!(meta.paused());
     }
@@ -765,50 +763,50 @@ mod test {
     #[test]
     fn contains_returns_expected() {
         let meta = arrange(None, 3, 1..=5, InternalDirection::Pause);
-        assert_eq!(meta.contains(RevFrame(0)), false, "{meta:#?}");
-        assert_eq!(meta.contains(RevFrame(1)), true, "{meta:#?}");
-        assert_eq!(meta.contains(RevFrame(2)), true, "{meta:#?}");
-        assert_eq!(meta.contains(RevFrame(3)), true, "{meta:#?}");
-        assert_eq!(meta.contains(RevFrame(4)), true, "{meta:#?}");
-        assert_eq!(meta.contains(RevFrame(5)), true, "{meta:#?}");
-        assert_eq!(meta.contains(RevFrame(6)), false, "{meta:#?}");
+        assert_eq!(meta.contains(0), false, "{meta:#?}");
+        assert_eq!(meta.contains(1), true, "{meta:#?}");
+        assert_eq!(meta.contains(2), true, "{meta:#?}");
+        assert_eq!(meta.contains(3), true, "{meta:#?}");
+        assert_eq!(meta.contains(4), true, "{meta:#?}");
+        assert_eq!(meta.contains(5), true, "{meta:#?}");
+        assert_eq!(meta.contains(6), false, "{meta:#?}");
     }
 
     #[test]
     fn past_contains_returns_expected() {
         let meta = arrange(None, 3, 1..=5, InternalDirection::Pause);
         assert_eq!(
-            meta.past_contains(RevFrame(0)),
+            meta.past_contains(0),
             false,
             "{meta:#?}"
         );
         assert_eq!(
-            meta.past_contains(RevFrame(1)),
+            meta.past_contains(1),
             true,
             "{meta:#?}"
         );
         assert_eq!(
-            meta.past_contains(RevFrame(2)),
+            meta.past_contains(2),
             true,
             "{meta:#?}"
         );
         assert_eq!(
-            meta.past_contains(RevFrame(3)),
+            meta.past_contains(3),
             false,
             "{meta:#?}"
         );
         assert_eq!(
-            meta.past_contains(RevFrame(4)),
+            meta.past_contains(4),
             false,
             "{meta:#?}"
         );
         assert_eq!(
-            meta.past_contains(RevFrame(5)),
+            meta.past_contains(5),
             false,
             "{meta:#?}"
         );
         assert_eq!(
-            meta.past_contains(RevFrame(6)),
+            meta.past_contains(6),
             false,
             "{meta:#?}"
         );
@@ -818,37 +816,37 @@ mod test {
     fn future_contains_returns_expected() {
         let meta = arrange(None, 3, 1..=5, InternalDirection::Pause);
         assert_eq!(
-            meta.future_contains(RevFrame(0)),
+            meta.future_contains(0),
             false,
             "{meta:#?}"
         );
         assert_eq!(
-            meta.future_contains(RevFrame(1)),
+            meta.future_contains(1),
             false,
             "{meta:#?}"
         );
         assert_eq!(
-            meta.future_contains(RevFrame(2)),
+            meta.future_contains(2),
             false,
             "{meta:#?}"
         );
         assert_eq!(
-            meta.future_contains(RevFrame(3)),
+            meta.future_contains(3),
             false,
             "{meta:#?}"
         );
         assert_eq!(
-            meta.future_contains(RevFrame(4)),
+            meta.future_contains(4),
             true,
             "{meta:#?}"
         );
         assert_eq!(
-            meta.future_contains(RevFrame(5)),
+            meta.future_contains(5),
             true,
             "{meta:#?}"
         );
         assert_eq!(
-            meta.future_contains(RevFrame(6)),
+            meta.future_contains(6),
             false,
             "{meta:#?}"
         );

@@ -1,6 +1,5 @@
 use std::{
     mem::take,
-    num::NonZeroU64,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -14,17 +13,16 @@ use bevy::{
         component::Component,
         event::Event,
         observer::Trigger,
-        schedule::{common_conditions::run_once, IntoSystemSet},
+        schedule::IntoSystemSet,
         system::{Commands, IntoSystem, Resource},
         world::{DeferredWorld, World},
     },
 };
 
 use crate::{
-    frame::RevFrame,
     meta::RevDirection,
     schedule::RevUpdate,
-    undo_redo::{BuffersUndoRedo, UndoRedo, UndoRedoBuffer, UndoRedoDirection},
+    undo_redo::{BuffersUndoRedo, UndoRedo, UndoRedoBuffer},
 };
 
 use super::*;
@@ -372,7 +370,7 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
     let mut meta = world.resource_mut::<RevMeta>();
     let end_frame = meta.present_world_state();
     assert!(
-        meta.queue_log(RevFrame(0)).is_ok(),
+        meta.queue_log(0).is_ok(),
         "{meta:#?}"
     );
     for (step, expected) in expected.iter().enumerate().rev() {
@@ -887,7 +885,7 @@ fn pipe_commands() {
 #[test]
 fn run_if() {
     fn at_2(meta: Res<RevMeta>) -> bool {
-        meta.present_world_state().0 == 2
+        meta.present_world_state() == 2
     }
     fn at_2_once() -> impl Fn(Res<RevMeta>) -> bool + Clone {
         let was_2 = Arc::new(AtomicBool::new(false));
@@ -936,57 +934,4 @@ fn run_if() {
             vec![], // does not run at 3
         ],
     );
-}
-
-#[test]
-fn finalize_undo_redo() {
-    #[derive(Resource, Copy, Clone, Debug, PartialEq)]
-    enum TestCommand {
-        Applied,
-        Finalized,
-    }
-
-    fn system(mut commands: Commands) {
-        commands.queue(|world: &mut World| {
-            world.insert_resource(TestCommand::Applied);
-            world.buffer_undo_redo(|world: &mut World, finalize: UndoRedoDirection| {
-                if finalize == UndoRedoDirection::FinalizeRedone {
-                    world.insert_resource(TestCommand::Finalized);
-                }
-            });
-        });
-    }
-
-    // setup world
-    let mut world = World::new();
-    world.insert_resource(RevMeta::new(
-        NonZeroU64::new(1),
-        todo!("Some(RevFrame::checked_new(RevMeta::MAX_WORLD_STATES - 2))"),
-        false,
-    ));
-
-    // setup schedules
-    let mut schedule = Schedule::new(FixedUpdate);
-    schedule.add_systems(RevMeta::run_rev_update);
-    let err = schedule.initialize(&mut world).err();
-    assert!(err.is_none(), "{:?}", err.unwrap());
-    world.add_schedule(schedule);
-
-    let mut schedule = Schedule::new(RevUpdate);
-    schedule.rev_add_systems(system.rev_run_if(run_once));
-    let err = schedule.initialize(&mut world).err();
-    assert!(err.is_none(), "{:?}", err.unwrap());
-    world.add_schedule(schedule);
-
-    // first updates issues command that sets the Applied resource
-    world.run_schedule(FixedUpdate);
-    assert_eq!(world.remove_resource(), Some(TestCommand::Applied));
-
-    // no system run and no event to check the commands log because log start is still <= MAX_WORLD_STATES
-    world.run_schedule(FixedUpdate);
-    assert_eq!(world.remove_resource::<TestCommand>(), None);
-
-    // no system run but an event to check the commands log because log start is MAX_WORLD_STATES + 1
-    world.run_schedule(FixedUpdate);
-    assert_eq!(world.remove_resource(), Some(TestCommand::Finalized));
 }

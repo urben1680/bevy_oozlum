@@ -1,4 +1,4 @@
-use std::{fmt::Debug, ops::Sub};
+use std::fmt::Debug;
 
 use bevy::reflect::Reflect;
 
@@ -19,12 +19,5 @@ impl RevFrame {
     }
     pub(crate) const fn decrease(self) -> Self {
         Self(self.0 - 1)
-    }
-}
-
-impl Sub for RevFrame {
-    type Output = u64;
-    fn sub(self, rhs: Self) -> Self::Output {
-        self.0 - rhs.0
     }
 }
