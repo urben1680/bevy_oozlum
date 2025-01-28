@@ -1,6 +1,6 @@
 use std::{
     mem::take,
-    num::NonZeroU32,
+    num::NonZeroU64,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -372,7 +372,7 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
     let mut meta = world.resource_mut::<RevMeta>();
     let end_frame = meta.present_world_state();
     assert!(
-        meta.queue_log(RevFrame::checked_new(0)).is_ok(),
+        meta.queue_log(RevFrame(0)).is_ok(),
         "{meta:#?}"
     );
     for (step, expected) in expected.iter().enumerate().rev() {
@@ -887,8 +887,7 @@ fn pipe_commands() {
 #[test]
 fn run_if() {
     fn at_2(meta: Res<RevMeta>) -> bool {
-        let now: u32 = meta.present_world_state().into();
-        now == 2
+        meta.present_world_state().0 == 2
     }
     fn at_2_once() -> impl Fn(Res<RevMeta>) -> bool + Clone {
         let was_2 = Arc::new(AtomicBool::new(false));
@@ -961,8 +960,8 @@ fn finalize_undo_redo() {
     // setup world
     let mut world = World::new();
     world.insert_resource(RevMeta::new(
-        NonZeroU32::new(1),
-        Some(RevFrame::checked_new(RevMeta::MAX_WORLD_STATES - 2)),
+        NonZeroU64::new(1),
+        todo!("Some(RevFrame::checked_new(RevMeta::MAX_WORLD_STATES - 2))"),
         false,
     ));
 
