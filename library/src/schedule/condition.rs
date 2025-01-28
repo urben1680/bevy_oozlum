@@ -21,7 +21,7 @@ use bevy::{
 
 use crate::{
     error_per_flag,
-    log::{OutOfLog, RareTransitionLog},
+    log::{OutOfLog, SparseTransitionLog},
     meta::{RevDirection, RevMeta},
     schedule::ForwardSet,
 };
@@ -51,7 +51,7 @@ pub(crate) fn add_condition<Marker>(
 struct RevCondition<T> {
     condition: T,
     meta_id: Option<ComponentId>,
-    log: RareTransitionLog<()>,
+    log: SparseTransitionLog<()>,
     component_access: Access<ComponentId>,
     archetype_component_access: Access<ArchetypeComponentId>,
     out_of_log_err: bool,
@@ -67,8 +67,10 @@ impl<T: ReadOnlySystem<Out = bool>> RevCondition<T> {
         match meta.direction() {
             RevDirection::NOT_LOG => {
                 let out = valid && eval_cond(&mut self.condition);
-                self.log.pop_past_by_len(meta.past_world_states().saturating_sub(1) as usize);
-                self.log.push_present(out.then_some(()));
+                self.log.push_and_pop_past(
+                    meta.past_world_states().saturating_sub(1) as usize,
+                    out.then_some(())
+                );
                 out
             },
             // todo, simplify error msg, can only be internal bug
