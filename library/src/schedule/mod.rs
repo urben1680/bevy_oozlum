@@ -1,6 +1,8 @@
 use bevy::ecs::{
     change_detection::Res,
-    schedule::{InternedSystemSet, IntoSystemSetConfigs, Schedule, ScheduleLabel, SystemSet},
+    schedule::{
+        InternedSystemSet, IntoSystemSetConfigs, LogLevel, Schedule, ScheduleLabel, SystemSet,
+    },
 };
 
 use crate::meta::RevMeta;
@@ -113,6 +115,10 @@ impl RevSchedule for Schedule {
                     .chain()
                     .in_set(RevSystemsSet),
             );
+            // todo: do not add things to redundant sets
+            let mut settings = self.get_build_settings();
+            settings.hierarchy_detection = LogLevel::Ignore;
+            self.set_build_settings(settings);
         }
         let RevSystemSetConfigs {
             fwd_sys_sets,
