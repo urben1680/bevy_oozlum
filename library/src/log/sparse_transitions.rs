@@ -9,7 +9,7 @@ use std::{
 use bevy::reflect::{std_traits::ReflectDefault, Reflect};
 
 use super::{
-    AmountErr, EntryAmount, OutOfLog, SparseDrain, SparseLogMut, SparseTransitionLog, ValueEntry,
+    AmountErr, EntryAmount, LogMut, OutOfLog, SparseDrain, SparseTransitionLog, ValueEntry,
     USIZE_BYTES,
 };
 
@@ -161,6 +161,42 @@ impl<T, U, const AMOUNT_BYTES: usize> SparseTransitionsLog<T, U, AMOUNT_BYTES> {
     pub fn transitions_shrink_to_fit(&mut self) {
         self.transitions.shrink_to_fit()
     }
+    pub fn push_none(&mut self) {
+        self.transitions.truncate(self.index);
+        self.amounts.push(None);
+    }
+    pub fn push_none_and_pop_past(
+        &mut self,
+        max_past_len: usize,
+    ) -> Option<ValueEntry<Drain<T>, U>> {
+        self.transitions.truncate(self.index);
+        self.amounts
+            .push_and_pop_past(max_past_len, None)
+            .map(|entry_amount| {
+                let amount = entry_amount.amount();
+                self.index -= amount;
+                ValueEntry {
+                    value: self.transitions.drain(..amount),
+                    entry: entry_amount.entry,
+                }
+            })
+    }
+    pub fn push_none_and_drain_past(
+        &mut self,
+        max_past_len: usize,
+    ) -> (Drain<T>, SparseDrain<EntryAmount<U, AMOUNT_BYTES>>) {
+        self.transitions.truncate(self.index);
+        let to_drain = self.amounts.push_and_iter_to_drain_past(max_past_len, None);
+        let to_drain_len = to_drain.len();
+        let amount: usize = to_drain
+            .map(|entry_amount| entry_amount.value.amount())
+            .sum();
+        self.index -= amount;
+        (
+            self.transitions.drain(..amount),
+            self.amounts.drain_past(to_drain_len),
+        )
+    }
     pub fn drain_future(&mut self) -> (Drain<T>, SparseDrain<EntryAmount<U, AMOUNT_BYTES>>) {
         (
             self.transitions.drain(self.index..),
@@ -197,42 +233,26 @@ impl<T, U, const AMOUNT_BYTES: usize> SparseTransitionsLog<T, U, AMOUNT_BYTES> {
 }
 
 impl<T, U> SparseTransitionsLog<T, U, USIZE_BYTES> {
-    pub fn push(&mut self, c: impl FnOnce(SparseLogMut<T, U>)) {
+    pub fn push_some<Out: Into<U>>(&mut self, c: impl FnOnce(LogMut<T>) -> Out) {
         self.transitions.truncate(self.index);
-        let mut entry = None;
-        c(SparseLogMut {
-            values: &mut self.transitions,
-            entry: &mut entry,
-        });
-        let Some(entry) = entry else {
-            self.amounts.push(None);
-            return;
-        };
+        let entry = c(LogMut(&mut self.transitions)).into();
         let pushed_amount = self.transitions.len() - self.index;
         let entry_amount = EntryAmount::new(entry, pushed_amount);
         self.index = self.transitions.len();
         self.amounts.push(Some(entry_amount));
     }
-    pub fn push_and_pop_past(
+    pub fn push_some_and_pop_past<Out: Into<U>>(
         &mut self,
         max_past_len: usize,
-        c: impl FnOnce(SparseLogMut<T, U>),
+        c: impl FnOnce(LogMut<T>) -> Out,
     ) -> Option<ValueEntry<Drain<T>, U>> {
         self.transitions.truncate(self.index);
-        let mut entry = None;
-        c(SparseLogMut {
-            values: &mut self.transitions,
-            entry: &mut entry,
-        });
-        let mut entry_amount_option = None;
-        if let Some(entry) = entry {
-            let pushed_amount = self.transitions.len() - self.index;
-            let entry_amount = EntryAmount::new(entry, pushed_amount);
-            self.index = self.transitions.len();
-            entry_amount_option = Some(entry_amount);
-        }
+        let entry = c(LogMut(&mut self.transitions)).into();
+        let pushed_amount = self.transitions.len() - self.index;
+        let entry_amount = EntryAmount::new(entry, pushed_amount);
+        self.index = self.transitions.len();
         self.amounts
-            .push_and_pop_past(max_past_len, entry_amount_option)
+            .push_and_pop_past(max_past_len, Some(entry_amount))
             .map(|entry_amount| {
                 let amount = entry_amount.amount();
                 self.index -= amount;
@@ -242,27 +262,19 @@ impl<T, U> SparseTransitionsLog<T, U, USIZE_BYTES> {
                 }
             })
     }
-    pub fn push_and_drain_past(
+    pub fn push_some_and_drain_past<Out: Into<U>>(
         &mut self,
         max_past_len: usize,
-        c: impl FnOnce(SparseLogMut<T, U>),
+        c: impl FnOnce(LogMut<T>) -> Out,
     ) -> (Drain<T>, SparseDrain<EntryAmount<U>>) {
         self.transitions.truncate(self.index);
-        let mut entry = None;
-        c(SparseLogMut {
-            values: &mut self.transitions,
-            entry: &mut entry,
-        });
-        let mut entry_amount_option = None;
-        if let Some(entry) = entry {
-            let pushed_amount = self.transitions.len() - self.index;
-            let entry_amount = EntryAmount::new(entry, pushed_amount);
-            self.index = self.transitions.len();
-            entry_amount_option = Some(entry_amount);
-        }
+        let entry = c(LogMut(&mut self.transitions)).into();
+        let pushed_amount = self.transitions.len() - self.index;
+        let entry_amount = EntryAmount::new(entry, pushed_amount);
+        self.index = self.transitions.len();
         let to_drain = self
             .amounts
-            .push_and_iter_to_drain_past(max_past_len, entry_amount_option);
+            .push_and_iter_to_drain_past(max_past_len, Some(entry_amount));
         let to_drain_len = to_drain.len();
         let amount: usize = to_drain
             .map(|entry_amount| entry_amount.value.amount())
@@ -276,59 +288,43 @@ impl<T, U> SparseTransitionsLog<T, U, USIZE_BYTES> {
 }
 
 impl<T, U, const AMOUNT_BYTES: usize> SparseTransitionsLog<T, U, AMOUNT_BYTES> {
-    pub fn try_push(
+    pub fn try_push_some<Out: Into<U>>(
         &mut self,
-        c: impl FnOnce(SparseLogMut<T, U>),
+        c: impl FnOnce(LogMut<T>) -> Out,
     ) -> Result<(), AmountErr<Drain<T>, U, AMOUNT_BYTES>> {
         self.transitions.truncate(self.index);
-        let mut entry = None;
-        c(SparseLogMut {
-            values: &mut self.transitions,
-            entry: &mut entry,
-        });
-        let Some(entry) = entry else {
-            self.amounts.push(None);
-            return Ok(());
-        };
+        let entry = c(LogMut(&mut self.transitions)).into();
         let pushed_amount = self.transitions.len() - self.index;
         let entry_amount = EntryAmount::new(entry, pushed_amount);
         if pushed_amount != entry_amount.amount() {
             return Err(AmountErr {
                 values: self.transitions.drain(self.index..),
-                entry_amount,
+                entry: entry_amount.entry,
             });
         }
         self.index = self.transitions.len();
         self.amounts.push(Some(entry_amount));
         Ok(())
     }
-    pub fn try_push_and_pop_past(
+    pub fn try_push_some_and_pop_past<Out: Into<U>>(
         &mut self,
         max_past_len: usize,
-        c: impl FnOnce(SparseLogMut<T, U>),
+        c: impl FnOnce(LogMut<T>) -> Out,
     ) -> Result<Option<ValueEntry<Drain<T>, U>>, AmountErr<Drain<T>, U, AMOUNT_BYTES>> {
         self.transitions.truncate(self.index);
-        let mut entry = None;
-        c(SparseLogMut {
-            values: &mut self.transitions,
-            entry: &mut entry,
-        });
-        let mut entry_amount_option = None;
-        if let Some(entry) = entry {
-            let pushed_amount = self.transitions.len() - self.index;
-            let entry_amount = EntryAmount::new(entry, pushed_amount);
-            if pushed_amount != entry_amount.amount() {
-                return Err(AmountErr {
-                    values: self.transitions.drain(self.index..),
-                    entry_amount,
-                });
-            }
-            self.index = self.transitions.len();
-            entry_amount_option = Some(entry_amount);
+        let entry = c(LogMut(&mut self.transitions)).into();
+        let pushed_amount = self.transitions.len() - self.index;
+        let entry_amount = EntryAmount::new(entry, pushed_amount);
+        if pushed_amount != entry_amount.amount() {
+            return Err(AmountErr {
+                values: self.transitions.drain(self.index..),
+                entry: entry_amount.entry,
+            });
         }
+        self.index = self.transitions.len();
         let pop = self
             .amounts
-            .push_and_pop_past(max_past_len, entry_amount_option)
+            .push_and_pop_past(max_past_len, Some(entry_amount))
             .map(|entry_amount| {
                 let amount = entry_amount.amount();
                 self.index -= amount;
@@ -339,36 +335,28 @@ impl<T, U, const AMOUNT_BYTES: usize> SparseTransitionsLog<T, U, AMOUNT_BYTES> {
             });
         Ok(pop)
     }
-    pub fn try_push_and_drain_past(
+    pub fn try_push_some_and_drain_past<Out: Into<U>>(
         &mut self,
         max_past_len: usize,
-        c: impl FnOnce(SparseLogMut<T, U>),
+        c: impl FnOnce(LogMut<T>) -> Out,
     ) -> Result<
         (Drain<T>, SparseDrain<EntryAmount<U, AMOUNT_BYTES>>),
         AmountErr<Drain<T>, U, AMOUNT_BYTES>,
     > {
         self.transitions.truncate(self.index);
-        let mut entry = None;
-        c(SparseLogMut {
-            values: &mut self.transitions,
-            entry: &mut entry,
-        });
-        let mut entry_amount_option = None;
-        if let Some(entry) = entry {
-            let pushed_amount = self.transitions.len() - self.index;
-            let entry_amount = EntryAmount::new(entry, pushed_amount);
-            if pushed_amount != entry_amount.amount() {
-                return Err(AmountErr {
-                    values: self.transitions.drain(self.index..),
-                    entry_amount,
-                });
-            }
-            self.index = self.transitions.len();
-            entry_amount_option = Some(entry_amount);
+        let entry = c(LogMut(&mut self.transitions)).into();
+        let pushed_amount = self.transitions.len() - self.index;
+        let entry_amount = EntryAmount::new(entry, pushed_amount);
+        if pushed_amount != entry_amount.amount() {
+            return Err(AmountErr {
+                values: self.transitions.drain(self.index..),
+                entry: entry_amount.entry,
+            });
         }
+        self.index = self.transitions.len();
         let to_drain = self
             .amounts
-            .push_and_iter_to_drain_past(max_past_len, entry_amount_option);
+            .push_and_iter_to_drain_past(max_past_len, Some(entry_amount));
         let to_drain_len = to_drain.len();
         let amount: usize = to_drain
             .map(|entry_amount| entry_amount.value.amount())
@@ -401,11 +389,13 @@ mod test {
         }
 
         let mut original = SparseTransitionsLog::new();
-        original.push(|log| {
-            log.push(1).extend(['a', 'b']);
+        original.push_some(|mut log| {
+            log.extend(['a', 'b']);
+            1
         });
-        original.push(|log| {
-            log.push(2).extend(['c', 'd']);
+        original.push_some(|mut log| {
+            log.extend(['c', 'd']);
+            2
         });
         original.backward_log().expect("in log");
 
@@ -481,11 +471,15 @@ mod test {
                 .map(|expected_drained| expected_drained.into_iter().collect::<Vec<_>>());
             for [log1, log2] in self.0.iter_mut() {
                 let before = log1.clone();
-                let actual_pop = log1.try_push_and_pop_past(max_past_len, |log| {
-                    if let Some((transitions, entry)) = push.clone() {
-                        log.push(entry).extend(transitions);
+                let actual_pop = match push.clone() {
+                    Some((transitions, entry)) => {
+                        log1.try_push_some_and_pop_past(max_past_len, |mut log| {
+                            log.extend(transitions);
+                            entry
+                        })
                     }
-                });
+                    None => Ok(log1.push_none_and_pop_past(max_past_len)),
+                };
                 let actual_pop = collect_pop_result(actual_pop).map_err(|err| Some(err));
                 assert_eq!(
                     actual_pop,
@@ -504,11 +498,15 @@ mod test {
                 );
 
                 let before = log2.clone();
-                let actual_drain = log2.try_push_and_drain_past(max_past_len, |log| {
-                    if let Some((transitions, entry)) = push.clone() {
-                        log.push(entry).extend(transitions);
+                let actual_drain = match push.clone() {
+                    Some((transitions, entry)) => {
+                        log2.try_push_some_and_drain_past(max_past_len, |mut log| {
+                            log.extend(transitions);
+                            entry
+                        })
                     }
-                });
+                    None => Ok(log2.push_none_and_drain_past(max_past_len)),
+                };
                 let actual_drain = collect_drain_result(actual_drain).map_err(|err| Some(err));
                 assert_eq!(
                     actual_drain,
