@@ -36,7 +36,7 @@ pub use sparse_states::SparseStatesLog;
 pub use sparse_transition::SparseTransitionLog;
 pub use sparse_transitions::SparseTransitionsLog;
 
-pub use frame_state::FrameStateLog;
+pub use frame_state::FrameTransitionLog;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct OutOfLog;
@@ -65,24 +65,12 @@ impl<'a, T> Extend<T> for LogMut<'a, T> {
     }
 }
 
-pub struct SparseLogMut<'a, T, U> {
-    values: &'a mut VecDeque<T>,
-    entry: &'a mut Option<U>,
-}
-
-impl<'a, T, U> SparseLogMut<'a, T, U> {
-    pub fn push(self, entry: U) -> LogMut<'a, T> {
-        *self.entry = Some(entry);
-        LogMut(self.values)
-    }
-}
-
-pub struct AmountErr<I, U, const AMOUNT_BYTES: usize> {
+pub struct AmountErr<I: ExactSizeIterator, U, const AMOUNT_BYTES: usize> {
     pub values: I,
-    pub entry_amount: EntryAmount<U, AMOUNT_BYTES>,
+    pub entry: U,
 }
 
-impl<I, U, const AMOUNT_BYTES: usize> AmountErr<I, U, AMOUNT_BYTES> {
+impl<I: ExactSizeIterator, U, const AMOUNT_BYTES: usize> AmountErr<I, U, AMOUNT_BYTES> {
     pub const MAX_AMOUNT: usize = usize::MAX >> ((USIZE_BYTES - AMOUNT_BYTES) * 8);
     // easier to call with &self during error handling
     pub fn max_amount(&self) -> usize {
@@ -91,11 +79,10 @@ impl<I, U, const AMOUNT_BYTES: usize> AmountErr<I, U, AMOUNT_BYTES> {
 }
 
 // makes unwrap possible without requiring additional Debug bounds everywhere
-#[allow(private_bounds)]
-impl<I, U, const AMOUNT_BYTES: usize> Debug for AmountErr<I, U, AMOUNT_BYTES> {
+impl<I: ExactSizeIterator, U, const AMOUNT_BYTES: usize> Debug for AmountErr<I, U, AMOUNT_BYTES> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct(std::any::type_name::<Self>())
-            .field("pushed_amount", &self.entry_amount.amount())
+            .field("pushed_amount", &self.values.len())
             .field("max_amount", &self.max_amount())
             .finish_non_exhaustive()
     }
@@ -306,26 +293,29 @@ fn index_oob() -> OutOfLog {
 mod test {
     use super::{AmountErr, EntryAmount, ValueEntry};
 
-    pub(super) fn collect_pop_result<I1: Iterator<Item = char>, I2: Iterator<Item = char>>(
+    pub(super) fn collect_pop_result<
+        I1: Iterator<Item = char>,
+        I2: ExactSizeIterator<Item = char>,
+    >(
         actual_pop: Result<Option<ValueEntry<I1, char>>, AmountErr<I2, char, 1>>,
     ) -> Result<Option<(Vec<char>, char)>, (Vec<char>, char)> {
         match actual_pop {
             Ok(None) => Ok(None),
             Ok(Some(value_entry)) => Ok(Some((value_entry.value.collect(), value_entry.entry))),
-            Err(err) => Err((err.values.collect(), err.entry_amount.entry)),
+            Err(err) => Err((err.values.collect(), err.entry)),
         }
     }
 
     pub(super) fn collect_drain_result<
         I1: ExactSizeIterator<Item = char>,
         I2: Iterator<Item = EntryAmount<char, 1>>,
-        I3: Iterator<Item = char>,
+        I3: ExactSizeIterator<Item = char>,
     >(
         actual_drain: Result<(I1, I2), AmountErr<I3, char, 1>>,
     ) -> Result<Vec<(Vec<char>, char)>, (Vec<char>, char)> {
         match actual_drain {
             Ok(ok) => Ok(collect_drain(ok)),
-            Err(err) => Err((err.values.collect(), err.entry_amount.entry)),
+            Err(err) => Err((err.values.collect(), err.entry)),
         }
     }
 
