@@ -9,8 +9,7 @@ use std::{
 use bevy::reflect::{std_traits::ReflectDefault, Reflect};
 
 use super::{
-    AmountErr, DenseTransitionLog, EntryAmount, LogMut, OutOfLog, ValueEntry,
-    USIZE_BYTES,
+    AmountErr, DenseTransitionLog, EntryAmount, LogMut, OutOfLog, ValueEntry, USIZE_BYTES,
 };
 
 #[derive(Debug, Clone, Reflect)]
@@ -260,7 +259,7 @@ impl<T, U, const AMOUNT_BYTES: usize> DenseTransitionsLog<T, U, AMOUNT_BYTES> {
             let values = self.transitions.drain(self.index..);
             return Err(AmountErr {
                 values,
-                entry_amount,
+                entry: entry_amount.entry,
             });
         }
         self.amounts.push(entry_amount);
@@ -280,7 +279,7 @@ impl<T, U, const AMOUNT_BYTES: usize> DenseTransitionsLog<T, U, AMOUNT_BYTES> {
             let values = self.transitions.drain(self.index..);
             return Err(AmountErr {
                 values,
-                entry_amount,
+                entry: entry_amount.entry,
             });
         }
         self.index = self.transitions.len();
@@ -310,7 +309,7 @@ impl<T, U, const AMOUNT_BYTES: usize> DenseTransitionsLog<T, U, AMOUNT_BYTES> {
             let values = self.transitions.drain(self.index..);
             return Err(AmountErr {
                 values,
-                entry_amount,
+                entry: entry_amount.entry,
             });
         }
         self.index = self.transitions.len();
