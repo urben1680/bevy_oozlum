@@ -1,115 +1,130 @@
 use core::fmt::Debug;
-use std::collections::{
-    vec_deque::Drain,
-    TryReserveError,
-};
+use std::collections::{TryReserveError, VecDeque};
 
 use bevy::reflect::Reflect;
 
 use crate::meta::RevMeta;
 
-use super::DenseStateLog;
+use super::index_oob;
 
-#[derive(Debug, Clone, Reflect)]
+// todo: mention limitations, like missing frames
+#[derive(Debug, Clone, Default, Reflect)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct FrameStateLog(DenseStateLog<u64>);
+pub struct FrameTransitionLog {
+    frames: VecDeque<u64>,
+    index: usize,
+}
 
 #[cfg(feature = "serde")]
 mod serde_with {
-    use crate::log::serde_with::{
-        LoglessState, LoglessWithCapacity, WithCapacity,
-    };
+    use std::collections::VecDeque;
 
-    use super::{FrameStateLog, DenseStateLog};
+    use crate::log::serde_with::{LoglessWithCapacity, WithCapacity, WithCapacityWrapper};
 
-    impl LoglessState for FrameStateLog {
-        type Se<'se> = <DenseStateLog<u64> as LoglessState>::Se<'se>;
-        type De = <DenseStateLog<u64> as LoglessState>::De;
-        fn get_logless_state(&self) -> Self::Se<'_> {
-            self.0.get_logless_state()
-        }
-        fn from_logless_state(logless_state: Self::De) -> Self {
-            Self(DenseStateLog::<u64>::from_logless_state(logless_state))
-        }
-    }
+    use super::FrameTransitionLog;
 
-    impl WithCapacity for FrameStateLog {
-        type Se<'se> = <DenseStateLog<u64> as WithCapacity>::Se<'se>;
-        type De = <DenseStateLog<u64> as WithCapacity>::De;
+    impl WithCapacity for FrameTransitionLog {
+        type Se<'se> = (WithCapacityWrapper<&'se VecDeque<u64>>, usize);
+        type De = (WithCapacityWrapper<VecDeque<u64>>, usize);
         fn get_with_capacity(&self) -> Self::Se<'_> {
-            self.0.get_with_capacity()
+            (WithCapacityWrapper(&self.frames), self.index)
         }
-        fn from_with_capacity(with_capacity: Self::De) -> Self {
-            Self(DenseStateLog::<u64>::from_with_capacity(with_capacity))
+        fn from_with_capacity((WithCapacityWrapper(frames), index): Self::De) -> Self {
+            Self { frames, index }
         }
     }
 
-    impl LoglessWithCapacity for FrameStateLog {
-        type Se<'se> = <DenseStateLog<u64> as LoglessWithCapacity>::Se<'se>;
-        type De = <DenseStateLog<u64> as LoglessWithCapacity>::De;
+    impl LoglessWithCapacity for FrameTransitionLog {
+        type Se<'se> = usize;
+        type De = usize;
         fn get_logless_with_capacity(&self) -> Self::Se<'_> {
-            self.0.get_logless_with_capacity()
+            self.frames.capacity()
         }
         fn from_logless_with_capacity(logless_with_capacity: Self::De) -> Self {
-            Self(DenseStateLog::<u64>::from_logless_with_capacity(logless_with_capacity))
+            Self::with_capacity(logless_with_capacity)
         }
     }
 }
 
-impl FrameStateLog {
-    pub const fn new(meta: &RevMeta) -> Self {
-        Self(DenseStateLog::new(meta.present_world_state()))
+impl FrameTransitionLog {
+    pub const fn new() -> Self {
+        Self {
+            frames: VecDeque::new(),
+            index: 0,
+        }
     }
-    pub fn with_capacity(meta: &RevMeta, frames_capacity: usize) -> Self {
-        Self(DenseStateLog::with_capacity(meta.present_world_state(), frames_capacity))
-    }
-    pub fn past_len(&self) -> usize {
-        self.0.past_len()
+    pub fn with_capacity(frame_capacity: usize) -> Self {
+        Self {
+            frames: VecDeque::with_capacity(frame_capacity),
+            index: 0,
+        }
     }
     pub fn frames_len(&self) -> usize {
-        self.0.states_len()
+        self.frames.len()
     }
     pub fn frames_capacity(&self) -> usize {
-        self.0.states_capacity()
+        self.frames.capacity()
     }
     pub fn frames_is_empty(&self) -> bool {
-        self.0.states_is_empty()
+        self.frames.is_empty()
     }
     pub fn frames_reserve(&mut self, additional: usize) {
-        self.0.states_reserve(additional)
+        self.frames.reserve(additional)
     }
     pub fn frames_reserve_exact(&mut self, additional: usize) {
-        self.0.states_reserve_exact(additional)
+        self.frames.reserve_exact(additional)
     }
     pub fn frames_try_reserve(&mut self, additional: usize) -> Result<(), TryReserveError> {
-        self.0.states_try_reserve(additional)
+        self.frames.try_reserve(additional)
     }
     pub fn frames_try_reserve_exact(&mut self, additional: usize) -> Result<(), TryReserveError> {
-        self.0.states_try_reserve_exact(additional)
+        self.frames.try_reserve_exact(additional)
     }
     pub fn frames_shrink_to(&mut self, min_capacity: usize) {
-        self.0.states_shrink_to(min_capacity)
+        self.frames.shrink_to(min_capacity)
     }
     pub fn frames_shrink_to_fit(&mut self) {
-        self.0.states_shrink_to_fit()
+        self.frames.shrink_to_fit()
     }
-    pub fn push_and_drain_past(&mut self, meta: &RevMeta) -> Drain<u64> {
-        self.0.frame_push_and_drain_past(meta)
-    }
-    pub fn drain_future(&mut self) -> Drain<u64> {
-        self.0.drain_future()
+    pub fn push_and_get_past_len(&mut self, meta: &RevMeta) -> usize {
+        self.frames.truncate(self.index);
+        let to_drain = self
+            .frames
+            .partition_point(|frame| *frame < meta.past_end_world_state());
+        self.frames.drain(..to_drain);
+        self.frames.push_back(meta.present_world_state());
+        // do not consider present push to be part of the past, user needs to increase return value if needed
+        let past_len = self.index - to_drain;
+        self.index = past_len + 1;
+        past_len
     }
     pub fn clear(&mut self) {
-        self.0.clear()
-    }
-    pub fn clear_with(&mut self, meta: &RevMeta) {
-        self.0.clear_with(meta.present_world_state())
+        self.frames.clear();
+        self.index = 0;
     }
     pub fn backward_log(&mut self, meta: &RevMeta) -> bool {
-        self.0.frame_backward_log(meta)
+        let Some(index) = self.index.checked_sub(1) else {
+            return false;
+        };
+        let Some(&frame) = self.frames.get(index) else {
+            index_oob();
+            return false;
+        };
+        let expects_backward = frame == meta.present_world_state() + 1;
+        if expects_backward {
+            self.index = index;
+        }
+        expects_backward
     }
     pub fn forward_log(&mut self, meta: &RevMeta) -> bool {
-        self.0.frame_forward_log(meta)
+        let Some(&frame) = self.frames.get(self.index) else {
+            return false;
+        };
+        let expects_forward = frame == meta.present_world_state();
+        if expects_forward {
+            self.index += 1;
+        }
+        expects_forward
     }
 }
 
@@ -120,91 +135,106 @@ mod test {
     use super::*;
 
     struct Log {
-        log: FrameStateLog,
-        meta: RevMeta
+        log: FrameTransitionLog,
+        meta: RevMeta,
     }
 
     impl Log {
         fn new(max_world_states: u64, now: u64) -> Self {
+            let log = FrameTransitionLog::new();
             let meta = RevMeta::new(NonZeroU64::new(max_world_states), Some(now), false);
-            let log = FrameStateLog::new(&meta);
-            Self {
-                log,
-                meta
-            }
+            Self { log, meta }
         }
-        fn forward_skip(
-            &mut self
-        ) {
+        fn forward(&mut self, updates_with_expected_past_len: Vec<usize>) {
             self.meta.queue_forward();
-            self.meta.update(|_|());
+            self.meta
+                .update(|meta| {
+                    let before = self.log.clone();
+                    let len = updates_with_expected_past_len.len();
+                    let updates_with_actual_past_len: Vec<usize> = (0..len)
+                        .map(|_| self.log.push_and_get_past_len(meta))
+                        .collect();
+                    assert_eq!(
+                        updates_with_actual_past_len, updates_with_expected_past_len,
+                        "\nbefore: {before:#?}\nafter: {:#?}\nmeta: {meta:?}",
+                        self.log
+                    )
+                })
+                .expect("should update");
         }
-        fn forward(
-            &mut self,
-            push: u64,
-            expected_past_len: usize,
-            expected_drain: Vec<u64>,
-        ) {
-            self.meta.queue_forward();
-            self.meta.update(|meta| {
-                assert_eq!(meta.present_world_state(), push, "\n{meta:?}");
-                let expected_drain: Vec<_> = expected_drain.into_iter().collect();
-                let before = self.log.clone();
-                let actual_drain: Vec<_> = self.log.push_and_drain_past(meta).collect();
-                assert_eq!(
-                    &actual_drain,
-                    &expected_drain,
-                    "\nbefore: {before:#?}\nafter: {:#?}\nmeta: {meta:?}", self.log
-                );
-                assert_eq!(
-                    self.log.past_len(),
-                    expected_past_len,
-                    "\nbefore: {before:#?}\nafter: {:#?}\nmeta: {meta:?}", self.log
-                );
-            });
-        }
-        fn forward_log(&mut self, result: bool) {
+        fn forward_log(&mut self, expected_forward_log_updates: usize) {
             let previous = self.meta.present_world_state() + 1;
             assert_eq!(self.meta.queue_log(previous), Ok(1));
-            self.meta.update(|meta| {
-                let before = self.log.clone();
-                assert_eq!(
-                    self.log.forward_log(meta), 
-                    result,
-                    "\nbefore: {before:#?}\nafter: {:#?}\nmeta: {meta:?}", self.log
-                );
-            });
+            self.meta
+                .update(|meta| {
+                    for _ in 0..expected_forward_log_updates {
+                        let before = self.log.clone();
+                        assert_eq!(
+                            self.log.forward_log(meta),
+                            true,
+                            "\nbefore: {before:#?}\nafter: {:#?}\nmeta: {meta:?}",
+                            self.log
+                        );
+                    }
+                    let before = self.log.clone();
+                    assert_eq!(
+                        self.log.forward_log(meta),
+                        false,
+                        "\nbefore: {before:#?}\nafter: {:#?}\nmeta: {meta:?}",
+                        self.log
+                    );
+                })
+                .expect("should update");
         }
-        fn backward_log(&mut self, result: bool) {
+        fn backward_log(&mut self, expected_backward_log_updates: usize) {
             let previous = self.meta.present_world_state() - 1;
             assert_eq!(self.meta.queue_log(previous), Ok(1));
-            self.meta.update(|meta| {
-                let before = self.log.clone();
-                assert_eq!(
-                    self.log.backward_log(meta), 
-                    result,
-                    "\nbefore: {before:#?}\nafter: {:#?}\nmeta: {meta:?}", self.log
-                );
-            });
+            self.meta
+                .update(|meta| {
+                    for _ in 0..expected_backward_log_updates {
+                        let before = self.log.clone();
+                        assert_eq!(
+                            self.log.backward_log(meta),
+                            true,
+                            "\nbefore: {before:#?}\nafter: {:#?}\nmeta: {meta:?}",
+                            self.log
+                        );
+                    }
+                    let before = self.log.clone();
+                    assert_eq!(
+                        self.log.backward_log(meta),
+                        false,
+                        "\nbefore: {before:#?}\nafter: {:#?}\nmeta: {meta:?}",
+                        self.log
+                    );
+                })
+                .expect("should update");
         }
     }
 
-    #[test] // todo: test multiple times of pushes per frame: `times` param
+    #[test]
     fn log_traversal_works() {
         let mut log = Log::new(4, 0);
-        log.forward(1, 1, vec![]);
-        log.forward(2, 2, vec![]);
-        log.forward_skip();
+        log.forward(vec![0]); // frame #1
+        log.forward(vec![1, 2]); // frame #2
+        log.forward(vec![3]);
+        log.forward(vec![]);
         // shortened log
-        log.forward(4, 2, vec![0]);
-        log.forward_skip();
+        log.forward(vec![3, 4]);
 
-        log.backward_log(false);
-        log.backward_log(true);
-        log.backward_log(false);
+        log.backward_log(2);
+        log.backward_log(0);
+        log.backward_log(1);
 
-        log.forward_log(false);
-        log.forward_log(true);
-        log.forward_log(false);
+        log.forward_log(1);
+        log.forward_log(0);
+        log.forward_log(2);
+
+        log.backward_log(2);
+        log.backward_log(0);
+        log.backward_log(1);
+
+        // the two logs at frame #2 remain
+        log.forward(vec![2]);
     }
 }
