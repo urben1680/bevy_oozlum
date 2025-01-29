@@ -14,7 +14,6 @@ TODO:
 Enhancements:
 - reduce todo!() and //todo
 - impl Error for relevant structs/enums via thiserror
-- blanket impl UndoRedo
 - test Finalize
 - #[inline]s
 - examples
@@ -26,6 +25,7 @@ Enhancements:
 -- ecs, commands https://github.com/bevyengine/bevy/blob/main/examples/ecs/ecs_guide.rs
 - idea: Arc system stores system state in resource, not Mutex
 -- might be incompatible with System::update_archetype_component_access as UnsafeWorldCell may only be used to read (archetype) metadata
+-- registering access to that resource is impossible, missing pub methods
 
 Docs
 - documentations
