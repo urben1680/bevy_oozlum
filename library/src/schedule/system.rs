@@ -22,7 +22,7 @@ use crate::{
     error_per_flag,
     meta::RevMeta,
     schedule::{BackwardSet, BwdCmdSet, BwdCmdSysSet, BwdSysSet, ForwardSet, FwdSysSet},
-    undo_redo::{UndoRedoBuffer, UndoRedoLogErr, UndoRedoLog},
+    undo_redo::{UndoRedoBuffer, UndoRedoLog, UndoRedoLogErr},
 };
 
 use super::{IntoRevSystemConfigs, RevSystemConfigs, RevSystemSetConfigs};
@@ -251,7 +251,7 @@ impl<T: System> System for ArcSystem<T> {
             if let Err(err) = shared.commands_log.forward(world) {
                 error_per_flag!(
                     &mut self.commands_err,
-                    "Reversible commands from reversible system {} could not be done/redone: {err:?}",
+                    "Reversible commands from reversible exclusive system {} could not be done/redone: {err:#?}",
                     self.name
                 )
             }
@@ -260,7 +260,7 @@ impl<T: System> System for ArcSystem<T> {
             if let Err(err) = shared.commands_log.backward(world) {
                 error_per_flag!(
                     &mut self.commands_err,
-                    "Reversible commands from reversible system {} could not be undone: {err:?}",
+                    "Reversible commands from reversible exclusive system {} could not be undone: {err:#?}",
                     self.name
                 )
             }
@@ -287,12 +287,12 @@ impl<T: System> System for ArcSystem<T> {
 
         // reverisble commands are now in the buffer resource so commands_log can take them
         match shared.commands_log.forward(world) {
-            Ok(()) | Err(UndoRedoLogErr::UnexpectedUpdate(_)) => {},
+            Ok(()) | Err(UndoRedoLogErr::UnexpectedUpdate(_)) => {}
             Err(err) => error_per_flag!(
                 &mut self.commands_err,
-                "Reversible commands from reversible system {} could not be done/redone: {err:?}",
+                "Reversible commands from reversible system {} could not be done/redone: {err:#?}",
                 self.name
-            )
+            ),
         }
     }
     fn queue_deferred(&mut self, _world: DeferredWorld) {
@@ -414,12 +414,12 @@ impl<T: System> System for CommandsBackward<T> {
             .commands_log
             .backward(world);
         match result {
-            Ok(()) | Err(UndoRedoLogErr::UnexpectedUpdate(_)) => {},
+            Ok(()) | Err(UndoRedoLogErr::UnexpectedUpdate(_)) => {}
             Err(err) => error_per_flag!(
                 &mut self.commands_err,
-                "Reversible commands from reversible system {} could not be undone: {err:?}",
+                "Reversible commands from reversible system {} could not be undone: {err:#?}",
                 self.name
-            )
+            ),
         }
     }
     fn queue_deferred(&mut self, _world: DeferredWorld) {
@@ -466,7 +466,7 @@ fn initialize_arc_system<'a, T: System>(
 }
 
 fn expect_lock<T: Debug, Out>(name: &String) -> impl FnOnce(T) -> Out + '_ {
-    move |err| panic!("Could not access reversible system {name} because of {err:?}")
+    move |err| panic!("Could not access reversible system {name} because of {err:#?}")
 }
 
 /// reference: Tick::check_tick
