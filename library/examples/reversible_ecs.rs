@@ -7,7 +7,7 @@ use bevy::{
 };
 
 use library::{
-    log::{SparseTransitionLog, DenseTransitionLog},
+    log::{DenseTransitionLog, FrameTransitionLog, SparseTransitionLog},
     prelude::*,
 };
 
@@ -30,8 +30,8 @@ fn main() {
                 (system_1, system_2).rev_chain(),
                 system_3.rev_run_if(pressed_3),
                 system_4.rev_after(system_3),
-                system_5.backward_noop(),
-                system_6.backward_noop(),
+                system_5, /*.backward_noop()*/
+                system_6, /*.backward_noop()*/
             ),
         )
         .add_systems(RevUpdate, clear_input.after(RevSystemsSet))
@@ -116,35 +116,33 @@ fn system_2(
 fn system_3(
     meta: Res<RevMeta>,
     mut entity_log: Local<DenseTransitionLog<Entity>>,
+    mut frame_log: Local<FrameTransitionLog>,
     mut commands: Commands,
 ) {
-    /* todo
     let trash = Trash {
         tossed_at: meta.present_world_state(),
         row: 3,
     };
     match meta.direction() {
         RevDirection::NOT_LOG => {
-            for (entity, _) in entity_log.drain_future() {
+            for entity in entity_log.drain_future() {
                 commands.entity(entity).despawn();
             }
+            let past_len = frame_log.push_and_get_past_len(&meta);
             let entity = commands.spawn(trash).id();
-            for (entity, _) in entity_log.push_and_drain_past()
-            if let Some((entity, _)) = entity_log.pop_past_by_logged_at(&meta) {
+            for entity in entity_log.push_and_drain_past(past_len, entity) {
                 commands.entity(entity).despawn();
             }
-            entity_log.push_present((entity, meta.present_world_state()));
         }
         RevDirection::FORWARD_LOG => {
-            let (entity, _) = *entity_log.forward_log().unwrap();
+            let entity = *entity_log.forward_log().unwrap();
             commands.entity(entity).insert(trash);
         }
         RevDirection::BackwardLog => {
-            let (entity, _) = *entity_log.backward_log().unwrap();
+            let entity = *entity_log.backward_log().unwrap();
             commands.entity(entity).remove::<Trash>();
         }
     }
-    */
 }
 
 fn pressed_3(pressed: Res<KeysPressed>) -> bool {
@@ -338,18 +336,13 @@ fn render_game(
     lost: Res<LostTrash>,
     mut last_future_end: Local<Option<u64>>,
 ) {
-    print!("\x1B[2J"); // this clears the last frame
+    println!("\x1B[2J"); // this clears the last frame
     println!();
     println!("Pass the time waiting for Bevy 1.0 by tossing some trash into the water!");
     println!("No worry, it is okay if you can undo it. Just don't wait for too long...");
     println!();
 
-    let wave = |phase: u64| {
-        "`-._,~'"
-            .chars()
-            .cycle()
-            .skip(7 - phase as usize % 7)
-    };
+    let wave = |phase: u64| "`-._,~'".chars().cycle().skip(7 - phase as usize % 7);
 
     let row_future: String = wave(meta.future_end_world_state())
         .take(meta.future_world_states() as usize)
@@ -363,7 +356,7 @@ fn render_game(
 
     let padding = match *last_future_end {
         Some(frame) => {
-            let mut padding = frame - meta.future_end_world_state();
+            let mut padding = frame.wrapping_sub(meta.future_end_world_state());
             if padding > MAX_LOG_LEN {
                 padding = 0;
                 *last_future_end = Some(meta.future_end_world_state());
