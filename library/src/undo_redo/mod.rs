@@ -2,15 +2,15 @@ use std::{collections::VecDeque, fmt::Debug};
 
 use bevy::{
     ecs::{
+        system::Commands,
         system::Resource,
         world::{DeferredWorld, World},
-        system::Commands
     },
     utils::synccell::SyncCell,
 };
 
 use crate::{
-    log::{DenseTransitionsLog, FrameStateLog},
+    log::{DenseTransitionsLog, FrameTransitionLog},
     meta::{RevDirection, RevMeta},
 };
 
@@ -112,9 +112,9 @@ impl<F: FnMut(&mut World, UndoRedoDirection) + Send + 'static> UndoRedo for F {
 }
 
 #[derive(Default)]
-pub(crate) struct UndoRedoLog{
+pub(crate) struct UndoRedoLog {
     undo_redo_log: DenseTransitionsLog<SyncCell<Box<dyn UndoRedo>>>,
-    frame_log: Option<FrameStateLog>
+    frame_log: FrameTransitionLog,
 }
 
 #[derive(Debug)]
@@ -125,41 +125,46 @@ pub(crate) enum UndoRedoLogErr {
     RevDirectionMismatch(RevMeta),
     UnexpectedUpdate(RevMeta),
     OutOfLog(RevMeta),
-    UninitFrameLog(RevMeta),
 }
 
 impl UndoRedoLog {
     pub(crate) fn forward(&mut self, world: &mut World) -> Result<(), UndoRedoLogErr> {
-        let meta = world.get_resource::<RevMeta>().ok_or(UndoRedoLogErr::RevMetaMissing)?.clone();
+        let meta = world
+            .get_resource::<RevMeta>()
+            .ok_or(UndoRedoLogErr::RevMetaMissing)?
+            .clone();
         match meta.get_direction() {
             Some(RevDirection::NOT_LOG) => {
-                for command in self.undo_redo_log.drain_future().0.rev().map(SyncCell::to_inner) {
+                for command in self
+                    .undo_redo_log
+                    .drain_future()
+                    .0
+                    .rev()
+                    .map(SyncCell::to_inner)
+                {
                     command.finalize_undone(world);
                 }
-                let max_past_len = match self.frame_log.as_mut() {
-                    Some(frame_log) => {
-                        frame_log.push_and_drain_past(&meta);
-                        frame_log.past_len()
-                    },
-                    None => {
-                        self.frame_log = Some(FrameStateLog::new(&meta));
-                        0
-                    }
-                };
-                let mut buffer = world.get_resource_mut::<UndoRedoBuffer>().ok_or_else(|| UndoRedoLogErr::UndoRedoBufferMissing(meta))?;
-                let past_drain = self.undo_redo_log.push_and_drain_past(max_past_len, |mut log| {
-                    log.append(&mut buffer.0)
-                });
+                let mut max_past_len = self.frame_log.push_and_get_past_len(&meta);
+                let mut buffer = world
+                    .get_resource_mut::<UndoRedoBuffer>()
+                    .ok_or_else(|| UndoRedoLogErr::UndoRedoBufferMissing(meta))?;
+                max_past_len += 1; // do not drain the buffered boxes
+                let past_drain = self
+                    .undo_redo_log
+                    .push_and_drain_past(max_past_len, |mut log| log.append(&mut buffer.0));
                 for command in past_drain.0.map(SyncCell::to_inner) {
                     command.finalize_redone(world);
                 }
             }
             Some(RevDirection::FORWARD_LOG) => {
-                let frame_log = self.frame_log.as_mut().ok_or_else(|| UndoRedoLogErr::UninitFrameLog(meta.clone()))?;
-                if !frame_log.forward_log(&meta) {
+                if !self.frame_log.forward_log(&meta) {
                     return Err(UndoRedoLogErr::UnexpectedUpdate(meta));
                 };
-                let iter = self.undo_redo_log.forward_log().map_err(|_| UndoRedoLogErr::OutOfLog(meta))?;
+                let iter = self
+                    .undo_redo_log
+                    .forward_log()
+                    .map_err(|_| UndoRedoLogErr::OutOfLog(meta))?;
+                println!("{} commands to redo", iter.value.len());
                 for command in iter.value.map(SyncCell::get) {
                     command.redo(world);
                 }
@@ -169,15 +174,20 @@ impl UndoRedoLog {
         Ok(())
     }
     pub(crate) fn backward(&mut self, world: &mut World) -> Result<(), UndoRedoLogErr> {
-        let meta = world.get_resource::<RevMeta>().ok_or(UndoRedoLogErr::RevMetaMissing)?.clone();
+        let meta = world
+            .get_resource::<RevMeta>()
+            .ok_or(UndoRedoLogErr::RevMetaMissing)?
+            .clone();
         if meta.get_direction() != Some(RevDirection::BackwardLog) {
             return Err(UndoRedoLogErr::RevDirectionMismatch(meta));
         }
-        let frame_log = self.frame_log.as_mut().ok_or_else(|| UndoRedoLogErr::UninitFrameLog(meta.clone()))?;
-        if !frame_log.backward_log(&meta) {
+        if !self.frame_log.backward_log(&meta) {
             return Err(UndoRedoLogErr::UnexpectedUpdate(meta));
         };
-        let iter = self.undo_redo_log.backward_log().map_err(|_| UndoRedoLogErr::OutOfLog(meta))?;
+        let iter = self
+            .undo_redo_log
+            .backward_log()
+            .map_err(|_| UndoRedoLogErr::OutOfLog(meta))?;
         for command in iter.value.rev().map(SyncCell::get) {
             command.undo(world);
         }
