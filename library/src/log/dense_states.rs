@@ -1,6 +1,6 @@
 use std::{
     collections::{
-        vec_deque::{Drain, Iter},
+        vec_deque::{Drain, IntoIter, Iter},
         TryReserveError, VecDeque,
     },
     fmt::Debug,
@@ -330,14 +330,14 @@ impl<T, U, const AMOUNT_BYTES: usize> DenseStatesLog<T, U, AMOUNT_BYTES> {
     pub fn try_new(
         states: impl IntoIterator<Item = T>,
         entry: U,
-    ) -> Result<Self, AmountErr<VecDeque<T>, U, AMOUNT_BYTES>> {
+    ) -> Result<Self, AmountErr<IntoIter<T>, U, AMOUNT_BYTES>> {
         let states = VecDeque::from_iter(states);
         let pushed_amount = states.len();
         let entry_amount = EntryAmount::new(entry, pushed_amount);
         if pushed_amount != entry_amount.amount() {
             return Err(AmountErr {
-                values: states,
-                entry_amount,
+                values: states.into_iter(),
+                entry: entry_amount.entry,
             });
         }
         Ok(Self {
@@ -351,15 +351,15 @@ impl<T, U, const AMOUNT_BYTES: usize> DenseStatesLog<T, U, AMOUNT_BYTES> {
         entry: U,
         states_capacity: usize,
         entries_capacity: usize,
-    ) -> Result<Self, AmountErr<VecDeque<T>, U, AMOUNT_BYTES>> {
+    ) -> Result<Self, AmountErr<IntoIter<T>, U, AMOUNT_BYTES>> {
         let mut states_deque = VecDeque::with_capacity(states_capacity);
         states_deque.extend(states);
         let pushed_amount = states_deque.len();
         let entry_amount = EntryAmount::new(entry, pushed_amount);
         if pushed_amount != entry_amount.amount() {
             return Err(AmountErr {
-                values: states_deque,
-                entry_amount,
+                values: states_deque.into_iter(),
+                entry: entry_amount.entry,
             });
         }
         let amounts = DenseStateLog::with_capacity(entry_amount, entries_capacity);
@@ -381,10 +381,11 @@ impl<T, U, const AMOUNT_BYTES: usize> DenseStatesLog<T, U, AMOUNT_BYTES> {
             let values = self.states.drain(self.index..);
             return Err(AmountErr {
                 values,
-                entry_amount,
+                entry: entry_amount.entry,
             });
         }
         self.index = self.states.len();
+        self.amounts.push(entry_amount);
         Ok(())
     }
     pub fn try_push_and_pop_past<Out: Into<U>>(
@@ -400,7 +401,7 @@ impl<T, U, const AMOUNT_BYTES: usize> DenseStatesLog<T, U, AMOUNT_BYTES> {
             let values = self.states.drain(self.index..);
             return Err(AmountErr {
                 values,
-                entry_amount,
+                entry: entry_amount.entry,
             });
         }
         self.index = self.states.len();
@@ -431,7 +432,7 @@ impl<T, U, const AMOUNT_BYTES: usize> DenseStatesLog<T, U, AMOUNT_BYTES> {
             let values = self.states.drain(self.index..);
             return Err(AmountErr {
                 values,
-                entry_amount,
+                entry: entry_amount.entry,
             });
         }
         self.index = self.states.len();
@@ -450,14 +451,14 @@ impl<T, U, const AMOUNT_BYTES: usize> DenseStatesLog<T, U, AMOUNT_BYTES> {
         &mut self,
         iter: impl IntoIterator<Item = T>,
         entry: U,
-    ) -> Result<(), AmountErr<VecDeque<T>, U, AMOUNT_BYTES>> {
+    ) -> Result<(), AmountErr<IntoIter<T>, U, AMOUNT_BYTES>> {
         let mut states = VecDeque::from_iter(iter);
         let pushed_amount = states.len();
         let entry_amount = EntryAmount::new(entry, pushed_amount);
         if pushed_amount != entry_amount.amount() {
             return Err(AmountErr {
-                values: states,
-                entry_amount,
+                values: states.into_iter(),
+                entry: entry_amount.entry,
             });
         }
         self.states.clear();
@@ -631,23 +632,16 @@ mod test {
             .expect_err("pushed too many");
         let state = log.get();
         assert_eq!(
-            err.values, [0; 256],
-            "log: {log:#?}\noriginal: {original:#?}"
-        );
-        assert_eq!(
-            err.entry_amount.amount(),
-            256,
-            "log: {log:#?}\noriginal: {original:#?}"
-        );
-        assert_eq!(
             err.max_amount(),
             255,
             "log: {log:#?}\noriginal: {original:#?}"
         );
         assert_eq!(
-            err.entry_amount.entry, 'e',
+            err.values.collect::<Vec<_>>(),
+            vec![0; 256],
             "log: {log:#?}\noriginal: {original:#?}"
         );
+        assert_eq!(err.entry, 'e', "log: {log:#?}\noriginal: {original:#?}");
         // unchanged
         assert_eq!(
             state.0.cloned().collect::<Vec<_>>(),
