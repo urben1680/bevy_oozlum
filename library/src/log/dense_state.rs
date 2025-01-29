@@ -9,8 +9,6 @@ use std::{
 
 use bevy::reflect::Reflect;
 
-use crate::meta::RevMeta;
-
 use super::{index_oob, OutOfLog};
 
 #[derive(Debug, Default, Clone, Reflect)]
@@ -223,35 +221,6 @@ impl<T> DenseStateLog<T> {
         core::mem::swap(&mut self.present, now_future);
         self.index += 1;
         return Ok(());
-    }
-}
-
-impl DenseStateLog<u64> {
-    pub(super) fn frame_push_and_drain_past(&mut self, meta: &RevMeta) -> Drain<u64> {
-        self.states.truncate(self.index);
-        let before = core::mem::replace(&mut self.present, meta.present_world_state());
-        self.states.push_back(before);
-        self.index += 1;
-        let to_drain = self.states.partition_point(|frame| *frame < meta.past_end_world_state());
-        self.index -= to_drain;
-        self.states.drain(..to_drain)
-    }
-    pub(super) fn frame_forward_log(&mut self, meta: &RevMeta) -> bool {
-        let expects_forward = self.states.get(self.index).is_some_and(|frame| *frame == meta.present_world_state());
-        if expects_forward {
-            let _ok = self.forward_log();
-        }
-        expects_forward
-    }
-    pub(super) fn frame_backward_log(&mut self, meta: &RevMeta) -> bool {
-        let expects_backward = self.present == meta.present_world_state() + 1;
-        if expects_backward {
-            let _ok = self.backward_log();
-        }
-        expects_backward
-    }
-    pub(super) fn past_len(&self) -> usize {
-        self.index
     }
 }
 
