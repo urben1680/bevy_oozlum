@@ -1,6 +1,6 @@
 use std::{
     collections::{
-        vec_deque::{Drain, Iter},
+        vec_deque::{Drain, IntoIter, Iter},
         TryReserveError, VecDeque,
     },
     fmt::Debug,
@@ -10,8 +10,7 @@ use std::{
 use bevy::{reflect::Reflect, utils::default};
 
 use super::{
-    AmountErr, EntryAmount, OutOfLog, SparseDrain, SparseLogMut, SparseStateLog, ValueEntry,
-    USIZE_BYTES,
+    AmountErr, EntryAmount, LogMut, OutOfLog, SparseDrain, SparseStateLog, ValueEntry, USIZE_BYTES,
 };
 
 #[derive(Debug, Clone, Reflect)]
@@ -124,15 +123,13 @@ mod serde_with {
     }
 }
 
-impl<T, U: Default, const AMOUNT_BYTES: usize> Default for SparseStatesLog<T, U, AMOUNT_BYTES>
-{
+impl<T, U: Default, const AMOUNT_BYTES: usize> Default for SparseStatesLog<T, U, AMOUNT_BYTES> {
     fn default() -> Self {
         Self::new_empty(default())
     }
 }
 
-impl<T, U, const AMOUNT_BYTES: usize> Deref for SparseStatesLog<T, U, AMOUNT_BYTES>
-{
+impl<T, U, const AMOUNT_BYTES: usize> Deref for SparseStatesLog<T, U, AMOUNT_BYTES> {
     type Target = U;
     fn deref(&self) -> &Self::Target {
         &self.amounts.entry
@@ -222,6 +219,42 @@ impl<T, U, const AMOUNT_BYTES: usize> SparseStatesLog<T, U, AMOUNT_BYTES> {
         let states = self.states.range(range);
         (states, entry)
     }
+    pub fn push_none(&mut self) {
+        self.states.truncate(self.index);
+        self.amounts.push(None);
+    }
+    pub fn push_none_and_pop_past(
+        &mut self,
+        max_past_len: usize,
+    ) -> Option<ValueEntry<Drain<T>, U>> {
+        self.states.truncate(self.index);
+        self.amounts
+            .push_and_pop_past(max_past_len, None)
+            .map(|entry_amount| {
+                let amount = entry_amount.amount();
+                self.index -= amount;
+                ValueEntry {
+                    value: self.states.drain(..amount),
+                    entry: entry_amount.entry,
+                }
+            })
+    }
+    pub fn push_none_and_drain_past(
+        &mut self,
+        max_past_len: usize,
+    ) -> (Drain<T>, SparseDrain<EntryAmount<U, AMOUNT_BYTES>>) {
+        self.states.truncate(self.index);
+        let to_drain = self.amounts.push_and_iter_to_drain_past(max_past_len, None);
+        let to_drain_len = to_drain.len();
+        let amount: usize = to_drain
+            .map(|entry_amount| entry_amount.value.amount())
+            .sum();
+        self.index -= amount;
+        (
+            self.states.drain(..amount),
+            self.amounts.drain_past(to_drain_len),
+        )
+    }
     pub fn drain_future(&mut self) -> (Drain<T>, SparseDrain<EntryAmount<U, AMOUNT_BYTES>>) {
         (self.states.drain(self.index..), self.amounts.drain_future())
     }
@@ -283,40 +316,26 @@ impl<T, U> SparseStatesLog<T, U, USIZE_BYTES> {
             index: pushed_amount,
         }
     }
-    pub fn push(&mut self, c: impl FnOnce(SparseLogMut<T, U>)) {
+    pub fn push_some<Out: Into<U>>(&mut self, c: impl FnOnce(LogMut<T>) -> Out) {
         self.states.truncate(self.index);
-        let mut entry = None;
-        c(SparseLogMut {
-            values: &mut self.states,
-            entry: &mut entry,
-        });
-        let Some(entry) = entry else {
-            self.amounts.push(None);
-            return;
-        };
+        let entry = c(LogMut(&mut self.states)).into();
         let pushed_amount = self.states.len() - self.index;
         let entry_amount = EntryAmount::new(entry, pushed_amount);
         self.index = self.states.len();
         self.amounts.push(Some(entry_amount));
     }
-    pub fn push_and_pop_past(
+    pub fn push_some_and_pop_past<Out: Into<U>>(
         &mut self,
         max_past_len: usize,
-        c: impl FnOnce(SparseLogMut<T, U>),
+        c: impl FnOnce(LogMut<T>) -> Out,
     ) -> Option<ValueEntry<Drain<T>, U>> {
         self.states.truncate(self.index);
-        let mut entry = None;
-        c(SparseLogMut {
-            values: &mut self.states,
-            entry: &mut entry,
-        });
-        let entry_amount = entry.map(|entry| {
-            self.index = self.states.len();
-            let pushed_amount = self.states.len() - self.index;
-            EntryAmount::new(entry, pushed_amount)
-        });
+        let entry = c(LogMut(&mut self.states)).into();
+        let pushed_amount = self.states.len() - self.index;
+        let entry_amount = EntryAmount::new(entry, pushed_amount);
+        self.index = self.states.len();
         self.amounts
-            .push_and_pop_past(max_past_len, entry_amount)
+            .push_and_pop_past(max_past_len, Some(entry_amount))
             .map(|entry_amount| {
                 let amount = entry_amount.amount();
                 self.index -= amount;
@@ -326,25 +345,19 @@ impl<T, U> SparseStatesLog<T, U, USIZE_BYTES> {
                 }
             })
     }
-    pub fn push_and_drain_past(
+    pub fn push_some_and_drain_past<Out: Into<U>>(
         &mut self,
         max_past_len: usize,
-        c: impl FnOnce(SparseLogMut<T, U>),
+        c: impl FnOnce(LogMut<T>) -> Out,
     ) -> (Drain<T>, SparseDrain<EntryAmount<U>>) {
         self.states.truncate(self.index);
-        let mut entry = None;
-        c(SparseLogMut {
-            values: &mut self.states,
-            entry: &mut entry,
-        });
-        let entry_amount = entry.map(|entry| {
-            self.index = self.states.len();
-            let pushed_amount = self.states.len() - self.index;
-            EntryAmount::new(entry, pushed_amount)
-        });
+        let entry = c(LogMut(&mut self.states)).into();
+        let pushed_amount = self.states.len() - self.index;
+        let entry_amount = EntryAmount::new(entry, pushed_amount);
+        self.index = self.states.len();
         let to_drain = self
             .amounts
-            .push_and_iter_to_drain_past(max_past_len, entry_amount);
+            .push_and_iter_to_drain_past(max_past_len, Some(entry_amount));
         let to_drain_len = to_drain.len();
         let amount: usize = to_drain
             .map(|entry_amount| entry_amount.value.amount())
@@ -370,14 +383,14 @@ impl<T, U, const AMOUNT_BYTES: usize> SparseStatesLog<T, U, AMOUNT_BYTES> {
     pub fn try_new(
         states: impl IntoIterator<Item = T>,
         entry: U,
-    ) -> Result<Self, AmountErr<VecDeque<T>, U, AMOUNT_BYTES>> {
+    ) -> Result<Self, AmountErr<IntoIter<T>, U, AMOUNT_BYTES>> {
         let states = VecDeque::from_iter(states.into_iter());
         let pushed_amount = states.len();
         let entry_amount = EntryAmount::new(entry, pushed_amount);
         if pushed_amount != entry_amount.amount() {
             return Err(AmountErr {
-                values: states,
-                entry_amount,
+                values: states.into_iter(),
+                entry: entry_amount.entry,
             });
         }
         Ok(Self {
@@ -391,15 +404,15 @@ impl<T, U, const AMOUNT_BYTES: usize> SparseStatesLog<T, U, AMOUNT_BYTES> {
         entry: U,
         states_capacity: usize,
         entries_capacity: usize,
-    ) -> Result<Self, AmountErr<VecDeque<T>, U, AMOUNT_BYTES>> {
+    ) -> Result<Self, AmountErr<IntoIter<T>, U, AMOUNT_BYTES>> {
         let mut states_deque = VecDeque::with_capacity(states_capacity);
         states_deque.extend(states.into_iter());
         let pushed_amount = states_deque.len();
         let entry_amount = EntryAmount::new(entry, pushed_amount);
         if pushed_amount != entry_amount.amount() {
             return Err(AmountErr {
-                values: states_deque,
-                entry_amount,
+                values: states_deque.into_iter(),
+                entry: entry_amount.entry,
             });
         }
         Ok(Self {
@@ -408,59 +421,43 @@ impl<T, U, const AMOUNT_BYTES: usize> SparseStatesLog<T, U, AMOUNT_BYTES> {
             index: pushed_amount,
         })
     }
-    pub fn try_push(
+    pub fn try_push_some<Out: Into<U>>(
         &mut self,
-        c: impl FnOnce(SparseLogMut<T, U>),
+        c: impl FnOnce(LogMut<T>) -> Out,
     ) -> Result<(), AmountErr<Drain<T>, U, AMOUNT_BYTES>> {
         self.states.truncate(self.index);
-        let mut entry = None;
-        c(SparseLogMut {
-            values: &mut self.states,
-            entry: &mut entry,
-        });
-        let Some(entry) = entry else {
-            self.amounts.push(None);
-            return Ok(());
-        };
+        let entry = c(LogMut(&mut self.states)).into();
         let pushed_amount = self.states.len() - self.index;
         let entry_amount = EntryAmount::new(entry, pushed_amount);
         if pushed_amount != entry_amount.amount() {
             return Err(AmountErr {
                 values: self.states.drain(self.index..),
-                entry_amount,
+                entry: entry_amount.entry,
             });
         }
         self.index = self.states.len();
         self.amounts.push(Some(entry_amount));
         Ok(())
     }
-    pub fn try_push_and_pop_past(
+    pub fn try_push_some_and_pop_past<Out: Into<U>>(
         &mut self,
         max_past_len: usize,
-        c: impl FnOnce(SparseLogMut<T, U>),
+        c: impl FnOnce(LogMut<T>) -> Out,
     ) -> Result<Option<ValueEntry<Drain<T>, U>>, AmountErr<Drain<T>, U, AMOUNT_BYTES>> {
         self.states.truncate(self.index);
-        let mut entry = None;
-        c(SparseLogMut {
-            values: &mut self.states,
-            entry: &mut entry,
-        });
-        let mut entry_amount_option = None;
-        if let Some(entry) = entry {
-            let pushed_amount = self.states.len() - self.index;
-            let entry_amount = EntryAmount::new(entry, pushed_amount);
-            if pushed_amount != entry_amount.amount() {
-                return Err(AmountErr {
-                    values: self.states.drain(self.index..),
-                    entry_amount,
-                });
-            }
-            self.index = self.states.len();
-            entry_amount_option = Some(entry_amount);
+        let entry = c(LogMut(&mut self.states)).into();
+        let pushed_amount = self.states.len() - self.index;
+        let entry_amount = EntryAmount::new(entry, pushed_amount);
+        if pushed_amount != entry_amount.amount() {
+            return Err(AmountErr {
+                values: self.states.drain(self.index..),
+                entry: entry_amount.entry,
+            });
         }
+        self.index = self.states.len();
         let pop = self
             .amounts
-            .push_and_pop_past(max_past_len, entry_amount_option)
+            .push_and_pop_past(max_past_len, Some(entry_amount))
             .map(|entry_amount| {
                 let amount = entry_amount.amount();
                 self.index -= amount;
@@ -471,36 +468,28 @@ impl<T, U, const AMOUNT_BYTES: usize> SparseStatesLog<T, U, AMOUNT_BYTES> {
             });
         Ok(pop)
     }
-    pub fn try_push_and_drain_past(
+    pub fn try_push_some_and_drain_past<Out: Into<U>>(
         &mut self,
         max_past_len: usize,
-        c: impl FnOnce(SparseLogMut<T, U>),
+        c: impl FnOnce(LogMut<T>) -> Out,
     ) -> Result<
         (Drain<T>, SparseDrain<EntryAmount<U, AMOUNT_BYTES>>),
         AmountErr<Drain<T>, U, AMOUNT_BYTES>,
     > {
         self.states.truncate(self.index);
-        let mut entry = None;
-        c(SparseLogMut {
-            values: &mut self.states,
-            entry: &mut entry,
-        });
-        let mut entry_amount_option = None;
-        if let Some(entry) = entry {
-            let pushed_amount = self.states.len() - self.index;
-            let entry_amount = EntryAmount::new(entry, pushed_amount);
-            if pushed_amount != entry_amount.amount() {
-                return Err(AmountErr {
-                    values: self.states.drain(self.index..),
-                    entry_amount,
-                });
-            }
-            self.index = self.states.len();
-            entry_amount_option = Some(entry_amount);
+        let entry = c(LogMut(&mut self.states)).into();
+        let pushed_amount = self.states.len() - self.index;
+        let entry_amount = EntryAmount::new(entry, pushed_amount);
+        if pushed_amount != entry_amount.amount() {
+            return Err(AmountErr {
+                values: self.states.drain(self.index..),
+                entry: entry_amount.entry,
+            });
         }
+        self.index = self.states.len();
         let to_drain = self
             .amounts
-            .push_and_iter_to_drain_past(max_past_len, entry_amount_option);
+            .push_and_iter_to_drain_past(max_past_len, Some(entry_amount));
         let to_drain_len = to_drain.len();
         let amount: usize = to_drain
             .map(|entry_amount| entry_amount.value.amount())
@@ -515,14 +504,14 @@ impl<T, U, const AMOUNT_BYTES: usize> SparseStatesLog<T, U, AMOUNT_BYTES> {
         &mut self,
         states: impl IntoIterator<Item = T>,
         entry: U,
-    ) -> Result<(), AmountErr<VecDeque<T>, U, AMOUNT_BYTES>> {
+    ) -> Result<(), AmountErr<IntoIter<T>, U, AMOUNT_BYTES>> {
         let mut states = VecDeque::from_iter(states.into_iter());
         let pushed_amount = states.len();
         let entry_amount = EntryAmount::new(entry, pushed_amount);
         if pushed_amount != entry_amount.amount() {
             return Err(AmountErr {
-                values: states,
-                entry_amount,
+                values: states.into_iter(),
+                entry: entry_amount.entry,
             });
         }
         self.states.clear();
@@ -555,11 +544,13 @@ mod test {
         }
 
         let mut original = SparseStatesLog::<char, u8>::new(['a', 'b'], 1);
-        original.push(|log| {
-            log.push(2).extend(['c', 'd']);
+        original.push_some(|mut log| {
+            log.extend(['c', 'd']);
+            2
         });
-        original.push(|log| {
-            log.push(3).extend(['e', 'f']);
+        original.push_some(|mut log| {
+            log.extend(['e', 'f']);
+            3
         });
         original.backward_log().expect("in log");
 
@@ -635,18 +626,16 @@ mod test {
     fn clear() {
         let mut original = SparseStatesLog::<_, _, 1>::try_new([1, 1], 'a').unwrap();
         original
-            .try_push(|log| {
-                log.push('b').extend([2, 2]);
+            .try_push_some(|mut log| {
+                log.extend([2, 2]);
+                'b'
             })
             .unwrap();
+        original.push_none();
         original
-            .try_push(|log| {
-                log.push('x').append(&mut VecDeque::new());
-            })
-            .unwrap();
-        original
-            .try_push(|log| {
-                log.push('c').extend([3, 3]);
+            .try_push_some(|mut log| {
+                log.extend([3, 3]);
+                'c'
             })
             .unwrap();
         original.backward_log().expect("in log");
@@ -697,13 +686,11 @@ mod test {
             .expect_err("pushed too many");
         let state = log.get();
         assert_eq!(
-            err.values, [0; 256],
+            err.values.collect::<Vec<_>>(),
+            vec![0; 256],
             "log: {log:#?}\noriginal: {original:#?}"
         );
-        assert_eq!(
-            err.entry_amount.entry, 'e',
-            "log: {log:#?}\noriginal: {original:#?}"
-        );
+        assert_eq!(err.entry, 'e', "log: {log:#?}\noriginal: {original:#?}");
         // unchanged
         assert_eq!(
             state.0.cloned().collect::<Vec<_>>(),
@@ -766,11 +753,14 @@ mod test {
                 .map(|drain| drain.into_iter().collect::<Vec<_>>());
             for [log1, log2] in self.0.iter_mut() {
                 let before = log1.clone();
-                let actual_pop = log1.try_push_and_pop_past(max_past_len, |log| {
-                    if push {
-                        log.push(entry).extend(states.clone());
-                    }
-                });
+                let actual_pop = if push {
+                    log1.try_push_some_and_pop_past(max_past_len, |mut log| {
+                        log.extend(states.clone());
+                        entry
+                    })
+                } else {
+                    Ok(log1.push_none_and_pop_past(max_past_len))
+                };
                 let actual_pop = match collect_pop_result(actual_pop) {
                     Ok(ok) => {
                         let actual_get = log1.get();
@@ -809,11 +799,14 @@ mod test {
                 );
 
                 let before = log2.clone();
-                let actual_drain = log2.try_push_and_drain_past(max_past_len, |log| {
-                    if push {
-                        log.push(entry).extend(states.clone());
-                    }
-                });
+                let actual_drain = if push {
+                    log2.try_push_some_and_drain_past(max_past_len, |mut log| {
+                        log.extend(states.clone());
+                        entry
+                    })
+                } else {
+                    Ok(log2.push_none_and_drain_past(max_past_len))
+                };
                 let actual_drain = match collect_drain_result(actual_drain) {
                     Ok(ok) => {
                         let actual_get = log2.get();
