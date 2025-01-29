@@ -24,18 +24,8 @@ Enhancements:
 -- hooks https://github.com/bevyengine/bevy/blob/main/examples/ecs/component_hooks.rs
 -- observers https://github.com/bevyengine/bevy/blob/main/examples/ecs/observers.rs
 -- ecs, commands https://github.com/bevyengine/bevy/blob/main/examples/ecs/ecs_guide.rs
--local log that can react on DrainPastByLoggedAt
--- deprecate event? last RevMeta at trigger + count, if count is equal, call drain_past_by_logged_at, otherwise clear log
-- test cfg with forward_set
-- deprecate init_none, Option::get_or_* methods are enough
-- expects_forward_log/backward_log for framed logs
 - idea: Arc system stores system state in resource, not Mutex
 -- might be incompatible with System::update_archetype_component_access as UnsafeWorldCell may only be used to read (archetype) metadata
--- register write access of dynamic resources is impossible because methods are not pub
-- make PackedRevFrame the RevFrame or private
--- PackedRevFrame becomes private, RevFrame contains overflow number, effectively a u64
--- RevFrame can be split up by internal code
-- NonZero inside RevFrameNew to enable smaller enum storage
 
 Docs
 - documentations
@@ -50,10 +40,7 @@ ISSUES/DISCUSSIONS:
 - manual sync point configuration
 -- apply_deferred
 -- ScheduleBuildSettings::auto_insert_apply_deferred
-- rare_init_none
 */
-
-mod example {}
 
 pub mod app;
 pub mod log;
