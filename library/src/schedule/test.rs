@@ -17,6 +17,15 @@ use bevy::{
         system::{Commands, IntoSystem, Resource},
         world::{DeferredWorld, World},
     },
+    log::{
+        tracing_subscriber::{
+            self,
+            layer::{Context, SubscriberExt},
+            util::SubscriberInitExt,
+        },
+        Level,
+    },
+    utils::tracing::{Event as TraceEvent, Subscriber},
 };
 
 use crate::{
@@ -208,6 +217,16 @@ fn test_run<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
     configs: Vec<C>,
     expected: Vec<Vec<TestBundle>>,
 ) {
+    struct PanicOnError;
+    impl<S: Subscriber> tracing_subscriber::Layer<S> for PanicOnError {
+        fn on_event(&self, event: &TraceEvent, _ctx: Context<S>) {
+            if *event.metadata().level() == Level::ERROR {
+                panic!("{event:#?}")
+            }
+        }
+    }
+    let _ = tracing_subscriber::registry().with(PanicOnError).try_init();
+
     for (variant, config) in configs.into_iter().enumerate() {
         for apply_final_deferred in [true, false] {
             test_run_variant(variant, &config, apply_final_deferred, &expected);
@@ -369,10 +388,7 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
     // run tests backward log
     let mut meta = world.resource_mut::<RevMeta>();
     let end_frame = meta.present_world_state();
-    assert!(
-        meta.queue_log(0).is_ok(),
-        "{meta:#?}"
-    );
+    assert!(meta.queue_log(0).is_ok(), "{meta:#?}");
     for (step, expected) in expected.iter().enumerate().rev() {
         test_step(
             &mut world,
