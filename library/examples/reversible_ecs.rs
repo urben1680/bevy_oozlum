@@ -338,8 +338,8 @@ fn render_game(
 ) {
     println!("\x1B[2J"); // this clears the last frame
     println!();
-    println!("Pass the time waiting for Bevy 1.0 by tossing some trash into the water!");
-    println!("No worry, it is okay if you can undo it. Just don't wait for too long...");
+    println!("Let's waste the time 'til Bevy 1.0 by tossing said waste into the ocean!");
+    println!("No worry, it's okay as long you undo it. Just don't wait for too long...");
     println!();
 
     let wave = |phase: u64| "`-._,~'".chars().cycle().skip(7 - phase as usize % 7);
@@ -400,9 +400,9 @@ fn render_game(
 
     println!();
     if meta.ran_direction() != Some(RevDirection::NOT_LOG) || lost == 10 {
-        println!("           (trash lost: {lost_bar})    ESC: close");
+        println!("           (waste lost: {lost_bar})    ESC: close");
     } else {
-        println!(" 1-6: toss trash (lost: {lost_bar})    ESC: close");
+        println!(" 1-6: toss waste (lost: {lost_bar})    ESC: close");
     }
     if lost < 10 {
         println!("LEFT: forward log, pause at end        RIGHT: backward log, pause at end");

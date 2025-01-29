@@ -16,12 +16,12 @@ mod dense_states;
 mod dense_transition;
 mod dense_transitions;
 
+mod frame_transition;
+
 mod sparse_state;
 mod sparse_states;
 mod sparse_transition;
 mod sparse_transitions;
-
-mod frame_state;
 
 #[cfg(feature = "serde")]
 pub use serde_with::{logless_state, logless_with_capacity, with_capacity};
@@ -31,12 +31,12 @@ pub use dense_states::DenseStatesLog;
 pub use dense_transition::DenseTransitionLog;
 pub use dense_transitions::DenseTransitionsLog;
 
+pub use frame_transition::FrameTransitionLog;
+
 pub use sparse_state::SparseStateLog;
 pub use sparse_states::SparseStatesLog;
 pub use sparse_transition::SparseTransitionLog;
 pub use sparse_transitions::SparseTransitionsLog;
-
-pub use frame_state::FrameTransitionLog;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct OutOfLog;
@@ -219,7 +219,7 @@ impl<U, const AMOUNT_BYTES: usize> EntryAmount<U, AMOUNT_BYTES> {
         }
     }
 
-    /// Returns the amount of states/transitions of an update.
+    /// Returns the amount of states/transitions of an update. This can be useful to chunk them.
     ///
     /// # Examples
     ///
@@ -231,7 +231,7 @@ impl<U, const AMOUNT_BYTES: usize> EntryAmount<U, AMOUNT_BYTES> {
     /// let (mut future_states, future_entry_amounts) = log.drain_future();
     /// ```
     ///
-    /// Now iterate the updates:
+    /// Now iterate...
     /// ```
     /// # let mut log = library::log::DenseStatesLog::new([0], 0);
     /// # let (mut future_states, future_entry_amounts) = log.drain_future();
@@ -243,7 +243,7 @@ impl<U, const AMOUNT_BYTES: usize> EntryAmount<U, AMOUNT_BYTES> {
     /// }
     /// ```
     ///
-    /// Or collect the updates:
+    /// ...or collect them:
     /// ```
     /// # let mut log = library::log::DenseStatesLog::new([0], 0);
     /// # let (mut future_states, future_entry_amounts) = log.drain_future();
