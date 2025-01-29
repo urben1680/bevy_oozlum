@@ -17,11 +17,7 @@ use bevy::{
 #[cfg(feature = "serde")]
 use bevy::reflect::{ReflectDeserialize, ReflectSerialize};
 
-use crate::{
-    log::OutOfLog,
-    schedule::RevUpdate,
-    undo_redo::UndoRedoBuffer,
-};
+use crate::{log::OutOfLog, schedule::RevUpdate, undo_redo::UndoRedoBuffer};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum RevTryRunScheduleError {
@@ -205,11 +201,7 @@ impl Default for RevMeta {
 }
 
 impl RevMeta {
-    pub const fn new(
-        max_world_states: Option<NonZeroU64>,
-        now: Option<u64>,
-        paused: bool,
-    ) -> Self {
+    pub const fn new(max_world_states: Option<NonZeroU64>, now: Option<u64>, paused: bool) -> Self {
         let now = match now {
             Some(now) => now,
             None => 0,
@@ -500,118 +492,6 @@ impl RevMeta {
     }
 }
 
-/*
-Testing different approach of periodic cleanup:
-- lazy, done by user
-- downsides:
--- is called every non-log update
-- upsides:
--- easier to do than observers
--- rare logs likely do not run often enough for extra call to matter
-
-deprecate Rare logs with logged_at functionality
-logged_at functionality in new log wrapper
-
-max log len <= 4
-half:  first  | second
-frame: 0 1 2 3|4 5 6 7
-meta:  # # # #|# # # #
-       # # # #|# 5 6 # cleanup id 3, log start 5, present 6
-log1:  0 s 2 #|# # # #
-       # # # #|# # 6 # cleanup id 0, should be updated and then cleaned
-log2:  # # # #|# # # #
-       # 1 # 3|4 # 6 # cleanup id 2, can be updated any order to clean which reduces part of log
-log3:  # # # #|# # # #
-       # # # #|4 # 6 # cleanup id 3, can be updated any order to clean which reduces part of log
-
-splitting in halves may be not needed, cleanup id could be the # of times the log start overflowed
-but then the contains check is harder/impossible?
-
-fixed len logs remain as they are
-
-logged at changes:
-- if own log start has same id
--- check from start how much to drain, be aware overflow may happen along the way
-- if own log start has 1 less id
--- find overflow in log, check from here how much to drain
-- if own log start has >1 less id
--- clean entire past
-
-because logic is moved to push place, the log methods need to be merged, push + drains
-complicated drain logic undesired because vec_deque::Drain cannot be stored with &mut VecDeque
-so push always happens first, then a drain is returned
-
-for entry in log.future_drain() { ... }
-for entry in log.push_drain_past(("abs", now)) { ... }
-
-since there is no VecDeque::truncate_front, no push method without drain is useful
-borrow checker wont complain if drain is not assigned to a variable
-
-because push+drain is combined, there can be no overflow in the log after the call,
-the overflow id is valid for the whole log including present
-                limited by  push
-DenseStateLog   len         push_drain_past(max_len, T) -> Option<T>
-DenseStatesLog  len         push_drain_past(max_len, impl FnOnce(LogMut) -> U) -> Drain
-                            try_push_drain_past(max_len, impl FnOnce(LogMut) -> U) -> Result<Drain, AmountErr>
-SparseStateLog  len         push_drain_past(max_len, Option<T>) -> Drain
-SparseStatesLog len         push_drain_past(max_len, impl FnOnce(LogMut) -> U) -> Drain
-                            try_push_drain_past(max_len, impl FnOnce(LogMut) -> U) -> Result<Drain, AmountErr>
-FramedStateLog  frame       push_drain_past(meta, T) -> Drain
-FramedStatesLog frame       push_drain_past(meta, impl FnOnce(LogMut) -> U) -> Drain
-                            try_push_drain_past(meta, impl FnOnce(LogMut) -> U) -> Result<Drain, AmountErr>
-
-// idea: example that shows behavior of all log variants, transition variants are missing yet, rewrite to be a system
-fn state_update(
-    value: i32,
-    meta: &RevMeta,
-    mut condition_log: Local<SparseTransitionLog<()>>,
-
-    mut dense_state: Local<DenseStateLog<i32>>,
-    mut sparse_state: Local<SparseStateLog<i32>>,
-    mut framed_state: Local<FramedStateLog<i32>>,
-
-    mut dense_xor: Local<DenseTransitionLog<i32>>,
-    mut sparse_xor: Local<SparseTransitionLog<i32>>,
-    mut framed_xor: Local<FramedTransitionLog<i32>>,
-) {
-    let past_len = meta.past_log_len() as usize;
-
-    match meta.direction() {
-        RevDirection::NOT_LOG => if condition {
-            dense.push_drain_past(past_len, value);
-            sparse.push_drain_past(past_len, Some(value));
-            framed.push_drain_past(meta, value);
-        } else {
-            let previous_value = *dense;
-            dense.push_drain_past(past_len, previous_value);
-            sparse.push_drain_past(past_len, None);
-        },
-        RevDirection::FORWARD_LOG => if condition {
-            assert_eq!(dense.forward_log(), Ok(()));
-            assert_eq!(sparse.forward_log(), Ok(true));
-            assert_eq!(framed.forward_log()), Ok(()));
-        } else {
-            assert_eq!(dense.forward_log()), Ok(()));
-            assert_eq!(sparse.forward_log(), Ok(false));
-        },
-        RevDirection::BackwardLog => if condition {
-            assert_eq!(dense.backward_log()), Ok(()));
-            assert_eq!(sparse.backward_log(), Ok(true));
-            assert_eq!(framed.checked_backward_log(meta.present_world_state())), Ok(()));
-        } else {
-            assert_eq!(dense.backward_log()), Ok(()));
-            assert_eq!(sparse.backward_log(), Ok(false));
-        }
-    }
-
-    assert_eq!(*dense, *sparse);
-    assert_eq!(*sparse, *framed);
-}
-
-if vec_deque::Drain could be iterated twice, U could be returned as well at *StatesLog
-does not need to, just iterate regularily and return a drain
-*/
-
 #[cfg(test)]
 mod test {
     use std::ops::RangeInclusive;
@@ -775,81 +655,25 @@ mod test {
     #[test]
     fn past_contains_returns_expected() {
         let meta = arrange(None, 3, 1..=5, InternalDirection::Pause);
-        assert_eq!(
-            meta.past_contains(0),
-            false,
-            "{meta:#?}"
-        );
-        assert_eq!(
-            meta.past_contains(1),
-            true,
-            "{meta:#?}"
-        );
-        assert_eq!(
-            meta.past_contains(2),
-            true,
-            "{meta:#?}"
-        );
-        assert_eq!(
-            meta.past_contains(3),
-            false,
-            "{meta:#?}"
-        );
-        assert_eq!(
-            meta.past_contains(4),
-            false,
-            "{meta:#?}"
-        );
-        assert_eq!(
-            meta.past_contains(5),
-            false,
-            "{meta:#?}"
-        );
-        assert_eq!(
-            meta.past_contains(6),
-            false,
-            "{meta:#?}"
-        );
+        assert_eq!(meta.past_contains(0), false, "{meta:#?}");
+        assert_eq!(meta.past_contains(1), true, "{meta:#?}");
+        assert_eq!(meta.past_contains(2), true, "{meta:#?}");
+        assert_eq!(meta.past_contains(3), false, "{meta:#?}");
+        assert_eq!(meta.past_contains(4), false, "{meta:#?}");
+        assert_eq!(meta.past_contains(5), false, "{meta:#?}");
+        assert_eq!(meta.past_contains(6), false, "{meta:#?}");
     }
 
     #[test]
     fn future_contains_returns_expected() {
         let meta = arrange(None, 3, 1..=5, InternalDirection::Pause);
-        assert_eq!(
-            meta.future_contains(0),
-            false,
-            "{meta:#?}"
-        );
-        assert_eq!(
-            meta.future_contains(1),
-            false,
-            "{meta:#?}"
-        );
-        assert_eq!(
-            meta.future_contains(2),
-            false,
-            "{meta:#?}"
-        );
-        assert_eq!(
-            meta.future_contains(3),
-            false,
-            "{meta:#?}"
-        );
-        assert_eq!(
-            meta.future_contains(4),
-            true,
-            "{meta:#?}"
-        );
-        assert_eq!(
-            meta.future_contains(5),
-            true,
-            "{meta:#?}"
-        );
-        assert_eq!(
-            meta.future_contains(6),
-            false,
-            "{meta:#?}"
-        );
+        assert_eq!(meta.future_contains(0), false, "{meta:#?}");
+        assert_eq!(meta.future_contains(1), false, "{meta:#?}");
+        assert_eq!(meta.future_contains(2), false, "{meta:#?}");
+        assert_eq!(meta.future_contains(3), false, "{meta:#?}");
+        assert_eq!(meta.future_contains(4), true, "{meta:#?}");
+        assert_eq!(meta.future_contains(5), true, "{meta:#?}");
+        assert_eq!(meta.future_contains(6), false, "{meta:#?}");
     }
 
     #[test]
