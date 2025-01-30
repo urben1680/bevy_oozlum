@@ -1,4 +1,4 @@
-use std::{num::NonZeroU64, time::Duration};
+use std::{io::stdout, num::NonZeroU64, time::Duration};
 
 use bevy::{
     app::App,
@@ -6,243 +6,292 @@ use bevy::{
     prelude::*,
 };
 
+use crossterm::ExecutableCommand;
 use library::{
     log::{DenseTransitionLog, FrameTransitionLog, SparseTransitionLog},
     prelude::*,
 };
 
 const MAX_LOG_LEN: u64 = 71;
-const FIXED_DURATION_MS: u64 = 100;
-
-// todo: modules per system (if more than the system)
+const FIXED_TIMESTEP: Duration = Duration::from_millis(100);
 
 fn main() {
-    let meta = RevMeta::new(NonZeroU64::new(MAX_LOG_LEN), None, false);
+    let _ = stdout().execute(crossterm::terminal::SetSize(MAX_LOG_LEN as u16 + 2, 13));
+    let _ = stdout().execute(crossterm::cursor::Hide);
+    let meta = RevMeta::new(NonZeroU64::new(MAX_LOG_LEN), 0, false);
     App::new()
         .add_plugins((
-            RevSystemsPlugin::add_meta_and_runner(meta, FixedUpdate),
             MinimalPlugins,
+            // todo: explain plugin
+            RevSystemsPlugin::add_meta_and_runner(meta, FixedUpdate),
+            // todo: explain general task of a row
+            (row1, row2, row3, row4, row5, row6),
         ))
-        .add_systems(PreUpdate, map_input)
-        .rev_add_systems(
+        .rev_configure_sets(
             RevUpdate,
             (
-                (system_1, system_2).rev_chain(),
-                system_3.rev_run_if(pressed_3),
-                system_4.rev_after(system_3),
-                system_5, /*.backward_noop()*/
-                system_6, /*.backward_noop()*/
+                Row(1).rev_ambiguous_with_all(),
+                Row(2).rev_after(Row(1)),
+                (
+                    Row(3).rev_after_ignore_deferred(Row(2)),
+                    Row(4),
+                    Row(5).rev_before(Row(6)),
+                )
+                    .rev_chain(),
             ),
         )
-        .add_systems(RevUpdate, clear_input.after(RevSystemsSet))
+        .add_systems(PreUpdate, map_input)
         .add_systems(
             FixedUpdate,
             (
                 control_rev_meta.before(RevMeta::run_rev_update),
-                render_game.after(RevMeta::run_rev_update),
+                render.after(RevMeta::run_rev_update),
             ),
         )
+        .add_systems(RevUpdate, clear_input.after(RevSystemsSet))
         .init_resource::<KeysPressed>()
-        .init_resource::<LostTrash>()
-        .insert_resource(Time::<Fixed>::from_duration(Duration::from_millis(
-            FIXED_DURATION_MS,
-        )))
-        .add_observer(observer_6)
+        .init_resource::<LostWaste>()
+        .insert_resource(Time::<Fixed>::from_duration(FIXED_TIMESTEP))
         .run();
 }
 
+#[derive(SystemSet, Copy, Clone, Debug, Hash, PartialEq, Eq)]
+pub struct Row(u8);
+
 #[derive(Component, Clone, Copy)]
-#[component(on_add = on_add_5)]
+//#[component(on_add = on_add_5)]
 #[component(on_remove = on_remove)]
-struct Trash {
+struct Waste {
     tossed_at: u64,
     row: usize,
 }
 
 #[derive(Resource, Default)]
-struct LostTrash(usize);
+struct LostWaste(usize);
 
 fn on_remove(mut world: DeferredWorld, _: Entity, _: ComponentId) {
     if world.resource::<RevMeta>().get_direction() == Some(RevDirection::NOT_LOG) {
-        world.resource_mut::<LostTrash>().0 += 1;
+        world.resource_mut::<LostWaste>().0 += 1;
     }
 }
 
-fn system_1(meta: Res<RevMeta>, pressed: Res<KeysPressed>, mut commands: Commands) {
-    if meta.direction() != RevDirection::NOT_LOG || !pressed.num1 {
-        return;
-    }
-    // blocked on https://github.com/bevyengine/bevy/pull/13120
-    commands./*rev_*/spawn(Trash {
-        tossed_at: meta.present_world_state(),
-        row: 1,
-    });
-}
+fn row1(app: &mut App) {
+    app.rev_add_systems(RevUpdate, system.rev_in_set(Row(1)));
 
-fn system_2(
-    meta: Res<RevMeta>,
-    pressed: Res<KeysPressed>,
-    mut log: Local<SparseTransitionLog<Entity>>,
-    mut commands: Commands,
-) {
-    let trash = Trash {
-        tossed_at: meta.present_world_state(),
-        row: 2,
-    };
-    match meta.direction() {
-        RevDirection::NOT_LOG => {
-            let entity = pressed.num2.then(|| commands.spawn(trash).id());
-            for entity in log.drain_future() {
-                commands.entity(entity).despawn();
-            }
-            if let Some(entity) = log.push_and_pop_past(meta.past_world_states() as usize, entity) {
-                commands.entity(entity).despawn();
-            }
+    fn system(meta: Res<RevMeta>, pressed: Res<KeysPressed>, mut commands: Commands) {
+        if meta.direction() != RevDirection::NOT_LOG || !pressed.num1 {
+            return;
         }
-        RevDirection::FORWARD_LOG => {
-            if let Some(entity) = log.forward_log().unwrap() {
-                commands.entity(*entity).insert(trash);
-            }
-        }
-        RevDirection::BackwardLog => {
-            if let Some(entity) = log.backward_log().unwrap() {
-                commands.entity(*entity).remove::<Trash>();
-            }
-        }
+        // blocked on https://github.com/bevyengine/bevy/pull/13120
+        commands./*rev_*/spawn(Waste {
+            tossed_at: meta.present_world_state(),
+            row: 1,
+        });
     }
 }
 
-// todo: system that despawns stones
-fn system_3(
-    meta: Res<RevMeta>,
-    mut entity_log: Local<DenseTransitionLog<Entity>>,
-    mut frame_log: Local<FrameTransitionLog>,
-    mut commands: Commands,
-) {
-    let trash = Trash {
-        tossed_at: meta.present_world_state(),
-        row: 3,
-    };
-    match meta.direction() {
-        RevDirection::NOT_LOG => {
-            for entity in entity_log.drain_future() {
-                commands.entity(entity).despawn();
-            }
-            let past_len = frame_log.push_and_get_past_len(&meta);
-            let entity = commands.spawn(trash).id();
-            for entity in entity_log.push_and_drain_past(past_len, entity) {
-                commands.entity(entity).despawn();
-            }
-        }
-        RevDirection::FORWARD_LOG => {
-            let entity = *entity_log.forward_log().unwrap();
-            commands.entity(entity).insert(trash);
-        }
-        RevDirection::BackwardLog => {
-            let entity = *entity_log.backward_log().unwrap();
-            commands.entity(entity).remove::<Trash>();
-        }
-    }
-}
+fn row2(app: &mut App) {
+    app.rev_add_systems(RevUpdate, system.rev_in_set(Row(2)));
 
-fn pressed_3(pressed: Res<KeysPressed>) -> bool {
-    pressed.num3
-}
-
-// is reversible because uses commands.buffer_undo_redo
-fn system_4(meta: Res<RevMeta>, pressed: Res<KeysPressed>, mut commands: Commands) {
-    if meta.direction().is_log() || !pressed.num4 {
-        return;
-    }
-    let trash = Trash {
-        tossed_at: meta.present_world_state(),
-        row: 4,
-    };
-    let entity = commands.spawn(trash).id();
-    commands.buffer_undo_redo(move |world: &mut World, variant: UndoRedoDirection| {
-        let mut entity = world.entity_mut(entity);
-        match variant {
-            UndoRedoDirection::Undo => {
-                entity.remove::<Trash>();
-            }
-            UndoRedoDirection::Redo => {
-                entity.insert(trash);
-            }
-            UndoRedoDirection::FinalizeUndone | UndoRedoDirection::FinalizeRedone => {
-                entity.despawn();
-            }
+    fn system(
+        meta: Res<RevMeta>,
+        pressed: Res<KeysPressed>,
+        mut log: Local<SparseTransitionLog<Entity>>,
+        mut commands: Commands,
+    ) {
+        let waste = Waste {
+            tossed_at: meta.present_world_state(),
+            row: 2,
         };
-    });
+        match meta.direction() {
+            RevDirection::NOT_LOG => {
+                let entity = pressed.num2.then(|| commands.spawn(waste).id());
+                for entity in log.drain_future() {
+                    commands.entity(entity).despawn();
+                }
+                if let Some(entity) =
+                    log.push_and_pop_past(meta.past_world_states() as usize, entity)
+                {
+                    commands.entity(entity).despawn();
+                }
+            }
+            RevDirection::FORWARD_LOG => {
+                if let Some(entity) = log.forward_log().unwrap() {
+                    commands.entity(*entity).insert(waste);
+                }
+            }
+            RevDirection::BackwardLog => {
+                if let Some(entity) = log.backward_log().unwrap() {
+                    commands.entity(*entity).remove::<Waste>();
+                }
+            }
+        }
+    }
 }
 
-// is not reversible
-fn system_5(meta: Res<RevMeta>, pressed: Res<KeysPressed>, mut commands: Commands) {
-    if meta.direction().is_log() || !pressed.num5 {
-        return;
-    }
-    commands.spawn(Trash {
-        tossed_at: meta.present_world_state(),
-        row: 5,
-    });
-}
+fn row3(app: &mut App) {
+    app.rev_add_systems(
+        RevUpdate,
+        spawn_and_log_system
+            .rev_run_if(spawn_condition)
+            .rev_in_set(Row(3)),
+    )
+    .add_systems(
+        RevUpdate,
+        despawn_system.after(forward_set(spawn_and_log_system)),
+    );
 
-fn on_add_5(mut world: DeferredWorld, entity: Entity, _: ComponentId) {
-    if world.resource::<RevMeta>().direction().is_log() {
-        return;
-    }
-    let trash = *world.entity(entity).get::<Trash>().unwrap();
-    if trash.row != 5 {
-        return;
-    }
-    world.buffer_undo_redo(move |world: &mut World, variant: UndoRedoDirection| {
-        let mut entity = world.entity_mut(entity);
-        match variant {
-            UndoRedoDirection::Undo => {
-                entity.remove::<Trash>();
-            }
-            UndoRedoDirection::Redo => {
-                entity.insert(trash);
-            }
-            UndoRedoDirection::FinalizeUndone | UndoRedoDirection::FinalizeRedone => {
-                entity.despawn();
-            }
+    fn spawn_and_log_system(
+        meta: Res<RevMeta>,
+        mut entity_log: Local<DenseTransitionLog<Entity>>,
+        mut frame_log: Local<FrameTransitionLog>,
+        mut commands: Commands,
+    ) {
+        let waste = Waste {
+            tossed_at: meta.present_world_state(),
+            row: 3,
         };
-    });
-}
-
-// is not reversible
-fn system_6(meta: Res<RevMeta>, pressed: Res<KeysPressed>, mut commands: Commands) {
-    if meta.direction().is_log() || !pressed.num6 {
-        return;
+        match meta.direction() {
+            RevDirection::NOT_LOG => {
+                for entity in entity_log.drain_future() {
+                    commands.entity(entity).despawn();
+                }
+                let past_len = frame_log.push_and_get_past_len(&meta);
+                let entity = commands.spawn(waste).id();
+                // do not despawn drained entities here, could be too late because this system does not run every frame
+                entity_log.push_and_drain_past(past_len, entity);
+            }
+            RevDirection::FORWARD_LOG => {
+                let entity = *entity_log.forward_log().unwrap();
+                commands.entity(entity).insert(waste);
+            }
+            RevDirection::BackwardLog => {
+                let entity = *entity_log.backward_log().unwrap();
+                commands.entity(entity).remove::<Waste>();
+            }
+        }
     }
-    let trash = Trash {
-        tossed_at: meta.present_world_state(),
-        row: 6,
-    };
-    let entity = commands.spawn(trash).id();
-    commands.trigger_targets(Trash6Event(trash), entity);
+
+    fn spawn_condition(pressed: Res<KeysPressed>) -> bool {
+        pressed.num3
+    }
+
+    fn despawn_system(meta: Res<RevMeta>, query: Query<(Entity, &Waste)>, mut commands: Commands) {
+        query
+            .into_iter()
+            .filter(|(_, waste)| waste.row == 3 && waste.tossed_at < meta.past_end_world_state())
+            .for_each(|(entity, _)| commands.entity(entity).despawn());
+    }
 }
 
-#[derive(Event)]
-struct Trash6Event(Trash);
+fn row4(app: &mut App) {
+    app.rev_add_systems(RevUpdate, system.rev_in_set(Row(4)));
 
-fn observer_6(trigger: Trigger<Trash6Event>, mut world: DeferredWorld) {
-    let trash = trigger.0;
-    let entity = trigger.entity();
-    world.buffer_undo_redo(move |world: &mut World, variant: UndoRedoDirection| {
-        let mut entity = world.entity_mut(entity);
-        match variant {
-            UndoRedoDirection::Undo => {
-                entity.remove::<Trash>();
-            }
-            UndoRedoDirection::Redo => {
-                entity.insert(trash);
-            }
-            UndoRedoDirection::FinalizeUndone | UndoRedoDirection::FinalizeRedone => {
-                entity.despawn();
-            }
+    fn system(meta: Res<RevMeta>, pressed: Res<KeysPressed>, mut commands: Commands) {
+        if meta.direction().is_log() || !pressed.num4 {
+            return;
+        }
+        let waste = Waste {
+            tossed_at: meta.present_world_state(),
+            row: 4,
         };
-    });
+        let entity = commands.spawn(waste).id();
+        commands.buffer_undo_redo(move |world: &mut World, variant: UndoRedoDirection| {
+            let mut entity = world.entity_mut(entity);
+            match variant {
+                UndoRedoDirection::Undo => {
+                    entity.remove::<Waste>();
+                }
+                UndoRedoDirection::Redo => {
+                    entity.insert(waste);
+                }
+                UndoRedoDirection::FinalizeUndone | UndoRedoDirection::FinalizeRedone => {
+                    entity.despawn();
+                }
+            };
+        });
+    }
+}
+
+fn row5(app: &mut App) {
+    app.rev_add_systems(RevUpdate, system.rev_in_set(Row(5)))
+        .world_mut()
+        .register_component_hooks::<Waste>()
+        .on_add(on_add);
+
+    // buffered UndoRedo from on_add ends up in this system's state and thus needs to be added as a reversible system
+    fn system(meta: Res<RevMeta>, pressed: Res<KeysPressed>, mut commands: Commands) {
+        if meta.direction().is_log() || !pressed.num5 {
+            return;
+        }
+        commands.spawn(Waste {
+            tossed_at: meta.present_world_state(),
+            row: 5,
+        });
+    }
+
+    fn on_add(mut world: DeferredWorld, entity: Entity, _: ComponentId) {
+        if world.resource::<RevMeta>().direction().is_log() {
+            return;
+        }
+        let waste = *world.entity(entity).get::<Waste>().unwrap();
+        if waste.row != 5 {
+            return;
+        }
+        world.buffer_undo_redo(move |world: &mut World, variant: UndoRedoDirection| {
+            let mut entity = world.entity_mut(entity);
+            match variant {
+                UndoRedoDirection::Undo => {
+                    entity.remove::<Waste>();
+                }
+                UndoRedoDirection::Redo => {
+                    entity.insert(waste);
+                }
+                UndoRedoDirection::FinalizeUndone | UndoRedoDirection::FinalizeRedone => {
+                    entity.despawn();
+                }
+            };
+        });
+    }
+}
+
+fn row6(app: &mut App) {
+    app.rev_add_systems(RevUpdate, system.rev_in_set(Row(6)))
+        .add_observer(observer);
+
+    #[derive(Event)]
+    struct WasteObserverEvent(Waste);
+
+    fn system(meta: Res<RevMeta>, pressed: Res<KeysPressed>, mut commands: Commands) {
+        if meta.direction().is_log() || !pressed.num6 {
+            return;
+        }
+        let waste = Waste {
+            tossed_at: meta.present_world_state(),
+            row: 6,
+        };
+        let entity = commands.spawn(waste).id();
+        commands.trigger_targets(WasteObserverEvent(waste), entity);
+    }
+
+    fn observer(trigger: Trigger<WasteObserverEvent>, mut world: DeferredWorld) {
+        let waste = trigger.0;
+        let entity = trigger.entity();
+        world.buffer_undo_redo(move |world: &mut World, variant: UndoRedoDirection| {
+            let mut entity = world.entity_mut(entity);
+            match variant {
+                UndoRedoDirection::Undo => {
+                    entity.remove::<Waste>();
+                }
+                UndoRedoDirection::Redo => {
+                    entity.insert(waste);
+                }
+                UndoRedoDirection::FinalizeUndone | UndoRedoDirection::FinalizeRedone => {
+                    entity.despawn();
+                }
+            };
+        });
+    }
 }
 
 #[derive(Resource, Default)]
@@ -263,7 +312,7 @@ enum Direction {
     PastEnd,
 }
 
-fn map_input(mut keys: ResMut<KeysPressed>, lost: Res<LostTrash>, mut exit: EventWriter<AppExit>) {
+fn map_input(mut keys: ResMut<KeysPressed>, lost: Res<LostWaste>, mut exit: EventWriter<AppExit>) {
     use crossterm::{
         event::{poll, read, Event, KeyCode, KeyEvent, KeyEventKind},
         terminal::{disable_raw_mode, enable_raw_mode},
@@ -330,14 +379,16 @@ fn control_rev_meta(mut meta: ResMut<RevMeta>, keys: Res<KeysPressed>) {
     }
 }
 
-fn render_game(
+fn render(
     meta: Res<RevMeta>,
-    trash: Query<&Trash>,
-    lost: Res<LostTrash>,
+    waste: Query<&Waste>,
+    lost: Res<LostWaste>,
     mut last_future_end: Local<Option<u64>>,
 ) {
-    println!("\x1B[2J"); // this clears the last frame
-    println!();
+    let _ = stdout().execute(crossterm::terminal::BeginSynchronizedUpdate);
+    let _ = stdout().execute(crossterm::terminal::Clear(
+        crossterm::terminal::ClearType::All,
+    ));
     println!("Let's waste the time 'til Bevy 1.0 by tossing said waste into the ocean!");
     println!("No worry, it's okay as long you undo it. Just don't wait for too long...");
     println!();
@@ -370,17 +421,10 @@ fn render_game(
     };
     let padding = " ".repeat(padding);
 
-    for Trash { row, tossed_at } in trash.iter().cloned() {
-        if row == 3 && !meta.past_contains(tossed_at) {
-            // todo: no longer includes present
-            // The log in system_3 is only cleaned up when the system runs.
-            // As the system does not run every frame, it might not despawn as early as possible but remains in the world.
-            // These trashs would cause a panic further down, so we skip them.
-            continue;
-        }
+    for Waste { row, tossed_at } in waste.iter().cloned() {
         let index = (meta.present_world_state() - tossed_at) as usize;
-        // replace_range would panic if a trash is tossed into the water at a frame that is not the present or that is not within the past log
-        // this is ensured by reversible logic and by trashs being despawned when they go out of log
+        // replace_range would panic if a waste is tossed into the water at a frame that is not the present or that is not within the past log
+        // this is ensured by reversible logic and by wastes being despawned when they go out of log
         past_rows
             .get_mut(row - 1)
             .unwrap()
@@ -409,7 +453,8 @@ fn render_game(
         println!("  UP: exit log and resume              DOWN: pause");
     } else {
         println!();
-        println!("You left too much trash behind that you can no longer recover. GAME OVER");
+        println!("You left too much waste behind that you can no longer recover. GAME OVER");
     }
-    println!();
+    let _ = stdout().execute(crossterm::cursor::MoveTo(0, 0));
+    let _ = stdout().execute(crossterm::terminal::EndSynchronizedUpdate);
 }
