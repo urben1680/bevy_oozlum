@@ -1,8 +1,9 @@
-use bevy::ecs::{
-    change_detection::Res,
-    schedule::{
-        InternedSystemSet, IntoSystemSetConfigs, LogLevel, Schedule, ScheduleLabel, SystemSet,
+use bevy::{
+    ecs::{
+        change_detection::Res,
+        schedule::{InternedSystemSet, IntoSystemSetConfigs, Schedule, ScheduleLabel, SystemSet},
     },
+    prelude::IntoSystemSet,
 };
 
 use crate::meta::RevMeta;
@@ -80,6 +81,13 @@ impl_set_debug!(BwdCmdSet);
 impl_set_debug!(BwdSysSet);
 impl_set_debug!(BwdCmdSysSet);
 
+// todo: warn about cases where a system is actually a reversible system despite having no logic in the backward direction
+// - triggers reversible commands
+// - triggers commands that trigger reversible hooks/observers
+pub fn forward_set<M>(into_set: impl IntoSystemSet<M>) -> impl SystemSet {
+    FwdSysSet(into_set.into_system_set().intern())
+}
+
 pub trait RevSchedule {
     fn rev_add_systems<Marker>(&mut self, systems: impl IntoRevSystemConfigs<Marker>) -> &mut Self;
     fn rev_configure_sets<Marker>(
@@ -99,26 +107,18 @@ impl RevSchedule for Schedule {
         sets: impl IntoRevSystemSetConfigs<Marker>,
     ) -> &mut Self {
         if !self.graph().contains_set(ForwardSet) {
-            fn if_forward(meta: Option<Res<RevMeta>>) -> bool {
+            fn is_forward<const TRUE: bool>(meta: Option<Res<RevMeta>>) -> bool {
                 meta.and_then(|meta| meta.get_direction())
-                    .is_some_and(|direction| direction.is_forward())
-            }
-            fn if_backward(meta: Option<Res<RevMeta>>) -> bool {
-                meta.and_then(|meta| meta.get_direction())
-                    .is_some_and(|direction| !direction.is_forward())
+                    .is_some_and(|direction| direction.is_forward() == TRUE)
             }
             self.configure_sets(
                 (
-                    ForwardSet.run_if(if_forward),
-                    BackwardSet.run_if(if_backward),
+                    ForwardSet.run_if(is_forward::<true>),
+                    BackwardSet.run_if(is_forward::<false>),
                 )
                     .chain()
                     .in_set(RevSystemsSet),
             );
-            // todo: do not add things to redundant sets
-            let mut settings = self.get_build_settings();
-            settings.hierarchy_detection = LogLevel::Ignore;
-            self.set_build_settings(settings);
         }
         let RevSystemSetConfigs {
             fwd_sys_sets,
