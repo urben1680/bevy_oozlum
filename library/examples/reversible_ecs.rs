@@ -6,7 +6,8 @@ use bevy::{
     prelude::*,
 };
 
-use crossterm::ExecutableCommand;
+use crossterm::{ExecutableCommand, terminal::*, cursor::*};
+
 use library::{
     log::{DenseTransitionLog, FrameTransitionLog, SparseTransitionLog},
     prelude::*,
@@ -15,9 +16,10 @@ use library::{
 const MAX_LOG_LEN: u64 = 71;
 const FIXED_TIMESTEP: Duration = Duration::from_millis(100);
 
+// mention how the last column cannot be undone
+
 fn main() {
-    let _ = stdout().execute(crossterm::terminal::SetSize(MAX_LOG_LEN as u16 + 2, 13));
-    let _ = stdout().execute(crossterm::cursor::Hide);
+    let _crossterm = CrosstermSettings::new();
     let meta = RevMeta::new(NonZeroU64::new(MAX_LOG_LEN), 0, false);
     App::new()
         .add_plugins((
@@ -59,7 +61,6 @@ fn main() {
 pub struct Row(u8);
 
 #[derive(Component, Clone, Copy)]
-//#[component(on_add = on_add_5)]
 #[component(on_remove = on_remove)]
 struct Waste {
     tossed_at: u64,
@@ -156,16 +157,22 @@ fn row3(app: &mut App) {
                 for entity in entity_log.drain_future() {
                     commands.entity(entity).despawn();
                 }
-                let past_len = frame_log.push_and_get_past_len(&meta);
+                let mut past_len = frame_log.push_and_get_past_len(&meta);
+                // todo: explain why this is needed
+                past_len += 1;
                 let entity = commands.spawn(waste).id();
                 // do not despawn drained entities here, could be too late because this system does not run every frame
                 entity_log.push_and_drain_past(past_len, entity);
             }
             RevDirection::FORWARD_LOG => {
+                let expects_forward_log_run = frame_log.forward_log(&meta);
+                debug_assert!(expects_forward_log_run);
                 let entity = *entity_log.forward_log().unwrap();
                 commands.entity(entity).insert(waste);
             }
             RevDirection::BackwardLog => {
+                let expects_backward_log_run = frame_log.backward_log(&meta);
+                debug_assert!(expects_backward_log_run);
                 let entity = *entity_log.backward_log().unwrap();
                 commands.entity(entity).remove::<Waste>();
             }
@@ -313,10 +320,7 @@ enum Direction {
 }
 
 fn map_input(mut keys: ResMut<KeysPressed>, lost: Res<LostWaste>, mut exit: EventWriter<AppExit>) {
-    use crossterm::{
-        event::{poll, read, Event, KeyCode, KeyEvent, KeyEventKind},
-        terminal::{disable_raw_mode, enable_raw_mode},
-    };
+    use crossterm::event::{poll, read, Event, KeyCode, KeyEvent, KeyEventKind};
 
     let mut f = || -> std::io::Result<()> {
         // check if event exists to read, do not block thread to wait for one if not
@@ -379,16 +383,35 @@ fn control_rev_meta(mut meta: ResMut<RevMeta>, keys: Res<KeysPressed>) {
     }
 }
 
+struct CrosstermSettings;
+
+impl CrosstermSettings {
+    fn new() -> Self {
+        let _ = stdout().execute(SetSize(MAX_LOG_LEN as u16 + 2, 13));
+        let _ = stdout().execute(Hide);
+        Self
+    }
+}
+
+impl Drop for CrosstermSettings {
+    fn drop(&mut self) {
+        let _ = stdout().execute(MoveToRow(14));
+        let _ = stdout().execute(Show);        
+    }
+}
+
 fn render(
     meta: Res<RevMeta>,
     waste: Query<&Waste>,
     lost: Res<LostWaste>,
     mut last_future_end: Local<Option<u64>>,
 ) {
-    let _ = stdout().execute(crossterm::terminal::BeginSynchronizedUpdate);
-    let _ = stdout().execute(crossterm::terminal::Clear(
-        crossterm::terminal::ClearType::All,
+    let _ = stdout().execute(BeginSynchronizedUpdate);
+    let _ = stdout().execute(Clear(
+        ClearType::All,
     ));
+
+    println!();
     println!("Let's waste the time 'til Bevy 1.0 by tossing said waste into the ocean!");
     println!("No worry, it's okay as long you undo it. Just don't wait for too long...");
     println!();
@@ -405,7 +428,7 @@ fn render(
         .collect();
     let mut past_rows: [String; 6] = std::array::from_fn(|_| row_past.clone());
 
-    let padding = match *last_future_end {
+    let padding_cols = match *last_future_end {
         Some(frame) => {
             let mut padding = frame.wrapping_sub(meta.future_end_world_state());
             if padding > MAX_LOG_LEN {
@@ -419,7 +442,7 @@ fn render(
             0
         }
     };
-    let padding = " ".repeat(padding);
+    let padding = " ".repeat(padding_cols);
 
     for Waste { row, tossed_at } in waste.iter().cloned() {
         let index = (meta.present_world_state() - tossed_at) as usize;
@@ -442,7 +465,7 @@ fn render(
         .chain(wave(meta.present_world_state()).take(10 - lost))
         .collect();
 
-    println!();
+    println!("{}^", " ".repeat(padding_cols + meta.future_world_states() as usize + 1));
     if meta.ran_direction() != Some(RevDirection::NOT_LOG) || lost == 10 {
         println!("           (waste lost: {lost_bar})    ESC: close");
     } else {
@@ -455,6 +478,6 @@ fn render(
         println!();
         println!("You left too much waste behind that you can no longer recover. GAME OVER");
     }
-    let _ = stdout().execute(crossterm::cursor::MoveTo(0, 0));
-    let _ = stdout().execute(crossterm::terminal::EndSynchronizedUpdate);
+    let _ = stdout().execute(MoveTo(0, 0));
+    let _ = stdout().execute(EndSynchronizedUpdate);
 }

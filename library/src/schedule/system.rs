@@ -62,53 +62,53 @@ where
         });
 
         let mut set_iter = default_system_sets.into_iter();
-        let set = set_iter
+        let first_set = set_iter
             .next()
-            .unwrap_or_else(|| panic!("System {sys_name} contained no default sets"));
+            .unwrap_or_else(|| panic!("System {sys_name} contais no default sets"));
 
         let mut forward_sys = ArcSystem {
             shared: shared.clone(),
             name: fwd_sys_name,
-            tick: Tick::new(0),
-            is_send: false,
-            is_exclusive: false,
-            has_deferred: false,
+            tick: default(),
+            is_send: default(),
+            is_exclusive: default(),
+            has_deferred: default(),
             forward: true,
             commands_err: false,
             component_access: default(),
             archetype_component_access: default(),
         }
-        .in_set(FwdSysSet(set));
+        .in_set(FwdSysSet(first_set));
 
         let mut backward_cmd = CommandsBackward {
             shared: shared.clone(),
             name: bwd_cmd_name,
-            tick: Tick::new(0),
-            has_deferred: false,
+            tick: default(),
+            has_deferred: default(),
             commands_err: false,
         }
-        .in_set(BwdCmdSet(set));
+        .in_set(BwdCmdSet(first_set));
 
         let mut backward_sys = ArcSystem {
             shared,
             name: bwd_sys_name,
-            tick: Tick::new(0),
-            is_send: false,
-            is_exclusive: false,
-            has_deferred: false,
+            tick: default(),
+            is_send: default(),
+            is_exclusive: default(),
+            has_deferred: default(),
             forward: false,
             commands_err: false,
             component_access: default(),
             archetype_component_access: default(),
         }
-        .in_set(BwdSysSet(set));
+        .in_set(BwdSysSet(first_set));
 
-        let mut fwd_sys_sets = FwdSysSet(set).into_configs();
-        let mut bwd_cmd_sets = BwdCmdSet(set).in_set(BwdCmdSysSet(set));
-        let mut bwd_sys_sets = BwdSysSet(set)
-            .after(BwdCmdSet(set))
-            .in_set(BwdCmdSysSet(set));
-        let mut bwd_cmd_sys_sets = BwdCmdSysSet(set).into_configs();
+        let mut fwd_sys_sets = FwdSysSet(first_set).into_configs();
+        let mut bwd_cmd_sets = BwdCmdSet(first_set).in_set(BwdCmdSysSet(first_set));
+        let mut bwd_sys_sets = BwdSysSet(first_set)
+            .after(BwdCmdSet(first_set))
+            .in_set(BwdCmdSysSet(first_set));
+        let mut bwd_cmd_sys_sets = BwdCmdSysSet(first_set).into_configs();
 
         for set in set_iter {
             forward_sys.in_set_inner(FwdSysSet(set).intern());

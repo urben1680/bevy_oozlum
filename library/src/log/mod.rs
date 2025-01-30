@@ -6,8 +6,6 @@ use std::{
 
 use bevy::{log::error, reflect::Reflect};
 
-use crate::resize_ne_bytes;
-
 #[cfg(feature = "serde")]
 mod serde_with;
 
@@ -192,6 +190,23 @@ impl<T> DoubleEndedIterator for SparseDrain<'_, T> {
 impl<T> ExactSizeIterator for SparseDrain<'_, T> {}
 
 impl<T> FusedIterator for SparseDrain<'_, T> {}
+
+/// Assumes cut-off bytes, if any, are `0`.
+#[inline(always)]
+fn resize_ne_bytes<const N: usize, const M: usize>(arr: [u8; N]) -> [u8; M] {
+    let min = N.min(M);
+    let mut result = [0; M];
+    let (source, target);
+    if cfg!(target_endian = "little") {
+        source = &arr[..min];
+        target = &mut result[..min];
+    } else {
+        source = &arr[N - min..];
+        target = &mut result[M - min..];
+    };
+    target.copy_from_slice(source);
+    result
+}
 
 /// `EntryAmount` is usually encountered in draining methods of logs with multiple states/transitions per update,
 /// for example [`DenseStatesLog`] which will be behind the `log` variable in the following code snippets.

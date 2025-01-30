@@ -52,23 +52,6 @@ pub mod prelude {
     pub use crate::undo_redo::{BuffersUndoRedo as _, RevCommands as _, UndoRedoDirection};
 }
 
-/// Assumes cut-off bytes, if any, are `0`.
-#[inline(always)]
-fn resize_ne_bytes<const N: usize, const M: usize>(arr: [u8; N]) -> [u8; M] {
-    let min = N.min(M);
-    let mut result = [0; M];
-    let (source, target);
-    if cfg!(target_endian = "little") {
-        source = &arr[..min];
-        target = &mut result[..min];
-    } else {
-        source = &arr[N - min..];
-        target = &mut result[M - min..];
-    };
-    target.copy_from_slice(source);
-    result
-}
-
 macro_rules! error_per_flag {
     ($flag:expr, $($arg:tt)+) => ({
         if !*$flag {

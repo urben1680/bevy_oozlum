@@ -43,8 +43,8 @@ pub(crate) fn add_condition<Marker>(
         out_of_log_err: false,
     };
     let set = ConditionSet(SET_COUNTER.fetch_add(1, Ordering::Relaxed)).intern();
-    let before = replace(configs, ForwardSet.into_configs());
-    *configs = (before, set.run_if(condition)).into_configs();
+    let configs_by_value = replace(configs, ForwardSet.into_configs());
+    *configs = (configs_by_value, set.run_if(condition)).into_configs();
     set
 }
 
