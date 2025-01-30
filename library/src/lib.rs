@@ -16,16 +16,9 @@ Enhancements:
 - impl Error for relevant structs/enums via thiserror
 - test Finalize
 - #[inline]s
-- examples
--- folder next to src
---- how to have cargo check look at it?
---- add CI
--- hooks https://github.com/bevyengine/bevy/blob/main/examples/ecs/component_hooks.rs
--- observers https://github.com/bevyengine/bevy/blob/main/examples/ecs/observers.rs
--- ecs, commands https://github.com/bevyengine/bevy/blob/main/examples/ecs/ecs_guide.rs
-- idea: Arc system stores system state in resource, not Mutex
--- might be incompatible with System::update_archetype_component_access as UnsafeWorldCell may only be used to read (archetype) metadata
--- registering access to that resource is impossible, missing pub methods
+- schedule tests
+-- macro based
+-- forward_set
 
 Docs
 - documentations
@@ -53,8 +46,8 @@ pub mod prelude {
     pub use crate::app::{RevApp as _, RevSystemsPlugin};
     pub use crate::meta::{RevDirection, RevMeta};
     pub use crate::schedule::{
-        BackwardNoop as _, IntoRevSystemConfigs as _, IntoRevSystemSetConfigs as _,
-        RevSchedule as _, RevSystemsSet, RevUpdate,
+        forward_set, IntoRevSystemConfigs as _, IntoRevSystemSetConfigs as _, RevSchedule as _,
+        RevSystemsSet, RevUpdate,
     };
     pub use crate::undo_redo::{BuffersUndoRedo as _, RevCommands as _, UndoRedoDirection};
 }
