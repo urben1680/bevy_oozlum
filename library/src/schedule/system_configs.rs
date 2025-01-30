@@ -1,9 +1,6 @@
 use bevy::{
-    ecs::{
-        schedule::{
-            Condition, IntoSystemConfigs, IntoSystemSet, NodeConfigs, SystemConfigs, SystemSet,
-        },
-        system::IntoSystem,
+    ecs::schedule::{
+        Condition, IntoSystemConfigs, IntoSystemSet, NodeConfigs, SystemConfigs, SystemSet,
     },
     utils::all_tuples,
 };
@@ -98,18 +95,6 @@ where
 impl IntoRevSystemConfigs<()> for RevSystemConfigs {
     fn into_rev_configs(self) -> RevSystemConfigs {
         self
-    }
-}
-
-pub trait BackwardNoop<Marker> {
-    fn backward_noop(self) -> RevSystemConfigs;
-}
-
-// todo: rename system.rs to arc_system.rs and move this to backward_noop.rs
-impl<T: IntoSystem<(), (), Marker>, Marker> BackwardNoop<Marker> for T {
-    fn backward_noop(self) -> RevSystemConfigs {
-        // alternative to ArcSystem, asserts that no UndoRedo is buffered
-        todo!()
     }
 }
 
