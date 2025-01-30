@@ -11,7 +11,7 @@ use bevy::{
         archetype::ArchetypeComponentId,
         component::{ComponentId, Tick},
         query::Access,
-        schedule::{InternedSystemSet, IntoSystemConfigs, IntoSystemSetConfigs, SystemSetConfigs},
+        schedule::{InternedSystemSet, IntoSystemConfigs, IntoSystemSetConfigs, SystemSet},
         system::{IntoSystem, ReadOnlySystem, System, SystemIn},
         world::{unsafe_world_cell::UnsafeWorldCell, DeferredWorld, World},
     },
@@ -38,9 +38,10 @@ where
     fn into_rev_configs(self) -> RevSystemConfigs {
         let system = IntoSystem::into_system(self);
 
+        let sys_name = system.name();
         let name = |string: &str| {
-            let mut name = String::with_capacity(system.name().len() + string.len());
-            name.extend([&system.name(), string]);
+            let mut name = String::with_capacity(sys_name.len() + string.len());
+            name.extend([&sys_name, string]);
             name
         };
         let fwd_sys_name = name(" (forward system)");
@@ -60,6 +61,11 @@ where
             default_system_sets: default_system_sets.clone(),
         });
 
+        let mut set_iter = default_system_sets.into_iter();
+        let set = set_iter
+            .next()
+            .unwrap_or_else(|| panic!("System {sys_name} contained no default sets"));
+
         let mut forward_sys = ArcSystem {
             shared: shared.clone(),
             name: fwd_sys_name,
@@ -72,10 +78,19 @@ where
             component_access: default(),
             archetype_component_access: default(),
         }
-        .in_set(ForwardSet);
+        .in_set(FwdSysSet(set));
+
+        let mut backward_cmd = CommandsBackward {
+            shared: shared.clone(),
+            name: bwd_cmd_name,
+            tick: Tick::new(0),
+            has_deferred: false,
+            commands_err: false,
+        }
+        .in_set(BwdCmdSet(set));
 
         let mut backward_sys = ArcSystem {
-            shared: shared.clone(),
+            shared,
             name: bwd_sys_name,
             tick: Tick::new(0),
             is_send: false,
@@ -86,47 +101,30 @@ where
             component_access: default(),
             archetype_component_access: default(),
         }
-        .in_set(BackwardSet);
+        .in_set(BwdSysSet(set));
 
-        let mut backward_cmd = CommandsBackward {
-            shared,
-            name: bwd_cmd_name,
-            tick: Tick::new(0),
-            has_deferred: false,
-            commands_err: false,
-        }
-        .in_set(BackwardSet);
+        let mut fwd_sys_sets = FwdSysSet(set).into_configs();
+        let mut bwd_cmd_sets = BwdCmdSet(set).in_set(BwdCmdSysSet(set));
+        let mut bwd_sys_sets = BwdSysSet(set)
+            .after(BwdCmdSet(set))
+            .in_set(BwdCmdSysSet(set));
+        let mut bwd_cmd_sys_sets = BwdCmdSysSet(set).into_configs();
 
-        let mut fwd_sys_sets = None;
-        let mut bwd_cmd_sets = None;
-        let mut bwd_sys_sets = None;
-        let mut bwd_cmd_sys_sets = None;
+        for set in set_iter {
+            forward_sys.in_set_inner(FwdSysSet(set).intern());
+            backward_cmd.in_set_inner(BwdCmdSet(set).intern());
+            backward_sys.in_set_inner(BwdSysSet(set).intern());
 
-        fn add_configs(configs: &mut Option<SystemSetConfigs>, add: SystemSetConfigs) {
-            *configs = Some(match configs.take() {
-                None => add.into_configs(),
-                Some(configs) => (configs, add).into_configs(),
-            });
-        }
-
-        for set in default_system_sets {
-            forward_sys = forward_sys.in_set(FwdSysSet(set));
-            backward_cmd = backward_cmd.in_set(BwdCmdSet(set));
-            backward_sys = backward_sys.in_set(BwdSysSet(set));
-
-            add_configs(&mut fwd_sys_sets, FwdSysSet(set).in_set(ForwardSet));
-            add_configs(
-                &mut bwd_cmd_sets,
-                BwdCmdSet(set).in_set(BwdCmdSysSet(set)).in_set(BackwardSet),
-            );
-            add_configs(
-                &mut bwd_sys_sets,
+            fwd_sys_sets = (fwd_sys_sets, FwdSysSet(set)).into_configs();
+            bwd_cmd_sets = (bwd_cmd_sets, BwdCmdSet(set).in_set(BwdCmdSysSet(set))).into_configs();
+            bwd_sys_sets = (
+                bwd_sys_sets,
                 BwdSysSet(set)
                     .after(BwdCmdSet(set))
-                    .in_set(BwdCmdSysSet(set))
-                    .in_set(BackwardSet),
-            );
-            add_configs(&mut bwd_cmd_sys_sets, BwdCmdSysSet(set).in_set(BackwardSet));
+                    .in_set(BwdCmdSysSet(set)),
+            )
+                .into_configs();
+            bwd_cmd_sys_sets = (bwd_cmd_sys_sets, BwdCmdSysSet(set)).into_configs();
         }
 
         // Note that System::has_deferred may return no correct value before initializing the system.
@@ -136,10 +134,10 @@ where
         RevSystemConfigs {
             systems: (forward_sys, backward_cmd, backward_sys).into_configs(),
             sets: RevSystemSetConfigs {
-                fwd_sys_sets: fwd_sys_sets.unwrap(),
-                bwd_cmd_sets: bwd_cmd_sets.unwrap(),
-                bwd_sys_sets: bwd_sys_sets.unwrap(),
-                bwd_cmd_sys_sets: bwd_cmd_sys_sets.unwrap(),
+                fwd_sys_sets: fwd_sys_sets.in_set(ForwardSet),
+                bwd_cmd_sets,
+                bwd_sys_sets,
+                bwd_cmd_sys_sets: bwd_cmd_sys_sets.in_set(BackwardSet),
                 condition_sets: ForwardSet.into_configs(),
             },
         }
