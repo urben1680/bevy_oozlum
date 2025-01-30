@@ -142,7 +142,7 @@ mod test {
     impl Log {
         fn new(max_world_states: u64, now: u64) -> Self {
             let log = FrameTransitionLog::new();
-            let meta = RevMeta::new(NonZeroU64::new(max_world_states), Some(now), false);
+            let meta = RevMeta::new(NonZeroU64::new(max_world_states), now, false);
             Self { log, meta }
         }
         fn forward(&mut self, updates_with_expected_past_len: Vec<usize>) {
