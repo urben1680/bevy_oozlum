@@ -243,20 +243,24 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
     // set up world
     let mut world = World::new();
     world.init_resource::<TestLog>();
-    world.insert_resource(RevMeta::new(None, None, false));
+    world.insert_resource(RevMeta::new(None, 0, false));
 
     // set up schedules
     let mut schedule = Schedule::new(FixedUpdate);
     schedule.add_systems(RevMeta::run_rev_update);
     let err = schedule.initialize(&mut world).err();
-    assert!(err.is_none(), "{:?}", err.unwrap());
+    assert!(err.is_none(), "FixedUpdate init fail: {:?}, config #{variant}, apply_final_deferred {apply_final_deferred}", err.unwrap());
     world.add_schedule(schedule);
 
     let mut schedule = Schedule::new(RevUpdate);
     config(&mut schedule);
     schedule.set_apply_final_deferred(apply_final_deferred);
     let err = schedule.initialize(&mut world).err();
-    assert!(err.is_none(), "{:?}", err.unwrap());
+    assert!(
+        err.is_none(),
+        "RevUpdate init fail: {:?}, config #{variant}, apply_final_deferred {apply_final_deferred}",
+        err.unwrap()
+    );
     world.add_schedule(schedule);
 
     // set up observers
