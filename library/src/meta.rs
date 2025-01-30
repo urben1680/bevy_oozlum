@@ -196,16 +196,12 @@ pub struct RevMeta {
 
 impl Default for RevMeta {
     fn default() -> Self {
-        Self::new(Some(NonZeroU64::MIN), None, false)
+        Self::new(Some(NonZeroU64::MIN), 0, false)
     }
 }
 
 impl RevMeta {
-    pub const fn new(max_world_states: Option<NonZeroU64>, now: Option<u64>, paused: bool) -> Self {
-        let now = match now {
-            Some(now) => now,
-            None => 0,
-        };
+    pub const fn new(max_world_states: Option<NonZeroU64>, now: u64, paused: bool) -> Self {
         Self {
             max_world_states,
             present: now,
@@ -598,7 +594,7 @@ mod test {
 
     #[test]
     fn start_grows_according_to_max_len() {
-        let mut meta = RevMeta::new(Some(TWO), None, false);
+        let mut meta = RevMeta::new(Some(TWO), 0, false);
 
         meta.update_internal();
         assert_eq!(meta.present, 1);
