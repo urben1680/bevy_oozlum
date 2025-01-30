@@ -164,7 +164,6 @@ impl UndoRedoLog {
                     .undo_redo_log
                     .forward_log()
                     .map_err(|_| UndoRedoLogErr::OutOfLog(meta))?;
-                println!("{} commands to redo", iter.value.len());
                 for command in iter.value.map(SyncCell::get) {
                     command.redo(world);
                 }
