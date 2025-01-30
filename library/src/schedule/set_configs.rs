@@ -110,8 +110,8 @@ pub trait IntoRevSystemSetConfigs<Marker>: Sized {
         let set = add_condition(&mut configs.condition_sets, condition);
         RevSystemSetConfigs {
             fwd_sys_sets: configs.fwd_sys_sets.in_set(set),
-            bwd_cmd_sets: configs.bwd_cmd_sets.in_set(set),
-            bwd_sys_sets: configs.bwd_sys_sets.in_set(set),
+            bwd_cmd_sets: configs.bwd_cmd_sets,
+            bwd_sys_sets: configs.bwd_sys_sets,
             bwd_cmd_sys_sets: configs.bwd_cmd_sys_sets.in_set(set),
             condition_sets: configs.condition_sets,
         }
