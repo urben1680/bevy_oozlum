@@ -6,7 +6,7 @@ use bevy::{
     prelude::*,
 };
 
-use crossterm::{ExecutableCommand, terminal::*, cursor::*};
+use crossterm::{cursor::*, terminal::*, ExecutableCommand};
 
 use library::{
     log::{DenseTransitionLog, FrameTransitionLog, SparseTransitionLog},
@@ -19,7 +19,7 @@ const FIXED_TIMESTEP: Duration = Duration::from_millis(100);
 // mention how the last column cannot be undone
 
 fn main() {
-    let _crossterm = CrosstermSettings::new();
+    let _crossterm = GlobalSettings::new();
     let meta = RevMeta::new(NonZeroU64::new(MAX_LOG_LEN), 0, false);
     App::new()
         .add_plugins((
@@ -85,7 +85,7 @@ fn row1(app: &mut App) {
         }
         // blocked on https://github.com/bevyengine/bevy/pull/13120
         commands./*rev_*/spawn(Waste {
-            tossed_at: meta.present_world_state(),
+            tossed_at: meta.now(),
             row: 1,
         });
     }
@@ -101,18 +101,18 @@ fn row2(app: &mut App) {
         mut commands: Commands,
     ) {
         let waste = Waste {
-            tossed_at: meta.present_world_state(),
+            tossed_at: meta.now(),
             row: 2,
         };
         match meta.direction() {
             RevDirection::NOT_LOG => {
-                let entity = pressed.num2.then(|| commands.spawn(waste).id());
                 for entity in log.drain_future() {
                     commands.entity(entity).despawn();
                 }
-                if let Some(entity) =
-                    log.push_and_pop_past(meta.past_world_states() as usize, entity)
-                {
+                // todo: explain why this is needed, point out how waste is visible but not undoable at the right edge
+                let past_len = meta.past_len() + 1;
+                let entity = pressed.num2.then(|| commands.spawn(waste).id());
+                if let Some(entity) = log.push_and_pop_past(past_len as usize, entity) {
                     commands.entity(entity).despawn();
                 }
             }
@@ -149,7 +149,7 @@ fn row3(app: &mut App) {
         mut commands: Commands,
     ) {
         let waste = Waste {
-            tossed_at: meta.present_world_state(),
+            tossed_at: meta.now(),
             row: 3,
         };
         match meta.direction() {
@@ -157,22 +157,21 @@ fn row3(app: &mut App) {
                 for entity in entity_log.drain_future() {
                     commands.entity(entity).despawn();
                 }
-                let mut past_len = frame_log.push_and_get_past_len(&meta);
-                // todo: explain why this is needed
-                past_len += 1;
+                // todo: explain why this is needed, point out how waste is visible but not undoable at the right edge
+                let past_len = frame_log.push_and_get_past_len(&meta);
                 let entity = commands.spawn(waste).id();
                 // do not despawn drained entities here, could be too late because this system does not run every frame
                 entity_log.push_and_drain_past(past_len, entity);
             }
             RevDirection::FORWARD_LOG => {
                 let expects_forward_log_run = frame_log.forward_log(&meta);
-                debug_assert!(expects_forward_log_run);
+                assert!(expects_forward_log_run);
                 let entity = *entity_log.forward_log().unwrap();
                 commands.entity(entity).insert(waste);
             }
             RevDirection::BackwardLog => {
                 let expects_backward_log_run = frame_log.backward_log(&meta);
-                debug_assert!(expects_backward_log_run);
+                assert!(expects_backward_log_run);
                 let entity = *entity_log.backward_log().unwrap();
                 commands.entity(entity).remove::<Waste>();
             }
@@ -186,7 +185,7 @@ fn row3(app: &mut App) {
     fn despawn_system(meta: Res<RevMeta>, query: Query<(Entity, &Waste)>, mut commands: Commands) {
         query
             .into_iter()
-            .filter(|(_, waste)| waste.row == 3 && waste.tossed_at < meta.past_end_world_state())
+            .filter(|(_, waste)| waste.row == 3 && waste.tossed_at < meta.past_end())
             .for_each(|(entity, _)| commands.entity(entity).despawn());
     }
 }
@@ -199,7 +198,7 @@ fn row4(app: &mut App) {
             return;
         }
         let waste = Waste {
-            tossed_at: meta.present_world_state(),
+            tossed_at: meta.now(),
             row: 4,
         };
         let entity = commands.spawn(waste).id();
@@ -232,7 +231,7 @@ fn row5(app: &mut App) {
             return;
         }
         commands.spawn(Waste {
-            tossed_at: meta.present_world_state(),
+            tossed_at: meta.now(),
             row: 5,
         });
     }
@@ -274,7 +273,7 @@ fn row6(app: &mut App) {
             return;
         }
         let waste = Waste {
-            tossed_at: meta.present_world_state(),
+            tossed_at: meta.now(),
             row: 6,
         };
         let entity = commands.spawn(waste).id();
@@ -372,31 +371,52 @@ fn control_rev_meta(mut meta: ResMut<RevMeta>, keys: Res<KeysPressed>) {
         Some(Direction::Forward) => meta.queue_forward(),
         Some(Direction::Pause) => meta.queue_pause(),
         Some(Direction::FutureEnd) => {
-            let to = meta.future_end_world_state();
+            let to = meta.future_end();
             let _ok = meta.queue_log(to);
         }
         Some(Direction::PastEnd) => {
-            let to = meta.past_end_world_state();
+            let to = meta.past_end();
             let _ok = meta.queue_log(to);
         }
         None => {}
     }
 }
 
-struct CrosstermSettings;
+struct GlobalSettings;
 
-impl CrosstermSettings {
+impl GlobalSettings {
     fn new() -> Self {
+        use bevy::{
+            log::{
+                tracing_subscriber::{
+                    self,
+                    layer::{Context, SubscriberExt},
+                    util::SubscriberInitExt,
+                },
+                Level,
+            },
+            utils::tracing::{Event, Subscriber},
+        };
+
+        struct PanicOnError;
+        impl<S: Subscriber> tracing_subscriber::Layer<S> for PanicOnError {
+            fn on_event(&self, event: &Event, _ctx: Context<S>) {
+                if *event.metadata().level() == Level::ERROR {
+                    panic!("{event:#?}")
+                }
+            }
+        }
+        let _ = tracing_subscriber::registry().with(PanicOnError).try_init();
         let _ = stdout().execute(SetSize(MAX_LOG_LEN as u16 + 2, 13));
         let _ = stdout().execute(Hide);
         Self
     }
 }
 
-impl Drop for CrosstermSettings {
+impl Drop for GlobalSettings {
     fn drop(&mut self) {
         let _ = stdout().execute(MoveToRow(14));
-        let _ = stdout().execute(Show);        
+        let _ = stdout().execute(Show);
     }
 }
 
@@ -407,9 +427,7 @@ fn render(
     mut last_future_end: Local<Option<u64>>,
 ) {
     let _ = stdout().execute(BeginSynchronizedUpdate);
-    let _ = stdout().execute(Clear(
-        ClearType::All,
-    ));
+    let _ = stdout().execute(Clear(ClearType::All));
 
     println!();
     println!("Let's waste the time 'til Bevy 1.0 by tossing said waste into the ocean!");
@@ -418,40 +436,40 @@ fn render(
 
     let wave = |phase: u64| "`-._,~'".chars().cycle().skip(7 - phase as usize % 7);
 
-    let row_future: String = wave(meta.future_end_world_state())
-        .take(meta.future_world_states() as usize)
+    let row_future: String = wave(meta.future_end())
+        .take(meta.future_len() as usize)
         .collect();
 
-    let row_past: String = wave(meta.future_end_world_state())
-        .skip(meta.future_world_states() as usize % 7)
-        .take(meta.past_world_states() as usize + 1)
+    let row_past: String = wave(meta.future_end())
+        .skip(meta.future_len() as usize % 7)
+        .take(meta.past_len() as usize + 1)
         .collect();
     let mut past_rows: [String; 6] = std::array::from_fn(|_| row_past.clone());
 
     let padding_cols = match *last_future_end {
         Some(frame) => {
-            let mut padding = frame.wrapping_sub(meta.future_end_world_state());
+            let mut padding = frame.wrapping_sub(meta.future_end());
             if padding > MAX_LOG_LEN {
                 padding = 0;
-                *last_future_end = Some(meta.future_end_world_state());
+                *last_future_end = Some(meta.future_end());
             }
             padding as usize
         }
         None => {
-            *last_future_end = Some(meta.future_end_world_state());
+            *last_future_end = Some(meta.future_end());
             0
         }
     };
     let padding = " ".repeat(padding_cols);
 
     for Waste { row, tossed_at } in waste.iter().cloned() {
-        let index = (meta.present_world_state() - tossed_at) as usize;
+        let index = (meta.now() - tossed_at) as usize;
         // replace_range would panic if a waste is tossed into the water at a frame that is not the present or that is not within the past log
         // this is ensured by reversible logic and by wastes being despawned when they go out of log
         past_rows
             .get_mut(row - 1)
             .unwrap()
-            .replace_range(index..(index + 1), "#");
+            .replace_range(index..=index, "#");
     }
 
     for (i, past_row) in past_rows.into_iter().enumerate() {
@@ -462,10 +480,13 @@ fn render(
     let lost_bar: String = "#"
         .repeat(lost)
         .chars()
-        .chain(wave(meta.present_world_state()).take(10 - lost))
+        .chain(wave(meta.now()).take(10 - lost))
         .collect();
 
-    println!("{}^", " ".repeat(padding_cols + meta.future_world_states() as usize + 1));
+    println!(
+        "{}^",
+        " ".repeat(padding_cols + meta.future_len() as usize + 1)
+    );
     if meta.ran_direction() != Some(RevDirection::NOT_LOG) || lost == 10 {
         println!("           (waste lost: {lost_bar})    ESC: close");
     } else {
