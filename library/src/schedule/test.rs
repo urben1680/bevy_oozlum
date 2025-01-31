@@ -17,20 +17,12 @@ use bevy::{
         system::{Commands, IntoSystem, Resource},
         world::{DeferredWorld, World},
     },
-    log::{
-        tracing_subscriber::{
-            self,
-            layer::{Context, SubscriberExt},
-            util::SubscriberInitExt,
-        },
-        Level,
-    },
-    utils::tracing::{Event as TraceEvent, Subscriber},
 };
 
 use crate::{
     meta::RevDirection,
     schedule::RevUpdate,
+    test::panic_on_error_events,
     undo_redo::{BuffersUndoRedo, UndoRedo, UndoRedoBuffer},
 };
 
@@ -217,16 +209,7 @@ fn test_run<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
     configs: Vec<C>,
     expected: Vec<Vec<TestBundle>>,
 ) {
-    struct PanicOnError;
-    impl<S: Subscriber> tracing_subscriber::Layer<S> for PanicOnError {
-        fn on_event(&self, event: &TraceEvent, _ctx: Context<S>) {
-            if *event.metadata().level() == Level::ERROR {
-                panic!("{event:#?}")
-            }
-        }
-    }
-    let _ = tracing_subscriber::registry().with(PanicOnError).try_init();
-
+    panic_on_error_events();
     for (variant, config) in configs.into_iter().enumerate() {
         for apply_final_deferred in [true, false] {
             test_run_variant(variant, &config, apply_final_deferred, &expected);
@@ -391,7 +374,7 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
 
     // run tests backward log
     let mut meta = world.resource_mut::<RevMeta>();
-    let end_frame = meta.present_world_state();
+    let end_frame = meta.now();
     assert!(meta.queue_log(0).is_ok(), "{meta:#?}");
     for (step, expected) in expected.iter().enumerate().rev() {
         test_step(
@@ -905,7 +888,7 @@ fn pipe_commands() {
 #[test]
 fn run_if() {
     fn at_2(meta: Res<RevMeta>) -> bool {
-        meta.present_world_state() == 2
+        meta.now() == 2
     }
     fn at_2_once() -> impl Fn(Res<RevMeta>) -> bool + Clone {
         let was_2 = Arc::new(AtomicBool::new(false));
