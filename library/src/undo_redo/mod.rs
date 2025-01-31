@@ -30,6 +30,8 @@ pub trait BuffersUndoRedo {
     /// - [`SystemBuffer::apply`](bevy::ecs::system::SystemBuffer::apply)
     /// - [`System::apply_deferred`](bevy::ecs::system::System::apply_deferred)
     ///
+    /// Note that the sync point **must** belong to a reversible system.
+    /// todo: lay out situations where this is not true (trigger in non-reversible systems, queue commands in hooks/observers)
     /// The effect should be immediate in the sync point. Because of this, refer the following table for how to call this method:
     ///
     /// | | Sync Point | Non-Observer System |
@@ -144,11 +146,10 @@ impl UndoRedoLog {
                 {
                     command.finalize_undone(world);
                 }
-                let mut max_past_len = self.frame_log.push_and_get_past_len(&meta);
+                let max_past_len = self.frame_log.push_and_get_past_len(&meta);
                 let mut buffer = world
                     .get_resource_mut::<UndoRedoBuffer>()
                     .ok_or_else(|| UndoRedoLogErr::UndoRedoBufferMissing(meta))?;
-                max_past_len += 1; // do not drain the buffered boxes
                 let past_drain = self
                     .undo_redo_log
                     .push_and_drain_past(max_past_len, |mut log| log.append(&mut buffer.0));
