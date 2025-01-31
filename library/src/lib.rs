@@ -3,13 +3,13 @@ TODO:
 
 - add license
 - find new name
--- catchier and more unique to not use reversible-systems/schedules for comparable crates
--- "systems" in reverse: smetsys, can be altered to smet-sys or something
--- "schedules" in reverse: seludehcs (ew)
-- should still be descriptive
--- rev..?
--- bevy_smetsys
+-- revy
+-- brevy
+-- bevyveb
 -- bevy_yveb
+-- bevy_revsys
+-- bevy_revsched
+-- bevy_smetsys
 
 Enhancements:
 - reduce todo!() and //todo
@@ -17,7 +17,6 @@ Enhancements:
 - test Finalize
 - #[inline]s
 - schedule tests
--- macro based
 -- forward_set
 
 Docs
@@ -49,7 +48,9 @@ pub mod prelude {
         forward_set, IntoRevSystemConfigs as _, IntoRevSystemSetConfigs as _, RevSchedule as _,
         RevSystemsSet, RevUpdate,
     };
-    pub use crate::undo_redo::{BuffersUndoRedo as _, RevCommands as _, UndoRedoDirection};
+    pub use crate::undo_redo::{
+        BuffersUndoRedo as _, RevCommands as _, UndoRedoBuffer, UndoRedoDirection,
+    };
 }
 
 macro_rules! error_per_flag {
@@ -63,3 +64,36 @@ macro_rules! error_per_flag {
 }
 
 use error_per_flag;
+
+#[cfg(test)]
+mod test {
+    use bevy::{
+        log::{
+            tracing_subscriber::{
+                layer::{Context, SubscriberExt},
+                registry,
+                util::SubscriberInitExt,
+                Layer,
+            },
+            Level,
+        },
+        utils::tracing::{Event, Subscriber, dispatcher::get_default},
+    };
+
+    /// Make `error!` and `error_once!` cause panics.
+    pub(crate) fn panic_on_error_events() {
+        struct PanicOnError;
+        impl<S: Subscriber> Layer<S> for PanicOnError {
+            fn on_event(&self, event: &Event, _ctx: Context<S>) {
+                if *event.metadata().level() == Level::ERROR {
+                    panic!("{event:#?}")
+                }
+            }
+        }
+        if registry().with(PanicOnError).try_init().is_err() {
+            get_default(|subscriber| {
+                assert!(subscriber.downcast_ref::<PanicOnError>().is_some());
+            })
+        }
+    }
+}
