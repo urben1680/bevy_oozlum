@@ -90,13 +90,11 @@ impl FrameTransitionLog {
         self.frames.truncate(self.index);
         let to_drain = self
             .frames
-            .partition_point(|frame| *frame < meta.past_end_world_state());
+            .partition_point(|frame| *frame < meta.past_end());
         self.frames.drain(..to_drain);
-        self.frames.push_back(meta.present_world_state());
-        // do not consider present push to be part of the past, user needs to increase return value if needed
-        let past_len = self.index - to_drain;
-        self.index = past_len + 1;
-        past_len
+        self.frames.push_back(meta.now());
+        self.index = self.index + 1 - to_drain;
+        self.index
     }
     pub fn clear(&mut self) {
         self.frames.clear();
@@ -110,7 +108,7 @@ impl FrameTransitionLog {
             index_oob();
             return false;
         };
-        let expects_backward = frame == meta.present_world_state() + 1;
+        let expects_backward = frame == meta.now() + 1;
         if expects_backward {
             self.index = index;
         }
@@ -120,7 +118,7 @@ impl FrameTransitionLog {
         let Some(&frame) = self.frames.get(self.index) else {
             return false;
         };
-        let expects_forward = frame == meta.present_world_state();
+        let expects_forward = frame == meta.now();
         if expects_forward {
             self.index += 1;
         }
@@ -163,7 +161,7 @@ mod test {
                 .expect("should update");
         }
         fn forward_log(&mut self, expected_forward_log_updates: usize) {
-            let previous = self.meta.present_world_state() + 1;
+            let previous = self.meta.now() + 1;
             assert_eq!(self.meta.queue_log(previous), Ok(1));
             self.meta
                 .update(|meta| {
@@ -187,7 +185,7 @@ mod test {
                 .expect("should update");
         }
         fn backward_log(&mut self, expected_backward_log_updates: usize) {
-            let previous = self.meta.present_world_state() - 1;
+            let previous = self.meta.now() - 1;
             assert_eq!(self.meta.queue_log(previous), Ok(1));
             self.meta
                 .update(|meta| {
@@ -215,12 +213,12 @@ mod test {
     #[test]
     fn log_traversal_works() {
         let mut log = Log::new(4, 0);
-        log.forward(vec![0]); // frame #1
-        log.forward(vec![1, 2]); // frame #2
-        log.forward(vec![3]);
+        log.forward(vec![1]); // frame #1
+        log.forward(vec![2, 3]); // frame #2
+        log.forward(vec![4]);
         log.forward(vec![]);
         // shortened log
-        log.forward(vec![3, 4]);
+        log.forward(vec![4, 5]);
 
         log.backward_log(2);
         log.backward_log(0);
@@ -234,7 +232,6 @@ mod test {
         log.backward_log(0);
         log.backward_log(1);
 
-        // the two logs at frame #2 remain
-        log.forward(vec![2]);
+        log.forward(vec![3]);
     }
 }
