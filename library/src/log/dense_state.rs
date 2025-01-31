@@ -3,8 +3,7 @@ use std::{
     collections::{
         vec_deque::{Drain, Iter},
         TryReserveError, VecDeque,
-    },
-    ops::Deref,
+    }, hash::Hash, ops::Deref
 };
 
 use bevy::reflect::Reflect;
@@ -93,6 +92,36 @@ impl<T> Deref for DenseStateLog<T> {
     type Target = T;
     fn deref(&self) -> &Self::Target {
         &self.present
+    }
+}
+
+impl<T: PartialEq> PartialEq<Self> for DenseStateLog<T> {
+    fn eq(&self, other: &Self) -> bool {
+        **self == **other
+    }
+}
+
+impl<T: PartialEq> PartialEq<T> for DenseStateLog<T> {
+    fn eq(&self, other: &T) -> bool {
+        **self == *other
+    }
+}
+
+impl<T: PartialOrd> PartialOrd<Self> for DenseStateLog<T> {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        (**self).partial_cmp(&**other)
+    }
+}
+
+impl<T: PartialOrd> PartialOrd<T> for DenseStateLog<T> {
+    fn partial_cmp(&self, other: &T) -> Option<std::cmp::Ordering> {
+        (**self).partial_cmp(other)
+    }
+}
+
+impl<T: Hash> Hash for DenseStateLog<T> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        (**self).hash(state)
     }
 }
 
