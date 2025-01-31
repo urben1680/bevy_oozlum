@@ -1,14 +1,13 @@
 use core::fmt::Debug;
 use std::{
-    collections::{vec_deque::Iter, TryReserveError, VecDeque},
-    ops::Deref,
+    collections::{vec_deque::Iter, TryReserveError, VecDeque}, hash::Hash, ops::Deref
 };
 
 use bevy::reflect::Reflect;
 
 use super::{index_oob, OutOfLog, SparseDrain, SparseValue};
 
-#[derive(Debug, Clone, Reflect)]
+#[derive(Debug, Default, Clone, Reflect)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SparseStateLog<T> {
     /// SparseValue.skips represents the number of None pushes after the state in the struct
@@ -106,6 +105,36 @@ impl<T> Deref for SparseStateLog<T> {
     type Target = T;
     fn deref(&self) -> &Self::Target {
         &self.present
+    }
+}
+
+impl<T: PartialEq> PartialEq<Self> for SparseStateLog<T> {
+    fn eq(&self, other: &Self) -> bool {
+        **self == **other
+    }
+}
+
+impl<T: PartialEq> PartialEq<T> for SparseStateLog<T> {
+    fn eq(&self, other: &T) -> bool {
+        **self == *other
+    }
+}
+
+impl<T: PartialOrd> PartialOrd<Self> for SparseStateLog<T> {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        (**self).partial_cmp(&**other)
+    }
+}
+
+impl<T: PartialOrd> PartialOrd<T> for SparseStateLog<T> {
+    fn partial_cmp(&self, other: &T) -> Option<std::cmp::Ordering> {
+        (**self).partial_cmp(other)
+    }
+}
+
+impl<T: Hash> Hash for SparseStateLog<T> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        (**self).hash(state)
     }
 }
 
