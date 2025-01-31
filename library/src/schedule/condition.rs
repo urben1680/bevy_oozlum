@@ -68,7 +68,7 @@ impl<T: ReadOnlySystem<Out = bool>> RevCondition<T> {
             RevDirection::NOT_LOG => {
                 let out = valid && eval_cond(&mut self.condition);
                 self.log.push_and_pop_past(
-                    meta.past_world_states().saturating_sub(1) as usize,
+                    meta.past_len() as usize,
                     out.then_some(())
                 );
                 out
