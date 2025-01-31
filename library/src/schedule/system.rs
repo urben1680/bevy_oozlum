@@ -474,3 +474,95 @@ fn check_tick(this: &mut Tick, change_tick: Tick) {
         *this = Tick::new(change_tick.get().wrapping_sub(Tick::MAX.get()));
     }
 }
+
+#[cfg(test)]
+mod test {
+    use bevy::{
+        app::{App, Update},
+        ecs::{
+            change_detection::ResMut,
+            component::{Component, ComponentId},
+            entity::Entity,
+            event::Event,
+            observer::Trigger,
+            schedule::IntoSystemConfigs,
+            system::{Commands, IntoSystem},
+            world::{DeferredWorld, World},
+        },
+    };
+
+    use crate::{prelude::*, test::panic_on_error_events};
+
+    fn blank_undo_redo(_: &mut World, _: UndoRedoDirection) {}
+
+    #[derive(Event)]
+    struct Observer;
+    fn observer(_: Trigger<Observer>, mut world: DeferredWorld) {
+        world.buffer_undo_redo(blank_undo_redo);
+        world.commands().queue(|world: &mut World| {
+            world.spawn(EmptyOnAdd);
+        });
+    }
+
+    #[derive(Event)]
+    struct EmptyObserver;
+    fn empty_observer(_: Trigger<Observer>, mut world: DeferredWorld) {
+        world.buffer_undo_redo(blank_undo_redo);
+    }
+
+    #[derive(Component)]
+    #[component(on_add = on_add)]
+    struct OnAdd;
+    fn on_add(mut world: DeferredWorld, _: Entity, _: ComponentId) {
+        world.buffer_undo_redo(blank_undo_redo);
+        world.commands().queue(|world: &mut World| {
+            world.trigger(EmptyObserver);
+        });
+    }
+
+    #[derive(Component)]
+    #[component(on_add = empty_on_add)]
+    struct EmptyOnAdd;
+    fn empty_on_add(mut world: DeferredWorld, _: Entity, _: ComponentId) {
+        world.buffer_undo_redo(blank_undo_redo);
+    }
+
+    fn assert_system_drains_all_undo_redo<M>(system: impl IntoSystem<(), (), M> + Copy + 'static) {
+        panic_on_error_events();
+        let mut app = App::new();
+        app.add_plugins(RevSystemsPlugin::add_meta_and_runner(
+            RevMeta::default(),
+            Update,
+        ))
+        // non-reversible systems should leak undo_redo into the next reversible system
+        .add_systems(RevUpdate, system.before(RevSystemsSet))
+        .rev_add_systems(RevUpdate, system)
+        .add_observer(observer)
+        .add_observer(empty_observer)
+        .update();
+        assert!(app.world().resource::<UndoRedoBuffer>().is_empty());
+    }
+
+    #[test]
+    fn non_exclusive_system_drains_all_undo_redo() {
+        assert_system_drains_all_undo_redo(
+            |mut buffer: ResMut<UndoRedoBuffer>, mut commands: Commands| {
+                buffer.buffer_undo_redo(blank_undo_redo);
+                commands.buffer_undo_redo(blank_undo_redo);
+                commands.queue(|world: &mut World| {
+                    world.trigger(Observer);
+                    world.spawn(OnAdd);
+                });
+            },
+        )
+    }
+
+    #[test]
+    fn exclusive_system_drains_all_undo_redo() {
+        assert_system_drains_all_undo_redo(|world: &mut World| {
+            world.buffer_undo_redo(blank_undo_redo);
+            world.trigger(Observer);
+            world.spawn(OnAdd);
+        })
+    }
+}
