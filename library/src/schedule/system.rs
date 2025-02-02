@@ -22,7 +22,7 @@ use crate::{
     error_per_flag,
     meta::RevMeta,
     schedule::{BackwardSet, BwdCmdSet, BwdCmdSysSet, BwdSysSet, ForwardSet, FwdSysSet},
-    undo_redo::{UndoRedoBuffer, UndoRedoLog, UndoRedoLogErr},
+    undo_redo::{UndoRedoBuffer, UndoRedoLog, UndoRedoLogError},
 };
 
 use super::{IntoRevSystemConfigs, RevSystemConfigs, RevSystemSetConfigs};
@@ -246,7 +246,7 @@ impl<T: System> System for ArcSystem<T> {
             shared.system.run(input, world)
         } else if self.forward {
             let out = shared.system.run(input, world);
-            if let Err(err) = shared.commands_log.forward(world) {
+            if let Err(err) = shared.commands_log.forward(world, &self.name) {
                 error_per_flag!(
                     &mut self.commands_err,
                     "Reversible commands from reversible exclusive system {} could not be done/redone: {err:#?}",
@@ -255,7 +255,7 @@ impl<T: System> System for ArcSystem<T> {
             }
             out
         } else {
-            if let Err(err) = shared.commands_log.backward(world) {
+            if let Err(err) = shared.commands_log.backward(world, &self.name) {
                 error_per_flag!(
                     &mut self.commands_err,
                     "Reversible commands from reversible exclusive system {} could not be undone: {err:#?}",
@@ -284,13 +284,10 @@ impl<T: System> System for ArcSystem<T> {
         }
 
         // reverisble commands are now in the buffer resource so commands_log can take them
-        match shared.commands_log.forward(world) {
-            Ok(()) | Err(UndoRedoLogErr::UnexpectedUpdate(_)) => {}
-            Err(err) => error_per_flag!(
-                &mut self.commands_err,
-                "Reversible commands from reversible system {} could not be done/redone: {err:#?}",
-                self.name
-            ),
+        match shared.commands_log.forward(world, &self.name) {
+            Ok(()) => {}
+            Err(UndoRedoLogError::UnexpectedUpdate { .. }) => {} // bevy sometimes runs sync points regardless if their system ran
+            Err(err) => error_per_flag!(&mut self.commands_err, "{err}"),
         }
     }
     fn queue_deferred(&mut self, _world: DeferredWorld) {
@@ -410,14 +407,11 @@ impl<T: System> System for CommandsBackward<T> {
             .try_lock()
             .unwrap_or_else(expect_lock(&self.name))
             .commands_log
-            .backward(world);
+            .backward(world, &self.name);
         match result {
-            Ok(()) | Err(UndoRedoLogErr::UnexpectedUpdate(_)) => {}
-            Err(err) => error_per_flag!(
-                &mut self.commands_err,
-                "Reversible commands from reversible system {} could not be undone: {err:#?}",
-                self.name
-            ),
+            Ok(()) => {}
+            Err(UndoRedoLogError::UnexpectedUpdate { .. }) => {} // bevy sometimes runs sync points regardless if their system ran
+            Err(err) => error_per_flag!(&mut self.commands_err, "{err}"),
         }
     }
     fn queue_deferred(&mut self, _world: DeferredWorld) {
@@ -540,7 +534,10 @@ mod test {
         .add_observer(observer)
         .add_observer(empty_observer)
         .update();
-        assert!(app.world().resource::<UndoRedoBuffer>().is_empty());
+        assert!(app
+            .world()
+            .resource::<UndoRedoBuffer>()
+            .undo_redo_is_empty());
     }
 
     #[test]

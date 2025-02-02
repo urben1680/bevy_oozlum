@@ -9,7 +9,7 @@ use std::{
 
 use bevy::reflect::Reflect;
 
-use super::{AmountErr, DenseStateLog, EntryAmount, LogMut, OutOfLog, ValueEntry, USIZE_BYTES};
+use super::{PushedTooMany, DenseStateLog, EntryAmount, LogMut, OutOfLog, ValueEntry, USIZE_BYTES};
 
 #[allow(private_bounds)]
 #[derive(Debug, Clone, Reflect)]
@@ -330,12 +330,12 @@ impl<T, U, const AMOUNT_BYTES: usize> DenseStatesLog<T, U, AMOUNT_BYTES> {
     pub fn try_new(
         states: impl IntoIterator<Item = T>,
         entry: U,
-    ) -> Result<Self, AmountErr<IntoIter<T>, U, AMOUNT_BYTES>> {
+    ) -> Result<Self, PushedTooMany<IntoIter<T>, U, AMOUNT_BYTES>> {
         let states = VecDeque::from_iter(states);
         let pushed_amount = states.len();
         let entry_amount = EntryAmount::new(entry, pushed_amount);
         if pushed_amount != entry_amount.amount() {
-            return Err(AmountErr {
+            return Err(PushedTooMany {
                 values: states.into_iter(),
                 entry: entry_amount.entry,
             });
@@ -351,13 +351,13 @@ impl<T, U, const AMOUNT_BYTES: usize> DenseStatesLog<T, U, AMOUNT_BYTES> {
         entry: U,
         states_capacity: usize,
         entries_capacity: usize,
-    ) -> Result<Self, AmountErr<IntoIter<T>, U, AMOUNT_BYTES>> {
+    ) -> Result<Self, PushedTooMany<IntoIter<T>, U, AMOUNT_BYTES>> {
         let mut states_deque = VecDeque::with_capacity(states_capacity);
         states_deque.extend(states);
         let pushed_amount = states_deque.len();
         let entry_amount = EntryAmount::new(entry, pushed_amount);
         if pushed_amount != entry_amount.amount() {
-            return Err(AmountErr {
+            return Err(PushedTooMany {
                 values: states_deque.into_iter(),
                 entry: entry_amount.entry,
             });
@@ -372,14 +372,14 @@ impl<T, U, const AMOUNT_BYTES: usize> DenseStatesLog<T, U, AMOUNT_BYTES> {
     pub fn try_push<Out: Into<U>>(
         &mut self,
         c: impl FnOnce(LogMut<T>) -> Out,
-    ) -> Result<(), AmountErr<Drain<T>, U, AMOUNT_BYTES>> {
+    ) -> Result<(), PushedTooMany<Drain<T>, U, AMOUNT_BYTES>> {
         self.states.truncate(self.index);
         let entry = c(LogMut(&mut self.states)).into();
         let pushed_amount = self.states.len() - self.index;
         let entry_amount = EntryAmount::new(entry, pushed_amount);
         if pushed_amount != entry_amount.amount() {
             let values = self.states.drain(self.index..);
-            return Err(AmountErr {
+            return Err(PushedTooMany {
                 values,
                 entry: entry_amount.entry,
             });
@@ -392,14 +392,14 @@ impl<T, U, const AMOUNT_BYTES: usize> DenseStatesLog<T, U, AMOUNT_BYTES> {
         &mut self,
         max_past_len: usize,
         c: impl FnOnce(LogMut<T>) -> Out,
-    ) -> Result<Option<ValueEntry<Drain<T>, U>>, AmountErr<Drain<T>, U, AMOUNT_BYTES>> {
+    ) -> Result<Option<ValueEntry<Drain<T>, U>>, PushedTooMany<Drain<T>, U, AMOUNT_BYTES>> {
         self.states.truncate(self.index);
         let entry = c(LogMut(&mut self.states)).into();
         let pushed_amount = self.states.len() - self.index;
         let entry_amount = EntryAmount::new(entry, pushed_amount);
         if pushed_amount != entry_amount.amount() {
             let values = self.states.drain(self.index..);
-            return Err(AmountErr {
+            return Err(PushedTooMany {
                 values,
                 entry: entry_amount.entry,
             });
@@ -422,7 +422,7 @@ impl<T, U, const AMOUNT_BYTES: usize> DenseStatesLog<T, U, AMOUNT_BYTES> {
         &mut self,
         max_past_len: usize,
         c: impl FnOnce(LogMut<T>) -> Out,
-    ) -> Result<(Drain<T>, Drain<EntryAmount<U, AMOUNT_BYTES>>), AmountErr<Drain<T>, U, AMOUNT_BYTES>>
+    ) -> Result<(Drain<T>, Drain<EntryAmount<U, AMOUNT_BYTES>>), PushedTooMany<Drain<T>, U, AMOUNT_BYTES>>
     {
         self.states.truncate(self.index);
         let entry = c(LogMut(&mut self.states)).into();
@@ -430,7 +430,7 @@ impl<T, U, const AMOUNT_BYTES: usize> DenseStatesLog<T, U, AMOUNT_BYTES> {
         let entry_amount = EntryAmount::new(entry, pushed_amount);
         if pushed_amount != entry_amount.amount() {
             let values = self.states.drain(self.index..);
-            return Err(AmountErr {
+            return Err(PushedTooMany {
                 values,
                 entry: entry_amount.entry,
             });
@@ -451,12 +451,12 @@ impl<T, U, const AMOUNT_BYTES: usize> DenseStatesLog<T, U, AMOUNT_BYTES> {
         &mut self,
         iter: impl IntoIterator<Item = T>,
         entry: U,
-    ) -> Result<(), AmountErr<IntoIter<T>, U, AMOUNT_BYTES>> {
+    ) -> Result<(), PushedTooMany<IntoIter<T>, U, AMOUNT_BYTES>> {
         let mut states = VecDeque::from_iter(iter);
         let pushed_amount = states.len();
         let entry_amount = EntryAmount::new(entry, pushed_amount);
         if pushed_amount != entry_amount.amount() {
-            return Err(AmountErr {
+            return Err(PushedTooMany {
                 values: states.into_iter(),
                 entry: entry_amount.entry,
             });

@@ -1,7 +1,5 @@
 use std::{
-    collections::{vec_deque::Drain, VecDeque},
-    fmt::Debug,
-    iter::FusedIterator,
+    collections::{vec_deque::Drain, VecDeque}, error::Error, fmt::{Debug, Display}, iter::FusedIterator
 };
 
 use bevy::{log::error, reflect::Reflect};
@@ -36,8 +34,47 @@ pub use sparse_states::SparseStatesLog;
 pub use sparse_transition::SparseTransitionLog;
 pub use sparse_transitions::SparseTransitionsLog;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct OutOfLog;
+
+impl Display for OutOfLog {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "a log was traversed beyond it's bounds or it was attempted to queue RevMeta to a frame outside the log")
+    }
+}
+
+impl Error for OutOfLog {}
+
+pub struct PushedTooMany<I: ExactSizeIterator, U, const AMOUNT_BYTES: usize> {
+    pub values: I,
+    pub entry: U,
+}
+
+impl<I: ExactSizeIterator, U, const AMOUNT_BYTES: usize> PushedTooMany<I, U, AMOUNT_BYTES> {
+    pub const MAX_AMOUNT: usize = usize::MAX >> ((USIZE_BYTES - AMOUNT_BYTES) * 8);
+    // easier to call with &self during error handling
+    pub fn max_amount(&self) -> usize {
+        Self::MAX_AMOUNT
+    }
+}
+
+// makes unwrap possible without requiring additional Debug bounds everywhere
+impl<I: ExactSizeIterator, U, const AMOUNT_BYTES: usize> Debug for PushedTooMany<I, U, AMOUNT_BYTES> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct(std::any::type_name::<Self>())
+            .field("pushed_amount", &self.values.len())
+            .field("max_amount", &self.max_amount())
+            .finish_non_exhaustive()
+    }
+}
+
+impl<I: ExactSizeIterator, U, const AMOUNT_BYTES: usize> Display for PushedTooMany<I, U, AMOUNT_BYTES> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "attempted to push {} values into a log that support only {} values per update", self.values.len(), Self::MAX_AMOUNT)
+    }
+}
+
+impl<I: ExactSizeIterator, U, const AMOUNT_BYTES: usize> Error for PushedTooMany<I, U, AMOUNT_BYTES> {}
 
 /// A `&mut VecDeque<T>` wrapper that does not expose methods which remove from the deque.
 pub struct LogMut<'a, T>(&'a mut VecDeque<T>);
@@ -46,14 +83,8 @@ impl<'a, T> LogMut<'a, T> {
     pub fn append(&mut self, other: &mut VecDeque<T>) {
         self.0.append(other);
     }
-}
-
-impl<'a, T> Extend<&'a T> for LogMut<'a, T>
-where
-    T: 'a + Copy,
-{
-    fn extend<I: IntoIterator<Item = &'a T>>(&mut self, iter: I) {
-        self.0.extend(iter);
+    pub fn push(&mut self, value: T) {
+        self.0.push_back(value);
     }
 }
 
@@ -63,26 +94,12 @@ impl<'a, T> Extend<T> for LogMut<'a, T> {
     }
 }
 
-pub struct AmountErr<I: ExactSizeIterator, U, const AMOUNT_BYTES: usize> {
-    pub values: I,
-    pub entry: U,
-}
-
-impl<I: ExactSizeIterator, U, const AMOUNT_BYTES: usize> AmountErr<I, U, AMOUNT_BYTES> {
-    pub const MAX_AMOUNT: usize = usize::MAX >> ((USIZE_BYTES - AMOUNT_BYTES) * 8);
-    // easier to call with &self during error handling
-    pub fn max_amount(&self) -> usize {
-        Self::MAX_AMOUNT
-    }
-}
-
-// makes unwrap possible without requiring additional Debug bounds everywhere
-impl<I: ExactSizeIterator, U, const AMOUNT_BYTES: usize> Debug for AmountErr<I, U, AMOUNT_BYTES> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct(std::any::type_name::<Self>())
-            .field("pushed_amount", &self.values.len())
-            .field("max_amount", &self.max_amount())
-            .finish_non_exhaustive()
+impl<'a, T> Extend<&'a T> for LogMut<'a, T>
+where
+    T: 'a + Copy,
+{
+    fn extend<I: IntoIterator<Item = &'a T>>(&mut self, iter: I) {
+        self.0.extend(iter);
     }
 }
 
@@ -306,13 +323,13 @@ fn index_oob() -> OutOfLog {
 
 #[cfg(test)]
 mod test {
-    use super::{AmountErr, EntryAmount, ValueEntry};
+    use super::{PushedTooMany, EntryAmount, ValueEntry};
 
     pub(super) fn collect_pop_result<
         I1: Iterator<Item = char>,
         I2: ExactSizeIterator<Item = char>,
     >(
-        actual_pop: Result<Option<ValueEntry<I1, char>>, AmountErr<I2, char, 1>>,
+        actual_pop: Result<Option<ValueEntry<I1, char>>, PushedTooMany<I2, char, 1>>,
     ) -> Result<Option<(Vec<char>, char)>, (Vec<char>, char)> {
         match actual_pop {
             Ok(None) => Ok(None),
@@ -326,7 +343,7 @@ mod test {
         I2: Iterator<Item = EntryAmount<char, 1>>,
         I3: ExactSizeIterator<Item = char>,
     >(
-        actual_drain: Result<(I1, I2), AmountErr<I3, char, 1>>,
+        actual_drain: Result<(I1, I2), PushedTooMany<I3, char, 1>>,
     ) -> Result<Vec<(Vec<char>, char)>, (Vec<char>, char)> {
         match actual_drain {
             Ok(ok) => Ok(collect_drain(ok)),

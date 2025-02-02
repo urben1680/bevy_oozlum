@@ -1,6 +1,8 @@
 use core::fmt::Debug;
 use std::{
-    collections::{vec_deque::Iter, TryReserveError, VecDeque}, hash::Hash, ops::Deref
+    collections::{vec_deque::Iter, TryReserveError, VecDeque},
+    hash::Hash,
+    ops::Deref,
 };
 
 use bevy::reflect::Reflect;
@@ -235,17 +237,17 @@ impl<T> SparseStateLog<T> {
     }
     pub fn push_and_drain_past(&mut self, max_past_len: usize, state: Option<T>) -> SparseDrain<T> {
         self.push(state);
-        let mut drain_amount = 0;
+        let mut to_drain = 0;
         for entry in self.states.iter() {
             let less = self.past_len - entry.len();
             if less < max_past_len {
                 break;
             }
             self.past_len = less;
-            drain_amount += 1;
+            to_drain += 1;
         }
-        self.index -= drain_amount;
-        SparseDrain(self.states.drain(..drain_amount))
+        self.index -= to_drain;
+        SparseDrain(self.states.drain(..to_drain))
     }
     pub(super) fn push_and_iter_to_drain_past(
         &mut self,
@@ -253,17 +255,17 @@ impl<T> SparseStateLog<T> {
         state: Option<T>,
     ) -> Iter<SparseValue<T>> {
         self.push(state);
-        let mut drain_amount = 0;
+        let mut to_drain = 0;
         for entry in self.states.iter() {
             let less = self.past_len - entry.len();
             if less < max_past_len {
                 break;
             }
             self.past_len = less;
-            drain_amount += 1;
+            to_drain += 1;
         }
-        self.index -= drain_amount;
-        self.states.range(..drain_amount)
+        self.index -= to_drain;
+        self.states.range(..to_drain)
     }
     pub(super) fn drain_past(&mut self, to_drain: usize) -> SparseDrain<T> {
         SparseDrain(self.states.drain(..to_drain))

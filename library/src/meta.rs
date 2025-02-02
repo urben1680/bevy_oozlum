@@ -1,4 +1,5 @@
 use core::num::NonZeroU64;
+use std::{error::Error, fmt::Display};
 
 use bevy::{
     ecs::{
@@ -9,7 +10,7 @@ use bevy::{
         system::{IntoSystem, ReadOnlySystemParam, Res, Resource, System, SystemMeta, SystemParam},
         world::{unsafe_world_cell::UnsafeWorldCell, World},
     },
-    log::warn_once,
+    log::error_once,
     reflect::{std_traits::ReflectDefault, Reflect},
     utils::tracing::info,
 };
@@ -20,13 +21,33 @@ use bevy::reflect::{ReflectDeserialize, ReflectSerialize};
 use crate::{log::OutOfLog, schedule::RevUpdate, undo_redo::UndoRedoBuffer};
 
 #[derive(Clone, Debug, PartialEq)]
-pub enum RevTryRunScheduleError {
+pub enum TryRunRevUpdateError {
     RevMetaMissingFirstCall,
     RevMetaMissing { existed_previously: bool },
-    RevMetaRemovedInSchedule { meta: RevMeta },
-    UnexpectedInitialRunning { meta: RevMeta },
-    RevUpdateMissing { meta: RevMeta },
+    RevMetaRemovedInSchedule { frame: Option<u64> },
+    UnexpectedInitialRunning(RevMeta),
+    RevUpdateMissing(RevMeta),
+    UndoRedoBufferMissingAfterUpdate(RevMeta),
+    UndoRedoBufferNotEmptyBeforeUpdate(RevMeta),
+    UndoRedoBufferOutOfLogAfterUpdate(RevMeta),
 }
+
+impl Display for TryRunRevUpdateError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::RevMetaMissingFirstCall => write!(f, "RevMeta does not exist yet, RevUpdate will not be called until it is inserted"),
+            Self::RevMetaMissing { .. } => write!(f, "RevMeta was removed, RevUpdate will not be called until it is inserted again"),
+            Self::RevMetaRemovedInSchedule { frame } => write!(f, "RevMeta was removed in while RevUpdate ran at frame {}", frame.unwrap_or(u64::MAX)),
+            Self::UnexpectedInitialRunning(meta) => write!(f, "RevMeta was in a running state at frame {} before RevUpdate could run", meta.now()),
+            Self::RevUpdateMissing(meta) => write!(f, "RevUpdate was missing at frame {}", meta.now()),
+            Self::UndoRedoBufferMissingAfterUpdate(meta) => write!(f, "UndoRedoBuffer was removed during RevUpdate at frame {}", meta.now()),
+            Self::UndoRedoBufferNotEmptyBeforeUpdate(meta) => write!(f, "UndoRedoBuffer was not fully drained at frame {}, RevUpdate is not run", meta.now()),
+            Self::UndoRedoBufferOutOfLogAfterUpdate(meta) => write!(f, "UndoRedoBuffer was in an invalid state after RevUpdate ran at frame {}", meta.now()),
+        }
+    }
+}
+
+impl Error for TryRunRevUpdateError {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Reflect)]
 #[reflect(PartialEq)]
@@ -262,7 +283,7 @@ impl RevMeta {
     /// Queue to go forward.
     ///
     /// Will cause logged future frames to be forgotten.
-    pub fn queue_forward(&mut self) {
+    pub fn queue_not_log_forward(&mut self) {
         self.queue = Some(InternalDirection::RunningForward);
     }
     pub fn queue_log(&mut self, to: u64) -> Result<u64, OutOfLog> {
@@ -292,9 +313,7 @@ impl RevMeta {
     pub fn queue_pause(&mut self) {
         self.queue = Some(InternalDirection::Pause);
     }
-    pub fn try_run_rev_update(
-        world: &mut World,
-    ) -> Result<Option<UndoRedoBuffer>, RevTryRunScheduleError> {
+    pub fn try_run_rev_update(world: &mut World) -> Result<(), TryRunRevUpdateError> {
         #[derive(Resource, Clone, Copy)]
         struct Existed(bool);
 
@@ -302,9 +321,9 @@ impl RevMeta {
             world.insert_resource(Existed(true));
         } else {
             let err = match world.get_resource::<Existed>().cloned() {
-                None => RevTryRunScheduleError::RevMetaMissingFirstCall,
+                None => TryRunRevUpdateError::RevMetaMissingFirstCall,
                 Some(Existed(existed_previously)) => {
-                    RevTryRunScheduleError::RevMetaMissing { existed_previously }
+                    TryRunRevUpdateError::RevMetaMissing { existed_previously }
                 }
             };
             world.insert_resource(Existed(false));
@@ -312,37 +331,53 @@ impl RevMeta {
         }
 
         world.resource_scope(|world: &mut World, mut meta: Mut<Self>| {
-            let buffer = world
-                .get_resource_mut::<UndoRedoBuffer>()
-                .is_some_and(|buffer| !buffer.is_empty())
-                .then(|| world.remove_resource::<UndoRedoBuffer>().unwrap());
-            world.init_resource::<UndoRedoBuffer>();
+            let buffer = world.get_resource_or_init::<UndoRedoBuffer>();
+
+            if !buffer.undo_redo_is_empty() {
+                return Err(TryRunRevUpdateError::UndoRedoBufferNotEmptyBeforeUpdate(
+                    meta.clone(),
+                ));
+            }
 
             if meta.get_direction().is_some() {
-                return Err(RevTryRunScheduleError::UnexpectedInitialRunning {
-                    meta: meta.clone(),
-                });
+                return Err(TryRunRevUpdateError::UnexpectedInitialRunning(meta.clone()));
             }
             let previous = meta.clone();
             let result = meta.update(|meta| {
-                world
-                    .try_schedule_scope(RevUpdate, |world, schedule| {
-                        world.insert_resource(meta.clone());
-                        schedule.run(world);
-                    })
-                    .map_err(|_| RevTryRunScheduleError::RevUpdateMissing { meta: meta.clone() })
+                let frame = meta.now();
+                let result = world.try_schedule_scope(RevUpdate, |world, schedule| {
+                    world.insert_resource(meta.clone());
+                    schedule.run(world);
+                });
+                match result {
+                    Ok(()) => {
+                        if !world.contains_resource::<UndoRedoBuffer>() {
+                            Err(TryRunRevUpdateError::UndoRedoBufferMissingAfterUpdate(
+                                meta.clone(),
+                            ))
+                        } else {
+                            world.resource_scope(|world, mut buffer: Mut<UndoRedoBuffer>| {
+                                match buffer.update_finalize(&meta, world) {
+                                    Ok(()) => Ok(frame),
+                                    Err(OutOfLog) => Err(TryRunRevUpdateError::UndoRedoBufferOutOfLogAfterUpdate(
+                                        meta.clone(),
+                                    ))
+                                }
+                            })
+                        }
+                    }
+                    Err(_) => Err(TryRunRevUpdateError::RevUpdateMissing(meta.clone())),
+                }
             });
 
             match result.transpose() {
-                Ok(_) => {
+                Ok(frame) => {
                     let Some(updated) = world.remove_resource::<Self>() else {
-                        return Err(RevTryRunScheduleError::RevMetaRemovedInSchedule {
-                            meta: meta.clone(),
-                        });
+                        return Err(TryRunRevUpdateError::RevMetaRemovedInSchedule { frame });
                     };
                     meta.max_world_states = updated.max_world_states;
                     meta.queue = updated.queue;
-                    Ok(buffer)
+                    Ok(())
                 }
                 Err(err) => {
                     world.remove_resource::<Self>();
@@ -354,18 +389,15 @@ impl RevMeta {
     }
     pub fn run_rev_update(world: &mut World) {
         match Self::try_run_rev_update(world) {
-            Err(RevTryRunScheduleError::RevMetaMissingFirstCall) => info!(
+            Err(TryRunRevUpdateError::RevMetaMissingFirstCall) => info!(
                 "RevMeta does not exist yet, reversible schedule RevUpdate will not be called until it is inserted"
             ),
-            Err(RevTryRunScheduleError::RevMetaMissing { existed_previously: true, .. }) => info!(
-                "RevMeta was removed, reversible schedule RevUpdate will not be called until it is inserted again"
-            ),
-            Err(RevTryRunScheduleError::RevUpdateMissing { .. }) => warn_once!(
-                "RevMeta cannot find reversible schedule RevUpdate, make sure to not call RevMeta::update_world recursively"
-            ),
-            Ok(Some(_)) => warn_once!(
-                "`UndoRedoBuffer` was discovered non-empty at the start of the reversible schedule run"
-            ),
+            Err(TryRunRevUpdateError::RevMetaMissing { existed_previously, .. }) => if existed_previously {
+                info!(
+                    "RevMeta was removed, reversible schedule RevUpdate will not be called until it is inserted again"
+                )
+            },
+            Err(err) => error_once!("{err}"),
             _ => {}
         }
     }
@@ -686,7 +718,7 @@ mod test {
         meta.update_internal();
         meta.update_internal();
         assert_eq!(meta.len(), 3, "{meta:#?}");
-        meta.queue_forward();
+        meta.queue_not_log_forward();
         meta.update_internal();
         assert_eq!(meta.len(), 2, "{meta:#?}");
     }

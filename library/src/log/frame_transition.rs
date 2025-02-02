@@ -144,7 +144,7 @@ mod test {
             Self { log, meta }
         }
         fn forward(&mut self, updates_with_expected_past_len: Vec<usize>) {
-            self.meta.queue_forward();
+            self.meta.queue_not_log_forward();
             self.meta
                 .update(|meta| {
                     let before = self.log.clone();

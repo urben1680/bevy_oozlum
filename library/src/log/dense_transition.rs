@@ -119,9 +119,9 @@ impl<T> DenseTransitionLog<T> {
     pub fn push_and_drain_past(&mut self, max_past_len: usize, transition: T) -> Drain<T> {
         self.transitions.truncate(self.index);
         self.transitions.push_back(transition);
-        let excessive = self.transitions.len().saturating_sub(max_past_len);
-        self.index = self.transitions.len() - excessive;
-        self.transitions.drain(..excessive)
+        let to_drain = self.transitions.len().saturating_sub(max_past_len);
+        self.index = self.transitions.len() - to_drain;
+        self.transitions.drain(..to_drain)
     }
     pub(super) fn push_and_iter_to_drain_past(
         &mut self,
@@ -130,9 +130,9 @@ impl<T> DenseTransitionLog<T> {
     ) -> Iter<T> {
         self.transitions.truncate(self.index);
         self.transitions.push_back(transition);
-        let excessive = self.transitions.len().saturating_sub(max_past_len);
-        self.index = self.transitions.len() - excessive;
-        self.transitions.range(..excessive)
+        let to_drain = self.transitions.len().saturating_sub(max_past_len);
+        self.index = self.transitions.len() - to_drain;
+        self.transitions.range(..to_drain)
     }
     pub(super) fn drain_past(&mut self, to_drain: usize) -> Drain<T> {
         self.transitions.drain(..to_drain)

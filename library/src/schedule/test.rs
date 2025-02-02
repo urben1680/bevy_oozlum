@@ -1,5 +1,6 @@
 use std::{
     mem::take,
+    num::NonZeroU64,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -13,7 +14,7 @@ use bevy::{
         component::Component,
         event::Event,
         observer::Trigger,
-        schedule::IntoSystemSet,
+        schedule::{IntoSystemConfigs, IntoSystemSet},
         system::{Commands, IntoSystem, Resource},
         world::{DeferredWorld, World},
     },
@@ -23,7 +24,7 @@ use crate::{
     meta::RevDirection,
     schedule::RevUpdate,
     test::panic_on_error_events,
-    undo_redo::{BuffersUndoRedo, UndoRedo, UndoRedoBuffer},
+    undo_redo::{BuffersUndoRedo, Finalize, UndoRedo, UndoRedoBuffer},
 };
 
 use super::*;
@@ -71,13 +72,28 @@ impl<T> Test<T> {
 impl UndoRedo for Test<u8> {
     fn undo(&mut self, world: &mut World) {
         world
-            .resource_mut::<TestLog>()
+            .resource_mut::<TestLog<false>>()
             .0
             .push(self.map(|n| (n, RevDirection::BackwardLog)));
     }
     fn redo(&mut self, world: &mut World) {
         world
-            .resource_mut::<TestLog>()
+            .resource_mut::<TestLog<false>>()
+            .0
+            .push(self.map(|n| (n, RevDirection::FORWARD_LOG)));
+    }
+}
+
+impl Finalize for Test<u8> {
+    fn finalize_undone(self: Box<Self>, world: &mut World) {
+        world
+            .resource_mut::<TestLog<true>>()
+            .0
+            .push(self.map(|n| (n, RevDirection::BackwardLog)));
+    }
+    fn finalize_redone(self: Box<Self>, world: &mut World) {
+        world
+            .resource_mut::<TestLog<true>>()
             .0
             .push(self.map(|n| (n, RevDirection::FORWARD_LOG)));
     }
@@ -122,7 +138,7 @@ impl IntoIterator for TestBundle {
 }
 
 #[derive(Resource, Default)]
-struct TestLog(Vec<Test<(u8, RevDirection)>>);
+struct TestLog<const FINALIZE: bool>(Vec<Test<(u8, RevDirection)>>);
 
 #[derive(Component)]
 struct SysHook(u8);
@@ -145,7 +161,7 @@ struct SysCmdObsv(u8);
 /// Will add sync point
 fn non_exclusive_system<const N: u8>(
     direction: RevDirection,
-    mut log: ResMut<TestLog>,
+    mut log: ResMut<TestLog<false>>,
     commands: Commands,
 ) {
     log.0.push(Test::Sys((N, direction)));
@@ -175,7 +191,7 @@ fn non_exclusive_system_commands_only<const N: u8>(
 fn exclusive_system<const N: u8>(world: &mut World) {
     let direction = world.resource::<RevMeta>().direction();
     world
-        .resource_mut::<TestLog>()
+        .resource_mut::<TestLog<false>>()
         .0
         .push(Test::Sys((N, direction)));
     if direction != RevDirection::NOT_LOG {
@@ -198,21 +214,37 @@ fn system_command<const N: u8>(world: &mut World) {
 
     // todo: document that stuff like this belongs right before the return
     world
-        .resource_mut::<TestLog>()
+        .resource_mut::<TestLog<false>>()
         .0
         .push(Test::SysCmd((N, RevDirection::NOT_LOG)));
 
-    world.buffer_undo_redo(Test::SysCmd(N));
+    let test = Test::SysCmd(N);
+    world.buffer_undo_redo_finalize(test, test);
+}
+
+#[derive(Clone, Copy)]
+enum TestEndVariant {
+    SkipLogAndFinalize,
+    FinalizeRedone,
+    FinalizeUndone,
 }
 
 fn test_run<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
     configs: Vec<C>,
     expected: Vec<Vec<TestBundle>>,
+    test_log_and_finalize: bool,
 ) {
     panic_on_error_events();
+    let test_ends = if test_log_and_finalize {
+        vec![TestEndVariant::FinalizeUndone, TestEndVariant::FinalizeRedone]
+    } else {
+        vec![TestEndVariant::SkipLogAndFinalize]
+    };
     for (variant, config) in configs.into_iter().enumerate() {
-        for apply_final_deferred in [true, false] {
-            test_run_variant(variant, &config, apply_final_deferred, &expected);
+        for test_end in test_ends.iter() {
+            for apply_final_deferred in [true, false] {
+                test_run_variant(variant, &config, apply_final_deferred, &expected, *test_end);
+            }
         }
     }
 }
@@ -222,10 +254,12 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
     config: &C,
     apply_final_deferred: bool,
     expected: &Vec<Vec<TestBundle>>,
+    test_end: TestEndVariant,
 ) {
     // set up world
     let mut world = World::new();
-    world.init_resource::<TestLog>();
+    world.init_resource::<TestLog<false>>();
+    world.init_resource::<TestLog<true>>();
     world.insert_resource(RevMeta::new(None, 0, false));
 
     // set up schedules
@@ -251,7 +285,7 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
         let n = event.0;
 
         world
-            .resource_mut::<TestLog>()
+            .resource_mut::<TestLog<false>>()
             .0
             .push(Test::SysObsv((n, RevDirection::NOT_LOG)));
 
@@ -261,41 +295,46 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
         // trigger command in observer
         world.commands().queue(move |world: &mut World| {
             world
-                .resource_mut::<TestLog>()
+                .resource_mut::<TestLog<false>>()
                 .0
                 .push(Test::SysObsvCmd((n, RevDirection::NOT_LOG)));
 
-            world.buffer_undo_redo(Test::SysObsvCmd(n));
+            let test = Test::SysObsvCmd(n);
+            world.buffer_undo_redo_finalize(test, test);
         });
 
         // buffer reversible observer
-        world.buffer_undo_redo(Test::SysObsv(n));
+        let test = Test::SysObsv(n);
+        world.buffer_undo_redo_finalize(test, test);
     });
     world.add_observer(
         |event: Trigger<SysHookObsv>,
-         mut log: ResMut<TestLog>,
+         mut log: ResMut<TestLog<false>>,
          mut buffer: ResMut<UndoRedoBuffer>| {
             let n = event.0;
             log.0.push(Test::SysHookObsv((n, RevDirection::NOT_LOG)));
-            buffer.buffer_undo_redo(Test::SysHookObsv(n));
+            let test = Test::SysHookObsv(n);
+            buffer.buffer_undo_redo_finalize(test, test);
         },
     );
     world.add_observer(
         |event: Trigger<SysObsvObsv>,
-         mut log: ResMut<TestLog>,
+         mut log: ResMut<TestLog<false>>,
          mut buffer: ResMut<UndoRedoBuffer>| {
             let n = event.0;
             log.0.push(Test::SysObsvObsv((n, RevDirection::NOT_LOG)));
-            buffer.buffer_undo_redo(Test::SysObsvObsv(n));
+            let test = Test::SysObsvObsv(n);
+            buffer.buffer_undo_redo_finalize(test, test);
         },
     );
     world.add_observer(
         |event: Trigger<SysCmdObsv>,
-         mut log: ResMut<TestLog>,
+         mut log: ResMut<TestLog<false>>,
          mut buffer: ResMut<UndoRedoBuffer>| {
             let n = event.0;
             log.0.push(Test::SysCmdObsv((n, RevDirection::NOT_LOG)));
-            buffer.buffer_undo_redo(Test::SysCmdObsv(n));
+            let test = Test::SysCmdObsv(n);
+            buffer.buffer_undo_redo_finalize(test, test);
         },
     );
 
@@ -305,7 +344,7 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
         .on_add(|mut world, entity, _| {
             let n = world.entity(entity).get::<SysHook>().unwrap().0;
             world
-                .resource_mut::<TestLog>()
+                .resource_mut::<TestLog<false>>()
                 .0
                 .push(Test::SysHook((n, RevDirection::NOT_LOG)));
 
@@ -315,50 +354,31 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
             // trigger command in hook
             world.commands().queue(move |world: &mut World| {
                 world
-                    .resource_mut::<TestLog>()
+                    .resource_mut::<TestLog<false>>()
                     .0
                     .push(Test::SysHookCmd((n, RevDirection::NOT_LOG)));
 
-                world.buffer_undo_redo(Test::SysHookCmd(n));
+                let test = Test::SysHookCmd(n);
+                world.buffer_undo_redo_finalize(test, test);
             });
 
             // buffer reversible hook
-            world.buffer_undo_redo(Test::SysHook(n));
+            let test = Test::SysHook(n);
+            world.buffer_undo_redo_finalize(test, test);
         });
     world
         .register_component_hooks::<SysCmdHook>()
         .on_add(|mut world, entity, _| {
             let n = world.entity(entity).get::<SysCmdHook>().expect("todo").0;
             world
-                .resource_mut::<TestLog>()
+                .resource_mut::<TestLog<false>>()
                 .0
                 .push(Test::SysCmdHook((n, RevDirection::NOT_LOG)));
 
             // buffer reversible hook
-            world.buffer_undo_redo(Test::SysCmdHook(n));
+            let test = Test::SysCmdHook(n);
+            world.buffer_undo_redo_finalize(test, test);
         });
-
-    fn test_step(
-        world: &mut World,
-        variant: usize,
-        apply_final_deferred: bool,
-        step: usize,
-        expected: &Vec<TestBundle>,
-        direction: RevDirection,
-    ) {
-        world.run_schedule(FixedUpdate);
-        let actual = take(&mut world.resource_mut::<TestLog>().0);
-        let iter = expected
-            .iter()
-            .flat_map(|bundle| bundle.into_iter())
-            .map(|test| test.map(|n| (n, direction)));
-        let expected: Vec<_> = if direction.is_forward() {
-            iter.collect()
-        } else {
-            iter.rev().collect()
-        };
-        assert_eq!(actual, expected, "log mismatch! config #{variant}, apply_final_deferred {apply_final_deferred}, {direction:?}, step #{step}");
-    }
 
     // run tests forward
     for (step, expected) in expected.iter().enumerate() {
@@ -370,6 +390,12 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
             expected,
             RevDirection::NOT_LOG,
         );
+    }
+
+    if matches!(test_end, TestEndVariant::SkipLogAndFinalize) {
+        let finalizations = &world.resource::<TestLog<true>>().0;
+        assert!(finalizations.is_empty(), "unexpected finalizations! config #{variant}, apply_final_deferred {apply_final_deferred}, finalizations: {finalizations:?}");
+        return;
     }
 
     // run tests backward log
@@ -400,6 +426,85 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
             RevDirection::FORWARD_LOG,
         );
     }
+
+    let finalizations = &world.resource::<TestLog<true>>().0;
+    assert!(finalizations.is_empty(), "unexpected finalizations! config #{variant}, apply_final_deferred {apply_final_deferred}, finalizations: {finalizations:?}");
+
+    let expected = expected.iter().flatten().cloned().collect();
+    match test_end {
+        TestEndVariant::SkipLogAndFinalize => unreachable!("returned earlier"),
+        TestEndVariant::FinalizeRedone => {
+            test_finalize(&mut world, variant, apply_final_deferred, &expected, true)
+        }
+        TestEndVariant::FinalizeUndone => {
+            test_finalize(&mut world, variant, apply_final_deferred, &expected, false)
+        }
+    }
+}
+
+fn test_step(
+    world: &mut World,
+    variant: usize,
+    apply_final_deferred: bool,
+    step: usize,
+    expected: &Vec<TestBundle>,
+    direction: RevDirection,
+) {
+    world.run_schedule(FixedUpdate);
+    let actual = take(&mut world.resource_mut::<TestLog<false>>().0);
+    let iter = expected
+        .iter()
+        .flat_map(|bundle| bundle.into_iter())
+        .map(|test| test.map(|n| (n, direction)));
+    let expected: Vec<_> = if direction.is_forward() {
+        iter.collect()
+    } else {
+        iter.rev().collect()
+    };
+    assert_eq!(actual, expected, "log mismatch! config #{variant}, apply_final_deferred {apply_final_deferred}, {direction:?}, step #{step}");
+}
+
+fn test_finalize(
+    world: &mut World,
+    variant: usize,
+    apply_final_deferred: bool,
+    expected: &Vec<TestBundle>,
+    redone: bool,
+) {
+    let direction = if redone {
+        RevDirection::FORWARD_LOG
+    } else {
+        RevDirection::BackwardLog
+    };
+    let iter = expected
+        .iter()
+        .flat_map(|bundle| bundle.into_iter())
+        .filter(|test| !matches!(test, Test::Sys(_)))
+        .map(|test| test.map(|n| (n, direction)));
+
+    let mut meta = world.resource_mut::<RevMeta>();
+    meta.queue_not_log_forward();
+
+    let actual;
+    let expected: Vec<_>;
+    if direction.is_forward() {
+        meta.max_world_states = NonZeroU64::new(1);
+        world.run_schedule(FixedUpdate);
+        actual = take(&mut world.resource_mut::<TestLog<true>>().0);
+        expected = iter.collect();
+    } else {
+        assert!(meta.queue_log(0).is_ok(), "{meta:#?}");
+        let past_len = meta.past_len();
+        for _ in 0..past_len {
+            world.run_schedule(FixedUpdate);
+        }
+        world.resource_mut::<RevMeta>().queue_not_log_forward();
+        world.run_schedule(FixedUpdate);
+        actual = take(&mut world.resource_mut::<TestLog<true>>().0);
+        expected = iter.rev().collect();
+    }
+
+    assert_eq!(actual, expected, "log mismatch! config #{variant}, apply_final_deferred {apply_final_deferred}, {direction:?}");
 }
 
 fn a_then_b(
@@ -761,6 +866,7 @@ fn single_non_exclusive_system() {
             TestBundle::NonExclusive(1),
             TestBundle::NonExclusiveSyncPoint(1),
         ]],
+        true,
     );
 }
 
@@ -769,7 +875,11 @@ fn single_exclusive_system() {
     fn configs(schedule: &mut Schedule) -> &mut Schedule {
         schedule.rev_add_systems(exclusive_system::<1>)
     }
-    test_run(vec![configs], vec![vec![TestBundle::Exclusive(1)]]);
+    test_run(
+        vec![configs],
+        vec![vec![TestBundle::Exclusive(1)]],
+        true,
+    );
 }
 
 #[test]
@@ -782,6 +892,7 @@ fn non_exclusive_then_non_exclusive() {
             TestBundle::NonExclusive(2),
             TestBundle::NonExclusiveSyncPoint(2),
         ]],
+        true,
     )
 }
 
@@ -794,6 +905,7 @@ fn exclusive_then_non_exclusive() {
             TestBundle::NonExclusive(2),
             TestBundle::NonExclusiveSyncPoint(2),
         ]],
+        true,
     )
 }
 
@@ -806,6 +918,7 @@ fn non_exclusive_then_exclusive() {
             TestBundle::NonExclusiveSyncPoint(1),
             TestBundle::Exclusive(2),
         ]],
+        true,
     )
 }
 
@@ -814,6 +927,7 @@ fn exclusive_then_exclusive() {
     test_run(
         a_then_b(true, true, false),
         vec![vec![TestBundle::Exclusive(1), TestBundle::Exclusive(2)]],
+        true,
     )
 }
 
@@ -827,6 +941,7 @@ fn non_exclusive_then_non_exclusive_ignore_deferred() {
             TestBundle::NonExclusiveSyncPoint(1),
             TestBundle::NonExclusiveSyncPoint(2),
         ]],
+        true,
     )
 }
 
@@ -839,6 +954,7 @@ fn exclusive_then_non_exclusive_ignore_deferred() {
             TestBundle::NonExclusive(2),
             TestBundle::NonExclusiveSyncPoint(2),
         ]],
+        true,
     )
 }
 
@@ -858,6 +974,7 @@ fn non_exclusive_then_exclusive_ignore_deferred() {
             TestBundle::Exclusive(2),
             TestBundle::NonExclusiveSyncPoint(1),
         ]],
+        true,
     )
 }
 
@@ -866,6 +983,7 @@ fn exclusive_then_exclusive_ignore_deferred() {
     test_run(
         a_then_b(true, true, true),
         vec![vec![TestBundle::Exclusive(1), TestBundle::Exclusive(2)]],
+        true,
     )
 }
 
@@ -882,6 +1000,7 @@ fn pipe_commands() {
             TestBundle::NonExclusiveSyncPoint(1),
             TestBundle::NonExclusiveSyncPoint(2),
         ]],
+        true,
     )
 }
 
@@ -936,5 +1055,34 @@ fn run_if() {
             ],
             vec![], // does not run at 3
         ],
+        true,
+    );
+}
+
+#[test]
+fn forward_set() {
+    fn config1(schedule: &mut Schedule) -> &mut Schedule {
+        schedule
+            .rev_add_systems(non_exclusive_system::<2>)
+            .add_systems(
+                non_exclusive_system::<1>.before(super::forward_set(non_exclusive_system::<2>)),
+            )
+    }
+    fn config2(schedule: &mut Schedule) -> &mut Schedule {
+        schedule
+            .rev_add_systems(non_exclusive_system::<1>)
+            .add_systems(
+                non_exclusive_system::<2>.after(super::forward_set(non_exclusive_system::<1>)),
+            )
+    }
+    test_run(
+        vec![config1, config2],
+        vec![vec![
+            TestBundle::NonExclusive(1),
+            TestBundle::NonExclusiveSyncPoint(1),
+            TestBundle::NonExclusive(2),
+            TestBundle::NonExclusiveSyncPoint(2),
+        ]],
+        false,
     );
 }

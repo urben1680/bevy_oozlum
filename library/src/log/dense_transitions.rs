@@ -9,7 +9,7 @@ use std::{
 use bevy::reflect::{std_traits::ReflectDefault, Reflect};
 
 use super::{
-    AmountErr, DenseTransitionLog, EntryAmount, LogMut, OutOfLog, ValueEntry, USIZE_BYTES,
+    PushedTooMany, DenseTransitionLog, EntryAmount, LogMut, OutOfLog, ValueEntry, USIZE_BYTES,
 };
 
 #[derive(Debug, Clone, Reflect)]
@@ -250,14 +250,14 @@ impl<T, U, const AMOUNT_BYTES: usize> DenseTransitionsLog<T, U, AMOUNT_BYTES> {
     pub fn try_push<Out: Into<U>>(
         &mut self,
         c: impl FnOnce(LogMut<T>) -> Out,
-    ) -> Result<(), AmountErr<Drain<T>, U, AMOUNT_BYTES>> {
+    ) -> Result<(), PushedTooMany<Drain<T>, U, AMOUNT_BYTES>> {
         self.transitions.truncate(self.index);
         let entry = c(LogMut(&mut self.transitions)).into();
         let pushed_amount = self.transitions.len() - self.index;
         let entry_amount = EntryAmount::new(entry, pushed_amount);
         if pushed_amount != entry_amount.amount() {
             let values = self.transitions.drain(self.index..);
-            return Err(AmountErr {
+            return Err(PushedTooMany {
                 values,
                 entry: entry_amount.entry,
             });
@@ -270,14 +270,14 @@ impl<T, U, const AMOUNT_BYTES: usize> DenseTransitionsLog<T, U, AMOUNT_BYTES> {
         &mut self,
         max_past_len: usize,
         c: impl FnOnce(LogMut<T>) -> Out,
-    ) -> Result<Option<ValueEntry<Drain<T>, U>>, AmountErr<Drain<T>, U, AMOUNT_BYTES>> {
+    ) -> Result<Option<ValueEntry<Drain<T>, U>>, PushedTooMany<Drain<T>, U, AMOUNT_BYTES>> {
         self.transitions.truncate(self.index);
         let entry = c(LogMut(&mut self.transitions)).into();
         let pushed_amount = self.transitions.len() - self.index;
         let entry_amount = EntryAmount::new(entry, pushed_amount);
         if pushed_amount != entry_amount.amount() {
             let values = self.transitions.drain(self.index..);
-            return Err(AmountErr {
+            return Err(PushedTooMany {
                 values,
                 entry: entry_amount.entry,
             });
@@ -299,7 +299,7 @@ impl<T, U, const AMOUNT_BYTES: usize> DenseTransitionsLog<T, U, AMOUNT_BYTES> {
         &mut self,
         max_past_len: usize,
         c: impl FnOnce(LogMut<T>) -> Out,
-    ) -> Result<(Drain<T>, Drain<EntryAmount<U, AMOUNT_BYTES>>), AmountErr<Drain<T>, U, AMOUNT_BYTES>>
+    ) -> Result<(Drain<T>, Drain<EntryAmount<U, AMOUNT_BYTES>>), PushedTooMany<Drain<T>, U, AMOUNT_BYTES>>
     {
         self.transitions.truncate(self.index);
         let entry = c(LogMut(&mut self.transitions)).into();
@@ -307,7 +307,7 @@ impl<T, U, const AMOUNT_BYTES: usize> DenseTransitionsLog<T, U, AMOUNT_BYTES> {
         let entry_amount = EntryAmount::new(entry, pushed_amount);
         if pushed_amount != entry_amount.amount() {
             let values = self.transitions.drain(self.index..);
-            return Err(AmountErr {
+            return Err(PushedTooMany {
                 values,
                 entry: entry_amount.entry,
             });

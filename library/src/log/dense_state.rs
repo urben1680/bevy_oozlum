@@ -3,7 +3,9 @@ use std::{
     collections::{
         vec_deque::{Drain, Iter},
         TryReserveError, VecDeque,
-    }, hash::Hash, ops::Deref
+    },
+    hash::Hash,
+    ops::Deref,
 };
 
 use bevy::reflect::Reflect;
@@ -192,18 +194,18 @@ impl<T> DenseStateLog<T> {
         let before = core::mem::replace(&mut self.present, state);
         self.states.push_back(before);
         self.index += 1;
-        let excessive = self.index.saturating_sub(max_past_len);
-        self.index -= excessive;
-        self.states.drain(..excessive)
+        let to_drain = self.index.saturating_sub(max_past_len);
+        self.index -= to_drain;
+        self.states.drain(..to_drain)
     }
     pub(super) fn push_and_iter_to_drain_past(&mut self, max_past_len: usize, state: T) -> Iter<T> {
         self.states.truncate(self.index);
         let before = core::mem::replace(&mut self.present, state);
         self.states.push_back(before);
         self.index += 1;
-        let excessive = self.index.saturating_sub(max_past_len);
-        self.index -= excessive;
-        self.states.range(..excessive)
+        let to_drain = self.index.saturating_sub(max_past_len);
+        self.index -= to_drain;
+        self.states.range(..to_drain)
     }
     pub(super) fn drain_past(&mut self, to_drain: usize) -> Drain<T> {
         self.states.drain(..to_drain)

@@ -185,17 +185,17 @@ impl<T> SparseTransitionLog<T> {
         transition: Option<T>,
     ) -> Iter<SparseValue<T>> {
         self.push(transition);
-        let mut drain_amount = 0;
+        let mut to_drain = 0;
         for entry in self.transitions.iter() {
             let less = self.past_len - entry.len();
             if less < max_past_len {
                 break;
             }
             self.past_len = less;
-            drain_amount += 1;
+            to_drain += 1;
         }
-        self.index -= drain_amount;
-        self.transitions.range(..drain_amount)
+        self.index -= to_drain;
+        self.transitions.range(..to_drain)
     }
     pub(super) fn drain_past(&mut self, to_drain: usize) -> SparseDrain<T> {
         SparseDrain(self.transitions.drain(..to_drain))
@@ -206,17 +206,17 @@ impl<T> SparseTransitionLog<T> {
         transition: Option<T>,
     ) -> SparseDrain<T> {
         self.push(transition);
-        let mut drain_amount = 0;
+        let mut to_drain = 0;
         for entry in self.transitions.iter() {
             let less = self.past_len - entry.len();
             if less < max_past_len {
                 break;
             }
             self.past_len = less;
-            drain_amount += 1;
+            to_drain += 1;
         }
-        self.index -= drain_amount;
-        SparseDrain(self.transitions.drain(..drain_amount))
+        self.index -= to_drain;
+        SparseDrain(self.transitions.drain(..to_drain))
     }
     pub fn backward_log(&mut self) -> Result<Option<&mut T>, OutOfLog> {
         if self.skips > 0 {

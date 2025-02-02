@@ -1,3 +1,5 @@
+use std::fmt::Debug;
+
 use bevy::{
     ecs::{
         change_detection::Res,
@@ -23,63 +25,44 @@ pub use system_configs::*;
 pub struct RevUpdate;
 
 /// Contains a forward and a backward set that run depending on the current [`RevDirection`] in [`RevMeta`].
-#[derive(SystemSet, Copy, Clone, Debug, Hash, PartialEq, Eq)]
+#[derive(SystemSet, Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub struct RevSystemsSet;
 
 /// Subset of [`RevSystemsSet`].
 ///
 /// Contains [`FwdArcSet`]s.
-#[derive(SystemSet, Copy, Clone, Debug, Hash, PartialEq, Eq)]
+#[derive(SystemSet, Debug, Copy, Clone, Hash, PartialEq, Eq)]
 struct ForwardSet;
 
 /// Subset of [`RevSystemsSet`].
 ///
 /// Contains [`BwdCmdArcSet`]s in reverse order.
-#[derive(SystemSet, Copy, Clone, Debug, Hash, PartialEq, Eq)]
+#[derive(SystemSet, Debug, Copy, Clone, Hash, PartialEq, Eq)]
 struct BackwardSet;
 
 /// Subsets of [`ForwardSet`].
 ///
 /// Each contains the system wrapped in `Arc`.
-#[derive(SystemSet, Copy, Clone, Hash, PartialEq, Eq)]
+#[derive(SystemSet, Debug, Copy, Clone, Hash, PartialEq, Eq)]
 struct FwdSysSet(InternedSystemSet);
 
 /// Subsets of [`BackwardSet`].
 ///
 /// todo
-#[derive(SystemSet, Copy, Clone, Hash, PartialEq, Eq)]
+#[derive(SystemSet, Debug, Copy, Clone, Hash, PartialEq, Eq)]
 struct BwdCmdSet(InternedSystemSet);
 
 /// Subsets of [`BackwardSet`].
 ///
 /// Each contains the system wrapped in `Arc`.
-#[derive(SystemSet, Copy, Clone, Hash, PartialEq, Eq)]
+#[derive(SystemSet, Debug, Copy, Clone, Hash, PartialEq, Eq)]
 struct BwdSysSet(InternedSystemSet);
 
 /// Subsets of [`BackwardSet`].
 ///
 /// Each contains the system wrapped in `Arc`.
-#[derive(SystemSet, Copy, Clone, Hash, PartialEq, Eq)]
+#[derive(SystemSet, Debug, Copy, Clone, Hash, PartialEq, Eq)]
 struct BwdCmdSysSet(InternedSystemSet);
-
-macro_rules! impl_set_debug {
-    ($T: ident) => {
-        impl std::fmt::Debug for $T {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                let mut f = f.debug_tuple(std::any::type_name::<Self>());
-                match self.0.system_type() {
-                    None => f.field(&self.0).finish(),
-                    Some(id) => f.field(&id).finish(),
-                }
-            }
-        }
-    };
-}
-
-impl_set_debug!(FwdSysSet);
-impl_set_debug!(BwdCmdSet);
-impl_set_debug!(BwdSysSet);
-impl_set_debug!(BwdCmdSysSet);
 
 // todo: warn about cases where a system is actually a reversible system despite having no logic in the backward direction
 // - triggers reversible commands

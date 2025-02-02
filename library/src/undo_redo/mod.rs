@@ -1,4 +1,4 @@
-use std::{collections::VecDeque, fmt::Debug};
+use std::{collections::VecDeque, error::Error, fmt::{Debug, Display}};
 
 use bevy::{
     ecs::{
@@ -10,7 +10,7 @@ use bevy::{
 };
 
 use crate::{
-    log::{DenseTransitionsLog, FrameTransitionLog},
+    log::{DenseTransitionsLog, FrameTransitionLog, OutOfLog, SparseTransitionsLog},
     meta::{RevDirection, RevMeta},
 };
 
@@ -41,11 +41,24 @@ pub trait BuffersUndoRedo {
     /// | [`UndoRedoBuffer`] | ✅ | ❌ |
     /// | [`Commands`] | ❌ | ✅ |
     fn buffer_undo_redo(&mut self, undo_redo: impl UndoRedo);
+    fn buffer_undo_redo_finalize(&mut self, undo_redo: impl UndoRedo, finalize: impl Finalize);
+}
+
+impl<'w, 's> BuffersUndoRedo for Commands<'w, 's> {
+    fn buffer_undo_redo(&mut self, undo_redo: impl UndoRedo) {
+        self.queue(move |world: &mut World| world.buffer_undo_redo(undo_redo))
+    }
+    fn buffer_undo_redo_finalize(&mut self, undo_redo: impl UndoRedo, finalize: impl Finalize) {
+        self.queue(move |world: &mut World| world.buffer_undo_redo_finalize(undo_redo, finalize))
+    }
 }
 
 impl BuffersUndoRedo for World {
     fn buffer_undo_redo(&mut self, undo_redo: impl UndoRedo) {
         DeferredWorld::buffer_undo_redo(&mut self.into(), undo_redo);
+    }
+    fn buffer_undo_redo_finalize(&mut self, undo_redo: impl UndoRedo, finalize: impl Finalize) {
+        DeferredWorld::buffer_undo_redo_finalize(&mut self.into(), undo_redo, finalize);
     }
 }
 
@@ -55,11 +68,10 @@ impl<'w> BuffersUndoRedo for DeferredWorld<'w> {
             .expect("todo")
             .buffer_undo_redo(undo_redo);
     }
-}
-
-impl<'w, 's> BuffersUndoRedo for Commands<'w, 's> {
-    fn buffer_undo_redo(&mut self, undo_redo: impl UndoRedo) {
-        self.queue(move |world: &mut World| world.buffer_undo_redo(undo_redo))
+    fn buffer_undo_redo_finalize(&mut self, undo_redo: impl UndoRedo, finalize: impl Finalize) {
+        self.get_resource_mut::<UndoRedoBuffer>()
+            .expect("todo")
+            .buffer_undo_redo_finalize(undo_redo, finalize);
     }
 }
 /// For usages in reversible observer systems.
@@ -69,33 +81,81 @@ impl<'w, 's> BuffersUndoRedo for Commands<'w, 's> {
 /// Do not remove or overwrite this resource.
 // uses a VecDeque so `CommandsLog` can use `VecDeque::append`
 #[derive(Resource, Default)]
-pub struct UndoRedoBuffer(VecDeque<SyncCell<Box<dyn UndoRedo>>>);
+pub struct UndoRedoBuffer {
+    undo_redo_buffer: VecDeque<SyncCell<Box<dyn UndoRedo>>>,
+    finalize_buffer: VecDeque<SyncCell<Box<dyn Finalize>>>,
+    finalize_log: SparseTransitionsLog<SyncCell<Box<dyn Finalize>>>,
+}
 
 impl BuffersUndoRedo for UndoRedoBuffer {
     fn buffer_undo_redo(&mut self, undo_redo: impl UndoRedo) {
-        self.0.push_back(SyncCell::new(Box::new(undo_redo)));
+        self.undo_redo_buffer
+            .push_back(SyncCell::new(Box::new(undo_redo)));
+    }
+    fn buffer_undo_redo_finalize(&mut self, undo_redo: impl UndoRedo, finalize: impl Finalize) {
+        self.buffer_undo_redo(undo_redo);
+        self.finalize_buffer
+            .push_back(SyncCell::new(Box::new(finalize)));
     }
 }
 
 impl UndoRedoBuffer {
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
+    pub fn undo_redo_is_empty(&self) -> bool {
+        self.undo_redo_buffer.is_empty()
     }
+    pub(crate) fn update_finalize(&mut self, meta: &RevMeta, world: &mut World) -> Result<(), OutOfLog> {
+        match meta.get_direction() {
+            None => return Ok(()),
+            Some(RevDirection::NOT_LOG) => {
+                for finalize in self
+                    .finalize_log
+                    .drain_future()
+                    .0
+                    .rev()
+                    .map(SyncCell::to_inner)
+                {
+                    finalize.finalize_undone(world);
+                }
+                let past_len = meta.past_len() as usize + 1;
+                let past_drain = if self.finalize_buffer.is_empty() {
+                    self.finalize_log.push_none_and_drain_past(past_len)
+                } else {
+                    self.finalize_log
+                        .push_some_and_drain_past(past_len, |mut log| {
+                            log.append(&mut self.finalize_buffer);
+                        })
+                };
+                for finalize in past_drain.0.map(SyncCell::to_inner) {
+                    finalize.finalize_redone(world);
+                }
+                Ok(())
+            }
+            Some(RevDirection::FORWARD_LOG) => self.finalize_log.forward_log().map(|_| ()),
+            Some(RevDirection::BackwardLog) => self.finalize_log.backward_log().map(|_| ()),
+        }
+    }
+}
+
+pub trait UndoRedo: Send + 'static {
+    fn undo(&mut self, world: &mut World);
+    fn redo(&mut self, world: &mut World);
+}
+
+pub trait Finalize: Send + 'static {
+    fn finalize_undone(self: Box<Self>, world: &mut World);
+    fn finalize_redone(self: Box<Self>, world: &mut World);
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum UndoRedoDirection {
     Undo,
     Redo,
-    FinalizeUndone,
-    FinalizeRedone,
 }
 
-pub trait UndoRedo: Send + 'static {
-    fn undo(&mut self, world: &mut World);
-    fn redo(&mut self, world: &mut World);
-    fn finalize_undone(self: Box<Self>, _world: &mut World) {}
-    fn finalize_redone(self: Box<Self>, _world: &mut World) {}
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub enum FinalizeDirection {
+    FinalizeUndone,
+    FinalizeRedone,
 }
 
 impl<F: FnMut(&mut World, UndoRedoDirection) + Send + 'static> UndoRedo for F {
@@ -105,11 +165,14 @@ impl<F: FnMut(&mut World, UndoRedoDirection) + Send + 'static> UndoRedo for F {
     fn redo(&mut self, world: &mut World) {
         self(world, UndoRedoDirection::Redo)
     }
+}
+
+impl<F: FnMut(&mut World, FinalizeDirection) + Send + 'static> Finalize for F {
     fn finalize_undone(mut self: Box<Self>, world: &mut World) {
-        self(world, UndoRedoDirection::FinalizeUndone)
+        self(world, FinalizeDirection::FinalizeUndone)
     }
     fn finalize_redone(mut self: Box<Self>, world: &mut World) {
-        self(world, UndoRedoDirection::FinalizeRedone)
+        self(world, FinalizeDirection::FinalizeRedone)
     }
 }
 
@@ -121,76 +184,100 @@ pub(crate) struct UndoRedoLog {
 
 #[derive(Debug)]
 #[allow(dead_code)]
-pub(crate) enum UndoRedoLogErr {
-    RevMetaMissing,
-    UndoRedoBufferMissing(RevMeta),
-    RevDirectionMismatch(RevMeta),
-    UnexpectedUpdate(RevMeta),
-    OutOfLog(RevMeta),
+pub(crate) enum UndoRedoLogError<'a> {
+    RevMetaMissing {
+        system_name: &'a str
+    },
+    UndoRedoBufferMissing {
+        now: u64,
+        system_name: &'a str
+    },
+    RevDirectionMismatch {
+        now: u64,
+        system_name: &'a str
+    },
+    UnexpectedUpdate {
+        now: u64,
+        system_name: &'a str
+    },
+    OutOfLog {
+        now: u64,
+        system_name: &'a str
+    },
 }
 
 impl UndoRedoLog {
-    pub(crate) fn forward(&mut self, world: &mut World) -> Result<(), UndoRedoLogErr> {
+    pub(crate) fn forward<'a>(&mut self, world: &mut World, system_name: &'a str) -> Result<(), UndoRedoLogError<'a>> {
         let meta = world
             .get_resource::<RevMeta>()
-            .ok_or(UndoRedoLogErr::RevMetaMissing)?
+            .ok_or(UndoRedoLogError::RevMetaMissing { system_name })?
             .clone();
+        let now = meta.now();
         match meta.get_direction() {
             Some(RevDirection::NOT_LOG) => {
-                for command in self
-                    .undo_redo_log
-                    .drain_future()
-                    .0
-                    .rev()
-                    .map(SyncCell::to_inner)
-                {
-                    command.finalize_undone(world);
-                }
-                let max_past_len = self.frame_log.push_and_get_past_len(&meta);
+                let past_len = self.frame_log.push_and_get_past_len(&meta);
                 let mut buffer = world
                     .get_resource_mut::<UndoRedoBuffer>()
-                    .ok_or_else(|| UndoRedoLogErr::UndoRedoBufferMissing(meta))?;
-                let past_drain = self
-                    .undo_redo_log
-                    .push_and_drain_past(max_past_len, |mut log| log.append(&mut buffer.0));
-                for command in past_drain.0.map(SyncCell::to_inner) {
-                    command.finalize_redone(world);
-                }
+                    .ok_or_else(|| UndoRedoLogError::UndoRedoBufferMissing { now, system_name })?;
+                self.undo_redo_log
+                    .push_and_drain_past(past_len, |mut log| {
+                        log.append(&mut buffer.undo_redo_buffer)
+                    });
             }
             Some(RevDirection::FORWARD_LOG) => {
                 if !self.frame_log.forward_log(&meta) {
-                    return Err(UndoRedoLogErr::UnexpectedUpdate(meta));
+                    return Err(UndoRedoLogError::UnexpectedUpdate { now, system_name });
                 };
                 let iter = self
                     .undo_redo_log
                     .forward_log()
-                    .map_err(|_| UndoRedoLogErr::OutOfLog(meta))?;
-                for command in iter.value.map(SyncCell::get) {
+                    .map_err(|_| UndoRedoLogError::OutOfLog { now, system_name })?
+                    .value
+                    .map(SyncCell::get);
+                for command in iter {
                     command.redo(world);
                 }
             }
-            _ => return Err(UndoRedoLogErr::RevDirectionMismatch(meta)),
+            _ => return Err(UndoRedoLogError::RevDirectionMismatch { now, system_name }),
         }
         Ok(())
     }
-    pub(crate) fn backward(&mut self, world: &mut World) -> Result<(), UndoRedoLogErr> {
+    pub(crate) fn backward<'a>(&mut self, world: &mut World, system_name: &'a str) -> Result<(), UndoRedoLogError<'a>> {
         let meta = world
             .get_resource::<RevMeta>()
-            .ok_or(UndoRedoLogErr::RevMetaMissing)?
+            .ok_or(UndoRedoLogError::RevMetaMissing { system_name })?
             .clone();
+        let now = meta.now();
         if meta.get_direction() != Some(RevDirection::BackwardLog) {
-            return Err(UndoRedoLogErr::RevDirectionMismatch(meta));
+            return Err(UndoRedoLogError::RevDirectionMismatch { now, system_name });
         }
         if !self.frame_log.backward_log(&meta) {
-            return Err(UndoRedoLogErr::UnexpectedUpdate(meta));
+            return Err(UndoRedoLogError::UnexpectedUpdate { now, system_name });
         };
         let iter = self
             .undo_redo_log
             .backward_log()
-            .map_err(|_| UndoRedoLogErr::OutOfLog(meta))?;
-        for command in iter.value.rev().map(SyncCell::get) {
+            .map_err(|_| UndoRedoLogError::OutOfLog { now, system_name })?
+            .value
+            .map(SyncCell::get)
+            .rev();
+        for command in iter {
             command.undo(world);
         }
         Ok(())
     }
 }
+
+impl<'a> Display for UndoRedoLogError<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::RevMetaMissing { system_name } => write!(f, "RevMeta was removed but is needed to update the UndoRedo log of reversible system {system_name}"),
+            Self::UndoRedoBufferMissing { now, system_name } => write!(f, "UndoRedoBuffer was removed at frame {now} but is needed to update the UndoRedo log of reversible system {system_name}"),
+            Self::RevDirectionMismatch { now, system_name } => write!(f, "RevDirection changed to an incorrect value at frame {now} before the update of the UndoRedo log of reversible system {system_name}"),
+            Self::UnexpectedUpdate { now, system_name } => write!(f, "the reversible system {system_name} ran unexpectedly at frame {now} at which it did not run at RevDirection::NOT_LOG"),
+            Self::OutOfLog { now, system_name } => write!(f, "the UndoRedo log of the reversible system {system_name} is in an invalid state at frame {now}"),
+        }
+    }
+}
+
+impl<'a> Error for UndoRedoLogError<'a> {}

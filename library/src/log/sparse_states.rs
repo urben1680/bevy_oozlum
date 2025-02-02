@@ -10,7 +10,7 @@ use std::{
 use bevy::{reflect::Reflect, utils::default};
 
 use super::{
-    AmountErr, EntryAmount, LogMut, OutOfLog, SparseDrain, SparseStateLog, ValueEntry, USIZE_BYTES,
+    PushedTooMany, EntryAmount, LogMut, OutOfLog, SparseDrain, SparseStateLog, ValueEntry, USIZE_BYTES,
 };
 
 #[derive(Debug, Clone, Reflect)]
@@ -383,12 +383,12 @@ impl<T, U, const AMOUNT_BYTES: usize> SparseStatesLog<T, U, AMOUNT_BYTES> {
     pub fn try_new(
         states: impl IntoIterator<Item = T>,
         entry: U,
-    ) -> Result<Self, AmountErr<IntoIter<T>, U, AMOUNT_BYTES>> {
+    ) -> Result<Self, PushedTooMany<IntoIter<T>, U, AMOUNT_BYTES>> {
         let states = VecDeque::from_iter(states.into_iter());
         let pushed_amount = states.len();
         let entry_amount = EntryAmount::new(entry, pushed_amount);
         if pushed_amount != entry_amount.amount() {
-            return Err(AmountErr {
+            return Err(PushedTooMany {
                 values: states.into_iter(),
                 entry: entry_amount.entry,
             });
@@ -404,13 +404,13 @@ impl<T, U, const AMOUNT_BYTES: usize> SparseStatesLog<T, U, AMOUNT_BYTES> {
         entry: U,
         states_capacity: usize,
         entries_capacity: usize,
-    ) -> Result<Self, AmountErr<IntoIter<T>, U, AMOUNT_BYTES>> {
+    ) -> Result<Self, PushedTooMany<IntoIter<T>, U, AMOUNT_BYTES>> {
         let mut states_deque = VecDeque::with_capacity(states_capacity);
         states_deque.extend(states.into_iter());
         let pushed_amount = states_deque.len();
         let entry_amount = EntryAmount::new(entry, pushed_amount);
         if pushed_amount != entry_amount.amount() {
-            return Err(AmountErr {
+            return Err(PushedTooMany {
                 values: states_deque.into_iter(),
                 entry: entry_amount.entry,
             });
@@ -424,13 +424,13 @@ impl<T, U, const AMOUNT_BYTES: usize> SparseStatesLog<T, U, AMOUNT_BYTES> {
     pub fn try_push_some<Out: Into<U>>(
         &mut self,
         c: impl FnOnce(LogMut<T>) -> Out,
-    ) -> Result<(), AmountErr<Drain<T>, U, AMOUNT_BYTES>> {
+    ) -> Result<(), PushedTooMany<Drain<T>, U, AMOUNT_BYTES>> {
         self.states.truncate(self.index);
         let entry = c(LogMut(&mut self.states)).into();
         let pushed_amount = self.states.len() - self.index;
         let entry_amount = EntryAmount::new(entry, pushed_amount);
         if pushed_amount != entry_amount.amount() {
-            return Err(AmountErr {
+            return Err(PushedTooMany {
                 values: self.states.drain(self.index..),
                 entry: entry_amount.entry,
             });
@@ -443,13 +443,13 @@ impl<T, U, const AMOUNT_BYTES: usize> SparseStatesLog<T, U, AMOUNT_BYTES> {
         &mut self,
         max_past_len: usize,
         c: impl FnOnce(LogMut<T>) -> Out,
-    ) -> Result<Option<ValueEntry<Drain<T>, U>>, AmountErr<Drain<T>, U, AMOUNT_BYTES>> {
+    ) -> Result<Option<ValueEntry<Drain<T>, U>>, PushedTooMany<Drain<T>, U, AMOUNT_BYTES>> {
         self.states.truncate(self.index);
         let entry = c(LogMut(&mut self.states)).into();
         let pushed_amount = self.states.len() - self.index;
         let entry_amount = EntryAmount::new(entry, pushed_amount);
         if pushed_amount != entry_amount.amount() {
-            return Err(AmountErr {
+            return Err(PushedTooMany {
                 values: self.states.drain(self.index..),
                 entry: entry_amount.entry,
             });
@@ -474,14 +474,14 @@ impl<T, U, const AMOUNT_BYTES: usize> SparseStatesLog<T, U, AMOUNT_BYTES> {
         c: impl FnOnce(LogMut<T>) -> Out,
     ) -> Result<
         (Drain<T>, SparseDrain<EntryAmount<U, AMOUNT_BYTES>>),
-        AmountErr<Drain<T>, U, AMOUNT_BYTES>,
+        PushedTooMany<Drain<T>, U, AMOUNT_BYTES>,
     > {
         self.states.truncate(self.index);
         let entry = c(LogMut(&mut self.states)).into();
         let pushed_amount = self.states.len() - self.index;
         let entry_amount = EntryAmount::new(entry, pushed_amount);
         if pushed_amount != entry_amount.amount() {
-            return Err(AmountErr {
+            return Err(PushedTooMany {
                 values: self.states.drain(self.index..),
                 entry: entry_amount.entry,
             });
@@ -504,12 +504,12 @@ impl<T, U, const AMOUNT_BYTES: usize> SparseStatesLog<T, U, AMOUNT_BYTES> {
         &mut self,
         states: impl IntoIterator<Item = T>,
         entry: U,
-    ) -> Result<(), AmountErr<IntoIter<T>, U, AMOUNT_BYTES>> {
+    ) -> Result<(), PushedTooMany<IntoIter<T>, U, AMOUNT_BYTES>> {
         let mut states = VecDeque::from_iter(states.into_iter());
         let pushed_amount = states.len();
         let entry_amount = EntryAmount::new(entry, pushed_amount);
         if pushed_amount != entry_amount.amount() {
-            return Err(AmountErr {
+            return Err(PushedTooMany {
                 values: states.into_iter(),
                 entry: entry_amount.entry,
             });

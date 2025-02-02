@@ -9,7 +9,7 @@ use std::{
 use bevy::reflect::{std_traits::ReflectDefault, Reflect};
 
 use super::{
-    AmountErr, EntryAmount, LogMut, OutOfLog, SparseDrain, SparseTransitionLog, ValueEntry,
+    PushedTooMany, EntryAmount, LogMut, OutOfLog, SparseDrain, SparseTransitionLog, ValueEntry,
     USIZE_BYTES,
 };
 
@@ -291,13 +291,13 @@ impl<T, U, const AMOUNT_BYTES: usize> SparseTransitionsLog<T, U, AMOUNT_BYTES> {
     pub fn try_push_some<Out: Into<U>>(
         &mut self,
         c: impl FnOnce(LogMut<T>) -> Out,
-    ) -> Result<(), AmountErr<Drain<T>, U, AMOUNT_BYTES>> {
+    ) -> Result<(), PushedTooMany<Drain<T>, U, AMOUNT_BYTES>> {
         self.transitions.truncate(self.index);
         let entry = c(LogMut(&mut self.transitions)).into();
         let pushed_amount = self.transitions.len() - self.index;
         let entry_amount = EntryAmount::new(entry, pushed_amount);
         if pushed_amount != entry_amount.amount() {
-            return Err(AmountErr {
+            return Err(PushedTooMany {
                 values: self.transitions.drain(self.index..),
                 entry: entry_amount.entry,
             });
@@ -310,13 +310,13 @@ impl<T, U, const AMOUNT_BYTES: usize> SparseTransitionsLog<T, U, AMOUNT_BYTES> {
         &mut self,
         max_past_len: usize,
         c: impl FnOnce(LogMut<T>) -> Out,
-    ) -> Result<Option<ValueEntry<Drain<T>, U>>, AmountErr<Drain<T>, U, AMOUNT_BYTES>> {
+    ) -> Result<Option<ValueEntry<Drain<T>, U>>, PushedTooMany<Drain<T>, U, AMOUNT_BYTES>> {
         self.transitions.truncate(self.index);
         let entry = c(LogMut(&mut self.transitions)).into();
         let pushed_amount = self.transitions.len() - self.index;
         let entry_amount = EntryAmount::new(entry, pushed_amount);
         if pushed_amount != entry_amount.amount() {
-            return Err(AmountErr {
+            return Err(PushedTooMany {
                 values: self.transitions.drain(self.index..),
                 entry: entry_amount.entry,
             });
@@ -341,14 +341,14 @@ impl<T, U, const AMOUNT_BYTES: usize> SparseTransitionsLog<T, U, AMOUNT_BYTES> {
         c: impl FnOnce(LogMut<T>) -> Out,
     ) -> Result<
         (Drain<T>, SparseDrain<EntryAmount<U, AMOUNT_BYTES>>),
-        AmountErr<Drain<T>, U, AMOUNT_BYTES>,
+        PushedTooMany<Drain<T>, U, AMOUNT_BYTES>,
     > {
         self.transitions.truncate(self.index);
         let entry = c(LogMut(&mut self.transitions)).into();
         let pushed_amount = self.transitions.len() - self.index;
         let entry_amount = EntryAmount::new(entry, pushed_amount);
         if pushed_amount != entry_amount.amount() {
-            return Err(AmountErr {
+            return Err(PushedTooMany {
                 values: self.transitions.drain(self.index..),
                 entry: entry_amount.entry,
             });

@@ -13,11 +13,7 @@ TODO:
 
 Enhancements:
 - reduce todo!() and //todo
-- impl Error for relevant structs/enums via thiserror
-- test Finalize
 - #[inline]s
-- schedule tests
--- forward_set
 
 Docs
 - documentations
@@ -49,7 +45,8 @@ pub mod prelude {
         RevSystemsSet, RevUpdate,
     };
     pub use crate::undo_redo::{
-        BuffersUndoRedo as _, RevCommands as _, UndoRedoBuffer, UndoRedoDirection,
+        BuffersUndoRedo as _, FinalizeDirection, RevCommands as _, UndoRedoBuffer,
+        UndoRedoDirection,
     };
 }
 
@@ -77,7 +74,7 @@ mod test {
             },
             Level,
         },
-        utils::tracing::{Event, Subscriber, dispatcher::get_default},
+        utils::tracing::{dispatcher::get_default, Event, Subscriber},
     };
 
     /// Make `error!` and `error_once!` cause panics.

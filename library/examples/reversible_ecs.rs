@@ -16,7 +16,9 @@ use library::{
 const MAX_LOG_LEN: u64 = 71;
 const FIXED_TIMESTEP: Duration = Duration::from_millis(100);
 
-// mention how the last column cannot be undone
+// todo: mention how the last column cannot be undone
+
+// todo: entirely work with entity disabling instead of removing/readding components
 
 fn main() {
     let _crossterm = GlobalSettings::new();
@@ -202,20 +204,22 @@ fn row4(app: &mut App) {
             row: 4,
         };
         let entity = commands.spawn(waste).id();
-        commands.buffer_undo_redo(move |world: &mut World, variant: UndoRedoDirection| {
-            let mut entity = world.entity_mut(entity);
-            match variant {
-                UndoRedoDirection::Undo => {
-                    entity.remove::<Waste>();
-                }
-                UndoRedoDirection::Redo => {
-                    entity.insert(waste);
-                }
-                UndoRedoDirection::FinalizeUndone | UndoRedoDirection::FinalizeRedone => {
-                    entity.despawn();
-                }
-            };
-        });
+        commands.buffer_undo_redo_finalize(
+            move |world: &mut World, variant: UndoRedoDirection| {
+                let mut entity = world.entity_mut(entity);
+                match variant {
+                    UndoRedoDirection::Undo => {
+                        entity.remove::<Waste>();
+                    }
+                    UndoRedoDirection::Redo => {
+                        entity.insert(waste);
+                    }
+                };
+            },
+            move |world: &mut World, _: FinalizeDirection| {
+                world.entity_mut(entity).despawn();
+            },
+        );
     }
 }
 
@@ -244,20 +248,22 @@ fn row5(app: &mut App) {
         if waste.row != 5 {
             return;
         }
-        world.buffer_undo_redo(move |world: &mut World, variant: UndoRedoDirection| {
-            let mut entity = world.entity_mut(entity);
-            match variant {
-                UndoRedoDirection::Undo => {
-                    entity.remove::<Waste>();
-                }
-                UndoRedoDirection::Redo => {
-                    entity.insert(waste);
-                }
-                UndoRedoDirection::FinalizeUndone | UndoRedoDirection::FinalizeRedone => {
-                    entity.despawn();
-                }
-            };
-        });
+        world.buffer_undo_redo_finalize(
+            move |world: &mut World, variant: UndoRedoDirection| {
+                let mut entity = world.entity_mut(entity);
+                match variant {
+                    UndoRedoDirection::Undo => {
+                        entity.remove::<Waste>();
+                    }
+                    UndoRedoDirection::Redo => {
+                        entity.insert(waste);
+                    }
+                };
+            },
+            move |world: &mut World, _: FinalizeDirection| {
+                world.entity_mut(entity).despawn();
+            },
+        )
     }
 }
 
@@ -283,20 +289,22 @@ fn row6(app: &mut App) {
     fn observer(trigger: Trigger<WasteObserverEvent>, mut world: DeferredWorld) {
         let waste = trigger.0;
         let entity = trigger.entity();
-        world.buffer_undo_redo(move |world: &mut World, variant: UndoRedoDirection| {
-            let mut entity = world.entity_mut(entity);
-            match variant {
-                UndoRedoDirection::Undo => {
-                    entity.remove::<Waste>();
+        world.buffer_undo_redo_finalize(
+            move |world: &mut World, variant: UndoRedoDirection| {
+                let mut entity = world.entity_mut(entity);
+                match variant {
+                    UndoRedoDirection::Undo => {
+                        entity.remove::<Waste>();
+                    }
+                    UndoRedoDirection::Redo => {
+                        entity.insert(waste);
+                    }
                 }
-                UndoRedoDirection::Redo => {
-                    entity.insert(waste);
-                }
-                UndoRedoDirection::FinalizeUndone | UndoRedoDirection::FinalizeRedone => {
-                    entity.despawn();
-                }
-            };
-        });
+            },
+            move |world: &mut World, _: FinalizeDirection| {
+                world.entity_mut(entity).despawn();
+            },
+        );
     }
 }
 
@@ -368,7 +376,7 @@ fn clear_input(mut keys: ResMut<KeysPressed>) {
 
 fn control_rev_meta(mut meta: ResMut<RevMeta>, keys: Res<KeysPressed>) {
     match keys.direction {
-        Some(Direction::Forward) => meta.queue_forward(),
+        Some(Direction::Forward) => meta.queue_not_log_forward(),
         Some(Direction::Pause) => meta.queue_pause(),
         Some(Direction::FutureEnd) => {
             let to = meta.future_end();
