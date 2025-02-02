@@ -35,14 +35,42 @@ pub enum TryRunRevUpdateError {
 impl Display for TryRunRevUpdateError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::RevMetaMissingFirstCall => write!(f, "RevMeta does not exist yet, RevUpdate will not be called until it is inserted"),
-            Self::RevMetaMissing { .. } => write!(f, "RevMeta was removed, RevUpdate will not be called until it is inserted again"),
-            Self::RevMetaRemovedInSchedule { frame } => write!(f, "RevMeta was removed in while RevUpdate ran at frame {}", frame.unwrap_or(u64::MAX)),
-            Self::UnexpectedInitialRunning(meta) => write!(f, "RevMeta was in a running state at frame {} before RevUpdate could run", meta.now()),
-            Self::RevUpdateMissing(meta) => write!(f, "RevUpdate was missing at frame {}", meta.now()),
-            Self::UndoRedoBufferMissingAfterUpdate(meta) => write!(f, "UndoRedoBuffer was removed during RevUpdate at frame {}", meta.now()),
-            Self::UndoRedoBufferNotEmptyBeforeUpdate(meta) => write!(f, "UndoRedoBuffer was not fully drained at frame {}, RevUpdate is not run", meta.now()),
-            Self::UndoRedoBufferOutOfLogAfterUpdate(meta) => write!(f, "UndoRedoBuffer was in an invalid state after RevUpdate ran at frame {}", meta.now()),
+            Self::RevMetaMissingFirstCall => write!(
+                f,
+                "RevMeta does not exist yet, RevUpdate will not be called until it is inserted"
+            ),
+            Self::RevMetaMissing { .. } => write!(
+                f,
+                "RevMeta was removed, RevUpdate will not be called until it is inserted again"
+            ),
+            Self::RevMetaRemovedInSchedule { frame } => write!(
+                f,
+                "RevMeta was removed in while RevUpdate ran at frame {}",
+                frame.unwrap_or(u64::MAX)
+            ),
+            Self::UnexpectedInitialRunning(meta) => write!(
+                f,
+                "RevMeta was in a running state at frame {} before RevUpdate could run",
+                meta.now()
+            ),
+            Self::RevUpdateMissing(meta) => {
+                write!(f, "RevUpdate was missing at frame {}", meta.now())
+            }
+            Self::UndoRedoBufferMissingAfterUpdate(meta) => write!(
+                f,
+                "UndoRedoBuffer was removed during RevUpdate at frame {}",
+                meta.now()
+            ),
+            Self::UndoRedoBufferNotEmptyBeforeUpdate(meta) => write!(
+                f,
+                "UndoRedoBuffer was not fully drained at frame {}, RevUpdate is not run",
+                meta.now()
+            ),
+            Self::UndoRedoBufferOutOfLogAfterUpdate(meta) => write!(
+                f,
+                "UndoRedoBuffer was in an invalid state after RevUpdate ran at frame {}",
+                meta.now()
+            ),
         }
     }
 }
@@ -359,9 +387,11 @@ impl RevMeta {
                             world.resource_scope(|world, mut buffer: Mut<UndoRedoBuffer>| {
                                 match buffer.update_finalize(&meta, world) {
                                     Ok(()) => Ok(frame),
-                                    Err(OutOfLog) => Err(TryRunRevUpdateError::UndoRedoBufferOutOfLogAfterUpdate(
-                                        meta.clone(),
-                                    ))
+                                    Err(OutOfLog) => Err(
+                                        TryRunRevUpdateError::UndoRedoBufferOutOfLogAfterUpdate(
+                                            meta.clone(),
+                                        ),
+                                    ),
                                 }
                             })
                         }

@@ -236,7 +236,10 @@ fn test_run<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
 ) {
     panic_on_error_events();
     let test_ends = if test_log_and_finalize {
-        vec![TestEndVariant::FinalizeUndone, TestEndVariant::FinalizeRedone]
+        vec![
+            TestEndVariant::FinalizeUndone,
+            TestEndVariant::FinalizeRedone,
+        ]
     } else {
         vec![TestEndVariant::SkipLogAndFinalize]
     };
@@ -875,11 +878,7 @@ fn single_exclusive_system() {
     fn configs(schedule: &mut Schedule) -> &mut Schedule {
         schedule.rev_add_systems(exclusive_system::<1>)
     }
-    test_run(
-        vec![configs],
-        vec![vec![TestBundle::Exclusive(1)]],
-        true,
-    );
+    test_run(vec![configs], vec![vec![TestBundle::Exclusive(1)]], true);
 }
 
 #[test]

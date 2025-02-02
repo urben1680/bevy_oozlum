@@ -1,5 +1,8 @@
 use std::{
-    collections::{vec_deque::Drain, VecDeque}, error::Error, fmt::{Debug, Display}, iter::FusedIterator
+    collections::{vec_deque::Drain, VecDeque},
+    error::Error,
+    fmt::{Debug, Display},
+    iter::FusedIterator,
 };
 
 use bevy::{log::error, reflect::Reflect};
@@ -59,7 +62,9 @@ impl<I: ExactSizeIterator, U, const AMOUNT_BYTES: usize> PushedTooMany<I, U, AMO
 }
 
 // makes unwrap possible without requiring additional Debug bounds everywhere
-impl<I: ExactSizeIterator, U, const AMOUNT_BYTES: usize> Debug for PushedTooMany<I, U, AMOUNT_BYTES> {
+impl<I: ExactSizeIterator, U, const AMOUNT_BYTES: usize> Debug
+    for PushedTooMany<I, U, AMOUNT_BYTES>
+{
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct(std::any::type_name::<Self>())
             .field("pushed_amount", &self.values.len())
@@ -68,13 +73,23 @@ impl<I: ExactSizeIterator, U, const AMOUNT_BYTES: usize> Debug for PushedTooMany
     }
 }
 
-impl<I: ExactSizeIterator, U, const AMOUNT_BYTES: usize> Display for PushedTooMany<I, U, AMOUNT_BYTES> {
+impl<I: ExactSizeIterator, U, const AMOUNT_BYTES: usize> Display
+    for PushedTooMany<I, U, AMOUNT_BYTES>
+{
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "attempted to push {} values into a log that support only {} values per update", self.values.len(), Self::MAX_AMOUNT)
+        write!(
+            f,
+            "attempted to push {} values into a log that support only {} values per update",
+            self.values.len(),
+            Self::MAX_AMOUNT
+        )
     }
 }
 
-impl<I: ExactSizeIterator, U, const AMOUNT_BYTES: usize> Error for PushedTooMany<I, U, AMOUNT_BYTES> {}
+impl<I: ExactSizeIterator, U, const AMOUNT_BYTES: usize> Error
+    for PushedTooMany<I, U, AMOUNT_BYTES>
+{
+}
 
 /// A `&mut VecDeque<T>` wrapper that does not expose methods which remove from the deque.
 pub struct LogMut<'a, T>(&'a mut VecDeque<T>);
@@ -323,7 +338,7 @@ fn index_oob() -> OutOfLog {
 
 #[cfg(test)]
 mod test {
-    use super::{PushedTooMany, EntryAmount, ValueEntry};
+    use super::{EntryAmount, PushedTooMany, ValueEntry};
 
     pub(super) fn collect_pop_result<
         I1: Iterator<Item = char>,

@@ -9,7 +9,7 @@ use std::{
 use bevy::reflect::{std_traits::ReflectDefault, Reflect};
 
 use super::{
-    PushedTooMany, EntryAmount, LogMut, OutOfLog, SparseDrain, SparseTransitionLog, ValueEntry,
+    EntryAmount, LogMut, OutOfLog, PushedTooMany, SparseDrain, SparseTransitionLog, ValueEntry,
     USIZE_BYTES,
 };
 

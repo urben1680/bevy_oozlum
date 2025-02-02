@@ -1,4 +1,8 @@
-use std::{collections::VecDeque, error::Error, fmt::{Debug, Display}};
+use std::{
+    collections::VecDeque,
+    error::Error,
+    fmt::{Debug, Display},
+};
 
 use bevy::{
     ecs::{
@@ -103,7 +107,11 @@ impl UndoRedoBuffer {
     pub fn undo_redo_is_empty(&self) -> bool {
         self.undo_redo_buffer.is_empty()
     }
-    pub(crate) fn update_finalize(&mut self, meta: &RevMeta, world: &mut World) -> Result<(), OutOfLog> {
+    pub(crate) fn update_finalize(
+        &mut self,
+        meta: &RevMeta,
+        world: &mut World,
+    ) -> Result<(), OutOfLog> {
         match meta.get_direction() {
             None => return Ok(()),
             Some(RevDirection::NOT_LOG) => {
@@ -185,29 +193,19 @@ pub(crate) struct UndoRedoLog {
 #[derive(Debug)]
 #[allow(dead_code)]
 pub(crate) enum UndoRedoLogError<'a> {
-    RevMetaMissing {
-        system_name: &'a str
-    },
-    UndoRedoBufferMissing {
-        now: u64,
-        system_name: &'a str
-    },
-    RevDirectionMismatch {
-        now: u64,
-        system_name: &'a str
-    },
-    UnexpectedUpdate {
-        now: u64,
-        system_name: &'a str
-    },
-    OutOfLog {
-        now: u64,
-        system_name: &'a str
-    },
+    RevMetaMissing { system_name: &'a str },
+    UndoRedoBufferMissing { now: u64, system_name: &'a str },
+    RevDirectionMismatch { now: u64, system_name: &'a str },
+    UnexpectedUpdate { now: u64, system_name: &'a str },
+    OutOfLog { now: u64, system_name: &'a str },
 }
 
 impl UndoRedoLog {
-    pub(crate) fn forward<'a>(&mut self, world: &mut World, system_name: &'a str) -> Result<(), UndoRedoLogError<'a>> {
+    pub(crate) fn forward<'a>(
+        &mut self,
+        world: &mut World,
+        system_name: &'a str,
+    ) -> Result<(), UndoRedoLogError<'a>> {
         let meta = world
             .get_resource::<RevMeta>()
             .ok_or(UndoRedoLogError::RevMetaMissing { system_name })?
@@ -219,10 +217,9 @@ impl UndoRedoLog {
                 let mut buffer = world
                     .get_resource_mut::<UndoRedoBuffer>()
                     .ok_or_else(|| UndoRedoLogError::UndoRedoBufferMissing { now, system_name })?;
-                self.undo_redo_log
-                    .push_and_drain_past(past_len, |mut log| {
-                        log.append(&mut buffer.undo_redo_buffer)
-                    });
+                self.undo_redo_log.push_and_drain_past(past_len, |mut log| {
+                    log.append(&mut buffer.undo_redo_buffer)
+                });
             }
             Some(RevDirection::FORWARD_LOG) => {
                 if !self.frame_log.forward_log(&meta) {
@@ -242,7 +239,11 @@ impl UndoRedoLog {
         }
         Ok(())
     }
-    pub(crate) fn backward<'a>(&mut self, world: &mut World, system_name: &'a str) -> Result<(), UndoRedoLogError<'a>> {
+    pub(crate) fn backward<'a>(
+        &mut self,
+        world: &mut World,
+        system_name: &'a str,
+    ) -> Result<(), UndoRedoLogError<'a>> {
         let meta = world
             .get_resource::<RevMeta>()
             .ok_or(UndoRedoLogError::RevMetaMissing { system_name })?

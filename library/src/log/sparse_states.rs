@@ -10,7 +10,8 @@ use std::{
 use bevy::{reflect::Reflect, utils::default};
 
 use super::{
-    PushedTooMany, EntryAmount, LogMut, OutOfLog, SparseDrain, SparseStateLog, ValueEntry, USIZE_BYTES,
+    EntryAmount, LogMut, OutOfLog, PushedTooMany, SparseDrain, SparseStateLog, ValueEntry,
+    USIZE_BYTES,
 };
 
 #[derive(Debug, Clone, Reflect)]

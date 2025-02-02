@@ -9,7 +9,7 @@ use std::{
 
 use bevy::reflect::Reflect;
 
-use super::{PushedTooMany, DenseStateLog, EntryAmount, LogMut, OutOfLog, ValueEntry, USIZE_BYTES};
+use super::{DenseStateLog, EntryAmount, LogMut, OutOfLog, PushedTooMany, ValueEntry, USIZE_BYTES};
 
 #[allow(private_bounds)]
 #[derive(Debug, Clone, Reflect)]
@@ -422,8 +422,10 @@ impl<T, U, const AMOUNT_BYTES: usize> DenseStatesLog<T, U, AMOUNT_BYTES> {
         &mut self,
         max_past_len: usize,
         c: impl FnOnce(LogMut<T>) -> Out,
-    ) -> Result<(Drain<T>, Drain<EntryAmount<U, AMOUNT_BYTES>>), PushedTooMany<Drain<T>, U, AMOUNT_BYTES>>
-    {
+    ) -> Result<
+        (Drain<T>, Drain<EntryAmount<U, AMOUNT_BYTES>>),
+        PushedTooMany<Drain<T>, U, AMOUNT_BYTES>,
+    > {
         self.states.truncate(self.index);
         let entry = c(LogMut(&mut self.states)).into();
         let pushed_amount = self.states.len() - self.index;
