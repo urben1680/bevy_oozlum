@@ -20,7 +20,9 @@ use bevy::{
 
 use crate::{
     meta::RevMeta,
-    schedule::{BackwardSet, BwdCmdSet, BwdCmdSysSet, BwdSysSet, ForwardSet, FwdSysSet, error_per_flag},
+    schedule::{
+        error_per_flag, BackwardSet, BwdCmdSet, BwdCmdSysSet, BwdSysSet, ForwardSet, FwdSysSet,
+    },
     undo_redo::{UndoRedoBuffer, UndoRedoLog, UndoRedoLogError},
 };
 

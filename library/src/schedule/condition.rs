@@ -22,7 +22,7 @@ use bevy::{
 use crate::{
     log::{OutOfLog, SparseTransitionLog},
     meta::{RevDirection, RevMeta},
-    schedule::{ForwardSet, error_per_flag}
+    schedule::{error_per_flag, ForwardSet},
 };
 
 pub(crate) fn add_condition<Marker>(
