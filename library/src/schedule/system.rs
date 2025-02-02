@@ -19,9 +19,8 @@ use bevy::{
 };
 
 use crate::{
-    error_per_flag,
     meta::RevMeta,
-    schedule::{BackwardSet, BwdCmdSet, BwdCmdSysSet, BwdSysSet, ForwardSet, FwdSysSet},
+    schedule::{BackwardSet, BwdCmdSet, BwdCmdSysSet, BwdSysSet, ForwardSet, FwdSysSet, error_per_flag},
     undo_redo::{UndoRedoBuffer, UndoRedoLog, UndoRedoLogError},
 };
 
@@ -485,7 +484,7 @@ mod test {
         },
     };
 
-    use crate::{prelude::*, test::panic_on_error_events};
+    use crate::{prelude::*, schedule::test::panic_on_error_events};
 
     fn blank_undo_redo(_: &mut World, _: UndoRedoDirection) {}
 

@@ -119,3 +119,15 @@ impl RevSchedule for Schedule {
         ))
     }
 }
+
+macro_rules! error_per_flag {
+    ($flag:expr, $($arg:tt)+) => ({
+        if !*$flag {
+            bevy::utils::tracing::error!($($arg)+);
+            *$flag = true;
+        }
+        core::default::Default::default()
+    });
+}
+
+use error_per_flag;

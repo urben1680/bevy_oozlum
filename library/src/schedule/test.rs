@@ -18,16 +18,42 @@ use bevy::{
         system::{Commands, IntoSystem, Resource},
         world::{DeferredWorld, World},
     },
+    log::{
+        tracing_subscriber::{
+            layer::{Context, SubscriberExt},
+            registry,
+            util::SubscriberInitExt,
+            Layer,
+        },
+        Level,
+    },
+    utils::tracing::{dispatcher::get_default, Event as TraceEvent, Subscriber},
 };
 
 use crate::{
     meta::RevDirection,
     schedule::RevUpdate,
-    test::panic_on_error_events,
     undo_redo::{BuffersUndoRedo, Finalize, UndoRedo, UndoRedoBuffer},
 };
 
 use super::*;
+
+/// Make `error!` and `error_once!` cause panics.
+pub(super) fn panic_on_error_events() {
+    struct PanicOnError;
+    impl<S: Subscriber> Layer<S> for PanicOnError {
+        fn on_event(&self, event: &TraceEvent, _ctx: Context<S>) {
+            if *event.metadata().level() == Level::ERROR {
+                panic!("{event:#?}")
+            }
+        }
+    }
+    if registry().with(PanicOnError).try_init().is_err() {
+        get_default(|subscriber| {
+            assert!(subscriber.downcast_ref::<PanicOnError>().is_some());
+        })
+    }
+}
 
 #[derive(SystemSet, Copy, Clone, Debug, Hash, PartialEq, Eq)]
 struct TestSet(u8);

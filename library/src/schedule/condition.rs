@@ -20,10 +20,9 @@ use bevy::{
 };
 
 use crate::{
-    error_per_flag,
     log::{OutOfLog, SparseTransitionLog},
     meta::{RevDirection, RevMeta},
-    schedule::ForwardSet,
+    schedule::{ForwardSet, error_per_flag}
 };
 
 pub(crate) fn add_condition<Marker>(
