@@ -1,4 +1,4 @@
-use std::fmt::Debug;
+use std::{collections::VecDeque, fmt::Debug, num::NonZeroUsize};
 
 use library::{log::*, prelude::*};
 
@@ -7,40 +7,66 @@ use serde::{Deserialize, Serialize};
 fn main() {
     let len = 100;
     let modulo = 7;
-    let mut meta = RevMeta::new(None, 0, false);
-    let mut logs = Logs::with_capacity(len, modulo);
+    let mut meta = RevMeta::new(NonZeroUsize::new(len + 1), 0, false);
+    let mut last_frame_where_modulo_eq_zero =
+        LastFrameWhereModuloEqZero::with_capacity(0, len, modulo);
 
-    println!("fwd     {}", get_plot(&mut meta, &mut logs, len, modulo));
+    let plot = get_plot(&mut meta, &mut last_frame_where_modulo_eq_zero, len);
+    println!("fwd     {plot}");
+
     meta.queue_log(0).unwrap();
-    println!("bwd log {}", get_plot(&mut meta, &mut logs, len, modulo));
+    let plot = get_plot(&mut meta, &mut last_frame_where_modulo_eq_zero, len);
+    println!("bwd log {plot}");
+
     meta.queue_log(len as u64).unwrap();
-    println!("fwd log {}", get_plot(&mut meta, &mut logs, len, modulo));
+    let plot = get_plot(&mut meta, &mut last_frame_where_modulo_eq_zero, len);
+    println!("fwd log {plot}");
 }
 
-fn get_plot(meta: &mut RevMeta, logs: &mut Logs, len: usize, modulo: u8) -> String {
-    let mut plot = "?".repeat(len + 1);
+fn get_plot(
+    meta: &mut RevMeta,
+    last_frame_where_modulo_eq_zero: &mut LastFrameWhereModuloEqZero,
+    len: usize,
+) -> String {
+    let mut plot = VecDeque::with_capacity(len + 1);
+    let frame = last_frame_where_modulo_eq_zero.get();
+    let character = get_character(frame, meta);
+    plot.push_back(character);
     for _ in 0..len {
         meta.update(|meta| {
-            let frame = logs.get_last_frame_where_module_eq_zero(meta, modulo);
-            let character = match frame == meta.now() {
-                true => "|",
-                false => ".",
-            };
-            let i = meta.now() as usize;
-            plot.replace_range(i..=i, character);
+            let frame = last_frame_where_modulo_eq_zero.update_and_get(meta);
+            let character = get_character(frame, meta);
+            if meta.direction().is_forward() {
+                plot.push_back(character);
+            } else {
+                plot.push_front(character);
+            }
         });
     }
-    plot
+    plot.into_iter().collect()
+}
+
+fn get_character(frame: u64, meta: &RevMeta) -> char {
+    match frame == meta.now() {
+        true => '|',
+        false => '.',
+    }
 }
 
 #[derive(Serialize, Deserialize)]
-struct Logs {
-    last_frame_where_modulo_eq_zero: u64,
+struct LastFrameWhereModuloEqZero {
+    modulo: u8,
+    state_for_transition_logs: u64,
 
     #[serde(with = "logless_with_capacity")]
     dense_state: DenseStateLog<u64>,
     #[serde(with = "logless_with_capacity")]
     scoped_state: DenseStateLog<u64>,
+
+    #[serde(with = "logless_with_capacity")]
+    dense_transition: DenseTransitionLog<u8>,
+    #[serde(with = "logless_with_capacity")]
+    scoped_transition: DenseTransitionLog<u8>,
 
     #[serde(with = "logless_with_capacity")]
     sparse_state: SparseStateLog<u64>,
@@ -49,29 +75,30 @@ struct Logs {
 
     #[serde(with = "logless_with_capacity")]
     frame_transition: FrameTransitionLog,
-    #[serde(with = "logless_with_capacity")]
-    dense_transition: DenseTransitionLog<u8>,
-    #[serde(with = "logless_with_capacity")]
-    scoped_transition: DenseTransitionLog<u8>,
 }
 
-impl Logs {
-    fn with_capacity(capacity: usize, modulo: u8) -> Self {
+impl LastFrameWhereModuloEqZero {
+    fn with_capacity(state: u64, capacity: usize, modulo: u8) -> Self {
+        assert_eq!(state % modulo as u64, 0);
         let scoped_capacity = capacity / modulo as usize;
         Self {
-            last_frame_where_modulo_eq_zero: 0,
-            dense_state: DenseStateLog::with_capacity(0, capacity),
-            dense_transition: DenseTransitionLog::with_capacity(capacity),
+            modulo,
+            state_for_transition_logs: state,
 
-            sparse_state: SparseStateLog::with_capacity(0, scoped_capacity),
-            sparse_transition: SparseTransitionLog::with_capacity(scoped_capacity),
-            scoped_state: DenseStateLog::with_capacity(0, scoped_capacity),
+            dense_state: DenseStateLog::with_capacity(state, capacity),
+            scoped_state: DenseStateLog::with_capacity(state, scoped_capacity),
+
+            dense_transition: DenseTransitionLog::with_capacity(capacity),
             scoped_transition: DenseTransitionLog::with_capacity(scoped_capacity),
+
+            sparse_state: SparseStateLog::with_capacity(state, scoped_capacity),
+            sparse_transition: SparseTransitionLog::with_capacity(scoped_capacity),
+
             frame_transition: FrameTransitionLog::with_capacity(scoped_capacity),
         }
     }
-    fn get_last_frame_where_module_eq_zero(&mut self, meta: &RevMeta, modulo: u8) -> u64 {
-        let modulo = modulo as u64;
+    fn update_and_get(&mut self, meta: &RevMeta) -> u64 {
+        let modulo = self.modulo as u64;
         let expected_result = modulo * (meta.now() / modulo);
         /*
         return expected_result;
@@ -79,9 +106,7 @@ impl Logs {
         match meta.direction() {
             RevDirection::NOT_LOG => {
                 let now = meta.now();
-                let delta: u8 = (now - self.last_frame_where_modulo_eq_zero)
-                    .try_into()
-                    .unwrap();
+                let delta: u8 = (now - self.state_for_transition_logs).try_into().unwrap();
                 let past_len = meta.past_len() as usize;
                 let update = now % modulo == 0;
 
@@ -89,7 +114,7 @@ impl Logs {
                     past_len,
                     update
                         .then_some(now)
-                        .unwrap_or(self.last_frame_where_modulo_eq_zero),
+                        .unwrap_or(self.state_for_transition_logs),
                 );
 
                 self.dense_transition
@@ -109,7 +134,7 @@ impl Logs {
                     self.scoped_transition
                         .push_and_drain_past(scoped_past_len, delta);
 
-                    self.last_frame_where_modulo_eq_zero = now;
+                    self.state_for_transition_logs = now;
                 }
             }
             RevDirection::FORWARD_LOG => {
@@ -140,8 +165,8 @@ impl Logs {
                 }
 
                 let transition = assert_equality_get(transitions);
-                states.push(self.last_frame_where_modulo_eq_zero + transition as u64);
-                self.last_frame_where_modulo_eq_zero = assert_equality_get(states);
+                states.push(self.state_for_transition_logs + transition as u64);
+                self.state_for_transition_logs = assert_equality_get(states);
             }
             RevDirection::BackwardLog => {
                 let mut states = vec![];
@@ -171,14 +196,22 @@ impl Logs {
                 }
 
                 let transition = assert_equality_get(transitions);
-                states.push(self.last_frame_where_modulo_eq_zero - transition as u64);
-                self.last_frame_where_modulo_eq_zero = assert_equality_get(states);
+                states.push(self.state_for_transition_logs - transition as u64);
+                self.state_for_transition_logs = assert_equality_get(states);
             }
         }
 
-        assert_eq!(self.last_frame_where_modulo_eq_zero, expected_result);
+        assert_eq!(self.state_for_transition_logs, expected_result);
 
-        self.last_frame_where_modulo_eq_zero
+        self.state_for_transition_logs
+    }
+    fn get(&self) -> u64 {
+        assert_equality_get(vec![
+            *self.dense_state,
+            *self.scoped_state,
+            *self.sparse_state,
+            self.state_for_transition_logs,
+        ])
     }
 }
 
