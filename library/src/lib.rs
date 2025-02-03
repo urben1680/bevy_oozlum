@@ -30,6 +30,10 @@ ISSUES/DISCUSSIONS:
 - manual sync point configuration
 -- apply_deferred
 -- ScheduleBuildSettings::auto_insert_apply_deferred
+- more compact FrameTransitionLog
+-- VecDeque<u8> with variable len entries
+-- has to provide the same api
+-- expects_* determination without lookups
 */
 
 pub mod app;
