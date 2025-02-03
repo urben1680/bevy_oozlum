@@ -1,6 +1,7 @@
 use std::{
     any::TypeId,
     borrow::Cow,
+    hash::Hash,
     mem::replace,
     sync::atomic::{AtomicU32, Ordering},
 };
@@ -25,23 +26,39 @@ use crate::{
     schedule::{error_per_flag, ForwardSet},
 };
 
+#[derive(SystemSet, Clone, Debug, Eq)]
+#[allow(dead_code)]
+struct RevConditionSet(u32, Cow<'static, str>);
+
+impl PartialEq for RevConditionSet {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+
+impl Hash for RevConditionSet {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.0.hash(state)
+    }
+}
+
 pub(crate) fn add_condition<Marker>(
     configs: &mut SystemSetConfigs,
     condition: impl Condition<Marker>,
 ) -> InternedSystemSet {
-    #[derive(SystemSet, Copy, Clone, Debug, Hash, PartialEq, Eq)]
-    struct ConditionSet(u32);
     static SET_COUNTER: AtomicU32 = AtomicU32::new(0);
-
+    let condition = IntoSystem::into_system(condition);
+    let name = condition.name();
     let condition = RevCondition {
-        condition: IntoSystem::into_system(condition),
-        meta_id: None,
+        condition,
+        meta_id: default(),
         log: default(),
         component_access: default(),
         archetype_component_access: default(),
         out_of_log_err: false,
     };
-    let set = ConditionSet(SET_COUNTER.fetch_add(1, Ordering::Relaxed)).intern();
+    let id = SET_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let set = RevConditionSet(id, name).intern();
     let configs_by_value = replace(configs, ForwardSet.into_configs());
     *configs = (configs_by_value, set.run_if(condition)).into_configs();
     set
@@ -51,8 +68,10 @@ struct RevCondition<T> {
     condition: T,
     meta_id: Option<ComponentId>,
     log: SparseTransitionLog<()>,
+    // needs its own Access to register RevMeta read
     component_access: Access<ComponentId>,
     archetype_component_access: Access<ArchetypeComponentId>,
+
     out_of_log_err: bool,
 }
 
