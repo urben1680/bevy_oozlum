@@ -23,7 +23,7 @@ use crate::{
     schedule::{
         error_per_flag, BackwardSet, BwdCmdSet, BwdCmdSysSet, BwdSysSet, ForwardSet, FwdSysSet,
     },
-    undo_redo::{UndoRedoBuffer, UndoRedoLog, UndoRedoLogError},
+    undo_redo::{UndoRedoBuffer, UndoRedoLog},
 };
 
 use super::{IntoRevSystemConfigs, RevSystemConfigs, RevSystemSetConfigs};
@@ -285,10 +285,8 @@ impl<T: System> System for ArcSystem<T> {
         }
 
         // reverisble commands are now in the buffer resource so commands_log can take them
-        match shared.commands_log.forward(world, &self.name) {
-            Ok(()) => {}
-            Err(UndoRedoLogError::UnexpectedUpdate { .. }) => {} // bevy sometimes runs sync points regardless if their system ran
-            Err(err) => error_per_flag!(&mut self.commands_err, "{err}"),
+        if let Err(err) = shared.commands_log.forward(world, &self.name) {
+            error_per_flag!(&mut self.commands_err, "{err}")
         }
     }
     fn queue_deferred(&mut self, _world: DeferredWorld) {
@@ -409,10 +407,8 @@ impl<T: System> System for CommandsBackward<T> {
             .unwrap_or_else(expect_lock(&self.name))
             .commands_log
             .backward(world, &self.name);
-        match result {
-            Ok(()) => {}
-            Err(UndoRedoLogError::UnexpectedUpdate { .. }) => {} // bevy sometimes runs sync points regardless if their system ran
-            Err(err) => error_per_flag!(&mut self.commands_err, "{err}"),
+        if let Err(err) = result {
+            error_per_flag!(&mut self.commands_err, "{err}")
         }
     }
     fn queue_deferred(&mut self, _world: DeferredWorld) {
