@@ -196,7 +196,6 @@ pub(crate) enum UndoRedoLogError<'a> {
     RevMetaMissing { system_name: &'a str },
     UndoRedoBufferMissing { now: u64, system_name: &'a str },
     RevDirectionMismatch { now: u64, system_name: &'a str },
-    UnexpectedUpdate { now: u64, system_name: &'a str },
     OutOfLog { now: u64, system_name: &'a str },
 }
 
@@ -213,17 +212,19 @@ impl UndoRedoLog {
         let now = meta.now();
         match meta.get_direction() {
             Some(RevDirection::NOT_LOG) => {
-                let past_len = self.frame_log.push_and_get_past_len(&meta);
                 let mut buffer = world
                     .get_resource_mut::<UndoRedoBuffer>()
                     .ok_or_else(|| UndoRedoLogError::UndoRedoBufferMissing { now, system_name })?;
-                self.undo_redo_log.push_and_drain_past(past_len, |mut log| {
-                    log.append(&mut buffer.undo_redo_buffer)
-                });
+                if !buffer.undo_redo_is_empty() {
+                    let past_len = self.frame_log.push_and_get_past_len(&meta);
+                    self.undo_redo_log.push_and_drain_past(past_len, |mut log| {
+                        log.append(&mut buffer.undo_redo_buffer)
+                    });
+                }
             }
             Some(RevDirection::FORWARD_LOG) => {
                 if !self.frame_log.forward_log(&meta) {
-                    return Err(UndoRedoLogError::UnexpectedUpdate { now, system_name });
+                    return Ok(());
                 };
                 let iter = self
                     .undo_redo_log
@@ -253,7 +254,7 @@ impl UndoRedoLog {
             return Err(UndoRedoLogError::RevDirectionMismatch { now, system_name });
         }
         if !self.frame_log.backward_log(&meta) {
-            return Err(UndoRedoLogError::UnexpectedUpdate { now, system_name });
+            return Ok(());
         };
         let iter = self
             .undo_redo_log
@@ -275,7 +276,6 @@ impl<'a> Display for UndoRedoLogError<'a> {
             Self::RevMetaMissing { system_name } => write!(f, "RevMeta was removed but is needed to update the UndoRedo log of reversible system {system_name}"),
             Self::UndoRedoBufferMissing { now, system_name } => write!(f, "UndoRedoBuffer was removed at frame {now} but is needed to update the UndoRedo log of reversible system {system_name}"),
             Self::RevDirectionMismatch { now, system_name } => write!(f, "RevDirection changed to an incorrect value at frame {now} before the update of the UndoRedo log of reversible system {system_name}"),
-            Self::UnexpectedUpdate { now, system_name } => write!(f, "the reversible system {system_name} ran unexpectedly at frame {now} at which it did not run at RevDirection::NOT_LOG"),
             Self::OutOfLog { now, system_name } => write!(f, "the UndoRedo log of the reversible system {system_name} is in an invalid state at frame {now}"),
         }
     }
