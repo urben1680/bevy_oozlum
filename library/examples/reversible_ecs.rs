@@ -1,4 +1,4 @@
-use std::{io::stdout, num::NonZeroU64, time::Duration};
+use std::{io::stdout, num::NonZeroUsize, time::Duration};
 
 use bevy::{
     app::App,
@@ -13,7 +13,7 @@ use library::{
     prelude::*,
 };
 
-const MAX_LOG_LEN: u64 = 71;
+const MAX_LOG_LEN: usize = 71;
 const FIXED_TIMESTEP: Duration = Duration::from_millis(100);
 
 // todo: mention how the last column cannot be undone
@@ -22,7 +22,7 @@ const FIXED_TIMESTEP: Duration = Duration::from_millis(100);
 
 fn main() {
     let _crossterm = GlobalSettings::new();
-    let meta = RevMeta::new(NonZeroU64::new(MAX_LOG_LEN), 0, false);
+    let meta = RevMeta::new(NonZeroUsize::new(MAX_LOG_LEN), 0, false);
     App::new()
         .add_plugins((
             MinimalPlugins,
@@ -457,7 +457,7 @@ fn render(
     let padding_cols = match *last_future_end {
         Some(frame) => {
             let mut padding = frame.wrapping_sub(meta.future_end());
-            if padding > MAX_LOG_LEN {
+            if padding > MAX_LOG_LEN as u64 {
                 padding = 0;
                 *last_future_end = Some(meta.future_end());
             }
