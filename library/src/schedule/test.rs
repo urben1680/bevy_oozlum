@@ -1,6 +1,6 @@
 use std::{
     mem::take,
-    num::NonZeroU64,
+    num::NonZeroUsize,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -517,7 +517,7 @@ fn test_finalize(
     let actual;
     let expected: Vec<_>;
     if direction.is_forward() {
-        meta.max_world_states = NonZeroU64::new(1);
+        meta.max_world_states = NonZeroUsize::new(1);
         world.run_schedule(FixedUpdate);
         actual = take(&mut world.resource_mut::<TestLog<true>>().0);
         expected = iter.collect();
