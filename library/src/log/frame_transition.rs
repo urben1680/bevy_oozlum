@@ -1,5 +1,5 @@
 use core::fmt::Debug;
-use std::collections::{TryReserveError, VecDeque};
+use std::{cmp::Ordering, collections::{TryReserveError, VecDeque}, error::Error, fmt::Display};
 
 use bevy::reflect::Reflect;
 
@@ -14,6 +14,17 @@ pub struct FrameTransitionLog {
     frames: VecDeque<u64>,
     index: usize,
 }
+
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
+pub struct MissedFrame;
+
+impl Display for MissedFrame {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "the expected frame for forward_log/backward_log was missed")
+    }
+}
+
+impl Error for MissedFrame {}
 
 #[cfg(feature = "serde")]
 mod serde_with {
@@ -100,29 +111,41 @@ impl FrameTransitionLog {
         self.frames.clear();
         self.index = 0;
     }
-    pub fn backward_log(&mut self, meta: &RevMeta) -> bool {
+    pub fn checked_backward_log(&mut self, meta: &RevMeta) -> Result<bool, MissedFrame> {
         let Some(index) = self.index.checked_sub(1) else {
-            return false;
+            return Err(MissedFrame);
         };
         let Some(&frame) = self.frames.get(index) else {
             index_oob();
-            return false;
+            return Err(MissedFrame);
         };
-        let expects_backward = frame == meta.now() + 1;
-        if expects_backward {
-            self.index = index;
+        match frame.cmp(&(meta.now() + 1)) {
+            Ordering::Greater => Ok(false),
+            Ordering::Equal => {
+                self.index = index;
+                Ok(true)
+            },
+            Ordering::Less => Err(MissedFrame)
         }
-        expects_backward
+    }
+    pub fn backward_log(&mut self, meta: &RevMeta) -> bool {
+        self.checked_backward_log(meta) == Ok(true)
+    }
+    pub fn checked_forward_log(&mut self, meta: &RevMeta) -> Result<bool, MissedFrame> {
+        let Some(&frame) = self.frames.get(self.index) else {
+            return Err(MissedFrame);
+        };
+        match frame.cmp(&meta.now()) {
+            Ordering::Less => Ok(false),
+            Ordering::Equal => {
+                self.index += 1;
+                Ok(true)
+            },
+            Ordering::Greater => Err(MissedFrame)
+        }
     }
     pub fn forward_log(&mut self, meta: &RevMeta) -> bool {
-        let Some(&frame) = self.frames.get(self.index) else {
-            return false;
-        };
-        let expects_forward = frame == meta.now();
-        if expects_forward {
-            self.index += 1;
-        }
-        expects_forward
+        self.checked_forward_log(meta) == Ok(true)
     }
 }
 
