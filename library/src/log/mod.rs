@@ -31,6 +31,7 @@ pub use dense_transition::DenseTransitionLog;
 pub use dense_transitions::DenseTransitionsLog;
 
 pub use frame_transition::FrameTransitionLog;
+pub use frame_transition::FrameTransitionLogError;
 
 pub use sparse_state::SparseStateLog;
 pub use sparse_states::SparseStatesLog;
@@ -223,7 +224,7 @@ impl<T> ExactSizeIterator for SparseDrain<'_, T> {}
 
 impl<T> FusedIterator for SparseDrain<'_, T> {}
 
-/// Assumes cut-off bytes, if any, are `0`.
+/// Assumes cut-off bytes, if any, are more significant than the existing ones and are `0`.
 #[inline(always)]
 fn resize_ne_bytes<const N: usize, const M: usize>(arr: [u8; N]) -> [u8; M] {
     let min = N.min(M);
@@ -247,7 +248,7 @@ fn resize_ne_bytes<const N: usize, const M: usize>(arr: [u8; N]) -> [u8; M] {
 /// drained, and the second with `EntryAmount`, containing the entry type `U` of the log (if specified) and the
 /// amount of states/transitions per update, returned by the [`amount`](Self::amount) method.
 #[derive(Debug, Clone, Reflect)]
-pub struct EntryAmount<U, const AMOUNT_BYTES: usize = USIZE_BYTES> {
+pub struct EntryAmount<U, const AMOUNT_BYTES: usize> {
     pub entry: U,
     amount: [u8; AMOUNT_BYTES],
 }
