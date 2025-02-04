@@ -7,12 +7,12 @@ use bevy::{
         change_detection::Mut,
         component::{ComponentId, Tick},
         query::Access,
-        system::{IntoSystem, ReadOnlySystemParam, Res, Resource, System, SystemMeta, SystemParam},
+        resource::Resource,
+        system::{IntoSystem, ReadOnlySystemParam, Res, System, SystemMeta, SystemParam},
         world::{unsafe_world_cell::UnsafeWorldCell, World},
     },
-    log::error_once,
+    log::{error_once, info},
     reflect::{std_traits::ReflectDefault, Reflect},
-    utils::tracing::info,
 };
 
 #[cfg(feature = "serde")]
