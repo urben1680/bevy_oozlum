@@ -6,8 +6,8 @@ use std::{
 
 use bevy::{
     ecs::{
+        resource::Resource,
         system::Commands,
-        system::Resource,
         world::{DeferredWorld, World},
     },
     utils::synccell::SyncCell,
@@ -19,9 +19,8 @@ use crate::{
 };
 
 mod commands;
-// todo: mod entity_commands
 
-pub use commands::RevCommands;
+pub use commands::{RevCommands, RevEntityCommands};
 
 pub trait BuffersUndoRedo {
     /// Buffers an [`UndoRedo`] implementor in a resource to be collected by the reversible system's state during sync points.
