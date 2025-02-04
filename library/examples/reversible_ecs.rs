@@ -2,7 +2,7 @@ use std::{io::stdout, num::NonZeroUsize, time::Duration};
 
 use bevy::{
     app::App,
-    ecs::{component::ComponentId, world::DeferredWorld},
+    ecs::{component::HookContext, world::DeferredWorld},
     prelude::*,
 };
 
@@ -72,7 +72,7 @@ struct Waste {
 #[derive(Resource, Default)]
 struct LostWaste(usize);
 
-fn on_remove(mut world: DeferredWorld, _: Entity, _: ComponentId) {
+fn on_remove(mut world: DeferredWorld, _: HookContext) {
     if world.resource::<RevMeta>().get_direction() == Some(RevDirection::NOT_LOG) {
         world.resource_mut::<LostWaste>().0 += 1;
     }
@@ -240,10 +240,11 @@ fn row5(app: &mut App) {
         });
     }
 
-    fn on_add(mut world: DeferredWorld, entity: Entity, _: ComponentId) {
+    fn on_add(mut world: DeferredWorld, context: HookContext) {
         if world.resource::<RevMeta>().direction().is_log() {
             return;
         }
+        let entity = context.entity;
         let waste = *world.entity(entity).get::<Waste>().unwrap();
         if waste.row != 5 {
             return;
@@ -288,7 +289,7 @@ fn row6(app: &mut App) {
 
     fn observer(trigger: Trigger<WasteObserverEvent>, mut world: DeferredWorld) {
         let waste = trigger.0;
-        let entity = trigger.entity();
+        let entity = trigger.target();
         world.buffer_undo_redo_finalize(
             move |world: &mut World, variant: UndoRedoDirection| {
                 let mut entity = world.entity_mut(entity);
@@ -394,27 +395,30 @@ struct GlobalSettings;
 
 impl GlobalSettings {
     fn new() -> Self {
-        use bevy::{
-            log::{
-                tracing_subscriber::{
-                    self,
-                    layer::{Context, SubscriberExt},
-                    util::SubscriberInitExt,
-                },
-                Level,
+        use bevy::log::{
+            tracing::{dispatcher::get_default, Event, Subscriber},
+            tracing_subscriber::{
+                layer::{Context, SubscriberExt},
+                registry,
+                util::SubscriberInitExt,
+                Layer,
             },
-            utils::tracing::{Event, Subscriber},
+            Level,
         };
 
         struct PanicOnError;
-        impl<S: Subscriber> tracing_subscriber::Layer<S> for PanicOnError {
+        impl<S: Subscriber> Layer<S> for PanicOnError {
             fn on_event(&self, event: &Event, _ctx: Context<S>) {
                 if *event.metadata().level() == Level::ERROR {
                     panic!("{event:#?}")
                 }
             }
         }
-        let _ = tracing_subscriber::registry().with(PanicOnError).try_init();
+        if registry().with(PanicOnError).try_init().is_err() {
+            get_default(|subscriber| {
+                assert!(subscriber.downcast_ref::<PanicOnError>().is_some());
+            })
+        }
         let _ = stdout().execute(SetSize(MAX_LOG_LEN as u16 + 2, 13));
         let _ = stdout().execute(Hide);
         Self
