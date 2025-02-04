@@ -1,9 +1,10 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use bevy::{
-    ecs::schedule::{Condition, IntoSystemSet, IntoSystemSetConfigs, SystemSet, SystemSetConfigs},
-    utils::all_tuples,
+use bevy::ecs::schedule::{
+    Condition, IntoSystemSet, IntoSystemSetConfigs, SystemSet, SystemSetConfigs,
 };
+
+use variadics_please::all_tuples;
 
 use super::{
     condition::add_condition, BackwardSet, BwdCmdSet, BwdCmdSysSet, BwdSysSet, ForwardSet,
