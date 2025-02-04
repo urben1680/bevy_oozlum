@@ -14,11 +14,13 @@ use bevy::{
         component::Component,
         event::Event,
         observer::Trigger,
+        resource::Resource,
         schedule::{IntoSystemConfigs, IntoSystemSet},
-        system::{Commands, IntoSystem, Resource},
+        system::{Commands, IntoSystem},
         world::{DeferredWorld, World},
     },
     log::{
+        tracing::{dispatcher::get_default, Event as TraceEvent, Subscriber},
         tracing_subscriber::{
             layer::{Context, SubscriberExt},
             registry,
@@ -27,7 +29,6 @@ use bevy::{
         },
         Level,
     },
-    utils::tracing::{dispatcher::get_default, Event as TraceEvent, Subscriber},
 };
 
 use crate::{
@@ -319,7 +320,7 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
             .push(Test::SysObsv((n, RevDirection::NOT_LOG)));
 
         // trigger observer in observer
-        world.trigger::<SysObsvObsv>(SysObsvObsv(n));
+        world.trigger(SysObsvObsv(n));
 
         // trigger command in observer
         world.commands().queue(move |world: &mut World| {
@@ -370,15 +371,15 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
     // set up hooks
     world
         .register_component_hooks::<SysHook>()
-        .on_add(|mut world, entity, _| {
-            let n = world.entity(entity).get::<SysHook>().unwrap().0;
+        .on_add(|mut world, hook| {
+            let n = world.entity(hook.entity).get::<SysHook>().unwrap().0;
             world
                 .resource_mut::<TestLog<false>>()
                 .0
                 .push(Test::SysHook((n, RevDirection::NOT_LOG)));
 
             // trigger observer in hook
-            world.trigger::<SysHookObsv>(SysHookObsv(n));
+            world.trigger(SysHookObsv(n));
 
             // trigger command in hook
             world.commands().queue(move |world: &mut World| {
@@ -397,8 +398,12 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
         });
     world
         .register_component_hooks::<SysCmdHook>()
-        .on_add(|mut world, entity, _| {
-            let n = world.entity(entity).get::<SysCmdHook>().expect("todo").0;
+        .on_add(|mut world, hook| {
+            let n = world
+                .entity(hook.entity)
+                .get::<SysCmdHook>()
+                .expect("todo")
+                .0;
             world
                 .resource_mut::<TestLog<false>>()
                 .0
