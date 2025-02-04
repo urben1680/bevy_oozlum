@@ -472,8 +472,7 @@ mod test {
         app::{App, Update},
         ecs::{
             change_detection::ResMut,
-            component::{Component, ComponentId},
-            entity::Entity,
+            component::{Component, HookContext},
             event::Event,
             observer::Trigger,
             schedule::IntoSystemConfigs,
@@ -504,7 +503,7 @@ mod test {
     #[derive(Component)]
     #[component(on_add = on_add)]
     struct OnAdd;
-    fn on_add(mut world: DeferredWorld, _: Entity, _: ComponentId) {
+    fn on_add(mut world: DeferredWorld, _: HookContext) {
         world.buffer_undo_redo(blank_undo_redo);
         world.commands().queue(|world: &mut World| {
             world.trigger(EmptyObserver);
@@ -514,7 +513,7 @@ mod test {
     #[derive(Component)]
     #[component(on_add = empty_on_add)]
     struct EmptyOnAdd;
-    fn empty_on_add(mut world: DeferredWorld, _: Entity, _: ComponentId) {
+    fn empty_on_add(mut world: DeferredWorld, _: HookContext) {
         world.buffer_undo_redo(blank_undo_redo);
     }
 
