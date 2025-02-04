@@ -1,11 +1,16 @@
 use core::fmt::Debug;
-use std::{cmp::Ordering, collections::{TryReserveError, VecDeque}, error::Error, fmt::Display};
+use std::{
+    cmp::Ordering,
+    collections::{TryReserveError, VecDeque},
+    error::Error,
+    fmt::Display,
+};
 
 use bevy::reflect::Reflect;
 
 use crate::meta::RevMeta;
 
-use super::index_oob;
+use super::{index_oob, OutOfLog};
 
 // todo: mention limitations, like missing frames
 #[derive(Debug, Clone, Default, Reflect)]
@@ -16,15 +21,27 @@ pub struct FrameTransitionLog {
 }
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
-pub struct MissedFrame;
+pub enum FrameTransitionLogError {
+    MissedFrame(u64),
+    OutOfLog,
+}
 
-impl Display for MissedFrame {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "the expected frame for forward_log/backward_log was missed")
+impl From<OutOfLog> for FrameTransitionLogError {
+    fn from(_: OutOfLog) -> Self {
+        Self::OutOfLog
     }
 }
 
-impl Error for MissedFrame {}
+impl Display for FrameTransitionLogError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MissedFrame(frame) => write!(f, "the expected frame {frame} was missed"),
+            Self::OutOfLog => write!(f, "no more frames are expected at this log direction"),
+        }
+    }
+}
+
+impl Error for FrameTransitionLogError {}
 
 #[cfg(feature = "serde")]
 mod serde_with {
@@ -111,41 +128,36 @@ impl FrameTransitionLog {
         self.frames.clear();
         self.index = 0;
     }
-    pub fn checked_backward_log(&mut self, meta: &RevMeta) -> Result<bool, MissedFrame> {
-        let Some(index) = self.index.checked_sub(1) else {
-            return Err(MissedFrame);
-        };
-        let Some(&frame) = self.frames.get(index) else {
-            index_oob();
-            return Err(MissedFrame);
-        };
+    pub fn try_backward_log(&mut self, meta: &RevMeta) -> Result<bool, FrameTransitionLogError> {
+        let index = self.index.checked_sub(1).ok_or(OutOfLog)?;
+        let frame = *self.frames.get(index).ok_or_else(index_oob)?;
         match frame.cmp(&(meta.now() + 1)) {
-            Ordering::Greater => Ok(false),
+            Ordering::Less => Ok(false),
             Ordering::Equal => {
                 self.index = index;
                 Ok(true)
-            },
-            Ordering::Less => Err(MissedFrame)
+            }
+            Ordering::Greater => Err(FrameTransitionLogError::MissedFrame(frame)),
         }
     }
     pub fn backward_log(&mut self, meta: &RevMeta) -> bool {
-        self.checked_backward_log(meta) == Ok(true)
+        self.try_backward_log(meta)
+            .unwrap_or_else(|err| panic!("{err}"))
     }
-    pub fn checked_forward_log(&mut self, meta: &RevMeta) -> Result<bool, MissedFrame> {
-        let Some(&frame) = self.frames.get(self.index) else {
-            return Err(MissedFrame);
-        };
+    pub fn try_forward_log(&mut self, meta: &RevMeta) -> Result<bool, FrameTransitionLogError> {
+        let frame = *self.frames.get(self.index).ok_or(OutOfLog)?;
         match frame.cmp(&meta.now()) {
-            Ordering::Less => Ok(false),
+            Ordering::Greater => Ok(false),
             Ordering::Equal => {
                 self.index += 1;
                 Ok(true)
-            },
-            Ordering::Greater => Err(MissedFrame)
+            }
+            Ordering::Less => Err(FrameTransitionLogError::MissedFrame(frame)),
         }
     }
     pub fn forward_log(&mut self, meta: &RevMeta) -> bool {
-        self.checked_forward_log(meta) == Ok(true)
+        self.try_forward_log(meta)
+            .unwrap_or_else(|err| panic!("{err}"))
     }
 }
 
@@ -198,9 +210,11 @@ mod test {
                         );
                     }
                     let before = self.log.clone();
-                    assert_eq!(
-                        self.log.forward_log(meta),
-                        false,
+                    assert!(
+                        matches!(
+                            self.log.try_backward_log(meta),
+                            Ok(false) | Err(FrameTransitionLogError::OutOfLog)
+                        ),
                         "\nbefore: {before:#?}\nafter: {:#?}\nmeta: {meta:?}",
                         self.log
                     );
@@ -222,9 +236,11 @@ mod test {
                         );
                     }
                     let before = self.log.clone();
-                    assert_eq!(
-                        self.log.backward_log(meta),
-                        false,
+                    assert!(
+                        matches!(
+                            self.log.try_backward_log(meta),
+                            Ok(false) | Err(FrameTransitionLogError::OutOfLog)
+                        ),
                         "\nbefore: {before:#?}\nafter: {:#?}\nmeta: {meta:?}",
                         self.log
                     );
