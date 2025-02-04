@@ -33,7 +33,6 @@ ISSUES/DISCUSSIONS:
 - more compact FrameTransitionLog
 -- VecDeque<u8> with variable len entries
 -- has to provide the same api
--- expects_* determination without lookups
 */
 
 pub mod app;
@@ -52,6 +51,6 @@ pub mod prelude {
     };
     pub use crate::undo_redo::{
         BuffersUndoRedo as _, FinalizeDirection, RevCommands as _, UndoRedoBuffer,
-        UndoRedoDirection,
+        UndoRedoDirection, RevEntityCommands as _,
     };
 }
