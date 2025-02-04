@@ -1,9 +1,8 @@
-use bevy::{
-    ecs::schedule::{
-        Condition, IntoSystemConfigs, IntoSystemSet, NodeConfigs, SystemConfigs, SystemSet,
-    },
-    utils::all_tuples,
+use bevy::ecs::schedule::{
+    Condition, IntoSystemConfigs, IntoSystemSet, NodeConfigs, SystemConfigs, SystemSet,
 };
+
+use variadics_please::all_tuples;
 
 use super::{
     condition::add_condition,
