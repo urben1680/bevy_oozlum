@@ -204,22 +204,20 @@ fn row4(app: &mut App) {
             row: 4,
         };
         let entity = commands.spawn(waste).id();
-        commands.buffer_undo_redo_finalize(
-            move |world: &mut World, variant: UndoRedoDirection| {
-                let mut entity = world.entity_mut(entity);
-                match variant {
-                    UndoRedoDirection::Undo => {
-                        entity.remove::<Waste>();
-                    }
-                    UndoRedoDirection::Redo => {
-                        entity.insert(waste);
-                    }
-                };
-            },
-            move |world: &mut World, _: FinalizeDirection| {
-                world.entity_mut(entity).despawn();
-            },
-        );
+        commands.buffer_undo_redo(move |world: &mut World, variant: UndoRedoDirection| {
+            let mut entity = world.entity_mut(entity);
+            match variant {
+                UndoRedoDirection::Undo => {
+                    entity.remove::<Waste>();
+                }
+                UndoRedoDirection::Redo => {
+                    entity.insert(waste);
+                }
+            };
+        });
+        commands.buffer_finalize(move |world: &mut World, _: FinalizeDirection| {
+            world.entity_mut(entity).despawn();
+        });
     }
 }
 
@@ -249,22 +247,20 @@ fn row5(app: &mut App) {
         if waste.row != 5 {
             return;
         }
-        world.buffer_undo_redo_finalize(
-            move |world: &mut World, variant: UndoRedoDirection| {
-                let mut entity = world.entity_mut(entity);
-                match variant {
-                    UndoRedoDirection::Undo => {
-                        entity.remove::<Waste>();
-                    }
-                    UndoRedoDirection::Redo => {
-                        entity.insert(waste);
-                    }
-                };
-            },
-            move |world: &mut World, _: FinalizeDirection| {
-                world.entity_mut(entity).despawn();
-            },
-        )
+        world.buffer_undo_redo(move |world: &mut World, variant: UndoRedoDirection| {
+            let mut entity = world.entity_mut(entity);
+            match variant {
+                UndoRedoDirection::Undo => {
+                    entity.remove::<Waste>();
+                }
+                UndoRedoDirection::Redo => {
+                    entity.insert(waste);
+                }
+            };
+        });
+        world.buffer_finalize(move |world: &mut World, _: FinalizeDirection| {
+            world.entity_mut(entity).despawn();
+        });
     }
 }
 
@@ -290,22 +286,20 @@ fn row6(app: &mut App) {
     fn observer(trigger: Trigger<WasteObserverEvent>, mut world: DeferredWorld) {
         let waste = trigger.0;
         let entity = trigger.target();
-        world.buffer_undo_redo_finalize(
-            move |world: &mut World, variant: UndoRedoDirection| {
-                let mut entity = world.entity_mut(entity);
-                match variant {
-                    UndoRedoDirection::Undo => {
-                        entity.remove::<Waste>();
-                    }
-                    UndoRedoDirection::Redo => {
-                        entity.insert(waste);
-                    }
+        world.buffer_undo_redo(move |world: &mut World, variant: UndoRedoDirection| {
+            let mut entity = world.entity_mut(entity);
+            match variant {
+                UndoRedoDirection::Undo => {
+                    entity.remove::<Waste>();
                 }
-            },
-            move |world: &mut World, _: FinalizeDirection| {
-                world.entity_mut(entity).despawn();
-            },
-        );
+                UndoRedoDirection::Redo => {
+                    entity.insert(waste);
+                }
+            }
+        });
+        world.buffer_finalize(move |world: &mut World, _: FinalizeDirection| {
+            world.entity_mut(entity).despawn();
+        });
     }
 }
 
