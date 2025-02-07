@@ -18,13 +18,13 @@ use bevy::{
 #[cfg(feature = "serde")]
 use bevy::reflect::{ReflectDeserialize, ReflectSerialize};
 
-use crate::{log::OutOfLog, schedule::RevUpdate, undo_redo::UndoRedoBuffer};
+use crate::{log::OutOfLog, schedule::RevUpdate, undo_redo::RevBuffer};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum TryRunRevUpdateError {
     RevMetaMissingFirstCall,
     RevMetaMissing { existed_previously: bool },
-    RevMetaRemovedInSchedule { frame: Option<u64> },
+    RevMetaRemovedInSchedule { frame: u64 },
     UnexpectedInitialRunning(RevMeta),
     RevUpdateMissing(RevMeta),
     UndoRedoBufferMissingAfterUpdate(RevMeta),
@@ -45,8 +45,7 @@ impl Display for TryRunRevUpdateError {
             ),
             Self::RevMetaRemovedInSchedule { frame } => write!(
                 f,
-                "RevMeta was removed in while RevUpdate ran at frame {}",
-                frame.unwrap_or(u64::MAX)
+                "RevMeta was removed in while RevUpdate ran at frame {frame}"
             ),
             Self::UnexpectedInitialRunning(meta) => write!(
                 f,
@@ -359,7 +358,7 @@ impl RevMeta {
         }
 
         world.resource_scope(|world: &mut World, mut meta: Mut<Self>| {
-            let buffer = world.get_resource_or_init::<UndoRedoBuffer>();
+            let buffer = world.get_resource_or_init::<RevBuffer>();
 
             if !buffer.undo_redo_is_empty() {
                 return Err(TryRunRevUpdateError::UndoRedoBufferNotEmptyBeforeUpdate(
@@ -370,6 +369,7 @@ impl RevMeta {
             if meta.get_direction().is_some() {
                 return Err(TryRunRevUpdateError::UnexpectedInitialRunning(meta.clone()));
             }
+
             let previous = meta.clone();
             let result = meta.update(|meta| {
                 let frame = meta.now();
@@ -377,15 +377,16 @@ impl RevMeta {
                     world.insert_resource(meta.clone());
                     schedule.run(world);
                 });
+
                 match result {
                     Ok(()) => {
-                        if !world.contains_resource::<UndoRedoBuffer>() {
+                        if !world.contains_resource::<RevBuffer>() {
                             Err(TryRunRevUpdateError::UndoRedoBufferMissingAfterUpdate(
                                 meta.clone(),
                             ))
                         } else {
-                            world.resource_scope(|world, mut buffer: Mut<UndoRedoBuffer>| {
-                                match buffer.update_finalize(&meta, world) {
+                            world.resource_scope(|world, mut buffer: Mut<RevBuffer>| {
+                                match buffer.finish_rev_update(&meta, world) {
                                     Ok(()) => Ok(frame),
                                     Err(OutOfLog) => Err(
                                         TryRunRevUpdateError::UndoRedoBufferOutOfLogAfterUpdate(
@@ -403,6 +404,9 @@ impl RevMeta {
             match result.transpose() {
                 Ok(frame) => {
                     let Some(updated) = world.remove_resource::<Self>() else {
+                        let frame = frame.expect(
+                            "RevMeta could not have been removed without running RevUpdate",
+                        );
                         return Err(TryRunRevUpdateError::RevMetaRemovedInSchedule { frame });
                     };
                     meta.max_world_states = updated.max_world_states;
