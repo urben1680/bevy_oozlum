@@ -89,6 +89,7 @@ impl RevSchedule for Schedule {
         &mut self,
         sets: impl IntoRevSystemSetConfigs<Marker>,
     ) -> &mut Self {
+        // check needs to be on a non-pub set that is also not used by the `forward_set` function
         if !self.graph().contains_set(ForwardSet) {
             fn is_forward<const TRUE: bool>(meta: Option<Res<RevMeta>>) -> bool {
                 meta.and_then(|meta| meta.get_direction())
