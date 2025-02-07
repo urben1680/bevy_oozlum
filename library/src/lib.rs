@@ -16,6 +16,7 @@ TODO:
 Enhancements:
 - reduce todo!() and //todo
 - #[inline]s
+- track_location and bevy_reflect feature (both are not documented?), rename serde -> serialize
 
 Docs
 - documentations
@@ -26,7 +27,15 @@ Docs
 ISSUES/DISCUSSIONS:
 - reversible change detection (copy over to new repo)
 - analyze test schedule::non_exclusive_then_exclusive_ignore_deferred, consider revamping test strategy
-- reversible entity commands, link to https://github.com/bevyengine/bevy/issues/15350 as blocker
+- reversible entity commands
+-- main has all that is needed but might all be too fresh and up for changes before 0.16
+-- approach:
+-- 1. methods that are rev_ variants of bevy's commands + entity commands
+--    still are vanilla Command/EntityCommand implementors
+--    ideally work with fallible commands API
+--    entity disabling (unspaw, undespawn) needs to be aware if entity is already disabled
+--      maybe add another marker component that requires Disabled
+-- 2. extend RevCommands trait, introduce RevEntityCommands
 - manual sync point configuration
 -- apply_deferred
 -- ScheduleBuildSettings::auto_insert_apply_deferred
@@ -50,7 +59,6 @@ pub mod prelude {
         RevSystemsSet, RevUpdate,
     };
     pub use crate::undo_redo::{
-        BuffersUndoRedo as _, FinalizeDirection, RevCommands as _, UndoRedoBuffer,
-        UndoRedoDirection, RevEntityCommands as _,
+        BuffersRev as _, FinalizeDirection, RevBuffer, RevCommands as _, UndoRedoDirection,
     };
 }
