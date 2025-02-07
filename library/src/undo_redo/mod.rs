@@ -7,8 +7,8 @@ use std::{
 use bevy::{
     ecs::{
         resource::Resource,
-        system::Commands,
-        world::{DeferredWorld, World},
+        system::{Commands, EntityCommands},
+        world::{DeferredWorld, EntityWorldMut, World},
     },
     utils::synccell::SyncCell,
 };
@@ -20,9 +20,10 @@ use crate::{
 
 mod commands;
 
-pub use commands::{RevCommands, RevEntityCommands};
+pub use commands::*;
 
-pub trait BuffersUndoRedo {
+// todo rename
+pub trait BuffersRev {
     /// Buffers an [`UndoRedo`] implementor in a resource to be collected by the reversible system's state during sync points.
     ///
     /// Logic applied in sync points are in:
@@ -40,43 +41,109 @@ pub trait BuffersUndoRedo {
     /// | | Sync Point | Non-Observer System |
     /// | - | - | - |
     /// | [`&mut World`](World) | ✅ | ❌ |
+    /// | [`EntityWorldMut`] | ✅ | ❌ |
     /// | [`DeferredWorld`] | ✅ | ❌ |
     /// | [`UndoRedoBuffer`] | ✅ | ❌ |
     /// | [`Commands`] | ❌ | ✅ |
-    fn buffer_undo_redo(&mut self, undo_redo: impl UndoRedo);
-    fn buffer_undo_redo_finalize(&mut self, undo_redo: impl UndoRedo, finalize: impl Finalize);
+    /// | [`EntityCommands`] | ❌ | ✅ |
+    fn buffer_undo_redo(&mut self, undo_redo: impl UndoRedo) -> &mut Self;
+    fn buffer_finalize(&mut self, finalize: impl Finalize) -> &mut Self;
+    fn buffer_undo_redo_finalize(
+        &mut self,
+        undo_redo_finalize: impl UndoRedo + Finalize + Clone,
+    ) -> &mut Self {
+        self.buffer_undo_redo(undo_redo_finalize.clone())
+            .buffer_finalize(undo_redo_finalize)
+    }
 }
 
-impl<'w, 's> BuffersUndoRedo for Commands<'w, 's> {
-    fn buffer_undo_redo(&mut self, undo_redo: impl UndoRedo) {
-        self.queue(move |world: &mut World| world.buffer_undo_redo(undo_redo))
+impl BuffersRev for Commands<'_, '_> {
+    fn buffer_undo_redo(&mut self, undo_redo: impl UndoRedo) -> &mut Self {
+        self.queue(move |world: &mut World| {
+            world.buffer_undo_redo(undo_redo);
+        });
+        self
     }
-    fn buffer_undo_redo_finalize(&mut self, undo_redo: impl UndoRedo, finalize: impl Finalize) {
-        self.queue(move |world: &mut World| world.buffer_undo_redo_finalize(undo_redo, finalize))
+    fn buffer_finalize(&mut self, finalize: impl Finalize) -> &mut Self {
+        self.queue(move |world: &mut World| {
+            world.buffer_finalize(finalize);
+        });
+        self
     }
 }
 
-impl BuffersUndoRedo for World {
-    fn buffer_undo_redo(&mut self, undo_redo: impl UndoRedo) {
+impl BuffersRev for EntityCommands<'_> {
+    fn buffer_undo_redo(&mut self, undo_redo: impl UndoRedo) -> &mut Self {
+        self.queue(move |mut world: EntityWorldMut| {
+            world.buffer_undo_redo(undo_redo);
+        });
+        self
+    }
+    fn buffer_finalize(&mut self, finalize: impl Finalize) -> &mut Self {
+        self.queue(move |mut world: EntityWorldMut| {
+            world.buffer_finalize(finalize);
+        });
+        self
+    }
+}
+
+impl BuffersRev for World {
+    fn buffer_undo_redo(&mut self, undo_redo: impl UndoRedo) -> &mut Self {
         DeferredWorld::buffer_undo_redo(&mut self.into(), undo_redo);
+        self
     }
-    fn buffer_undo_redo_finalize(&mut self, undo_redo: impl UndoRedo, finalize: impl Finalize) {
-        DeferredWorld::buffer_undo_redo_finalize(&mut self.into(), undo_redo, finalize);
+    fn buffer_finalize(&mut self, finalize: impl Finalize) -> &mut Self {
+        DeferredWorld::buffer_finalize(&mut self.into(), finalize);
+        self
     }
 }
 
-impl<'w> BuffersUndoRedo for DeferredWorld<'w> {
-    fn buffer_undo_redo(&mut self, undo_redo: impl UndoRedo) {
-        self.get_resource_mut::<UndoRedoBuffer>()
-            .expect("todo")
+impl BuffersRev for EntityWorldMut<'_> {
+    fn buffer_undo_redo(&mut self, undo_redo: impl UndoRedo) -> &mut Self {
+        self.get_resource_mut::<RevBuffer>()
+            .expect(EXPECT_BUFFER)
             .buffer_undo_redo(undo_redo);
+        self
     }
-    fn buffer_undo_redo_finalize(&mut self, undo_redo: impl UndoRedo, finalize: impl Finalize) {
-        self.get_resource_mut::<UndoRedoBuffer>()
-            .expect("todo")
-            .buffer_undo_redo_finalize(undo_redo, finalize);
+    fn buffer_finalize(&mut self, finalize: impl Finalize) -> &mut Self {
+        self.get_resource_mut::<RevBuffer>()
+            .expect(EXPECT_BUFFER)
+            .buffer_finalize(finalize);
+        self
     }
 }
+
+impl BuffersRev for DeferredWorld<'_> {
+    fn buffer_undo_redo(&mut self, undo_redo: impl UndoRedo) -> &mut Self {
+        self.get_resource_mut::<RevBuffer>()
+            .expect(EXPECT_BUFFER)
+            .buffer_undo_redo(undo_redo);
+        self
+    }
+    fn buffer_finalize(&mut self, finalize: impl Finalize) -> &mut Self {
+        self.get_resource_mut::<RevBuffer>()
+            .expect(EXPECT_BUFFER)
+            .buffer_finalize(finalize);
+        self
+    }
+}
+
+impl BuffersRev for RevBuffer {
+    fn buffer_undo_redo(&mut self, undo_redo: impl UndoRedo) -> &mut Self {
+        self.undo_redo_buffer
+            .push_back(SyncCell::new(Box::new(undo_redo)));
+        self
+    }
+    fn buffer_finalize(&mut self, finalize: impl Finalize) -> &mut Self {
+        self.finalize_buffer
+            .push_back(SyncCell::new(Box::new(finalize)));
+        self
+    }
+}
+
+const EXPECT_BUFFER: &'static str =
+    "BuffersUndoRedo methods need the UndoRedoBuffer resource but it is missing";
+
 /// For usages in reversible observer systems.
 ///
 /// Commands and hooks can buffer [`UndoRedo`] implementors via [`&mut World`](World)/[`DeferredWorld`] instead.
@@ -84,29 +151,17 @@ impl<'w> BuffersUndoRedo for DeferredWorld<'w> {
 /// Do not remove or overwrite this resource.
 // uses a VecDeque so `CommandsLog` can use `VecDeque::append`
 #[derive(Resource, Default)]
-pub struct UndoRedoBuffer {
+pub struct RevBuffer {
     undo_redo_buffer: VecDeque<SyncCell<Box<dyn UndoRedo>>>,
     finalize_buffer: VecDeque<SyncCell<Box<dyn Finalize>>>,
     finalize_log: SparseTransitionsLog<SyncCell<Box<dyn Finalize>>>,
 }
 
-impl BuffersUndoRedo for UndoRedoBuffer {
-    fn buffer_undo_redo(&mut self, undo_redo: impl UndoRedo) {
-        self.undo_redo_buffer
-            .push_back(SyncCell::new(Box::new(undo_redo)));
-    }
-    fn buffer_undo_redo_finalize(&mut self, undo_redo: impl UndoRedo, finalize: impl Finalize) {
-        self.buffer_undo_redo(undo_redo);
-        self.finalize_buffer
-            .push_back(SyncCell::new(Box::new(finalize)));
-    }
-}
-
-impl UndoRedoBuffer {
+impl RevBuffer {
     pub fn undo_redo_is_empty(&self) -> bool {
         self.undo_redo_buffer.is_empty()
     }
-    pub(crate) fn update_finalize(
+    pub(crate) fn finish_rev_update(
         &mut self,
         meta: &RevMeta,
         world: &mut World,
@@ -174,12 +229,90 @@ impl<F: FnMut(&mut World, UndoRedoDirection) + Send + 'static> UndoRedo for F {
     }
 }
 
+impl<T: UndoRedo> UndoRedo for Vec<T> {
+    fn undo(&mut self, world: &mut World) {
+        for x in self.iter_mut().rev() {
+            x.undo(world);
+        }
+    }
+    fn redo(&mut self, world: &mut World) {
+        for x in self.iter_mut() {
+            x.undo(world);
+        }
+    }
+}
+
+impl<T: UndoRedo, const N: usize> UndoRedo for [T; N] {
+    fn undo(&mut self, world: &mut World) {
+        for x in self.iter_mut().rev() {
+            x.undo(world);
+        }
+    }
+    fn redo(&mut self, world: &mut World) {
+        for x in self.iter_mut() {
+            x.undo(world);
+        }
+    }
+}
+
+impl<T: UndoRedo> UndoRedo for [T] {
+    fn undo(&mut self, world: &mut World) {
+        for x in self.iter_mut().rev() {
+            x.undo(world);
+        }
+    }
+    fn redo(&mut self, world: &mut World) {
+        for x in self.iter_mut() {
+            x.undo(world);
+        }
+    }
+}
+
 impl<F: FnMut(&mut World, FinalizeDirection) + Send + 'static> Finalize for F {
     fn finalize_undone(mut self: Box<Self>, world: &mut World) {
         self(world, FinalizeDirection::FinalizeUndone)
     }
     fn finalize_redone(mut self: Box<Self>, world: &mut World) {
         self(world, FinalizeDirection::FinalizeRedone)
+    }
+}
+
+impl<T: Finalize> Finalize for Vec<T> {
+    fn finalize_undone(self: Box<Self>, world: &mut World) {
+        for x in self.into_iter().rev().map(Box::new) {
+            x.finalize_undone(world);
+        }
+    }
+    fn finalize_redone(self: Box<Self>, world: &mut World) {
+        for x in self.into_iter().map(Box::new) {
+            x.finalize_redone(world);
+        }
+    }
+}
+
+impl<T: Finalize, const N: usize> Finalize for [T; N] {
+    fn finalize_undone(self: Box<Self>, world: &mut World) {
+        for x in self.into_iter().rev().map(Box::new) {
+            x.finalize_undone(world);
+        }
+    }
+    fn finalize_redone(self: Box<Self>, world: &mut World) {
+        for x in self.into_iter().map(Box::new) {
+            x.finalize_redone(world);
+        }
+    }
+}
+
+impl<T: Finalize> Finalize for [T] {
+    fn finalize_undone(self: Box<Self>, world: &mut World) {
+        for x in IntoIterator::into_iter(self).rev().map(Box::new) {
+            x.finalize_undone(world);
+        }
+    }
+    fn finalize_redone(self: Box<Self>, world: &mut World) {
+        for x in IntoIterator::into_iter(self).map(Box::new) {
+            x.finalize_redone(world);
+        }
     }
 }
 
@@ -212,7 +345,7 @@ impl UndoRedoLog {
         match meta.get_direction() {
             Some(RevDirection::NOT_LOG) => {
                 let mut buffer = world
-                    .get_resource_mut::<UndoRedoBuffer>()
+                    .get_resource_mut::<RevBuffer>()
                     .ok_or_else(|| UndoRedoLogError::UndoRedoBufferMissing { now, system_name })?;
                 if !buffer.undo_redo_is_empty() {
                     let past_len = self.frame_log.push_and_get_past_len(&meta);
