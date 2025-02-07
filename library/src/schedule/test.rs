@@ -34,7 +34,7 @@ use bevy::{
 use crate::{
     meta::RevDirection,
     schedule::RevUpdate,
-    undo_redo::{BuffersUndoRedo, Finalize, UndoRedo, UndoRedoBuffer},
+    undo_redo::{BuffersRev, Finalize, RevBuffer, UndoRedo},
 };
 
 use super::*;
@@ -246,7 +246,7 @@ fn system_command<const N: u8>(world: &mut World) {
         .push(Test::SysCmd((N, RevDirection::NOT_LOG)));
 
     let test = Test::SysCmd(N);
-    world.buffer_undo_redo_finalize(test, test);
+    world.buffer_undo_redo_finalize(test);
 }
 
 #[derive(Clone, Copy)]
@@ -330,41 +330,41 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
                 .push(Test::SysObsvCmd((n, RevDirection::NOT_LOG)));
 
             let test = Test::SysObsvCmd(n);
-            world.buffer_undo_redo_finalize(test, test);
+            world.buffer_undo_redo_finalize(test);
         });
 
         // buffer reversible observer
         let test = Test::SysObsv(n);
-        world.buffer_undo_redo_finalize(test, test);
+        world.buffer_undo_redo_finalize(test);
     });
     world.add_observer(
         |event: Trigger<SysHookObsv>,
          mut log: ResMut<TestLog<false>>,
-         mut buffer: ResMut<UndoRedoBuffer>| {
+         mut buffer: ResMut<RevBuffer>| {
             let n = event.0;
             log.0.push(Test::SysHookObsv((n, RevDirection::NOT_LOG)));
             let test = Test::SysHookObsv(n);
-            buffer.buffer_undo_redo_finalize(test, test);
+            buffer.buffer_undo_redo_finalize(test);
         },
     );
     world.add_observer(
         |event: Trigger<SysObsvObsv>,
          mut log: ResMut<TestLog<false>>,
-         mut buffer: ResMut<UndoRedoBuffer>| {
+         mut buffer: ResMut<RevBuffer>| {
             let n = event.0;
             log.0.push(Test::SysObsvObsv((n, RevDirection::NOT_LOG)));
             let test = Test::SysObsvObsv(n);
-            buffer.buffer_undo_redo_finalize(test, test);
+            buffer.buffer_undo_redo_finalize(test);
         },
     );
     world.add_observer(
         |event: Trigger<SysCmdObsv>,
          mut log: ResMut<TestLog<false>>,
-         mut buffer: ResMut<UndoRedoBuffer>| {
+         mut buffer: ResMut<RevBuffer>| {
             let n = event.0;
             log.0.push(Test::SysCmdObsv((n, RevDirection::NOT_LOG)));
             let test = Test::SysCmdObsv(n);
-            buffer.buffer_undo_redo_finalize(test, test);
+            buffer.buffer_undo_redo_finalize(test);
         },
     );
 
@@ -389,12 +389,12 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
                     .push(Test::SysHookCmd((n, RevDirection::NOT_LOG)));
 
                 let test = Test::SysHookCmd(n);
-                world.buffer_undo_redo_finalize(test, test);
+                world.buffer_undo_redo_finalize(test);
             });
 
             // buffer reversible hook
             let test = Test::SysHook(n);
-            world.buffer_undo_redo_finalize(test, test);
+            world.buffer_undo_redo_finalize(test);
         });
     world
         .register_component_hooks::<SysCmdHook>()
@@ -411,7 +411,7 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
 
             // buffer reversible hook
             let test = Test::SysCmdHook(n);
-            world.buffer_undo_redo_finalize(test, test);
+            world.buffer_undo_redo_finalize(test);
         });
 
     // run tests forward
