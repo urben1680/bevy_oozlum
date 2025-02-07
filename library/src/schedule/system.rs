@@ -23,7 +23,7 @@ use crate::{
     schedule::{
         error_per_flag, BackwardSet, BwdCmdSet, BwdCmdSysSet, BwdSysSet, ForwardSet, FwdSysSet,
     },
-    undo_redo::{UndoRedoBuffer, UndoRedoLog},
+    undo_redo::{RevBuffer, UndoRedoLog},
 };
 
 use super::{IntoRevSystemConfigs, RevSystemConfigs, RevSystemSetConfigs};
@@ -444,7 +444,7 @@ fn initialize_arc_system<'a, T: System>(
     name: &String,
     world: &mut World,
 ) -> MutexGuard<'a, Inner<T>> {
-    world.init_resource::<UndoRedoBuffer>();
+    world.init_resource::<RevBuffer>();
     *tick = world.change_tick();
     let mut shared = shared.inner.try_lock().unwrap_or_else(expect_lock(name));
     if !shared.initialized {
@@ -530,16 +530,13 @@ mod test {
         .add_observer(observer)
         .add_observer(empty_observer)
         .update();
-        assert!(app
-            .world()
-            .resource::<UndoRedoBuffer>()
-            .undo_redo_is_empty());
+        assert!(app.world().resource::<RevBuffer>().undo_redo_is_empty());
     }
 
     #[test]
     fn non_exclusive_system_drains_all_undo_redo() {
         assert_system_drains_all_undo_redo(
-            |mut buffer: ResMut<UndoRedoBuffer>, mut commands: Commands| {
+            |mut buffer: ResMut<RevBuffer>, mut commands: Commands| {
                 buffer.buffer_undo_redo(blank_undo_redo);
                 commands.buffer_undo_redo(blank_undo_redo);
                 commands.queue(|world: &mut World| {
