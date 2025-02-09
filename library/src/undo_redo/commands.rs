@@ -1,17 +1,32 @@
-use std::{any::TypeId, collections::HashMap, ops::Deref, sync::Arc};
-
-use bevy::ecs::{
-    archetype::ArchetypeId,
-    bundle::{Bundle, BundleId, InsertMode},
-    component::{Component, ComponentId},
-    entity::{Entity, EntityCloneBuilder},
-    resource::Resource,
-    result::Result as CommandResult,
-    system::{Command, Commands},
-    world::{error::TryInsertBatchError, FromWorld, World},
+use std::{
+    any::TypeId,
+    hash::{BuildHasher, Hash, Hasher},
+    ops::Deref,
+    sync::Arc,
 };
 
-use super::{BuffersRev, Finalize, UndoRedo};
+use bevy::{
+    ecs::{
+        archetype::{Archetype, ArchetypeId},
+        bundle::{Bundle, BundleId, BundleInfo, InsertMode},
+        change_detection::Mut,
+        component::{Component, ComponentId},
+        entity::{Entity, EntityCloneBuilder, EntityLocation},
+        resource::Resource,
+        result::Result as CommandResult,
+        system::{Command, Commands},
+        world::{error::TryInsertBatchError, FromWorld, World},
+    },
+    platform_support::{
+        collections::HashMap,
+        hash::{DefaultHasher, FixedHasher, FixedState},
+    },
+};
+
+use super::{
+    bundle_buffer::{get_bundle_id, BundleBuffers, InsertReplace},
+    BuffersRev, Finalize, UndoRedo,
+};
 
 pub trait RevCommands {
     fn rev_init_resource<R: Resource + FromWorld>(&mut self);
@@ -31,32 +46,29 @@ impl RevCommands for Commands<'_, '_> {
     }
 }
 
-/// todo workaround until manual bundle registration is possible
-fn get_bundle_id<B: Bundle>(world: &mut World) -> BundleId {
-    #[derive(Resource)]
-    struct EmptyEntity(Entity);
+#[derive(Resource, Default)]
+struct EmptyBuffers(Vec<Entity>);
 
-    let type_id = TypeId::of::<B>();
-    match world.bundles().get_id(type_id) {
-        Some(id) => id,
-        None => {
-            let empty_entity = world
-                .get_resource::<EmptyEntity>()
-                .filter(|res| world.entities().contains(res.0))
-                .map(|res| res.0)
-                .unwrap_or_else(|| {
-                    let entity = world.spawn_empty().id();
-                    world.flush();
-                    world.insert_resource(EmptyEntity(entity));
-                    entity
-                });
-
-            world.commands().entity(empty_entity).remove::<B>();
-            world.flush();
-            world
-                .bundles()
-                .get_id(type_id)
-                .expect("above command should have registered bundle")
+impl EmptyBuffers {
+    fn get_buffers_and_needs_flushing(
+        &mut self,
+        world: &World,
+        buffers: usize,
+    ) -> (Vec<Entity>, bool) {
+        if self.0.len() < buffers {
+            let count = buffers - self.0.len();
+            let mut entities = Vec::with_capacity(buffers);
+            entities.extend(
+                world
+                    .entities()
+                    .reserve_entities(count as u32)
+                    .chain(self.0.drain(..)),
+            );
+            (entities, true)
+        } else {
+            let start = self.0.len() - buffers;
+            let entities = self.0.drain(start..).collect();
+            (entities, false)
         }
     }
 }
@@ -146,61 +158,6 @@ where
     }
 }
 
-struct InsertBundleUndoRedo<T: Deref<Target = [ComponentId]>, const N: usize> {
-    entity: Entity,
-    buffers: [InsertBundleBuffer<T>; N],
-}
-
-struct InsertBundleBuffer<T: Deref<Target = [ComponentId]>> {
-    entity: Entity,
-    components: T,
-}
-
-struct InsertBundleFinalize<const N: usize>([Entity; N]);
-
-impl<T: Deref<Target = [ComponentId]>, const N: usize> InsertBundleUndoRedo<T, N> {
-    fn move_components<const IDX: usize, const TO_BUFFER: bool>(&self, world: &mut World) {
-        if IDX >= N {
-            return;
-        }
-        let buffer = &self.buffers[IDX];
-        let mut builder = EntityCloneBuilder::new(world);
-        builder
-            .deny_all()
-            .allow_by_ids(buffer.components.deref().iter().copied())
-            .move_components(true);
-        if TO_BUFFER {
-            builder.clone_entity(self.entity, buffer.entity);
-        } else {
-            builder.clone_entity(buffer.entity, self.entity);
-        }
-    }
-}
-
-impl<T: Send + 'static + Deref<Target = [ComponentId]>, const N: usize> UndoRedo
-    for InsertBundleUndoRedo<T, N>
-{
-    fn undo(&mut self, world: &mut World) {
-        self.move_components::<0, true>(world);
-        self.move_components::<1, false>(world);
-    }
-    fn redo(&mut self, world: &mut World) {
-        self.move_components::<1, true>(world);
-        self.move_components::<0, false>(world);
-    }
-}
-
-impl<const N: usize> Finalize for InsertBundleFinalize<N> {
-    fn finalize_redone(self: Box<Self>, world: &mut World) {
-        for entity in self.0.into_iter() {
-            world.despawn(entity);
-        }
-    }
-    fn finalize_undone(self: Box<Self>, world: &mut World) {
-        self.finalize_redone(world);
-    }
-}
-
 /// Reversible version of [`insert_batch`](bevy::ecs::system::command::insert_batch).
 ///
 /// Currently requires all components in `B` to be clonable.
@@ -210,20 +167,67 @@ where
     I: IntoIterator<Item = (Entity, B)> + Send + Sync + 'static,
     B: Bundle,
 {
+    struct InsertBatchKeep {
+        entity_buffer_pairs: Box<[(Entity, Entity)]>,
+        inserts: Arc<[ComponentId]>,
+    }
+
+    impl InsertBatchKeep {
+        fn undo_redo<const UNDO: bool>(&self, world: &mut World) {
+            for &(entity, buffer) in self.entity_buffer_pairs.iter() {
+                let mut builder = EntityCloneBuilder::new(world);
+                builder
+                    .deny_all()
+                    .allow_by_ids(self.inserts.iter().cloned())
+                    .move_components(true);
+                if UNDO {
+                    builder.clone_entity(entity, buffer);
+                } else {
+                    builder.clone_entity(buffer, entity);
+                }
+            }
+        }
+    }
+
+    impl UndoRedo for InsertBatchKeep {
+        fn undo(&mut self, world: &mut World) {
+            self.undo_redo::<true>(world);
+        }
+        fn redo(&mut self, world: &mut World) {
+            self.undo_redo::<false>(world);
+        }
+    }
+
+    struct InsertBatchBuffers(Box<[Entity]>);
+
+    impl Finalize for InsertBatchBuffers {
+        fn finalize_undone(self: Box<Self>, world: &mut World) {
+            for entity in self.0 {
+                world.despawn(entity);
+            }
+        }
+        fn finalize_redone(self: Box<Self>, world: &mut World) {
+            self.finalize_undone(world);
+        }
+    }
+
     move |world: &mut World| {
         if TypeId::of::<()>() == TypeId::of::<B>() {
             return Ok(());
         }
 
         // check if all entities exist
-        let batch: Vec<_> = batch.into_iter().collect();
-        let locations: Vec<_> = batch
-            .iter()
-            .map(|&(entity, _)| (entity, world.entities().get(entity)))
-            .collect();
-        let invalid_entities: Vec<_> = locations
-            .iter()
-            .filter_map(|(entity, location)| location.is_none().then_some(*entity))
+        let mut entities_per_archetype: HashMap<ArchetypeId, Vec<Entity>> = HashMap::default();
+        let mut invalid_entities = Vec::new();
+        let batch: Vec<_> = batch
+            .into_iter()
+            .inspect(|&(entity, _)| match world.entities().get(entity) {
+                Some(location) => entities_per_archetype
+                    .entry(location.archetype_id)
+                    .or_insert_with(|| Vec::with_capacity(1))
+                    .push(entity),
+                None => invalid_entities.push(entity),
+            })
             .collect();
         if !invalid_entities.is_empty() {
             Err(TryInsertBatchError {
@@ -232,143 +236,67 @@ where
             })?;
         }
 
-        // get bundle information
-        let bundle_id = get_bundle_id::<B>(world);
-        let bundle_info = world
-            .bundles()
-            .get(bundle_id)
-            .expect("BundleId comes from this world");
-
-        // collect UndoRedo/Finalize per entity
-        let explicit_ids = bundle_info.explicit_components();
-        let required_ids = bundle_info.required_components();
-        let iter = locations.into_iter().map(|(entity, location)| {
-            let location = unsafe {
-                // SAFETY: missing locations are handled in the return above
-                location.unwrap_unchecked()
-            };
-            (entity, location.archetype_id)
+        let mut buffer_entities: Vec<Entity> = Vec::new();
+        let mut keep: HashMap<Arc<[ComponentId]>, Vec<ArchetypeId>> = HashMap::default();
+        world.resource_scope(|world, mut bundle_buffers: Mut<BundleBuffers>| {
+            let bundle_id = get_bundle_id::<B>(world);
+            let bundle_info = world.bundles().get(bundle_id).expect("todo");
+            match insert_mode {
+                InsertMode::Keep => {
+                    for &archetype_id in entities_per_archetype.keys() {
+                        let components =
+                            bundle_buffers.insert_keep(world, bundle_info, archetype_id);
+                        keep.entry(components)
+                            .or_insert_with(|| Vec::with_capacity(1))
+                            .push(archetype_id);
+                    }
+                    buffer_entities = world
+                        .entities()
+                        .reserve_entities(batch.len() as u32)
+                        .collect();
+                }
+                InsertMode::Replace => {
+                    let mut replace: HashMap<InsertReplace, Vec<ArchetypeId>> = HashMap::default();
+                    for &archetype_id in entities_per_archetype.keys() {
+                        let insert_replace =
+                            bundle_buffers.insert_replace(world, bundle_info, archetype_id);
+                        if insert_replace.replaces.is_empty() {
+                            keep.entry(insert_replace.adds)
+                                .or_insert_with(|| Vec::with_capacity(1))
+                                .push(archetype_id);
+                        } else {
+                            replace
+                                .entry(insert_replace)
+                                .or_insert_with(|| Vec::with_capacity(1))
+                                .push(archetype_id);
+                        }
+                    }
+                    buffer_entities = world
+                        .entities()
+                        .reserve_entities((batch.len() + replace.len()) as u32)
+                        .collect();
+                    // todo
+                }
+            }
         });
-
-        let mut undo_redo_vec: Vec<InsertBundleUndoRedo<Arc<[ComponentId]>, 1>> = Vec::new();
-        let mut finalize_vec: Vec<InsertBundleFinalize<1>> = Vec::new();
-        let mut undo_redo_components: HashMap<ArchetypeId, Arc<[ComponentId]>> = HashMap::new();
-
-        match insert_mode {
-            InsertMode::Keep => {
-                for (entity, archetype_id) in iter {
-                    let insert_buffer_entity = world.entities().reserve_entity();
-                    let insert_components =
-                        undo_redo_components.entry(archetype_id).or_insert_with(|| {
-                            let archetype = world.archetypes().get(archetype_id).expect("todo");
-                            explicit_ids
-                                .iter()
-                                .copied()
-                                .chain(
-                                    required_ids
-                                        .iter()
-                                        .copied()
-                                        .filter(|id| !archetype.contains(*id)),
-                                )
-                                .collect()
-                        });
-                    let insert_buffer = InsertBundleBuffer {
-                        entity: insert_buffer_entity,
-                        components: insert_components.clone(),
-                    };
-                    undo_redo_vec.push(InsertBundleUndoRedo {
-                        entity,
-                        buffers: [insert_buffer],
-                    });
-                    finalize_vec.push(InsertBundleFinalize([insert_buffer_entity]));
-                }
-            }
-            InsertMode::Replace => {
-                let mut undo_redo_overwrite_vec: Vec<InsertBundleUndoRedo<Arc<[ComponentId]>, 2>> =
-                    Vec::new();
-                let mut finalize_overwrite_vec: Vec<InsertBundleFinalize<2>> = Vec::new();
-                let mut undo_redo_finalize_components: HashMap<ArchetypeId, Arc<[ComponentId]>> =
-                    HashMap::new();
-
-                for (entity, archetype_id) in iter {
-                    let insert_buffer_entity = world.entities().reserve_entity();
-                    let insert_components =
-                        undo_redo_components.entry(archetype_id).or_insert_with(|| {
-                            let archetype = world.archetypes().get(archetype_id).expect("todo");
-                            explicit_ids
-                                .iter()
-                                .chain(required_ids.iter().filter(|id| !archetype.contains(**id)))
-                                .copied()
-                                .collect()
-                        });
-                    let insert_buffer = InsertBundleBuffer {
-                        entity: insert_buffer_entity,
-                        components: insert_components.clone(),
-                    };
-
-                    let overwrite_components = undo_redo_finalize_components
-                        .entry(archetype_id)
-                        .or_insert_with(|| {
-                            let archetype = world.archetypes().get(archetype_id).expect("todo");
-                            explicit_ids
-                                .iter()
-                                .copied()
-                                .filter(|id| archetype.contains(*id))
-                                .collect()
-                        });
-                    if overwrite_components.is_empty() {
-                        undo_redo_vec.push(InsertBundleUndoRedo {
-                            entity,
-                            buffers: [insert_buffer],
-                        });
-                        finalize_vec.push(InsertBundleFinalize([insert_buffer_entity]));
-                    } else {
-                        let overwrite_buffer_entity = world.entities().reserve_entity();
-                        let overwrite_buffer = InsertBundleBuffer {
-                            entity: overwrite_buffer_entity,
-                            components: overwrite_components.clone(),
-                        };
-                        undo_redo_overwrite_vec.push(InsertBundleUndoRedo {
-                            entity,
-                            buffers: [insert_buffer, overwrite_buffer],
-                        });
-                        finalize_overwrite_vec.push(InsertBundleFinalize([
-                            insert_buffer_entity,
-                            overwrite_buffer_entity,
-                        ]));
-                    }
-                }
-
-                if !undo_redo_overwrite_vec.is_empty() {
-                    // spawn buffer entities for backup
-                    world.flush();
-
-                    // backup components that are about to be overwritten
-                    for overwrite in undo_redo_overwrite_vec.iter() {
-                        let buffer = &overwrite.buffers[1];
-                        let mut builder = EntityCloneBuilder::new(world);
-                        builder
-                            .deny_all()
-                            .allow_by_ids(buffer.components.iter().copied())
-                            .move_components(true);
-                        builder.clone_entity(overwrite.entity, buffer.entity);
-                    }
-
-                    // buffer UndoRedo/Finalize
-                    world
-                        .buffer_undo_redo(undo_redo_overwrite_vec)
-                        .buffer_finalize(finalize_overwrite_vec);
-                }
-            }
-        };
-
-        // insert batch
-        world.insert_batch(batch);
-
-        // buffer UndoRedo/Finalize
-        world
-            .buffer_undo_redo(undo_redo_vec)
-            .buffer_finalize(finalize_vec);
+        let keeps: Box<[InsertBatchKeep]> = keep
+            .into_iter()
+            .flat_map(|(inserts, archetypes)| {
+                archetypes
+                    .into_iter()
+                    .map(|archetype_id| entities_per_archetype.remove(&archetype_id).unwrap())
+                    .map(|entities| {
+                        let entity_buffer_pairs = entities
+                            .into_iter()
+                            .zip(buffer_entities.drain(..))
+                            .collect();
+                        InsertBatchKeep {
+                            entity_buffer_pairs,
+                            inserts,
+                        }
+                    })
+            })
+            .collect();
 
         Ok(())
     }

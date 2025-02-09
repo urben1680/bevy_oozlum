@@ -18,6 +18,7 @@ use crate::{
     meta::{RevDirection, RevMeta},
 };
 
+mod bundle_buffer;
 mod commands;
 
 pub use commands::*;
