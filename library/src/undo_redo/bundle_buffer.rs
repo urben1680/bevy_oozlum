@@ -1,34 +1,3 @@
-/*
-structure that contains (Bundle, Archetype) -> [&[ComponentId]; 3] mapping
-[&[ComponentId]; 3] ideally are unique too, like Interned does
-UndoRedo reference into values of this
-
-ideas of stored types in UndoRedo:
-- Box<[ComponentId]>
--- cloned from resource
-- Arc<[ComponentId]>
--- cloned from resource
-- Interned
--- cloned from resource (no cleanup)
-- usize
--- index into Vec in resource (no cleanup)
-- HashMap keys
--- index into Map in resource
-
-cleanup or not?
-
-cleanup adds runtime overhead since Arc counters need to be modified
-ideally there is only one arc in the resource and references in the UndoRedo
-Weak still has counters and checking upgrade is not free either
-
-cleanup without internal index logic:
-
-- one Map<(BundleId, ArchetypeId), Arcs> field
-- drop if key elements are no longer valid to be future proof of cleanup logic
-- drop if all Weak values have a strong count of 1
--
-*/
-
 use std::{
     any::TypeId,
     sync::{Arc, Weak},
@@ -39,7 +8,7 @@ use bevy::{
         archetype::{Archetype, ArchetypeId},
         bundle::{Bundle, BundleId, BundleInfo},
         component::ComponentId,
-        entity::{Entity, EntityLocation},
+        entity::Entity,
         resource::Resource,
         world::World,
     },
@@ -72,96 +41,68 @@ impl Default for Arcs {
 impl Arcs {
     fn insert_keep(
         &mut self,
-        world: &World,
         bundle_info: &BundleInfo,
-        archetype_id: ArchetypeId,
+        archetype: &Archetype,
     ) -> Arc<[ComponentId]> {
-        self.inner(
-            world,
-            bundle_info,
-            archetype_id,
-            |bundle_info, archetype| {
-                bundle_info
-                    .iter_contributed_components()
-                    .filter(|id| !archetype.contains(*id))
-            },
-        )
+        let arc = bundle_info
+            .iter_contributed_components()
+            .filter(|id| !archetype.contains(*id))
+            .collect();
+        self.arcs.get_or_insert(arc).clone()
     }
     fn insert_replace_adds(
         &mut self,
-        world: &World,
         bundle_info: &BundleInfo,
-        archetype_id: ArchetypeId,
+        archetype: &Archetype,
     ) -> Arc<[ComponentId]> {
-        self.inner(
-            world,
-            bundle_info,
-            archetype_id,
-            |bundle_info, archetype| {
-                bundle_info
-                    .iter_required_components()
-                    .filter(|id| !archetype.contains(*id))
-                    .chain(bundle_info.iter_explicit_components())
-            },
-        )
+        let arc = bundle_info
+            .iter_required_components()
+            .filter(|id| !archetype.contains(*id))
+            .chain(bundle_info.iter_explicit_components())
+            .collect();
+        self.arcs.get_or_insert(arc).clone()
     }
-    fn insert_replace_replaces(
+    fn remove_or_insert_replace_replaces(
         &mut self,
-        world: &World,
         bundle_info: &BundleInfo,
-        archetype_id: ArchetypeId,
+        archetype: &Archetype,
     ) -> Arc<[ComponentId]> {
-        self.inner(
-            world,
-            bundle_info,
-            archetype_id,
-            |bundle_info, archetype| {
-                bundle_info
-                    .iter_explicit_components()
-                    .filter(|id| archetype.contains(*id))
-            },
-        )
+        let arc = bundle_info
+            .iter_explicit_components()
+            .filter(|id| archetype.contains(*id))
+            .collect();
+        self.arcs.get_or_insert(arc).clone()
     }
-    fn inner<'a, I: Iterator<Item = ComponentId> + 'a>(
+    fn remove_with_requires(
         &mut self,
-        world: &'a World,
-        bundle_info: &'a BundleInfo,
-        archetype_id: ArchetypeId,
-        c: impl FnOnce(&'a BundleInfo, &'a Archetype) -> I,
+        bundle_info: &BundleInfo,
+        archetype: &Archetype,
     ) -> Arc<[ComponentId]> {
-        let archetype = world.archetypes().get(archetype_id).expect("todo");
-        let components = c(bundle_info, archetype).collect();
-        self.arcs.get_or_insert(components).clone()
+        let arc = bundle_info
+            .iter_contributed_components()
+            .filter(|id| archetype.contains(*id))
+            .collect();
+        self.arcs.get_or_insert(arc).clone()
     }
 }
 
 /// Store [`Weak`] so cleaning up via the strong count becomes trivial.
 struct Weaks {
-    insert_keep_adds: Weak<[ComponentId]>,
+    insert_keep: Weak<[ComponentId]>,
     insert_replace_adds: Weak<[ComponentId]>,
-    insert_replace_replaces: Weak<[ComponentId]>,
-}
-
-impl Weaks {
-    fn retain(&self) -> bool {
-        [
-            &self.insert_keep_adds,
-            &self.insert_replace_adds,
-            &self.insert_replace_replaces,
-        ]
-        .into_iter()
-        .any(|weak| weak.strong_count() > 1)
-    }
+    remove_or_insert_replace_replaces: Weak<[ComponentId]>,
+    remove_with_requires: Weak<[ComponentId]>,
 }
 
 impl Default for Weaks {
     fn default() -> Self {
         let arc = Arc::new([]);
-        let weak = || Arc::downgrade(&arc);
+        let weak = Arc::downgrade(&arc);
         Self {
-            insert_keep_adds: weak(),
-            insert_replace_adds: weak(),
-            insert_replace_replaces: weak(),
+            insert_keep: weak.clone(),
+            insert_replace_adds: weak.clone(),
+            remove_or_insert_replace_replaces: weak.clone(),
+            remove_with_requires: weak
         }
     }
 }
@@ -175,78 +116,91 @@ pub(super) struct InsertReplace {
 impl BundleBuffers {
     pub(crate) fn retain_used_buffers(&mut self) {
         self.arcs.arcs.retain(|arc| Arc::strong_count(arc) > 1);
-        self.weaks.retain(|_, components| components.retain());
+        self.weaks.retain(|_, weaks| {
+            weaks.insert_keep.strong_count() > 1
+                || weaks.insert_replace_adds.strong_count() > 1
+                || weaks.remove_or_insert_replace_replaces.strong_count() > 1
+        });
     }
     pub(super) fn insert_keep(
         &mut self,
-        world: &World,
         bundle_info: &BundleInfo,
-        archetype_id: ArchetypeId,
+        archetype: &Archetype,
     ) -> Arc<[ComponentId]> {
-        match self.weaks.entry((bundle_info.id(), archetype_id)) {
+        single_arc!(insert_keep, self, bundle_info, archetype)
+    }
+    pub(super) fn insert_replace(
+        &mut self,
+        bundle_info: &BundleInfo,
+        archetype: &Archetype,
+    ) -> InsertReplace {
+        match self.weaks.entry((bundle_info.id(), archetype.id())) {
             Entry::Occupied(mut occupied) => {
-                let components = occupied.get_mut();
-                components.insert_keep_adds.upgrade().unwrap_or_else(|| {
-                    let arc = self.arcs.insert_keep(world, bundle_info, archetype_id);
-                    components.insert_keep_adds = Arc::downgrade(&arc);
+                let weaks = occupied.get_mut();
+                let adds = weaks.insert_replace_adds.upgrade().unwrap_or_else(|| {
+                    let arc = self.arcs.insert_replace_adds(bundle_info, archetype);
+                    weaks.insert_replace_adds = Arc::downgrade(&arc);
+                    arc
+                });
+                let replaces = weaks.remove_or_insert_replace_replaces.upgrade().unwrap_or_else(|| {
+                    let arc = self.arcs.remove_or_insert_replace_replaces(bundle_info, archetype);
+                    weaks.remove_or_insert_replace_replaces = Arc::downgrade(&arc);
+                    arc
+                });
+                InsertReplace { adds, replaces }
+            }
+            Entry::Vacant(vacant) => {
+                let adds = self.arcs.insert_replace_adds(bundle_info, archetype);
+                let replaces = self.arcs.remove_or_insert_replace_replaces(bundle_info, archetype);
+                vacant.insert(Weaks {
+                    insert_replace_adds: Arc::downgrade(&adds),
+                    remove_or_insert_replace_replaces: Arc::downgrade(&replaces),
+                    ..Default::default()
+                });
+                InsertReplace { adds, replaces }
+            }
+        }
+    }
+    pub(super) fn remove(
+        &mut self,
+        bundle_info: &BundleInfo,
+        archetype: &Archetype,
+    ) -> Arc<[ComponentId]> {
+        single_arc!(remove_or_insert_replace_replaces, self, bundle_info, archetype)
+    }
+    pub(super) fn remove_with_requires(
+        &mut self,
+        bundle_info: &BundleInfo,
+        archetype: &Archetype,
+    ) -> Arc<[ComponentId]> {
+        single_arc!(remove_with_requires, self, bundle_info, archetype)
+    }
+}
+
+macro_rules! single_arc {
+    ($ident:ident, $this:ident, $bundle_info:ident, $archetype:ident) => {
+        match $this.weaks.entry(($bundle_info.id(), $archetype.id())) {
+            Entry::Occupied(mut occupied) => {
+                let weaks = occupied.get_mut();
+                weaks.$ident.upgrade().unwrap_or_else(|| {
+                    let arc = $this.arcs.$ident($bundle_info, $archetype);
+                    weaks.$ident = Arc::downgrade(&arc);
                     arc
                 })
             }
             Entry::Vacant(vacant) => {
-                let arc = self.arcs.insert_keep(world, bundle_info, archetype_id);
+                let arc = $this.arcs.$ident($bundle_info, $archetype);
                 vacant.insert(Weaks {
-                    insert_keep_adds: Arc::downgrade(&arc),
+                    $ident: Arc::downgrade(&arc),
                     ..Default::default()
                 });
                 arc
             }
         }
     }
-    pub(super) fn insert_replace(
-        &mut self,
-        world: &World,
-        bundle_info: &BundleInfo,
-        archetype_id: ArchetypeId,
-    ) -> InsertReplace {
-        match self.weaks.entry((bundle_info.id(), archetype_id)) {
-            Entry::Occupied(mut occupied) => {
-                let components = occupied.get_mut();
-                let adds = components.insert_replace_adds.upgrade().unwrap_or_else(|| {
-                    let arc = self
-                        .arcs
-                        .insert_replace_adds(world, bundle_info, archetype_id);
-                    components.insert_replace_adds = Arc::downgrade(&arc);
-                    arc
-                });
-                let replaces = components
-                    .insert_replace_replaces
-                    .upgrade()
-                    .unwrap_or_else(|| {
-                        let arc =
-                            self.arcs
-                                .insert_replace_replaces(world, bundle_info, archetype_id);
-                        components.insert_replace_replaces = Arc::downgrade(&arc);
-                        arc
-                    });
-                InsertReplace { adds, replaces }
-            }
-            Entry::Vacant(vacant) => {
-                let adds = self
-                    .arcs
-                    .insert_replace_adds(world, bundle_info, archetype_id);
-                let replaces = self
-                    .arcs
-                    .insert_replace_replaces(world, bundle_info, archetype_id);
-                vacant.insert(Weaks {
-                    insert_replace_adds: Arc::downgrade(&adds),
-                    insert_replace_replaces: Arc::downgrade(&replaces),
-                    ..Default::default()
-                });
-                InsertReplace { adds, replaces }
-            }
-        }
-    }
 }
+
+use single_arc;
 
 /// todo workaround until manual bundle registration is possible
 pub(super) fn get_bundle_id<T: Bundle>(world: &mut World) -> BundleId {
