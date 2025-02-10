@@ -1,25 +1,20 @@
-use std::{
-    any::TypeId,
-    hash::{BuildHasher, Hash, Hasher},
-    ops::Deref,
-    sync::Arc,
-};
+use std::{any::TypeId, hash::Hash, mem::take, ops::Deref, sync::Arc};
 
 use bevy::{
     ecs::{
-        archetype::{Archetype, ArchetypeId},
-        bundle::{Bundle, BundleId, BundleInfo, InsertMode},
+        archetype::ArchetypeId,
+        bundle::{Bundle, InsertMode},
         change_detection::Mut,
         component::{Component, ComponentId},
-        entity::{Entity, EntityCloneBuilder, EntityLocation},
+        entity::{Entity, EntityCloneBuilder},
         resource::Resource,
         result::Result as CommandResult,
         system::{Command, Commands},
         world::{error::TryInsertBatchError, FromWorld, World},
     },
     platform_support::{
-        collections::HashMap,
-        hash::{DefaultHasher, FixedHasher, FixedState},
+        collections::{hash_map::Entry, HashMap},
+        hash::FixedHasher,
     },
 };
 
@@ -46,57 +41,9 @@ impl RevCommands for Commands<'_, '_> {
     }
 }
 
-#[derive(Resource, Default)]
-struct EmptyBuffers(Vec<Entity>);
-
-impl EmptyBuffers {
-    fn get_buffers_and_needs_flushing(
-        &mut self,
-        world: &World,
-        buffers: usize,
-    ) -> (Vec<Entity>, bool) {
-        if self.0.len() < buffers {
-            let count = buffers - self.0.len();
-            let mut entities = Vec::with_capacity(buffers);
-            entities.extend(
-                world
-                    .entities()
-                    .reserve_entities(count as u32)
-                    .chain(self.0.drain(..)),
-            );
-            (entities, true)
-        } else {
-            let start = self.0.len() - buffers;
-            let entities = self.0.drain(start..).collect();
-            (entities, false)
-        }
-    }
-}
-
 /// todo: replace with first party Disabled when bevy main branch can be used
 #[derive(Component)]
 struct Disabled;
-
-struct ResourceSwap<R: Resource>(Option<R>);
-
-impl<R: Resource> UndoRedo for ResourceSwap<R> {
-    fn undo(&mut self, world: &mut World) {
-        match world.get_resource_mut::<R>() {
-            Some(mut r1) => match self.0.as_mut() {
-                Some(r2) => core::mem::swap(&mut *r1, r2),
-                None => self.0 = world.remove_resource::<R>(),
-            },
-            None => {
-                if let Some(r2) = self.0.take() {
-                    world.insert_resource(r2)
-                }
-            }
-        }
-    }
-    fn redo(&mut self, world: &mut World) {
-        self.undo(world)
-    }
-}
 
 /// Reversible version of [`spawn_batch`](bevy::ecs::system::command::spawn_batch).
 ///
@@ -198,6 +145,66 @@ where
         }
     }
 
+    struct InsertBatchReplace {
+        /// First half (rounded down) are target entities, second half (rounded up) are buffer entities.
+        ///
+        /// First buffer entity is empty, unless the state is undone, then the last buffer entity is empty.
+        ///
+        /// Undoing/Redoing this makes the empty state bubble through the buffer entities.
+        entity_buffers: Box<[Entity]>,
+        components: InsertReplace,
+    }
+
+    impl InsertBatchReplace {
+        fn undo_redo<const UNDO: bool, const SKIP_MOVE_INTO_TARGET: bool>(
+            &self,
+            world: &mut World,
+        ) {
+            let (components1, components2) = if UNDO {
+                (&self.components.adds, &self.components.replaces)
+            } else {
+                (&self.components.replaces, &self.components.adds)
+            };
+            let entities_len = self.entity_buffers.len() / 2;
+            let (entities, buffers) = self.entity_buffers.split_at(entities_len);
+            let mut buffers = buffers.into_iter();
+            let mut next_buffer = || {
+                if UNDO {
+                    *buffers.next().unwrap()
+                } else {
+                    *buffers.next_back().unwrap()
+                }
+            };
+            let mut empty_buffer = next_buffer();
+            for &entity in entities {
+                let mut builder = EntityCloneBuilder::new(world);
+                builder
+                    .deny_all()
+                    .allow_by_ids(components1.iter().cloned())
+                    .move_components(true);
+                builder.clone_entity(entity, empty_buffer);
+                empty_buffer = next_buffer();
+                if !SKIP_MOVE_INTO_TARGET {
+                    let mut builder = EntityCloneBuilder::new(world);
+                    builder
+                        .deny_all()
+                        .allow_by_ids(components2.iter().cloned())
+                        .move_components(true);
+                    builder.clone_entity(empty_buffer, entity);
+                }
+            }
+        }
+    }
+
+    impl UndoRedo for InsertBatchReplace {
+        fn undo(&mut self, world: &mut World) {
+            self.undo_redo::<true, false>(world);
+        }
+        fn redo(&mut self, world: &mut World) {
+            self.undo_redo::<false, false>(world);
+        }
+    }
+
     struct InsertBatchBuffers(Box<[Entity]>);
 
     impl Finalize for InsertBatchBuffers {
@@ -211,12 +218,19 @@ where
         }
     }
 
-    move |world: &mut World| {
-        if TypeId::of::<()>() == TypeId::of::<B>() {
-            return Ok(());
+    fn update_entry<K: Hash>(
+        entry: Entry<K, Vec<Entity>, FixedHasher>,
+        entities: &mut Vec<Entity>,
+    ) {
+        match entry {
+            Entry::Occupied(mut occupied) => occupied.get_mut().append(entities),
+            Entry::Vacant(vacant) => {
+                vacant.insert(take(entities));
+            }
         }
+    }
 
-        // check if all entities exist
+    move |world: &mut World| {
         let mut entities_per_archetype: HashMap<ArchetypeId, Vec<Entity>> = HashMap::default();
         let mut invalid_entities = Vec::new();
         let batch: Vec<_> = batch
@@ -229,6 +243,7 @@ where
                 None => invalid_entities.push(entity),
             })
             .collect();
+
         if !invalid_entities.is_empty() {
             Err(TryInsertBatchError {
                 bundle_type: core::any::type_name::<B>(),
@@ -236,19 +251,19 @@ where
             })?;
         }
 
-        let mut buffer_entities: Vec<Entity> = Vec::new();
-        let mut keep: HashMap<Arc<[ComponentId]>, Vec<ArchetypeId>> = HashMap::default();
+        let mut buffer_entities: Box<[Entity]> = Box::new([]);
+        let mut replace_buffers = 0;
+        let mut keeps: HashMap<Arc<[ComponentId]>, Vec<Entity>> = HashMap::default();
+        world.init_resource::<BundleBuffers>();
         world.resource_scope(|world, mut bundle_buffers: Mut<BundleBuffers>| {
             let bundle_id = get_bundle_id::<B>(world);
             let bundle_info = world.bundles().get(bundle_id).expect("todo");
             match insert_mode {
                 InsertMode::Keep => {
-                    for &archetype_id in entities_per_archetype.keys() {
-                        let components =
-                            bundle_buffers.insert_keep(world, bundle_info, archetype_id);
-                        keep.entry(components)
-                            .or_insert_with(|| Vec::with_capacity(1))
-                            .push(archetype_id);
+                    for (archetype_id, entities) in entities_per_archetype.iter_mut() {
+                        let archetype = world.archetypes().get(*archetype_id).expect("todo");
+                        let components = bundle_buffers.insert_keep(bundle_info, archetype);
+                        update_entry(keeps.entry(components), entities)
                     }
                     buffer_entities = world
                         .entities()
@@ -256,49 +271,81 @@ where
                         .collect();
                 }
                 InsertMode::Replace => {
-                    let mut replace: HashMap<InsertReplace, Vec<ArchetypeId>> = HashMap::default();
-                    for &archetype_id in entities_per_archetype.keys() {
-                        let insert_replace =
-                            bundle_buffers.insert_replace(world, bundle_info, archetype_id);
+                    let mut replaces: HashMap<InsertReplace, Vec<Entity>> = HashMap::default();
+                    for (archetype_id, entities) in entities_per_archetype.iter_mut() {
+                        let archetype = world.archetypes().get(*archetype_id).expect("todo");
+                        let insert_replace = bundle_buffers.insert_replace(bundle_info, archetype);
                         if insert_replace.replaces.is_empty() {
-                            keep.entry(insert_replace.adds)
-                                .or_insert_with(|| Vec::with_capacity(1))
-                                .push(archetype_id);
+                            update_entry(keeps.entry(insert_replace.adds), entities)
                         } else {
-                            replace
-                                .entry(insert_replace)
-                                .or_insert_with(|| Vec::with_capacity(1))
-                                .push(archetype_id);
+                            replace_buffers += entities.len() + 1;
+                            update_entry(replaces.entry(insert_replace), entities)
                         }
                     }
                     buffer_entities = world
                         .entities()
-                        .reserve_entities((batch.len() + replace.len()) as u32)
+                        .reserve_entities((batch.len() + replaces.len()) as u32)
                         .collect();
-                    // todo
+
+                    if !replaces.is_empty() {
+                        world.flush(); // buffer entities are already needed in the `inspect` below
+                        let mut replaces_buffers = buffer_entities.iter().copied();
+                        let replaces: Box<[InsertBatchReplace]> = replaces
+                            .into_iter()
+                            .map(|(components, entities)| {
+                                let buffers_len = entities.len() + 1;
+                                InsertBatchReplace {
+                                    entity_buffers: entities
+                                        .into_iter()
+                                        .chain(replaces_buffers.by_ref().take(buffers_len))
+                                        .collect(),
+                                    components,
+                                }
+                            })
+                            .inspect(|replaces| replaces.undo_redo::<false, true>(world))
+                            .collect();
+                        world.buffer_undo_redo(replaces);
+                    }
                 }
             }
         });
-        let keeps: Box<[InsertBatchKeep]> = keep
-            .into_iter()
-            .flat_map(|(inserts, archetypes)| {
-                archetypes
-                    .into_iter()
-                    .map(|archetype_id| entities_per_archetype.remove(&archetype_id).unwrap())
-                    .map(|entities| {
-                        let entity_buffer_pairs = entities
-                            .into_iter()
-                            .zip(buffer_entities.drain(..))
-                            .collect();
-                        InsertBatchKeep {
-                            entity_buffer_pairs,
-                            inserts,
-                        }
-                    })
-            })
-            .collect();
 
+        if !keeps.is_empty() {
+            let mut keeps_buffers = buffer_entities[replace_buffers..].into_iter().copied();
+            let keeps: Box<[InsertBatchKeep]> = keeps
+                .into_iter()
+                .map(|(inserts, entities)| InsertBatchKeep {
+                    entity_buffer_pairs: entities.into_iter().zip(keeps_buffers.by_ref()).collect(),
+                    inserts,
+                })
+                .collect();
+            world.buffer_undo_redo(keeps);
+        }
+
+        world.insert_batch(batch);
+        world.buffer_finalize(InsertBatchBuffers(buffer_entities));
         Ok(())
+    }
+}
+
+struct ResourceSwap<R: Resource>(Option<R>);
+
+impl<R: Resource> UndoRedo for ResourceSwap<R> {
+    fn undo(&mut self, world: &mut World) {
+        match world.get_resource_mut::<R>() {
+            Some(mut r1) => match self.0.as_mut() {
+                Some(r2) => core::mem::swap(&mut *r1, r2),
+                None => self.0 = world.remove_resource::<R>(),
+            },
+            None => {
+                if let Some(r2) = self.0.take() {
+                    world.insert_resource(r2)
+                }
+            }
+        }
+    }
+    fn redo(&mut self, world: &mut World) {
+        self.undo(world)
     }
 }
 
