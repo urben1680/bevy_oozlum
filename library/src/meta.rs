@@ -21,7 +21,7 @@ use bevy::reflect::{ReflectDeserialize, ReflectSerialize};
 use crate::{
     log::OutOfLog,
     schedule::RevUpdate,
-    undo_redo::{BundleBuffers, RevBuffer},
+    undo_redo::{BundleBuffers, RevBuffers},
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -362,7 +362,7 @@ impl RevMeta {
         }
 
         world.resource_scope(|world: &mut World, mut meta: Mut<Self>| {
-            let buffer = world.get_resource_or_init::<RevBuffer>();
+            let buffer = world.get_resource_or_init::<RevBuffers>();
 
             if !buffer.undo_redo_is_empty() {
                 return Err(TryRunRevUpdateError::UndoRedoBufferNotEmptyBeforeUpdate(
@@ -389,19 +389,19 @@ impl RevMeta {
                                 buffers.retain_used_buffers();
                             }
                         }
-                        if !world.contains_resource::<RevBuffer>() {
+                        if !world.contains_resource::<RevBuffers>() {
                             Err(TryRunRevUpdateError::UndoRedoBufferMissingAfterUpdate(
                                 meta.clone(),
                             ))
                         } else {
-                            world.resource_scope(|world, mut buffer: Mut<RevBuffer>| {
-                                match buffer.finish_rev_update(&meta, world) {
-                                    Ok(()) => Ok(frame),
-                                    Err(OutOfLog) => Err(
-                                        TryRunRevUpdateError::UndoRedoBufferOutOfLogAfterUpdate(
-                                            meta.clone(),
-                                        ),
-                                    ),
+                            world.resource_scope(|world, mut buffer: Mut<RevBuffers>| match buffer
+                                .finish_rev_update(&meta, world)
+                            {
+                                Ok(()) => Ok(frame),
+                                Err(OutOfLog) => {
+                                    Err(TryRunRevUpdateError::UndoRedoBufferOutOfLogAfterUpdate(
+                                        meta.clone(),
+                                    ))
                                 }
                             })
                         }

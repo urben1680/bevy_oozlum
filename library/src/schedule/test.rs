@@ -34,7 +34,7 @@ use bevy::{
 use crate::{
     meta::RevDirection,
     schedule::RevUpdate,
-    undo_redo::{BuffersRev, Finalize, RevBuffer, UndoRedo},
+    undo_redo::{BuffersRev, Finalize, RevBuffers, UndoRedo},
 };
 
 use super::*;
@@ -340,7 +340,7 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
     world.add_observer(
         |event: Trigger<SysHookObsv>,
          mut log: ResMut<TestLog<false>>,
-         mut buffer: ResMut<RevBuffer>| {
+         mut buffer: ResMut<RevBuffers>| {
             let n = event.0;
             log.0.push(Test::SysHookObsv((n, RevDirection::NOT_LOG)));
             let test = Test::SysHookObsv(n);
@@ -350,7 +350,7 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
     world.add_observer(
         |event: Trigger<SysObsvObsv>,
          mut log: ResMut<TestLog<false>>,
-         mut buffer: ResMut<RevBuffer>| {
+         mut buffer: ResMut<RevBuffers>| {
             let n = event.0;
             log.0.push(Test::SysObsvObsv((n, RevDirection::NOT_LOG)));
             let test = Test::SysObsvObsv(n);
@@ -360,7 +360,7 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
     world.add_observer(
         |event: Trigger<SysCmdObsv>,
          mut log: ResMut<TestLog<false>>,
-         mut buffer: ResMut<RevBuffer>| {
+         mut buffer: ResMut<RevBuffers>| {
             let n = event.0;
             log.0.push(Test::SysCmdObsv((n, RevDirection::NOT_LOG)));
             let test = Test::SysCmdObsv(n);

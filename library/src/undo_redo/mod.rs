@@ -102,13 +102,13 @@ impl BuffersRev for World {
 
 impl BuffersRev for EntityWorldMut<'_> {
     fn buffer_undo_redo(&mut self, undo_redo: impl UndoRedo) -> &mut Self {
-        self.get_resource_mut::<RevBuffer>()
+        self.get_resource_mut::<RevBuffers>()
             .expect(EXPECT_BUFFER)
             .buffer_undo_redo(undo_redo);
         self
     }
     fn buffer_finalize(&mut self, finalize: impl Finalize) -> &mut Self {
-        self.get_resource_mut::<RevBuffer>()
+        self.get_resource_mut::<RevBuffers>()
             .expect(EXPECT_BUFFER)
             .buffer_finalize(finalize);
         self
@@ -117,20 +117,20 @@ impl BuffersRev for EntityWorldMut<'_> {
 
 impl BuffersRev for DeferredWorld<'_> {
     fn buffer_undo_redo(&mut self, undo_redo: impl UndoRedo) -> &mut Self {
-        self.get_resource_mut::<RevBuffer>()
+        self.get_resource_mut::<RevBuffers>()
             .expect(EXPECT_BUFFER)
             .buffer_undo_redo(undo_redo);
         self
     }
     fn buffer_finalize(&mut self, finalize: impl Finalize) -> &mut Self {
-        self.get_resource_mut::<RevBuffer>()
+        self.get_resource_mut::<RevBuffers>()
             .expect(EXPECT_BUFFER)
             .buffer_finalize(finalize);
         self
     }
 }
 
-impl BuffersRev for RevBuffer {
+impl BuffersRev for RevBuffers {
     fn buffer_undo_redo(&mut self, undo_redo: impl UndoRedo) -> &mut Self {
         self.undo_redo_buffer
             .push_back(SyncCell::new(Box::new(undo_redo)));
@@ -153,13 +153,13 @@ const EXPECT_BUFFER: &'static str =
 /// Do not remove or overwrite this resource.
 // uses a VecDeque so `CommandsLog` can use `VecDeque::append`
 #[derive(Resource, Default)]
-pub struct RevBuffer {
+pub struct RevBuffers {
     undo_redo_buffer: VecDeque<SyncCell<Box<dyn UndoRedo>>>,
     finalize_buffer: VecDeque<SyncCell<Box<dyn Finalize>>>,
     finalize_log: SparseTransitionsLog<SyncCell<Box<dyn Finalize>>>,
 }
 
-impl RevBuffer {
+impl RevBuffers {
     pub fn undo_redo_is_empty(&self) -> bool {
         self.undo_redo_buffer.is_empty()
     }
@@ -197,6 +197,14 @@ impl RevBuffer {
             Some(RevDirection::FORWARD_LOG) => self.finalize_log.forward_log().map(|_| ()),
             Some(RevDirection::BackwardLog) => self.finalize_log.backward_log().map(|_| ()),
         }
+    }
+    #[cfg(test)]
+    pub fn pop_undo_redo(&mut self) -> Option<Box<dyn UndoRedo>> {
+        self.undo_redo_buffer.pop_back().map(SyncCell::to_inner)
+    }
+    #[cfg(test)]
+    pub fn pop_finalize(&mut self) -> Option<Box<dyn Finalize>> {
+        self.finalize_buffer.pop_back().map(SyncCell::to_inner)
     }
 }
 
@@ -308,7 +316,7 @@ impl UndoRedoLog {
         match meta.get_direction() {
             Some(RevDirection::NOT_LOG) => {
                 let mut buffer = world
-                    .get_resource_mut::<RevBuffer>()
+                    .get_resource_mut::<RevBuffers>()
                     .ok_or_else(|| UndoRedoLogError::UndoRedoBufferMissing { now, system_name })?;
                 if !buffer.undo_redo_is_empty() {
                     let past_len = self.frame_log.push_and_get_past_len(&meta);

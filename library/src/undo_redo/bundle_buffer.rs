@@ -102,7 +102,7 @@ impl Default for Weaks {
             insert_keep: weak.clone(),
             insert_replace_adds: weak.clone(),
             remove_or_insert_replace_replaces: weak.clone(),
-            remove_with_requires: weak
+            remove_with_requires: weak,
         }
     }
 }
@@ -127,7 +127,7 @@ impl BundleBuffers {
         bundle_info: &BundleInfo,
         archetype: &Archetype,
     ) -> Arc<[ComponentId]> {
-        single_arc!(insert_keep, self, bundle_info, archetype)
+        single_arc!(self, insert_keep, bundle_info, archetype)
     }
     pub(super) fn insert_replace(
         &mut self,
@@ -142,16 +142,23 @@ impl BundleBuffers {
                     weaks.insert_replace_adds = Arc::downgrade(&arc);
                     arc
                 });
-                let replaces = weaks.remove_or_insert_replace_replaces.upgrade().unwrap_or_else(|| {
-                    let arc = self.arcs.remove_or_insert_replace_replaces(bundle_info, archetype);
-                    weaks.remove_or_insert_replace_replaces = Arc::downgrade(&arc);
-                    arc
-                });
+                let replaces = weaks
+                    .remove_or_insert_replace_replaces
+                    .upgrade()
+                    .unwrap_or_else(|| {
+                        let arc = self
+                            .arcs
+                            .remove_or_insert_replace_replaces(bundle_info, archetype);
+                        weaks.remove_or_insert_replace_replaces = Arc::downgrade(&arc);
+                        arc
+                    });
                 InsertReplace { adds, replaces }
             }
             Entry::Vacant(vacant) => {
                 let adds = self.arcs.insert_replace_adds(bundle_info, archetype);
-                let replaces = self.arcs.remove_or_insert_replace_replaces(bundle_info, archetype);
+                let replaces = self
+                    .arcs
+                    .remove_or_insert_replace_replaces(bundle_info, archetype);
                 vacant.insert(Weaks {
                     insert_replace_adds: Arc::downgrade(&adds),
                     remove_or_insert_replace_replaces: Arc::downgrade(&replaces),
@@ -166,38 +173,43 @@ impl BundleBuffers {
         bundle_info: &BundleInfo,
         archetype: &Archetype,
     ) -> Arc<[ComponentId]> {
-        single_arc!(remove_or_insert_replace_replaces, self, bundle_info, archetype)
+        single_arc!(
+            self,
+            remove_or_insert_replace_replaces,
+            bundle_info,
+            archetype
+        )
     }
     pub(super) fn remove_with_requires(
         &mut self,
         bundle_info: &BundleInfo,
         archetype: &Archetype,
     ) -> Arc<[ComponentId]> {
-        single_arc!(remove_with_requires, self, bundle_info, archetype)
+        single_arc!(self, remove_with_requires, bundle_info, archetype)
     }
 }
 
 macro_rules! single_arc {
-    ($ident:ident, $this:ident, $bundle_info:ident, $archetype:ident) => {
-        match $this.weaks.entry(($bundle_info.id(), $archetype.id())) {
+    ($self:ident, $variant:ident, $bundle_info:ident, $archetype:ident) => {
+        match $self.weaks.entry(($bundle_info.id(), $archetype.id())) {
             Entry::Occupied(mut occupied) => {
                 let weaks = occupied.get_mut();
-                weaks.$ident.upgrade().unwrap_or_else(|| {
-                    let arc = $this.arcs.$ident($bundle_info, $archetype);
-                    weaks.$ident = Arc::downgrade(&arc);
+                weaks.$variant.upgrade().unwrap_or_else(|| {
+                    let arc = $self.arcs.$variant($bundle_info, $archetype);
+                    weaks.$variant = Arc::downgrade(&arc);
                     arc
                 })
             }
             Entry::Vacant(vacant) => {
-                let arc = $this.arcs.$ident($bundle_info, $archetype);
+                let arc = $self.arcs.$variant($bundle_info, $archetype);
                 vacant.insert(Weaks {
-                    $ident: Arc::downgrade(&arc),
+                    $variant: Arc::downgrade(&arc),
                     ..Default::default()
                 });
                 arc
             }
         }
-    }
+    };
 }
 
 use single_arc;

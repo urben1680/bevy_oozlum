@@ -378,3 +378,76 @@ pub fn rev_remove_resource<R: Resource>() -> impl Command {
         }
     }
 }
+
+#[cfg(test)]
+mod test {
+    use crate::prelude::RevBuffers;
+
+    use super::*;
+
+    #[derive(Resource, PartialEq, Debug, Default)]
+    struct TestRes(u8);
+
+    #[test]
+    fn rev_init_resource_works() {
+        let mut world = World::new();
+        world.init_resource::<RevBuffers>();
+
+        rev_init_resource::<TestRes>().apply(&mut world);
+        let mut undo_redo = world.resource_mut::<RevBuffers>().pop_undo_redo().unwrap();
+
+        assert_eq!(world.get_resource::<TestRes>(), Some(&TestRes(0)));
+        undo_redo.undo(&mut world);
+        assert_eq!(world.get_resource::<TestRes>(), None);
+        undo_redo.redo(&mut world);
+        assert_eq!(world.get_resource::<TestRes>(), Some(&TestRes(0)));
+
+        rev_init_resource::<TestRes>().apply(&mut world);
+        let undo_redo = world.resource_mut::<RevBuffers>().pop_undo_redo();
+        assert!(undo_redo.is_none());
+    }
+
+    #[test]
+    fn rev_insert_resource_works() {
+        let mut world = World::new();
+        world.init_resource::<RevBuffers>();
+
+        rev_insert_resource(TestRes(10)).apply(&mut world);
+        let mut undo_redo = world.resource_mut::<RevBuffers>().pop_undo_redo().unwrap();
+
+        assert_eq!(world.get_resource::<TestRes>(), Some(&TestRes(10)));
+        undo_redo.undo(&mut world);
+        assert_eq!(world.get_resource::<TestRes>(), None);
+        undo_redo.redo(&mut world);
+        assert_eq!(world.get_resource::<TestRes>(), Some(&TestRes(10)));
+
+        rev_insert_resource(TestRes(20)).apply(&mut world);
+        let mut undo_redo = world.resource_mut::<RevBuffers>().pop_undo_redo().unwrap();
+
+        assert_eq!(world.get_resource::<TestRes>(), Some(&TestRes(20)));
+        undo_redo.undo(&mut world);
+        assert_eq!(world.get_resource::<TestRes>(), Some(&TestRes(10)));
+        undo_redo.redo(&mut world);
+        assert_eq!(world.get_resource::<TestRes>(), Some(&TestRes(20)));
+    }
+
+    #[test]
+    fn rev_remove_resource_works() {
+        let mut world = World::new();
+        world.init_resource::<RevBuffers>();
+
+        world.insert_resource(TestRes(10));
+        rev_remove_resource::<TestRes>().apply(&mut world);
+        let mut undo_redo = world.resource_mut::<RevBuffers>().pop_undo_redo().unwrap();
+
+        assert_eq!(world.get_resource::<TestRes>(), None);
+        undo_redo.undo(&mut world);
+        assert_eq!(world.get_resource::<TestRes>(), Some(&TestRes(10)));
+        undo_redo.redo(&mut world);
+        assert_eq!(world.get_resource::<TestRes>(), None);
+
+        rev_remove_resource::<TestRes>().apply(&mut world);
+        let undo_redo = world.resource_mut::<RevBuffers>().pop_undo_redo();
+        assert!(undo_redo.is_none());
+    }
+}
