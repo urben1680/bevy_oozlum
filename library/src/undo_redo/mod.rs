@@ -21,6 +21,7 @@ use crate::{
 mod bundle_buffer;
 mod commands;
 
+pub(crate) use bundle_buffer::BundleBuffers;
 pub use commands::*;
 
 // todo rename
@@ -256,7 +257,7 @@ impl<T: UndoRedo, const N: usize> UndoRedo for [T; N] {
     }
 }
 
-impl<T: UndoRedo> UndoRedo for [T] {
+impl<T: UndoRedo> UndoRedo for Box<[T]> {
     fn undo(&mut self, world: &mut World) {
         for x in self.iter_mut().rev() {
             x.undo(world);
@@ -275,45 +276,6 @@ impl<F: FnMut(&mut World, FinalizeDirection) + Send + 'static> Finalize for F {
     }
     fn finalize_redone(mut self: Box<Self>, world: &mut World) {
         self(world, FinalizeDirection::FinalizeRedone)
-    }
-}
-
-impl<T: Finalize> Finalize for Vec<T> {
-    fn finalize_undone(self: Box<Self>, world: &mut World) {
-        for x in self.into_iter().rev().map(Box::new) {
-            x.finalize_undone(world);
-        }
-    }
-    fn finalize_redone(self: Box<Self>, world: &mut World) {
-        for x in self.into_iter().map(Box::new) {
-            x.finalize_redone(world);
-        }
-    }
-}
-
-impl<T: Finalize, const N: usize> Finalize for [T; N] {
-    fn finalize_undone(self: Box<Self>, world: &mut World) {
-        for x in self.into_iter().rev().map(Box::new) {
-            x.finalize_undone(world);
-        }
-    }
-    fn finalize_redone(self: Box<Self>, world: &mut World) {
-        for x in self.into_iter().map(Box::new) {
-            x.finalize_redone(world);
-        }
-    }
-}
-
-impl<T: Finalize> Finalize for [T] {
-    fn finalize_undone(self: Box<Self>, world: &mut World) {
-        for x in IntoIterator::into_iter(self).rev().map(Box::new) {
-            x.finalize_undone(world);
-        }
-    }
-    fn finalize_redone(self: Box<Self>, world: &mut World) {
-        for x in IntoIterator::into_iter(self).map(Box::new) {
-            x.finalize_redone(world);
-        }
     }
 }
 
