@@ -34,7 +34,7 @@ use bevy::{
 use crate::{
     meta::RevDirection,
     schedule::RevUpdate,
-    undo_redo::{BuffersRev, Finalize, RevBuffers, UndoRedo},
+    undo_redo::{BuffersUndoRedoFinalize, Finalize, RevBuffers, UndoRedo},
 };
 
 use super::*;
