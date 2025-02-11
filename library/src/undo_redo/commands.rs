@@ -5,7 +5,7 @@ use bevy::{
         archetype::ArchetypeId,
         bundle::{Bundle, InsertMode},
         change_detection::Mut,
-        component::{Component, ComponentId},
+        component::ComponentId,
         entity::{Entity, EntityCloneBuilder},
         resource::Resource,
         result::Result as CommandResult,
@@ -20,7 +20,7 @@ use bevy::{
 
 use super::{
     bundle_buffer::{get_bundle_id, BundleBuffers, InsertReplace},
-    BuffersRev, Finalize, UndoRedo,
+    BuffersUndoRedoFinalize, Finalize, RevDisabled, UndoRedo,
 };
 
 pub trait RevCommands {
@@ -41,10 +41,6 @@ impl RevCommands for Commands<'_, '_> {
     }
 }
 
-/// todo: replace with first party Disabled when bevy main branch can be used
-#[derive(Component)]
-struct Disabled;
-
 /// Reversible version of [`spawn_batch`](bevy::ecs::system::command::spawn_batch).
 ///
 /// If the entities are spawned with [`Disabled`], undoing this will do nothing though exiting the log when this command is undone still despawns the entities.
@@ -59,11 +55,11 @@ where
 
     impl UndoRedo for SpawnBatch<Arc<[Entity]>> {
         fn undo(&mut self, world: &mut World) {
-            world.insert_batch(self.0.iter().cloned().map(|entity| (entity, Disabled)));
+            world.insert_batch(self.0.iter().cloned().map(|entity| (entity, RevDisabled)));
         }
         fn redo(&mut self, world: &mut World) {
             let component_id = world
-                .component_id::<Disabled>()
+                .component_id::<RevDisabled>()
                 .expect("undo should have registered Disabled");
             let mut commands = world.commands();
             for &entity in &*self.0 {
@@ -86,7 +82,7 @@ where
     |world: &mut World| {
         let entities: Box<[Entity]> = world.spawn_batch(bundles_iter).collect();
 
-        if let Some(disabled_id) = world.component_id::<Disabled>() {
+        if let Some(disabled_id) = world.component_id::<RevDisabled>() {
             const BUNDLE_EXPECT: &'static str =
                 "iterated SpawnBatchIter should have registered bundle";
             let bundles = world.bundles();
