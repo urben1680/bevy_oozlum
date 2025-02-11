@@ -351,7 +351,7 @@ impl RevMeta {
         if world.contains_resource::<Self>() {
             world.insert_resource(Existed(true));
         } else {
-            let err = match world.get_resource::<Existed>().cloned() {
+            let err = match world.get_resource::<Existed>().copied() {
                 None => TryRunRevUpdateError::RevMetaMissingFirstCall,
                 Some(Existed(existed_previously)) => {
                     TryRunRevUpdateError::RevMetaMissing { existed_previously }
@@ -394,16 +394,18 @@ impl RevMeta {
                                 meta.clone(),
                             ))
                         } else {
-                            world.resource_scope(|world, mut buffer: Mut<RevBuffers>| match buffer
-                                .finish_rev_update(&meta, world)
-                            {
+                            let buffer_result =
+                                world.resource_scope(|world, mut buffer: Mut<RevBuffers>| {
+                                    buffer.finish_rev_update(&meta, world)
+                                });
+                            match buffer_result {
                                 Ok(()) => Ok(frame),
                                 Err(OutOfLog) => {
                                     Err(TryRunRevUpdateError::UndoRedoBufferOutOfLogAfterUpdate(
                                         meta.clone(),
                                     ))
                                 }
-                            })
+                            }
                         }
                     }
                     Err(_) => Err(TryRunRevUpdateError::RevUpdateMissing(meta.clone())),
