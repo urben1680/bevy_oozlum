@@ -23,7 +23,7 @@ pub(crate) struct BundleBuffers {
 
 struct Arcs {
     arcs: HashSet<Arc<[ComponentId]>>,
-    // always retain the empty slice by keeping the strong count > 1
+    /// Contains `Arc<[]>` to keep the strong count high enough to be always retained.
     _empty: Arc<[ComponentId]>,
 }
 
@@ -44,44 +44,48 @@ impl Arcs {
         bundle_info: &BundleInfo,
         archetype: &Archetype,
     ) -> Arc<[ComponentId]> {
-        let arc = bundle_info
+        let components = bundle_info
             .iter_contributed_components()
-            .filter(|id| !archetype.contains(*id))
-            .collect();
-        self.arcs.get_or_insert(arc).clone()
+            .filter(|id| !archetype.contains(*id));
+        self.get_or_insert(components)
     }
     fn insert_replace_adds(
         &mut self,
         bundle_info: &BundleInfo,
         archetype: &Archetype,
     ) -> Arc<[ComponentId]> {
-        let arc = bundle_info
+        let components = bundle_info
             .iter_required_components()
             .filter(|id| !archetype.contains(*id))
-            .chain(bundle_info.iter_explicit_components())
-            .collect();
-        self.arcs.get_or_insert(arc).clone()
+            .chain(bundle_info.iter_explicit_components());
+        self.get_or_insert(components)
     }
     fn remove_or_insert_replace_replaces(
         &mut self,
         bundle_info: &BundleInfo,
         archetype: &Archetype,
     ) -> Arc<[ComponentId]> {
-        let arc = bundle_info
+        let components = bundle_info
             .iter_explicit_components()
-            .filter(|id| archetype.contains(*id))
-            .collect();
-        self.arcs.get_or_insert(arc).clone()
+            .filter(|id| archetype.contains(*id));
+        self.get_or_insert(components)
     }
     fn remove_with_requires(
         &mut self,
         bundle_info: &BundleInfo,
         archetype: &Archetype,
     ) -> Arc<[ComponentId]> {
-        let arc = bundle_info
+        let components = bundle_info
             .iter_contributed_components()
-            .filter(|id| archetype.contains(*id))
-            .collect();
+            .filter(|id| archetype.contains(*id));
+        self.get_or_insert(components)
+    }
+    fn get_or_insert(
+        &mut self,
+        components: impl Iterator<Item = ComponentId>,
+    ) -> Arc<[ComponentId]> {
+        let mut arc: Arc<[ComponentId]> = components.collect();
+        Arc::get_mut(&mut arc).unwrap().sort();
         self.arcs.get_or_insert(arc).clone()
     }
 }
@@ -239,4 +243,29 @@ pub(super) fn get_bundle_id<T: Bundle>(world: &mut World) -> BundleId {
         .bundles()
         .get_id(type_id)
         .expect("above command should have registered bundle")
+}
+
+/*
+idea:
+
+ArchetypeId steht für ein set von components im table und sparse sets
+BundleId steht für components die eine Bewegung weg vom archetype bedeuten
+TableId steht für ein subset von components eines archetypes
+
+damit die slices der UndoRedo geteilt werden müssen sie entweder in einem Arc oder Interned stehen
+Arc ermöglich cleanup, was aber wiederum auch häufiger die slices erzeugen muss
+
+Internable zu umständlich, dann direkt &'static [ComponentId] durch Box::leak sammeln und einzigartig halten
+*/
+
+struct Foo {
+    weaks: HashMap<(BundleId, ArchetypeId), Bar>,
+    interner: HashSet<&'static [ComponentId]>,
+}
+
+struct Bar {
+    insert_keep: &'static [ComponentId],
+    insert_replace_adds: &'static [ComponentId],
+    remove_or_insert_replace_replaces: &'static [ComponentId],
+    remove_with_requires: &'static [ComponentId],
 }
