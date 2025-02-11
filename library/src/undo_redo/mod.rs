@@ -6,6 +6,7 @@ use std::{
 
 use bevy::{
     ecs::{
+        component::Component,
         resource::Resource,
         system::{Commands, EntityCommands},
         world::{DeferredWorld, EntityWorldMut, World},
@@ -25,7 +26,7 @@ pub(crate) use bundle_buffer::BundleBuffers;
 pub use commands::*;
 
 // todo rename
-pub trait BuffersRev {
+pub trait BuffersUndoRedoFinalize {
     /// Buffers an [`UndoRedo`] implementor in a resource to be collected by the reversible system's state during sync points.
     ///
     /// Logic applied in sync points are in:
@@ -59,7 +60,7 @@ pub trait BuffersRev {
     }
 }
 
-impl BuffersRev for Commands<'_, '_> {
+impl BuffersUndoRedoFinalize for Commands<'_, '_> {
     fn buffer_undo_redo(&mut self, undo_redo: impl UndoRedo) -> &mut Self {
         self.queue(move |world: &mut World| {
             world.buffer_undo_redo(undo_redo);
@@ -74,7 +75,7 @@ impl BuffersRev for Commands<'_, '_> {
     }
 }
 
-impl BuffersRev for EntityCommands<'_> {
+impl BuffersUndoRedoFinalize for EntityCommands<'_> {
     fn buffer_undo_redo(&mut self, undo_redo: impl UndoRedo) -> &mut Self {
         self.queue(move |mut world: EntityWorldMut| {
             world.buffer_undo_redo(undo_redo);
@@ -89,7 +90,7 @@ impl BuffersRev for EntityCommands<'_> {
     }
 }
 
-impl BuffersRev for World {
+impl BuffersUndoRedoFinalize for World {
     fn buffer_undo_redo(&mut self, undo_redo: impl UndoRedo) -> &mut Self {
         DeferredWorld::buffer_undo_redo(&mut self.into(), undo_redo);
         self
@@ -100,7 +101,7 @@ impl BuffersRev for World {
     }
 }
 
-impl BuffersRev for EntityWorldMut<'_> {
+impl BuffersUndoRedoFinalize for EntityWorldMut<'_> {
     fn buffer_undo_redo(&mut self, undo_redo: impl UndoRedo) -> &mut Self {
         self.get_resource_mut::<RevBuffers>()
             .expect(EXPECT_BUFFER)
@@ -115,7 +116,7 @@ impl BuffersRev for EntityWorldMut<'_> {
     }
 }
 
-impl BuffersRev for DeferredWorld<'_> {
+impl BuffersUndoRedoFinalize for DeferredWorld<'_> {
     fn buffer_undo_redo(&mut self, undo_redo: impl UndoRedo) -> &mut Self {
         self.get_resource_mut::<RevBuffers>()
             .expect(EXPECT_BUFFER)
@@ -130,7 +131,7 @@ impl BuffersRev for DeferredWorld<'_> {
     }
 }
 
-impl BuffersRev for RevBuffers {
+impl BuffersUndoRedoFinalize for RevBuffers {
     fn buffer_undo_redo(&mut self, undo_redo: impl UndoRedo) -> &mut Self {
         self.undo_redo_buffer
             .push_back(SyncCell::new(Box::new(undo_redo)));
@@ -163,6 +164,9 @@ impl RevBuffers {
     pub fn undo_redo_is_empty(&self) -> bool {
         self.undo_redo_buffer.is_empty()
     }
+    pub fn finalize_all(mut self, world: &mut World) {
+        self.update_finalize(world, 0);
+    }
     pub(crate) fn finish_rev_update(
         &mut self,
         meta: &RevMeta,
@@ -171,31 +175,33 @@ impl RevBuffers {
         match meta.get_direction() {
             None => return Ok(()),
             Some(RevDirection::NOT_LOG) => {
-                for finalize in self
-                    .finalize_log
-                    .drain_future()
-                    .0
-                    .rev()
-                    .map(SyncCell::to_inner)
-                {
-                    finalize.finalize_undone(world);
-                }
-                let past_len = meta.past_len() as usize + 1;
-                let past_drain = if self.finalize_buffer.is_empty() {
-                    self.finalize_log.push_none_and_drain_past(past_len)
-                } else {
-                    self.finalize_log
-                        .push_some_and_drain_past(past_len, |mut log| {
-                            log.append(&mut self.finalize_buffer);
-                        })
-                };
-                for finalize in past_drain.0.map(SyncCell::to_inner) {
-                    finalize.finalize_redone(world);
-                }
+                self.update_finalize(world, meta.past_len() as usize + 1);
                 Ok(())
             }
             Some(RevDirection::FORWARD_LOG) => self.finalize_log.forward_log().map(|_| ()),
             Some(RevDirection::BackwardLog) => self.finalize_log.backward_log().map(|_| ()),
+        }
+    }
+    fn update_finalize(&mut self, world: &mut World, past_len: usize) {
+        let future_drain = self
+            .finalize_log
+            .drain_future()
+            .0
+            .rev()
+            .map(SyncCell::to_inner);
+        for finalize in future_drain {
+            finalize.finalize_undone(world);
+        }
+        let past_drain = if self.finalize_buffer.is_empty() {
+            self.finalize_log.push_none_and_drain_past(past_len)
+        } else {
+            self.finalize_log
+                .push_some_and_drain_past(past_len, |mut log| {
+                    log.append(&mut self.finalize_buffer);
+                })
+        };
+        for finalize in past_drain.0.map(SyncCell::to_inner) {
+            finalize.finalize_redone(world);
         }
     }
     #[cfg(test)]
@@ -207,6 +213,16 @@ impl RevBuffers {
         self.finalize_buffer.pop_back().map(SyncCell::to_inner)
     }
 }
+
+/// Marker component that disables entities like [`Disabled`].
+///
+/// Entities marked with this component will be despawned when the relevant reversible command, for example
+/// an undone [`rev_spawn_batch`], is in the state that added this marker and will be finalized by either the
+/// [`RevMeta::run_rev_update`] system or [`RevBuffers::finalize_all`].
+///
+/// Until then entities with this marker should be considered as non-existing.
+#[derive(Component)]
+pub struct RevDisabled;
 
 pub trait UndoRedo: Send + 'static {
     fn undo(&mut self, world: &mut World);
