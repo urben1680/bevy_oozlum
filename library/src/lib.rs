@@ -59,6 +59,7 @@ pub mod prelude {
         RevSystemsSet, RevUpdate,
     };
     pub use crate::undo_redo::{
-        BuffersRev as _, FinalizeDirection, RevBuffers, RevCommands as _, UndoRedoDirection,
+        BuffersUndoRedoFinalize as _, FinalizeDirection, RevBuffers, RevCommands as _, RevDisabled,
+        UndoRedoDirection,
     };
 }
