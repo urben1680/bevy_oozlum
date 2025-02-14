@@ -989,14 +989,8 @@ fn exclusive_then_non_exclusive_ignore_deferred() {
 }
 
 #[test]
-#[ignore] // FIXME: Find cause and maybe report an issue at bevy.
+#[ignore] // https://github.com/bevyengine/bevy/issues/17828
 fn non_exclusive_then_exclusive_ignore_deferred() {
-    // For some reason bevy adds a sync point between non_exclusive::<1> and exclusive::<2> in ForwardSet.
-    // The implemention is simple here, using the vanilla before_ignore_deferred in the case of config #0.
-    // The sync point disappears if the BackwardSet is empty.
-    // Chaining ForwardSet and BackwardSet has no effect.
-    // bevy_mod_debugdump does not show other causes for this sync point.
-    // All configs from a_then_b are affected, though not the flipped variants.
     test_run(
         a_then_b(false, true, true),
         vec![vec![
