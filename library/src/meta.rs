@@ -18,11 +18,7 @@ use bevy::{
 #[cfg(feature = "serde")]
 use bevy::reflect::{ReflectDeserialize, ReflectSerialize};
 
-use crate::{
-    log::OutOfLog,
-    schedule::RevUpdate,
-    undo_redo::{BundleBuffers, RevBuffers},
-};
+use crate::{log::OutOfLog, schedule::RevUpdate, undo_redo::RevBuffers};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum TryRunRevUpdateError {
@@ -384,11 +380,6 @@ impl RevMeta {
 
                 match result {
                     Ok(()) => {
-                        if meta.get_direction() == Some(RevDirection::NOT_LOG) {
-                            if let Some(mut buffers) = world.get_resource_mut::<BundleBuffers>() {
-                                buffers.retain_used_buffers();
-                            }
-                        }
                         if !world.contains_resource::<RevBuffers>() {
                             Err(TryRunRevUpdateError::UndoRedoBufferMissingAfterUpdate(
                                 meta.clone(),
