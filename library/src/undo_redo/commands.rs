@@ -2,8 +2,8 @@ use std::{any::TypeId, hash::Hash, mem::take, ops::Deref, sync::Arc};
 
 use bevy::{
     ecs::{
-        archetype::{Archetype, ArchetypeId},
-        bundle::{Bundle, BundleId, BundleInfo, InsertMode},
+        archetype::ArchetypeId,
+        bundle::{Bundle, InsertMode},
         component::ComponentId,
         entity::{Entity, EntityCloneBuilder},
         resource::Resource,
@@ -17,12 +17,11 @@ use bevy::{
     },
 };
 
+use crate::undo_redo::empty_entity_scope;
+
 use super::{
-    //bundle_buffer::{get_bundle_id, BundleBuffers, InsertReplace},
-    BuffersUndoRedoFinalize,
-    Finalize,
-    RevDisabled,
-    UndoRedo,
+    archetype_insert_if_new, archetype_insert_replace, archetype_insert_replace_backup,
+    get_bundle_id, BuffersUndoRedoFinalize, Finalize, RevDisabled, UndoRedo,
 };
 
 pub trait RevCommands {
@@ -152,7 +151,7 @@ where
         /// First buffer entity is empty, unless the state is undone, then the last buffer entity is empty.
         ///
         /// Undoing/Redoing this makes the empty state bubble through the buffer entities.
-        entity_buffers: Box<[Entity]>,
+        entity_buffer_pairs: Box<[(Entity, Entity)]>,
         components: ReplaceComponents,
     }
 
@@ -163,58 +162,68 @@ where
     }
 
     impl InsertBatchReplace {
-        fn undo_redo<const UNDO: bool, const SKIP_MOVE_INTO_TARGET: bool>(
-            &self,
-            world: &mut World,
-        ) {
-            let (components1, components2) = if UNDO {
-                (&self.components.insert, &self.components.backup)
-            } else {
-                (&self.components.backup, &self.components.insert)
-            };
-            let entities_len = self.entity_buffers.len() / 2;
-            let (entities, buffers) = self.entity_buffers.split_at(entities_len);
-            let mut buffers = buffers.into_iter();
-            let mut next_buffer = || {
-                if UNDO {
-                    *buffers.next().unwrap()
-                } else {
-                    *buffers.next_back().unwrap()
-                }
-            };
-            let mut empty_buffer = next_buffer();
-            for &entity in entities {
-                let components1 = components1.clone();
+        fn init(&self, world: &mut World) {
+            for &(entity, buffer) in self.entity_buffer_pairs.iter().rev() {
                 let mut builder = EntityCloneBuilder::new(world);
+                let components = self.components.backup.clone();
                 builder
                     .deny_all()
                     .without_required_components(|builder| {
-                        builder.allow_by_ids(components1);
+                        builder.allow_by_ids(components);
                     })
                     .move_components(true);
-                builder.clone_entity(entity, empty_buffer);
-                empty_buffer = next_buffer();
-                if !SKIP_MOVE_INTO_TARGET {
-                    let components2 = components2.clone();
+                builder.clone_entity(entity, buffer);
+            }
+        }
+        fn undo_redo<const UNDO: bool>(&mut self, world: &mut World) {
+            empty_entity_scope(world, |world, empty_entity| {
+                let mut iter = self.entity_buffer_pairs.iter_mut();
+                let mut next_pair = || {
+                    if UNDO {
+                        iter.next()
+                    } else {
+                        iter.next_back()
+                    }
+                };
+                let (components1, components2) = if UNDO {
+                    (&self.components.insert, &self.components.backup)
+                } else {
+                    (&self.components.backup, &self.components.insert)
+                };
+
+                while let Some((entity, buffer)) = next_pair() {
                     let mut builder = EntityCloneBuilder::new(world);
+                    let components1 = components1.clone();
+                    builder
+                        .deny_all()
+                        .without_required_components(|builder| {
+                            builder.allow_by_ids(components1);
+                        })
+                        .move_components(true);
+                    builder.clone_entity(*entity, *empty_entity);
+
+                    let mut builder = EntityCloneBuilder::new(world);
+                    let components2 = components2.clone();
                     builder
                         .deny_all()
                         .without_required_components(|builder| {
                             builder.allow_by_ids(components2);
                         })
                         .move_components(true);
-                    builder.clone_entity(empty_buffer, entity);
+                    builder.clone_entity(*buffer, *entity);
+
+                    std::mem::swap(buffer, empty_entity);
                 }
-            }
+            })
         }
     }
 
     impl UndoRedo for InsertBatchReplace {
         fn undo(&mut self, world: &mut World) {
-            self.undo_redo::<true, false>(world);
+            self.undo_redo::<true>(world);
         }
         fn redo(&mut self, world: &mut World) {
-            self.undo_redo::<false, false>(world);
+            self.undo_redo::<false>(world);
         }
     }
 
@@ -246,6 +255,7 @@ where
     fn buffer<B: Bundle, const KEEP: bool>(
         world: &mut World,
         mut entities_per_archetype: HashMap<ArchetypeId, Vec<Entity>>,
+        len: usize,
     ) {
         let bundle_id = get_bundle_id::<B>(world);
         let bundle_info = world.bundles().get(bundle_id).expect("todo");
@@ -253,12 +263,12 @@ where
             Default::default();
         let mut entities_per_replace_components: HashMap<ReplaceComponents, Vec<Entity>> =
             Default::default();
-        let mut buffer_len = 0;
+        let buffer_entities: Box<[Entity]> =
+            world.entities().reserve_entities(len as u32).collect();
         for (archetype_id, entities) in entities_per_archetype.iter_mut() {
-            buffer_len += entities.len();
             let archetype = world.archetypes().get(*archetype_id).expect("todo");
             if KEEP {
-                let mut keep = archetype_insert_keep(bundle_info, archetype);
+                let mut keep = archetype_insert_if_new(bundle_info, archetype);
                 keep.sort();
                 update_entry(entities_per_insert_components.entry(keep), entities);
             } else {
@@ -274,11 +284,6 @@ where
                 }
             }
         }
-        buffer_len += entities_per_replace_components.len();
-        let buffer_entities: Box<[Entity]> = world
-            .entities()
-            .reserve_entities(buffer_len as u32)
-            .collect();
         let mut buffer_iter = buffer_entities.iter().copied();
         let keep: Box<[InsertBatchKeep]> = entities_per_insert_components
             .into_iter()
@@ -292,17 +297,11 @@ where
             world.flush(); // flush buffer entities to backup components that are to be replaced
             let replace: Box<[InsertBatchReplace]> = entities_per_replace_components
                 .into_iter()
-                .map(|(components, entities)| {
-                    let buffers_len = entities.len() + 1;
-                    InsertBatchReplace {
-                        entity_buffers: entities
-                            .into_iter()
-                            .chain(buffer_iter.by_ref().take(buffers_len))
-                            .collect(),
-                        components,
-                    }
+                .map(|(components, entities)| InsertBatchReplace {
+                    entity_buffer_pairs: entities.into_iter().zip(buffer_iter.by_ref()).collect(),
+                    components,
                 })
-                .inspect(|replace| replace.undo_redo::<false, true>(world))
+                .inspect(|replace| replace.init(world))
                 .collect();
             world.buffer_undo_redo(replace);
         }
@@ -331,8 +330,8 @@ where
         }
 
         match insert_mode {
-            InsertMode::Keep => buffer::<B, true>(world, entities_per_archetype),
-            InsertMode::Replace => buffer::<B, false>(world, entities_per_archetype),
+            InsertMode::Keep => buffer::<B, true>(world, entities_per_archetype, batch.len()),
+            InsertMode::Replace => buffer::<B, false>(world, entities_per_archetype, batch.len()),
         }
 
         world.insert_batch(batch);
@@ -389,58 +388,6 @@ pub fn rev_remove_resource<R: Resource>() -> impl Command {
             world.buffer_undo_redo(ResourceSwap(Some(resource)));
         }
     }
-}
-
-fn archetype_insert_keep(bundle_info: &BundleInfo, archetype: &Archetype) -> Box<[ComponentId]> {
-    bundle_info
-        .iter_contributed_components()
-        .filter(|component_id| !archetype.contains(*component_id))
-        .collect()
-}
-
-fn archetype_insert_replace(bundle_info: &BundleInfo, archetype: &Archetype) -> Box<[ComponentId]> {
-    bundle_info
-        .iter_required_components()
-        .filter(|component_id| !archetype.contains(*component_id))
-        .chain(bundle_info.iter_explicit_components())
-        .collect()
-}
-
-fn archetype_insert_replace_backup(
-    bundle_info: &BundleInfo,
-    archetype: &Archetype,
-) -> Box<[ComponentId]> {
-    bundle_info
-        .iter_explicit_components()
-        .filter(|component_id| archetype.contains(*component_id))
-        .collect()
-}
-
-/// todo workaround until manual bundle registration is possible
-fn get_bundle_id<T: Bundle>(world: &mut World) -> BundleId {
-    #[derive(Resource)]
-    struct EmptyEntity(Entity);
-
-    let type_id = TypeId::of::<T>();
-    if let Some(id) = world.bundles().get_id(type_id) {
-        return id;
-    }
-    let empty_entity = world
-        .get_resource::<EmptyEntity>()
-        .filter(|res| world.entities().contains(res.0))
-        .map(|res| res.0)
-        .unwrap_or_else(|| {
-            let entity = world.spawn_empty().id();
-            world.flush();
-            world.insert_resource(EmptyEntity(entity));
-            entity
-        });
-    world.commands().entity(empty_entity).remove::<T>();
-    world.flush();
-    world
-        .bundles()
-        .get_id(type_id)
-        .expect("above command should have registered bundle")
 }
 
 #[cfg(test)]
