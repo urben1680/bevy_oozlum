@@ -176,21 +176,21 @@ where
             }
         }
         fn undo_redo<const UNDO: bool>(&mut self, world: &mut World) {
-            empty_entity_scope(world, |world, empty_entity| {
-                let mut iter = self.entity_buffer_pairs.iter_mut();
-                let mut next_pair = || {
-                    if UNDO {
-                        iter.next()
-                    } else {
-                        iter.next_back()
-                    }
-                };
-                let (components1, components2) = if UNDO {
-                    (&self.components.insert, &self.components.backup)
+            let mut iter = self.entity_buffer_pairs.iter_mut();
+            let mut next_pair = || {
+                if UNDO {
+                    iter.next()
                 } else {
-                    (&self.components.backup, &self.components.insert)
-                };
+                    iter.next_back()
+                }
+            };
+            let (components1, components2) = if UNDO {
+                (&self.components.insert, &self.components.backup)
+            } else {
+                (&self.components.backup, &self.components.insert)
+            };
 
+            empty_entity_scope(world, |world, empty_entity| {
                 while let Some((entity, buffer)) = next_pair() {
                     let mut builder = EntityCloneBuilder::new(world);
                     let components1 = components1.clone();
@@ -263,8 +263,6 @@ where
             Default::default();
         let mut entities_per_replace_components: HashMap<ReplaceComponents, Vec<Entity>> =
             Default::default();
-        let buffer_entities: Box<[Entity]> =
-            world.entities().reserve_entities(len as u32).collect();
         for (archetype_id, entities) in entities_per_archetype.iter_mut() {
             let archetype = world.archetypes().get(*archetype_id).expect("todo");
             if KEEP {
@@ -284,6 +282,8 @@ where
                 }
             }
         }
+        let buffer_entities: Box<[Entity]> =
+            world.entities().reserve_entities(len as u32).collect();
         let mut buffer_iter = buffer_entities.iter().copied();
         let keep: Box<[InsertBatchKeep]> = entities_per_insert_components
             .into_iter()

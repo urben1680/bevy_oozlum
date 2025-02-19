@@ -12,6 +12,9 @@ TODO:
 -- bevy_revsched
 -- bevy_smetsys
 -- bevy_oozlum (mythical bird that flies backwards)
+- schedule/test
+-- reflect on fix of https://github.com/bevyengine/bevy/issues/17828
+-- test not only multi-thread executor
 
 Enhancements:
 - reduce todo!() and //todo
