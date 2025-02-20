@@ -10,7 +10,7 @@ use bevy::{
         archetype::Archetype,
         bundle::{Bundle, BundleId, BundleInfo},
         component::{Component, ComponentId},
-        entity::Entity,
+        entity::{Entity, EntityCloneBuilder},
         resource::Resource,
         system::{Commands, EntityCommands},
         world::{DeferredWorld, EntityWorldMut, FromWorld, World},
@@ -19,7 +19,7 @@ use bevy::{
 };
 
 use crate::{
-    log::{DenseTransitionsLog, FrameTransitionLog, OutOfLog, SparseTransitionsLog},
+    log::{DenseTransitionsLog, FrameTransitionLog},
     meta::{RevDirection, RevMeta},
 };
 
@@ -30,7 +30,7 @@ pub use commands::*;
 pub use entity_commands::*;
 
 // todo rename
-pub trait BuffersUndoRedoFinalize {
+pub trait BuffersUndoRedo {
     /// Buffers an [`UndoRedo`] implementor in a resource to be collected by the reversible system's state during sync points.
     ///
     /// Logic applied in sync points are in:
@@ -54,96 +54,55 @@ pub trait BuffersUndoRedoFinalize {
     /// | [`Commands`] | ❌ | ✅ |
     /// | [`EntityCommands`] | ❌ | ✅ |
     fn buffer_undo_redo(&mut self, undo_redo: impl UndoRedo) -> &mut Self;
-    fn buffer_finalize(&mut self, finalize: impl Finalize) -> &mut Self;
-    fn buffer_undo_redo_finalize(
-        &mut self,
-        undo_redo_finalize: impl UndoRedo + Finalize + Clone,
-    ) -> &mut Self {
-        self.buffer_undo_redo(undo_redo_finalize.clone())
-            .buffer_finalize(undo_redo_finalize)
-    }
 }
 
-impl BuffersUndoRedoFinalize for Commands<'_, '_> {
+impl BuffersUndoRedo for Commands<'_, '_> {
     fn buffer_undo_redo(&mut self, undo_redo: impl UndoRedo) -> &mut Self {
         self.queue(move |world: &mut World| {
             world.buffer_undo_redo(undo_redo);
         });
         self
     }
-    fn buffer_finalize(&mut self, finalize: impl Finalize) -> &mut Self {
-        self.queue(move |world: &mut World| {
-            world.buffer_finalize(finalize);
-        });
-        self
-    }
 }
 
-impl BuffersUndoRedoFinalize for EntityCommands<'_> {
+impl BuffersUndoRedo for EntityCommands<'_> {
     fn buffer_undo_redo(&mut self, undo_redo: impl UndoRedo) -> &mut Self {
         self.queue(move |mut world: EntityWorldMut| {
             world.buffer_undo_redo(undo_redo);
         });
         self
     }
-    fn buffer_finalize(&mut self, finalize: impl Finalize) -> &mut Self {
-        self.queue(move |mut world: EntityWorldMut| {
-            world.buffer_finalize(finalize);
-        });
-        self
-    }
 }
 
-impl BuffersUndoRedoFinalize for World {
+impl BuffersUndoRedo for World {
     fn buffer_undo_redo(&mut self, undo_redo: impl UndoRedo) -> &mut Self {
         DeferredWorld::buffer_undo_redo(&mut self.into(), undo_redo);
         self
     }
-    fn buffer_finalize(&mut self, finalize: impl Finalize) -> &mut Self {
-        DeferredWorld::buffer_finalize(&mut self.into(), finalize);
-        self
-    }
 }
 
-impl BuffersUndoRedoFinalize for EntityWorldMut<'_> {
+impl BuffersUndoRedo for EntityWorldMut<'_> {
     fn buffer_undo_redo(&mut self, undo_redo: impl UndoRedo) -> &mut Self {
         self.get_resource_mut::<RevBuffers>()
             .expect(EXPECT_BUFFER)
             .buffer_undo_redo(undo_redo);
         self
     }
-    fn buffer_finalize(&mut self, finalize: impl Finalize) -> &mut Self {
-        self.get_resource_mut::<RevBuffers>()
-            .expect(EXPECT_BUFFER)
-            .buffer_finalize(finalize);
-        self
-    }
 }
 
-impl BuffersUndoRedoFinalize for DeferredWorld<'_> {
+impl BuffersUndoRedo for DeferredWorld<'_> {
     fn buffer_undo_redo(&mut self, undo_redo: impl UndoRedo) -> &mut Self {
         self.get_resource_mut::<RevBuffers>()
             .expect(EXPECT_BUFFER)
             .buffer_undo_redo(undo_redo);
         self
     }
-    fn buffer_finalize(&mut self, finalize: impl Finalize) -> &mut Self {
-        self.get_resource_mut::<RevBuffers>()
-            .expect(EXPECT_BUFFER)
-            .buffer_finalize(finalize);
-        self
-    }
 }
 
-impl BuffersUndoRedoFinalize for RevBuffers {
+impl BuffersUndoRedo for RevBuffers {
     fn buffer_undo_redo(&mut self, undo_redo: impl UndoRedo) -> &mut Self {
         self.undo_redo_buffer
             .push_back(SyncCell::new(Box::new(undo_redo)));
-        self
-    }
-    fn buffer_finalize(&mut self, finalize: impl Finalize) -> &mut Self {
-        self.finalize_buffer
-            .push_back(SyncCell::new(Box::new(finalize)));
         self
     }
 }
@@ -160,61 +119,15 @@ const EXPECT_BUFFER: &'static str =
 #[derive(Resource, Default)]
 pub struct RevBuffers {
     undo_redo_buffer: VecDeque<SyncCell<Box<dyn UndoRedo>>>,
-    finalize_buffer: VecDeque<SyncCell<Box<dyn Finalize>>>,
-    finalize_log: SparseTransitionsLog<SyncCell<Box<dyn Finalize>>>,
 }
 
 impl RevBuffers {
     pub fn undo_redo_is_empty(&self) -> bool {
         self.undo_redo_buffer.is_empty()
     }
-    pub fn finalize_all(mut self, world: &mut World) {
-        self.update_finalize(world, 0);
-    }
-    pub(crate) fn finish_rev_update(
-        &mut self,
-        meta: &RevMeta,
-        world: &mut World,
-    ) -> Result<(), OutOfLog> {
-        match meta.get_direction() {
-            None => return Ok(()),
-            Some(RevDirection::NOT_LOG) => {
-                self.update_finalize(world, meta.past_len() as usize + 1);
-                Ok(())
-            }
-            Some(RevDirection::FORWARD_LOG) => self.finalize_log.forward_log().map(|_| ()),
-            Some(RevDirection::BackwardLog) => self.finalize_log.backward_log().map(|_| ()),
-        }
-    }
-    fn update_finalize(&mut self, world: &mut World, past_len: usize) {
-        let future_drain = self
-            .finalize_log
-            .drain_future()
-            .0
-            .rev()
-            .map(SyncCell::to_inner);
-        for finalize in future_drain {
-            finalize.finalize_undone(world);
-        }
-        let past_drain = if self.finalize_buffer.is_empty() {
-            self.finalize_log.push_none_and_drain_past(past_len)
-        } else {
-            self.finalize_log
-                .push_some_and_drain_past(past_len, |mut log| {
-                    log.append(&mut self.finalize_buffer);
-                })
-        };
-        for finalize in past_drain.0.map(SyncCell::to_inner) {
-            finalize.finalize_redone(world);
-        }
-    }
     #[cfg(test)]
     pub fn pop_undo_redo(&mut self) -> Option<Box<dyn UndoRedo>> {
         self.undo_redo_buffer.pop_back().map(SyncCell::to_inner)
-    }
-    #[cfg(test)]
-    pub fn pop_finalize(&mut self) -> Option<Box<dyn Finalize>> {
-        self.finalize_buffer.pop_back().map(SyncCell::to_inner)
     }
 }
 
@@ -231,11 +144,6 @@ pub struct RevDisabled;
 pub trait UndoRedo: Send + 'static {
     fn undo(&mut self, world: &mut World);
     fn redo(&mut self, world: &mut World);
-}
-
-pub trait Finalize: Send + 'static {
-    fn finalize_undone(self: Box<Self>, world: &mut World);
-    fn finalize_redone(self: Box<Self>, world: &mut World);
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -298,12 +206,23 @@ impl<T: UndoRedo> UndoRedo for Box<[T]> {
     }
 }
 
-impl<F: FnMut(&mut World, FinalizeDirection) + Send + 'static> Finalize for F {
-    fn finalize_undone(mut self: Box<Self>, world: &mut World) {
-        self(world, FinalizeDirection::FinalizeUndone)
+#[derive(Component, Clone, Copy, Debug, Hash, PartialOrd, Ord, PartialEq, Eq)]
+#[component(immutable)]
+pub struct DespawnAtOutOfLog(u64);
+
+impl DespawnAtOutOfLog {
+    pub fn new(now: u64) -> Self {
+        Self(now)
     }
-    fn finalize_redone(mut self: Box<Self>, world: &mut World) {
-        self(world, FinalizeDirection::FinalizeRedone)
+    pub fn added_at(self) -> u64 {
+        self.0
+    }
+}
+
+impl FromWorld for DespawnAtOutOfLog {
+    fn from_world(world: &mut World) -> Self {
+        let meta = world.get_resource::<RevMeta>().expect("todo");
+        Self::new(meta.now())
     }
 }
 
@@ -458,6 +377,25 @@ fn archetype_insert_replace_backup(
         .iter_explicit_components()
         .filter(|component_id| archetype.contains(*component_id))
         .collect()
+}
+
+// todo: ideally the builder does not need to be rebuilt each time but only the entities need to switch
+fn move_with_despawn_at_out_of_log(
+    world: &mut World,
+    source: Entity,
+    target: Entity,
+    components: Box<[ComponentId]>,
+) {
+    let mut builder = EntityCloneBuilder::new(world);
+    builder
+        .deny_all()
+        .without_required_components(|builder| {
+            builder
+                .allow_by_ids(components)
+                .allow::<DespawnAtOutOfLog>();
+        })
+        .move_components(true);
+    builder.clone_entity(source, target);
 }
 
 /// todo workaround until manual bundle registration is possible
