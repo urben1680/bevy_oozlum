@@ -20,6 +20,11 @@ Enhancements:
 - reduce todo!() and //todo
 - #[inline]s
 - track_location and bevy_reflect feature (both are not documented?), rename serde -> serialize
+- deprecate Finalize
+-- pub BufferEntity(u64) component
+-- buffer despawn system
+-- no first-party cleanup API
+-- new tests
 
 Docs
 - documentations
@@ -62,7 +67,7 @@ pub mod prelude {
         RevSystemsSet, RevUpdate,
     };
     pub use crate::undo_redo::{
-        BuffersUndoRedoFinalize as _, FinalizeDirection, RevBuffers, RevCommands as _, RevDisabled,
+        BuffersUndoRedo as _, FinalizeDirection, RevBuffers, RevCommands as _, RevDisabled,
         UndoRedoDirection,
     };
 }
