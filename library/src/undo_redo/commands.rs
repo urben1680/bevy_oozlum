@@ -1,4 +1,8 @@
-use std::{any::TypeId, hash::Hash, mem::take, ops::Deref, sync::Arc};
+use std::{
+    any::TypeId,
+    hash::Hash,
+    mem::take,
+};
 
 use bevy::{
     ecs::{
@@ -17,11 +21,10 @@ use bevy::{
     },
 };
 
-use crate::undo_redo::empty_entity_scope;
-
 use super::{
     archetype_insert_if_new, archetype_insert_replace, archetype_insert_replace_backup,
-    get_bundle_id, BuffersUndoRedoFinalize, Finalize, RevDisabled, UndoRedo,
+    empty_entity_scope, get_bundle_id, move_with_despawn_at_out_of_log, BuffersUndoRedo,
+    RevDisabled, UndoRedo,
 };
 
 pub trait RevCommands {
@@ -52,9 +55,9 @@ where
     I::Item: Bundle,
 {
     #[derive(Clone)]
-    struct SpawnBatch<T: Send + Deref<Target = [Entity]>>(T);
+    struct SpawnBatch(Box<[Entity]>);
 
-    impl UndoRedo for SpawnBatch<Arc<[Entity]>> {
+    impl UndoRedo for SpawnBatch {
         fn undo(&mut self, world: &mut World) {
             world.insert_batch(self.0.iter().cloned().map(|entity| (entity, RevDisabled)));
         }
@@ -67,16 +70,6 @@ where
                 commands.entity(entity).remove_by_id(component_id);
             }
             world.flush();
-        }
-    }
-
-    impl<T: Send + 'static + Deref<Target = [Entity]>> Finalize for SpawnBatch<T> {
-        fn finalize_redone(self: Box<Self>, _: &mut World) {}
-        fn finalize_undone(self: Box<Self>, world: &mut World) {
-            for &entity in &*self.0 {
-                // todo: despawn recursively?
-                world.despawn(entity);
-            }
         }
     }
 
@@ -93,12 +86,12 @@ where
             let bundle_info = bundles.get(bundle_id).expect(BUNDLE_EXPECT);
 
             if bundle_info.contributed_components().contains(&disabled_id) {
-                world.buffer_finalize(SpawnBatch(entities));
+                //world.buffer_finalize(SpawnBatch(entities));
                 return;
             }
         }
 
-        world.buffer_undo_redo_finalize(SpawnBatch(Arc::from(entities)));
+        //world.buffer_undo_redo_finalize(SpawnBatch(Arc::from(entities)));
     }
 }
 
@@ -164,15 +157,12 @@ where
     impl InsertBatchReplace {
         fn init(&self, world: &mut World) {
             for &(entity, buffer) in self.entity_buffer_pairs.iter().rev() {
-                let mut builder = EntityCloneBuilder::new(world);
-                let components = self.components.backup.clone();
-                builder
-                    .deny_all()
-                    .without_required_components(|builder| {
-                        builder.allow_by_ids(components);
-                    })
-                    .move_components(true);
-                builder.clone_entity(entity, buffer);
+                move_with_despawn_at_out_of_log(
+                    world,
+                    entity,
+                    buffer,
+                    self.components.backup.clone(),
+                );
             }
         }
         fn undo_redo<const UNDO: bool>(&mut self, world: &mut World) {
@@ -191,29 +181,24 @@ where
             };
 
             empty_entity_scope(world, |world, empty_entity| {
+                /*
+                E1    E2    E3      E1    E2    E3
+                mt    b1    b2      b1    b2    mt
+                  \  /  \  /    ->    \  /  \  /
+                   e1    e2            e1    e2
+                 */
+                let original_empty = *empty_entity;
                 while let Some((entity, buffer)) = next_pair() {
-                    let mut builder = EntityCloneBuilder::new(world);
-                    let components1 = components1.clone();
-                    builder
-                        .deny_all()
-                        .without_required_components(|builder| {
-                            builder.allow_by_ids(components1);
-                        })
-                        .move_components(true);
-                    builder.clone_entity(*entity, *empty_entity);
-
-                    let mut builder = EntityCloneBuilder::new(world);
-                    let components2 = components2.clone();
-                    builder
-                        .deny_all()
-                        .without_required_components(|builder| {
-                            builder.allow_by_ids(components2);
-                        })
-                        .move_components(true);
-                    builder.clone_entity(*buffer, *entity);
-
-                    std::mem::swap(buffer, empty_entity);
+                    move_with_despawn_at_out_of_log(
+                        world,
+                        *entity,
+                        *empty_entity,
+                        components1.clone(),
+                    );
+                    move_with_despawn_at_out_of_log(world, *buffer, *entity, components2.clone());
+                    std::mem::swap(buffer, empty_entity); // todo Problem: updated nicht InsertBatchBuffers
                 }
+                todo!()
             })
         }
     }
@@ -224,19 +209,6 @@ where
         }
         fn redo(&mut self, world: &mut World) {
             self.undo_redo::<false>(world);
-        }
-    }
-
-    struct InsertBatchBuffers(Box<[Entity]>);
-
-    impl Finalize for InsertBatchBuffers {
-        fn finalize_undone(self: Box<Self>, world: &mut World) {
-            for entity in self.0 {
-                world.despawn(entity);
-            }
-        }
-        fn finalize_redone(self: Box<Self>, world: &mut World) {
-            self.finalize_undone(world);
         }
     }
 
@@ -305,7 +277,7 @@ where
                 .collect();
             world.buffer_undo_redo(replace);
         }
-        world.buffer_finalize(InsertBatchBuffers(buffer_entities));
+        //world.buffer_finalize(InsertBatchBuffers(buffer_entities));
     }
 
     move |world: &mut World| {
