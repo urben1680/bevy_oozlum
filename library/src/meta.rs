@@ -6,9 +6,10 @@ use bevy::{
         archetype::ArchetypeComponentId,
         change_detection::Mut,
         component::{ComponentId, Tick},
-        query::Access,
+        entity::Entity,
+        query::{Access, QueryState},
         resource::Resource,
-        system::{IntoSystem, ReadOnlySystemParam, Res, System, SystemMeta, SystemParam},
+        system::{IntoSystem, Local, ReadOnlySystemParam, Res, System, SystemMeta, SystemParam},
         world::{unsafe_world_cell::UnsafeWorldCell, World},
     },
     log::{error_once, info},
@@ -18,7 +19,11 @@ use bevy::{
 #[cfg(feature = "serde")]
 use bevy::reflect::{ReflectDeserialize, ReflectSerialize};
 
-use crate::{log::OutOfLog, schedule::RevUpdate, undo_redo::RevBuffers};
+use crate::{
+    log::OutOfLog,
+    schedule::RevUpdate,
+    undo_redo::{DespawnAtOutOfLog, RevBuffers},
+};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum TryRunRevUpdateError {
@@ -27,9 +32,7 @@ pub enum TryRunRevUpdateError {
     RevMetaRemovedInSchedule { frame: u64 },
     UnexpectedInitialRunning(RevMeta),
     RevUpdateMissing(RevMeta),
-    UndoRedoBufferMissingAfterUpdate(RevMeta),
     UndoRedoBufferNotEmptyBeforeUpdate(RevMeta),
-    UndoRedoBufferOutOfLogAfterUpdate(RevMeta),
 }
 
 impl Display for TryRunRevUpdateError {
@@ -55,19 +58,9 @@ impl Display for TryRunRevUpdateError {
             Self::RevUpdateMissing(meta) => {
                 write!(f, "RevUpdate was missing at frame {}", meta.now())
             }
-            Self::UndoRedoBufferMissingAfterUpdate(meta) => write!(
-                f,
-                "UndoRedoBuffer was removed during RevUpdate at frame {}",
-                meta.now()
-            ),
             Self::UndoRedoBufferNotEmptyBeforeUpdate(meta) => write!(
                 f,
                 "UndoRedoBuffer was not fully drained at frame {}, RevUpdate is not run",
-                meta.now()
-            ),
-            Self::UndoRedoBufferOutOfLogAfterUpdate(meta) => write!(
-                f,
-                "UndoRedoBuffer was in an invalid state after RevUpdate ran at frame {}",
                 meta.now()
             ),
         }
@@ -340,7 +333,11 @@ impl RevMeta {
     pub fn queue_pause(&mut self) {
         self.queue = Some(InternalDirection::Pause);
     }
-    pub fn try_run_rev_update(world: &mut World) -> Result<(), TryRunRevUpdateError> {
+    pub fn try_run_rev_update(
+        world: &mut World,
+        buffers: &mut QueryState<(Entity, &DespawnAtOutOfLog)>, // todo: Has<Disabled>
+        mut out_of_log_buffers: Local<Vec<Entity>>,
+    ) -> Result<(), TryRunRevUpdateError> {
         #[derive(Resource, Clone, Copy)]
         struct Existed(bool);
 
@@ -380,24 +377,18 @@ impl RevMeta {
 
                 match result {
                     Ok(()) => {
-                        if !world.contains_resource::<RevBuffers>() {
-                            Err(TryRunRevUpdateError::UndoRedoBufferMissingAfterUpdate(
-                                meta.clone(),
-                            ))
-                        } else {
-                            let buffer_result =
-                                world.resource_scope(|world, mut buffer: Mut<RevBuffers>| {
-                                    buffer.finish_rev_update(&meta, world)
-                                });
-                            match buffer_result {
-                                Ok(()) => Ok(frame),
-                                Err(OutOfLog) => {
-                                    Err(TryRunRevUpdateError::UndoRedoBufferOutOfLogAfterUpdate(
-                                        meta.clone(),
-                                    ))
-                                }
+                        if meta.direction() == RevDirection::NOT_LOG {
+                            out_of_log_buffers.extend(
+                                buffers
+                                    .iter(world)
+                                    .filter(|(_, marker)| !meta.contains(marker.added_at()))
+                                    .map(|(entity, _)| entity),
+                            );
+                            for entity in out_of_log_buffers.drain(..) {
+                                world.despawn(entity);
                             }
                         }
+                        Ok(frame)
                     }
                     Err(_) => Err(TryRunRevUpdateError::RevUpdateMissing(meta.clone())),
                 }
@@ -423,8 +414,12 @@ impl RevMeta {
             }
         })
     }
-    pub fn run_rev_update(world: &mut World) {
-        match Self::try_run_rev_update(world) {
+    pub fn run_rev_update(
+        world: &mut World,
+        buffers: &mut QueryState<(Entity, &DespawnAtOutOfLog)>,
+        out_of_log_buffers: Local<Vec<Entity>>,
+    ) {
+        match Self::try_run_rev_update(world, buffers, out_of_log_buffers) {
             Err(TryRunRevUpdateError::RevMetaMissingFirstCall) => info!(
                 "RevMeta does not exist yet, reversible schedule RevUpdate will not be called until it is inserted"
             ),
