@@ -16,6 +16,67 @@ use super::*;
 /// replacing any that were already present.
 #[track_caller]
 pub fn rev_insert<B: Bundle>(bundle: B) -> impl EntityCommand {
+    struct RevInsert {
+        entity: Entity,
+        buffer: Entity,
+        insert: Box<[ComponentId]>,
+        backup: Box<[ComponentId]>,
+    }
+
+    impl RevInsert {
+        fn init(&self, world: &mut World) {
+            let mut builder = EntityCloneBuilder::new(world);
+            let components = self.backup.clone();
+            builder
+                .deny_all()
+                .without_required_components(|builder| {
+                    builder.allow_by_ids(components);
+                })
+                .move_components(true);
+            builder.clone_entity(self.entity, self.buffer);
+        }
+        fn undo_redo<const UNDO: bool>(&mut self, world: &mut World) {
+            let (components1, components2) = if UNDO {
+                (&self.insert, &self.backup)
+            } else {
+                (&self.backup, &self.insert)
+            };
+
+            empty_entity_scope(world, |world, empty_entity| {
+                let mut builder = EntityCloneBuilder::new(world);
+                let components1 = components1.clone();
+                builder
+                    .deny_all()
+                    .without_required_components(|builder| {
+                        builder.allow_by_ids(components1);
+                    })
+                    .move_components(true);
+                builder.clone_entity(self.entity, *empty_entity);
+
+                let mut builder = EntityCloneBuilder::new(world);
+                let components2 = components2.clone();
+                builder
+                    .deny_all()
+                    .without_required_components(|builder| {
+                        builder.allow_by_ids(components2);
+                    })
+                    .move_components(true);
+                builder.clone_entity(self.buffer, self.entity);
+
+                std::mem::swap(&mut self.buffer, empty_entity);
+            })
+        }
+    }
+
+    impl UndoRedo for RevInsert {
+        fn undo(&mut self, world: &mut World) {
+            self.undo_redo::<true>(world);
+        }
+        fn redo(&mut self, world: &mut World) {
+            self.undo_redo::<false>(world);
+        }
+    }
+
     todo!()
 }
 
@@ -58,16 +119,16 @@ pub fn rev_insert_if_new<B: Bundle>(bundle: B) -> impl EntityCommand {
     }
 
     struct RevInsertIfNewBuffer(Entity);
-
-    impl Finalize for RevInsertIfNewBuffer {
-        fn finalize_redone(self: Box<Self>, world: &mut World) {
-            world.despawn(self.0);
+    /*
+        impl Finalize for RevInsertIfNewBuffer {
+            fn finalize_redone(self: Box<Self>, world: &mut World) {
+                world.despawn(self.0);
+            }
+            fn finalize_undone(self: Box<Self>, world: &mut World) {
+                world.despawn(self.0);
+            }
         }
-        fn finalize_undone(self: Box<Self>, world: &mut World) {
-            world.despawn(self.0);
-        }
-    }
-
+    */
     move |mut entity: EntityWorldMut| {
         let bundle_id = unsafe {
             // SAFETY: does not change current entity's location, only registers bundle by removing it from an empty entity
