@@ -6,7 +6,7 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-bevy = { git = "https://github.com/raldone01/bevy-rs", branch = "better-bevy-manifest" } # todo: switch to main after https://github.com/bevyengine/bevy/issues/17612
+bevy = { git = "https://github.com/bevyengine/bevy" } # todo: switch to main after https://github.com/bevyengine/bevy/issues/17612
 variadics_please = "1.1"
 serde = { version = "1.0", features = ["derive"], optional = true }
 

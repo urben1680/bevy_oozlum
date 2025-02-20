@@ -10,7 +10,7 @@ use bevy::{
         archetype::Archetype,
         bundle::{Bundle, BundleId, BundleInfo},
         component::{Component, ComponentId},
-        entity::{Entity, EntityCloneBuilder},
+        entity::{Entity, EntityClonerBuilder},
         resource::Resource,
         system::{Commands, EntityCommands},
         world::{DeferredWorld, EntityWorldMut, FromWorld, World},
@@ -386,7 +386,7 @@ fn move_with_despawn_at_out_of_log(
     target: Entity,
     components: Box<[ComponentId]>,
 ) {
-    let mut builder = EntityCloneBuilder::new(world);
+    let mut builder = EntityClonerBuilder::new(world);
     builder
         .deny_all()
         .without_required_components(|builder| {

@@ -7,9 +7,9 @@ use std::{
 use bevy::{
     ecs::{
         archetype::ArchetypeId,
-        bundle::{Bundle, InsertMode},
+        bundle::{Bundle, BundleEffect, InsertMode, NoBundleEffect},
         component::ComponentId,
-        entity::{Entity, EntityCloneBuilder},
+        entity::Entity,
         resource::Resource,
         result::Result as CommandResult,
         system::{Command, Commands},
@@ -52,7 +52,7 @@ impl RevCommands for Commands<'_, '_> {
 pub fn rev_spawn_batch<I>(bundles_iter: I) -> impl Command
 where
     I: IntoIterator + Send + Sync + 'static,
-    I::Item: Bundle,
+    I::Item: Bundle<Effect: NoBundleEffect>,
 {
     #[derive(Clone)]
     struct SpawnBatch(Box<[Entity]>);
