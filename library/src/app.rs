@@ -9,6 +9,7 @@ use bevy::{
 
 use crate::{
     meta::RevMeta,
+    prelude::RevDisabled,
     schedule::{IntoRevSystemConfigs, IntoRevSystemSetConfigs, RevSchedule},
 };
 
@@ -112,5 +113,6 @@ impl Plugin for RevSystemsPlugin {
             }
             Self::AddMeta(..) => {}
         }
+        app.register_disabling_component::<RevDisabled>();
     }
 }
