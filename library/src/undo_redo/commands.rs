@@ -1,13 +1,7 @@
-use std::{
-    any::TypeId,
-    hash::Hash,
-    mem::take,
-};
-
 use bevy::{
     ecs::{
         archetype::ArchetypeId,
-        bundle::{Bundle, BundleEffect, InsertMode, NoBundleEffect},
+        bundle::{Bundle, InsertMode, NoBundleEffect},
         component::ComponentId,
         entity::Entity,
         resource::Resource,
@@ -21,10 +15,11 @@ use bevy::{
     },
 };
 
+use crate::undo_redo::ReplaceComponents;
+
 use super::{
     archetype_insert_if_new, archetype_insert_replace, archetype_insert_replace_backup,
-    empty_entity_scope, get_bundle_id, move_with_despawn_at_out_of_log, BuffersUndoRedo,
-    RevDisabled, UndoRedo,
+    EmptyEntityScope, get_bundle_id, BuffersUndoRedo, DespawnAtOutOfLog, RevDisabled, UndoRedo,
 };
 
 pub trait RevCommands {
@@ -55,43 +50,35 @@ where
     I::Item: Bundle<Effect: NoBundleEffect>,
 {
     #[derive(Clone)]
-    struct SpawnBatch(Box<[Entity]>);
+    struct SpawnBatch {
+        entities: Box<[Entity]>,
+        marker: DespawnAtOutOfLog,
+    }
 
     impl UndoRedo for SpawnBatch {
         fn undo(&mut self, world: &mut World) {
-            world.insert_batch(self.0.iter().cloned().map(|entity| (entity, RevDisabled)));
+            world.insert_batch(
+                self.entities
+                    .iter()
+                    .cloned()
+                    .map(|entity| (entity, (RevDisabled, self.marker))),
+            );
         }
         fn redo(&mut self, world: &mut World) {
-            let component_id = world
-                .component_id::<RevDisabled>()
-                .expect("undo should have registered Disabled");
             let mut commands = world.commands();
-            for &entity in &*self.0 {
-                commands.entity(entity).remove_by_id(component_id);
+            for &entity in &*self.entities {
+                commands
+                    .entity(entity)
+                    .remove::<(RevDisabled, DespawnAtOutOfLog)>();
             }
             world.flush();
         }
     }
 
     |world: &mut World| {
-        let entities: Box<[Entity]> = world.spawn_batch(bundles_iter).collect();
-
-        if let Some(disabled_id) = world.component_id::<RevDisabled>() {
-            const BUNDLE_EXPECT: &'static str =
-                "iterated SpawnBatchIter should have registered bundle";
-            let bundles = world.bundles();
-            let bundle_id = bundles
-                .get_id(TypeId::of::<I::Item>())
-                .expect(BUNDLE_EXPECT);
-            let bundle_info = bundles.get(bundle_id).expect(BUNDLE_EXPECT);
-
-            if bundle_info.contributed_components().contains(&disabled_id) {
-                //world.buffer_finalize(SpawnBatch(entities));
-                return;
-            }
-        }
-
-        //world.buffer_undo_redo_finalize(SpawnBatch(Arc::from(entities)));
+        let entities = world.spawn_batch(bundles_iter).collect();
+        let marker = DespawnAtOutOfLog::from_world(world);
+        world.buffer_undo_redo(SpawnBatch { entities, marker });
     }
 }
 
@@ -102,7 +89,7 @@ where
 pub fn rev_insert_batch<I, B>(batch: I, insert_mode: InsertMode) -> impl Command<CommandResult>
 where
     I: IntoIterator<Item = (Entity, B)> + Send + Sync + 'static,
-    B: Bundle,
+    B: Bundle<Effect: NoBundleEffect>,
 {
     struct InsertBatchKeep {
         entity_buffer_pairs: Box<[(Entity, Entity)]>,
@@ -111,19 +98,12 @@ where
 
     impl InsertBatchKeep {
         fn undo_redo<const UNDO: bool>(&self, world: &mut World) {
+            let mut mover = DespawnAtOutOfLog::move_with(world, self.components.clone());
             for &(entity, buffer) in self.entity_buffer_pairs.iter() {
-                let components = self.components.clone();
-                let mut builder = EntityCloneBuilder::new(world);
-                builder
-                    .deny_all()
-                    .without_required_components(|builder| {
-                        builder.allow_by_ids(components);
-                    })
-                    .move_components(true);
                 if UNDO {
-                    builder.clone_entity(entity, buffer);
+                    mover.clone_entity(world, entity, buffer);
                 } else {
-                    builder.clone_entity(buffer, entity);
+                    mover.clone_entity(world, buffer, entity);
                 }
             }
         }
@@ -148,57 +128,29 @@ where
         components: ReplaceComponents,
     }
 
-    #[derive(PartialEq, Eq, Hash)]
-    struct ReplaceComponents {
-        insert: Box<[ComponentId]>,
-        backup: Box<[ComponentId]>,
-    }
-
     impl InsertBatchReplace {
         fn init(&self, world: &mut World) {
-            for &(entity, buffer) in self.entity_buffer_pairs.iter().rev() {
-                move_with_despawn_at_out_of_log(
-                    world,
-                    entity,
-                    buffer,
-                    self.components.backup.clone(),
-                );
+            let mut mover = DespawnAtOutOfLog::move_with(world, self.components.backup.clone());
+            for &(entity, buffer) in self.entity_buffer_pairs.iter() {
+                mover.clone_entity(world, entity, buffer);
             }
         }
         fn undo_redo<const UNDO: bool>(&mut self, world: &mut World) {
             let mut iter = self.entity_buffer_pairs.iter_mut();
             let mut next_pair = || {
                 if UNDO {
-                    iter.next()
-                } else {
                     iter.next_back()
+                } else {
+                    iter.next()
                 }
             };
-            let (components1, components2) = if UNDO {
-                (&self.components.insert, &self.components.backup)
-            } else {
-                (&self.components.backup, &self.components.insert)
-            };
-
-            empty_entity_scope(world, |world, empty_entity| {
-                /*
-                E1    E2    E3      E1    E2    E3
-                mt    b1    b2      b1    b2    mt
-                  \  /  \  /    ->    \  /  \  /
-                   e1    e2            e1    e2
-                 */
-                let original_empty = *empty_entity;
+            let (mut mover1, mut mover2) = self.components.movers::<UNDO>(world);
+            world.empty_entity_scope(|world, empty_entity| {
                 while let Some((entity, buffer)) = next_pair() {
-                    move_with_despawn_at_out_of_log(
-                        world,
-                        *entity,
-                        *empty_entity,
-                        components1.clone(),
-                    );
-                    move_with_despawn_at_out_of_log(world, *buffer, *entity, components2.clone());
-                    std::mem::swap(buffer, empty_entity); // todo Problem: updated nicht InsertBatchBuffers
+                    mover1.clone_entity(world, *entity, *empty_entity);
+                    mover2.clone_entity(world, *buffer, *entity);
+                    std::mem::swap(buffer, empty_entity);
                 }
-                todo!()
             })
         }
     }
@@ -212,14 +164,14 @@ where
         }
     }
 
-    fn update_entry<K: Hash>(
+    fn update_entry<K: std::hash::Hash>(
         entry: Entry<K, Vec<Entity>, FixedHasher>,
         entities: &mut Vec<Entity>,
     ) {
         match entry {
             Entry::Occupied(mut occupied) => occupied.get_mut().append(entities),
             Entry::Vacant(vacant) => {
-                vacant.insert(take(entities));
+                vacant.insert(std::mem::take(entities));
             }
         }
     }
@@ -277,7 +229,6 @@ where
                 .collect();
             world.buffer_undo_redo(replace);
         }
-        //world.buffer_finalize(InsertBatchBuffers(buffer_entities));
     }
 
     move |world: &mut World| {
