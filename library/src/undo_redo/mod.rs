@@ -10,7 +10,7 @@ use bevy::{
         archetype::Archetype,
         bundle::{Bundle, BundleId, BundleInfo},
         component::{Component, ComponentId},
-        entity::{Entity, EntityClonerBuilder},
+        entity::{Entity, EntityCloner, EntityClonerBuilder},
         resource::Resource,
         system::{Commands, EntityCommands},
         world::{DeferredWorld, EntityWorldMut, FromWorld, World},
@@ -217,6 +217,32 @@ impl DespawnAtOutOfLog {
     pub fn added_at(self) -> u64 {
         self.0
     }
+    pub fn move_with(
+        world: &mut World,
+        components: impl IntoIterator<Item = ComponentId> + Send + Sync + 'static,
+    ) -> EntityCloner {
+        let mut builder = EntityCloner::build(world);
+        Self::move_with_inner(&mut builder, components);
+        builder.finish()
+    }
+    pub fn entity_move_with(
+        source: &mut EntityWorldMut,
+        target: Entity,
+        components: impl IntoIterator<Item = ComponentId> + Send + Sync + 'static,
+    ) {
+        source.clone_with(target, |builder| Self::move_with_inner(builder, components));
+    }
+    fn move_with_inner(
+        builder: &mut EntityClonerBuilder,
+        components: impl IntoIterator<Item = ComponentId> + Send + Sync + 'static
+    ) {
+        builder
+            .deny_all()
+            .without_required_components(move |builder| {
+                builder.allow_by_ids(components).allow::<Self>();
+            })
+            .move_components(true);
+    }
 }
 
 impl FromWorld for DespawnAtOutOfLog {
@@ -325,33 +351,35 @@ impl<'a> Display for UndoRedoLogError<'a> {
 
 impl<'a> Error for UndoRedoLogError<'a> {}
 
-/// Get a scope of the world and an entity id that is empty.
-///
-/// When the closure returns, the entity is cleared from any remaining components.
-///
-/// The entity may be changed, for example when components are moved into it and another
-/// entity became empty. One should not otherwise put any assumptions on the entity
-/// after returning as other code calling this method may change the empty entity as well.
-pub fn empty_entity_scope<Out>(
-    world: &mut World,
-    c: impl FnOnce(&mut World, &mut Entity) -> Out,
-) -> Out {
-    #[derive(Resource)]
-    struct EmptyEntity(Entity);
+#[derive(Resource)]
+struct EmptyEntity(Entity);
 
-    impl FromWorld for EmptyEntity {
-        fn from_world(world: &mut World) -> Self {
-            // do not just take any existing empty entity, it likely belongs to other logic
-            Self(world.spawn_empty().id())
-        }
+impl FromWorld for EmptyEntity {
+    fn from_world(world: &mut World) -> Self {
+        // do not just take any existing empty entity, it likely belongs to other logic
+        Self(world.spawn_empty().id())
     }
+}
+pub trait EmptyEntityScope {
+    /// Get a scope of the world and an entity id that is empty.
+    ///
+    /// When the closure returns, the entity is cleared from any remaining components.
+    ///
+    /// The entity may be changed, for example when components are moved into it and another
+    /// entity became empty. One should not otherwise put any assumptions on the entity
+    /// after returning as other code calling this method may change the empty entity as well.
+    fn empty_entity_scope<Out>(&mut self, c: impl FnOnce(&mut Self, &mut Entity) -> Out) -> Out;
+}
 
-    world.init_resource::<EmptyEntity>();
-    world.resource_scope::<EmptyEntity, Out>(|world, mut entity| {
-        let out = c(world, &mut entity.0);
-        world.entity_mut(entity.0).clear();
-        out
-    })
+impl EmptyEntityScope for World {
+    fn empty_entity_scope<Out>(&mut self, c: impl FnOnce(&mut Self, &mut Entity) -> Out) -> Out {
+        self.init_resource::<EmptyEntity>();
+        self.resource_scope::<EmptyEntity, Out>(|world, mut entity| {
+            let out = c(world, &mut entity.0);
+            world.entity_mut(entity.0).clear();
+            out
+        })
+    }
 }
 
 fn archetype_insert_if_new(bundle_info: &BundleInfo, archetype: &Archetype) -> Box<[ComponentId]> {
@@ -379,28 +407,9 @@ fn archetype_insert_replace_backup(
         .collect()
 }
 
-// todo: ideally the builder does not need to be rebuilt each time but only the entities need to switch
-fn move_with_despawn_at_out_of_log(
-    world: &mut World,
-    source: Entity,
-    target: Entity,
-    components: Box<[ComponentId]>,
-) {
-    let mut builder = EntityClonerBuilder::new(world);
-    builder
-        .deny_all()
-        .without_required_components(|builder| {
-            builder
-                .allow_by_ids(components)
-                .allow::<DespawnAtOutOfLog>();
-        })
-        .move_components(true);
-    builder.clone_entity(source, target);
-}
-
 /// todo workaround until manual bundle registration is possible
 fn get_bundle_id<T: Bundle>(world: &mut World) -> BundleId {
-    empty_entity_scope(world, |world, empty_entity| {
+    world.empty_entity_scope(|world, empty_entity| {
         let type_id = TypeId::of::<T>();
         if let Some(id) = world.bundles().get_id(type_id) {
             return id;
@@ -411,4 +420,26 @@ fn get_bundle_id<T: Bundle>(world: &mut World) -> BundleId {
             .get_id(type_id)
             .expect("above command should have registered bundle")
     })
+}
+
+#[derive(PartialEq, Eq, Hash)]
+struct ReplaceComponents {
+    insert: Box<[ComponentId]>,
+    backup: Box<[ComponentId]>,
+}
+
+impl ReplaceComponents {
+    fn movers<const UNDO: bool>(&self, world: &mut World) -> (EntityCloner, EntityCloner) {
+        if UNDO {
+            (
+                DespawnAtOutOfLog::move_with(world, self.insert.clone()),
+                DespawnAtOutOfLog::move_with(world, self.backup.clone()),
+            )
+        } else {
+            (
+                DespawnAtOutOfLog::move_with(world, self.backup.clone()),
+                DespawnAtOutOfLog::move_with(world, self.insert.clone()),
+            )
+        }
+    }
 }
