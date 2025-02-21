@@ -1,7 +1,7 @@
 use bevy::ecs::{
     bundle::{Bundle, InsertMode},
     component::{Component, ComponentId},
-    entity::{Entity, EntityCloneBuilder},
+    entity::Entity,
     system::{
         entity_command::{insert, insert_if_new},
         EntityCommand,
@@ -19,50 +19,19 @@ pub fn rev_insert<B: Bundle>(bundle: B) -> impl EntityCommand {
     struct RevInsert {
         entity: Entity,
         buffer: Entity,
-        insert: Box<[ComponentId]>,
-        backup: Box<[ComponentId]>,
+        components: ReplaceComponents
     }
 
     impl RevInsert {
         fn init(&self, world: &mut World) {
-            let mut builder = EntityCloneBuilder::new(world);
-            let components = self.backup.clone();
-            builder
-                .deny_all()
-                .without_required_components(|builder| {
-                    builder.allow_by_ids(components);
-                })
-                .move_components(true);
-            builder.clone_entity(self.entity, self.buffer);
+            DespawnAtOutOfLog::move_with(world, self.components.backup.clone())
+                .clone_entity(world, self.entity, self.buffer);
         }
         fn undo_redo<const UNDO: bool>(&mut self, world: &mut World) {
-            let (components1, components2) = if UNDO {
-                (&self.insert, &self.backup)
-            } else {
-                (&self.backup, &self.insert)
-            };
-
-            empty_entity_scope(world, |world, empty_entity| {
-                let mut builder = EntityCloneBuilder::new(world);
-                let components1 = components1.clone();
-                builder
-                    .deny_all()
-                    .without_required_components(|builder| {
-                        builder.allow_by_ids(components1);
-                    })
-                    .move_components(true);
-                builder.clone_entity(self.entity, *empty_entity);
-
-                let mut builder = EntityCloneBuilder::new(world);
-                let components2 = components2.clone();
-                builder
-                    .deny_all()
-                    .without_required_components(|builder| {
-                        builder.allow_by_ids(components2);
-                    })
-                    .move_components(true);
-                builder.clone_entity(self.buffer, self.entity);
-
+            let (mut mover1, mut mover2) = self.components.movers::<UNDO>(world);
+            world.empty_entity_scope(|world, empty_entity| {
+                mover1.clone_entity(world, self.entity, *empty_entity);
+                mover2.clone_entity(world, self.buffer, self.entity);
                 std::mem::swap(&mut self.buffer, empty_entity);
             })
         }
@@ -77,7 +46,35 @@ pub fn rev_insert<B: Bundle>(bundle: B) -> impl EntityCommand {
         }
     }
 
-    todo!()
+    move |mut entity: EntityWorldMut| {
+        let bundle_id = unsafe {
+            // SAFETY: get_bundle_id removes a bundle form another empty entity, current entity is unaffected
+            get_bundle_id::<B>(entity.world_mut())
+        };
+        let bundle_info = entity.world().bundles().get(bundle_id).expect("todo");
+        let backup = archetype_insert_replace_backup(bundle_info, entity.archetype());
+        if backup.is_empty() {
+            rev_insert_if_new(bundle);
+            return;
+        }
+        let insert = archetype_insert_replace(bundle_info, entity.archetype());
+        let id = entity.id();
+        entity.world_scope(|world| {
+            let marker = DespawnAtOutOfLog::from_world(world);
+            let buffer = world.spawn(marker).id();
+            let undo_redo = RevInsert {
+                entity: id,
+                buffer,
+                components: ReplaceComponents {
+                    insert,
+                    backup
+                }
+            };
+            undo_redo.init(world);
+            world.buffer_undo_redo(undo_redo);
+        });
+        entity.insert(bundle);
+    }
 }
 
 /// Reversible version of [`insert_if_new`](bevy::ecs::system::entity_command::insert_if_new).
@@ -93,18 +90,12 @@ pub fn rev_insert_if_new<B: Bundle>(bundle: B) -> impl EntityCommand {
 
     impl RevInsertIfNew {
         fn undo_redo<const UNDO: bool>(&self, world: &mut World) {
-            let components = self.components.clone();
-            let mut builder = EntityCloneBuilder::new(world);
-            builder
-                .deny_all()
-                .without_required_components(|builder| {
-                    builder.allow_by_ids(components);
-                })
-                .move_components(true);
+            // todo falsch, DespawnAtOutOfLog nicht bewegen!
+            let mut mover = DespawnAtOutOfLog::move_with(world, self.components.clone());
             if UNDO {
-                builder.clone_entity(self.entity, self.buffer);
+                mover.clone_entity(world, self.entity, self.buffer);
             } else {
-                builder.clone_entity(self.buffer, self.entity);
+                mover.clone_entity(world, self.buffer, self.entity);
             }
         }
     }
@@ -117,18 +108,7 @@ pub fn rev_insert_if_new<B: Bundle>(bundle: B) -> impl EntityCommand {
             self.undo_redo::<false>(world);
         }
     }
-
-    struct RevInsertIfNewBuffer(Entity);
-    /*
-        impl Finalize for RevInsertIfNewBuffer {
-            fn finalize_redone(self: Box<Self>, world: &mut World) {
-                world.despawn(self.0);
-            }
-            fn finalize_undone(self: Box<Self>, world: &mut World) {
-                world.despawn(self.0);
-            }
-        }
-    */
+    
     move |mut entity: EntityWorldMut| {
         let bundle_id = unsafe {
             // SAFETY: does not change current entity's location, only registers bundle by removing it from an empty entity
