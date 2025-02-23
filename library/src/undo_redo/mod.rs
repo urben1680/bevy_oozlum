@@ -10,7 +10,7 @@ use bevy::{
         archetype::Archetype,
         bundle::{Bundle, BundleId, BundleInfo},
         component::{Component, ComponentId},
-        entity::{Entity, EntityCloner, EntityClonerBuilder},
+        entity::{Entity, EntityCloner},
         resource::Resource,
         system::{Commands, EntityCommands},
         world::{DeferredWorld, EntityWorldMut, FromWorld, World},
@@ -206,6 +206,20 @@ impl<T: UndoRedo> UndoRedo for Box<[T]> {
     }
 }
 
+fn move_components(world: &mut World, components: Box<[ComponentId]>, with_despawn_at_out_of_log: bool) -> EntityCloner {
+    let mut builder = EntityCloner::build(world);
+    builder
+        .deny_all()
+        .without_required_components(move |builder| {
+            builder.allow_by_ids(components);
+            if with_despawn_at_out_of_log {
+                builder.allow::<DespawnAtOutOfLog>();
+            }
+        })
+        .move_components(true);
+    builder.finish()
+}
+
 #[derive(Component, Clone, Copy, Debug, Hash, PartialOrd, Ord, PartialEq, Eq)]
 #[component(immutable)]
 pub struct DespawnAtOutOfLog(u64);
@@ -216,32 +230,6 @@ impl DespawnAtOutOfLog {
     }
     pub fn added_at(self) -> u64 {
         self.0
-    }
-    pub fn move_with(
-        world: &mut World,
-        components: impl IntoIterator<Item = ComponentId> + Send + Sync + 'static,
-    ) -> EntityCloner {
-        let mut builder = EntityCloner::build(world);
-        Self::move_with_inner(&mut builder, components);
-        builder.finish()
-    }
-    pub fn entity_move_with(
-        source: &mut EntityWorldMut,
-        target: Entity,
-        components: impl IntoIterator<Item = ComponentId> + Send + Sync + 'static,
-    ) {
-        source.clone_with(target, |builder| Self::move_with_inner(builder, components));
-    }
-    fn move_with_inner(
-        builder: &mut EntityClonerBuilder,
-        components: impl IntoIterator<Item = ComponentId> + Send + Sync + 'static
-    ) {
-        builder
-            .deny_all()
-            .without_required_components(move |builder| {
-                builder.allow_by_ids(components).allow::<Self>();
-            })
-            .move_components(true);
     }
 }
 
@@ -432,13 +420,13 @@ impl ReplaceComponents {
     fn movers<const UNDO: bool>(&self, world: &mut World) -> (EntityCloner, EntityCloner) {
         if UNDO {
             (
-                DespawnAtOutOfLog::move_with(world, self.insert.clone()),
-                DespawnAtOutOfLog::move_with(world, self.backup.clone()),
+                move_components(world, self.insert.clone(), true),
+                move_components(world, self.backup.clone(), true),
             )
         } else {
             (
-                DespawnAtOutOfLog::move_with(world, self.backup.clone()),
-                DespawnAtOutOfLog::move_with(world, self.insert.clone()),
+                move_components(world, self.backup.clone(), true),
+                move_components(world, self.insert.clone(), true),
             )
         }
     }

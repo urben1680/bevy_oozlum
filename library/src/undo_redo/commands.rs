@@ -15,7 +15,7 @@ use bevy::{
     },
 };
 
-use crate::undo_redo::ReplaceComponents;
+use crate::undo_redo::{move_components, ReplaceComponents};
 
 use super::{
     archetype_insert_if_new, archetype_insert_replace, archetype_insert_replace_backup,
@@ -98,7 +98,7 @@ where
 
     impl InsertBatchKeep {
         fn undo_redo<const UNDO: bool>(&self, world: &mut World) {
-            let mut mover = DespawnAtOutOfLog::move_with(world, self.components.clone());
+            let mut mover = move_components(world, self.components.clone(), false);
             for &(entity, buffer) in self.entity_buffer_pairs.iter() {
                 if UNDO {
                     mover.clone_entity(world, entity, buffer);
@@ -130,7 +130,7 @@ where
 
     impl InsertBatchReplace {
         fn init(&self, world: &mut World) {
-            let mut mover = DespawnAtOutOfLog::move_with(world, self.components.backup.clone());
+            let mut mover = move_components(world, self.components.backup.clone(), false);
             for &(entity, buffer) in self.entity_buffer_pairs.iter() {
                 mover.clone_entity(world, entity, buffer);
             }

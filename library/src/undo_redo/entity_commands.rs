@@ -2,18 +2,13 @@ use bevy::ecs::{
     bundle::{Bundle, InsertMode},
     component::{Component, ComponentId},
     entity::Entity,
-    system::{
-        entity_command::{insert, insert_if_new},
-        EntityCommand,
-    },
+    system::EntityCommand,
     world::FromWorld,
 };
 
 use super::*;
 
 /// Reversible version of [`insert`](bevy::ecs::system::entity_command::insert).
-/// An [`EntityCommand`] that adds the components in a [`Bundle`] to an entity,
-/// replacing any that were already present.
 #[track_caller]
 pub fn rev_insert<B: Bundle>(bundle: B) -> impl EntityCommand {
     struct RevInsert {
@@ -24,7 +19,7 @@ pub fn rev_insert<B: Bundle>(bundle: B) -> impl EntityCommand {
 
     impl RevInsert {
         fn init(&self, world: &mut World) {
-            DespawnAtOutOfLog::move_with(world, self.components.backup.clone())
+            move_components(world, self.components.backup.clone(), false)
                 .clone_entity(world, self.entity, self.buffer);
         }
         fn undo_redo<const UNDO: bool>(&mut self, world: &mut World) {
@@ -78,8 +73,6 @@ pub fn rev_insert<B: Bundle>(bundle: B) -> impl EntityCommand {
 }
 
 /// Reversible version of [`insert_if_new`](bevy::ecs::system::entity_command::insert_if_new).
-/// An [`EntityCommand`] that adds the components in a [`Bundle`] to an entity,
-/// except for any that were already present.
 #[track_caller]
 pub fn rev_insert_if_new<B: Bundle>(bundle: B) -> impl EntityCommand {
     struct RevInsertIfNew {
@@ -91,7 +84,7 @@ pub fn rev_insert_if_new<B: Bundle>(bundle: B) -> impl EntityCommand {
     impl RevInsertIfNew {
         fn undo_redo<const UNDO: bool>(&self, world: &mut World) {
             // todo falsch, DespawnAtOutOfLog nicht bewegen!
-            let mut mover = DespawnAtOutOfLog::move_with(world, self.components.clone());
+            let mut mover = move_components(world, self.components.clone(), false);
             if UNDO {
                 mover.clone_entity(world, self.entity, self.buffer);
             } else {
@@ -121,15 +114,12 @@ pub fn rev_insert_if_new<B: Bundle>(bundle: B) -> impl EntityCommand {
             buffer,
             components: archetype_insert_if_new(bundle_info, entity.archetype()),
         };
-        entity
-            .buffer_undo_redo(undo_redo)
-            .buffer_finalize(RevInsertIfNewBuffer(buffer));
-        insert_if_new(bundle);
+        entity.buffer_undo_redo(undo_redo);
+        entity.insert_if_new(bundle);
     }
 }
 
 /// Reversible version of [`insert_by_id`](bevy::ecs::system::entity_command::insert_by_id).
-/// An [`EntityCommand`] that adds a dynamic component to an entity.
 #[track_caller]
 pub fn rev_insert_by_id<T: Send + 'static>(
     component_id: ComponentId,
