@@ -233,13 +233,6 @@ fn system_command<const N: u8>(world: &mut World) {
     world.buffer_undo_redo(test);
 }
 
-#[derive(Clone, Copy)]
-enum TestEndVariant {
-    SkipLogAndFinalize,
-    FinalizeRedone,
-    FinalizeUndone,
-}
-
 fn test_run<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
     configs: Vec<C>,
     expected: Vec<Vec<TestBundle>>,

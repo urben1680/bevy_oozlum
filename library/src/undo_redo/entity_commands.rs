@@ -136,6 +136,7 @@ pub unsafe fn rev_insert_by_id<T: Component + Send + 'static>(
 ) -> impl EntityCommand {
     move |mut entity: EntityWorldMut| {
         let components = |include_component: bool| -> Box<[ComponentId]> {
+            let archetype = entity.archetype();
             entity
                 .world()
                 .components()
@@ -143,7 +144,7 @@ pub unsafe fn rev_insert_by_id<T: Component + Send + 'static>(
                 .expect("todo")
                 .required_components()
                 .iter_ids()
-                .filter(|component_id| !entity.archetype().contains(*component_id))
+                .filter(|component_id| !archetype.contains(*component_id))
                 .chain(include_component.then_some(component_id))
                 .collect()
         };
