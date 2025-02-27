@@ -18,8 +18,8 @@ use bevy::{
 use crate::undo_redo::{move_components, ReplaceComponents};
 
 use super::{
-    archetype_insert_if_new, archetype_insert_replace, archetype_insert_replace_backup,
-    EmptyEntityScope, get_bundle_id, BuffersUndoRedo, DespawnAtOutOfLog, RevDisabled, UndoRedo,
+    archetype_insert_keep, archetype_insert_replace, archetype_insert_replace_backup,
+    BuffersUndoRedo, DespawnAtOutOfLog, EmptyEntityScope, RevDisabled, UndoRedo,
 };
 
 pub trait RevCommands {
@@ -98,7 +98,7 @@ where
 
     impl InsertBatchKeep {
         fn undo_redo<const UNDO: bool>(&self, world: &mut World) {
-            let mut mover = move_components(world, self.components.clone(), false);
+            let mut mover = move_components(world, self.components.iter().copied(), false);
             for &(entity, buffer) in self.entity_buffer_pairs.iter() {
                 if UNDO {
                     mover.clone_entity(world, entity, buffer);
@@ -125,12 +125,12 @@ where
         ///
         /// Undoing/Redoing this makes the empty state bubble through the buffer entities.
         entity_buffer_pairs: Box<[(Entity, Entity)]>,
-        components: ReplaceComponents,
+        components: ReplaceComponents<Box<[ComponentId]>, Box<[ComponentId]>>,
     }
 
     impl InsertBatchReplace {
         fn init(&self, world: &mut World) {
-            let mut mover = move_components(world, self.components.backup.clone(), false);
+            let mut mover = move_components(world, self.components.backup.iter().copied(), false);
             for &(entity, buffer) in self.entity_buffer_pairs.iter() {
                 mover.clone_entity(world, entity, buffer);
             }
@@ -181,16 +181,18 @@ where
         mut entities_per_archetype: HashMap<ArchetypeId, Vec<Entity>>,
         len: usize,
     ) {
-        let bundle_id = get_bundle_id::<B>(world);
-        let bundle_info = world.bundles().get(bundle_id).expect("todo");
+        let bundle_id = world.register_bundle::<B>().id();
+        let bundle_info = world.bundles().get(bundle_id).unwrap();
         let mut entities_per_insert_components: HashMap<Box<[ComponentId]>, Vec<Entity>> =
             Default::default();
-        let mut entities_per_replace_components: HashMap<ReplaceComponents, Vec<Entity>> =
-            Default::default();
+        let mut entities_per_replace_components: HashMap<
+            ReplaceComponents<Box<[ComponentId]>, Box<[ComponentId]>>,
+            Vec<Entity>,
+        > = Default::default();
         for (archetype_id, entities) in entities_per_archetype.iter_mut() {
             let archetype = world.archetypes().get(*archetype_id).expect("todo");
             if KEEP {
-                let mut keep = archetype_insert_if_new(bundle_info, archetype);
+                let mut keep = archetype_insert_keep(bundle_info, archetype);
                 keep.sort();
                 update_entry(entities_per_insert_components.entry(keep), entities);
             } else {
