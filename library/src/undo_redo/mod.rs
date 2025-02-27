@@ -1,5 +1,4 @@
 use std::{
-    any::TypeId,
     collections::VecDeque,
     error::Error,
     fmt::{Debug, Display},
@@ -8,7 +7,7 @@ use std::{
 use bevy::{
     ecs::{
         archetype::Archetype,
-        bundle::{Bundle, BundleId, BundleInfo},
+        bundle::BundleInfo,
         component::{Component, ComponentId},
         entity::{Entity, EntityCloner},
         resource::Resource,
@@ -206,20 +205,6 @@ impl<T: UndoRedo> UndoRedo for Box<[T]> {
     }
 }
 
-fn move_components(world: &mut World, components: Box<[ComponentId]>, with_despawn_at_out_of_log: bool) -> EntityCloner {
-    let mut builder = EntityCloner::build(world);
-    builder
-        .deny_all()
-        .without_required_components(move |builder| {
-            builder.allow_by_ids(components);
-            if with_despawn_at_out_of_log {
-                builder.allow::<DespawnAtOutOfLog>();
-            }
-        })
-        .move_components(true);
-    builder.finish()
-}
-
 #[derive(Component, Clone, Copy, Debug, Hash, PartialOrd, Ord, PartialEq, Eq)]
 #[component(immutable)]
 pub struct DespawnAtOutOfLog(u64);
@@ -370,7 +355,7 @@ impl EmptyEntityScope for World {
     }
 }
 
-fn archetype_insert_if_new(bundle_info: &BundleInfo, archetype: &Archetype) -> Box<[ComponentId]> {
+fn archetype_insert_keep(bundle_info: &BundleInfo, archetype: &Archetype) -> Box<[ComponentId]> {
     bundle_info
         .iter_contributed_components()
         .filter(|component_id| !archetype.contains(*component_id))
@@ -395,39 +380,46 @@ fn archetype_insert_replace_backup(
         .collect()
 }
 
-/// todo workaround until manual bundle registration is possible
-fn get_bundle_id<T: Bundle>(world: &mut World) -> BundleId {
-    world.empty_entity_scope(|world, empty_entity| {
-        let type_id = TypeId::of::<T>();
-        if let Some(id) = world.bundles().get_id(type_id) {
-            return id;
-        }
-        world.entity_mut(*empty_entity).remove::<T>();
-        world
-            .bundles()
-            .get_id(type_id)
-            .expect("above command should have registered bundle")
-    })
-}
-
 #[derive(PartialEq, Eq, Hash)]
-struct ReplaceComponents {
-    insert: Box<[ComponentId]>,
-    backup: Box<[ComponentId]>,
+struct ReplaceComponents<Insert = [ComponentId; 1], Backup = [ComponentId; 1]> {
+    insert: Insert,
+    backup: Backup,
 }
 
-impl ReplaceComponents {
+impl<Insert, Backup> ReplaceComponents<Insert, Backup>
+where
+    for<'a> &'a Insert: IntoIterator<Item = &'a ComponentId>,
+    for<'a> &'a Backup: IntoIterator<Item = &'a ComponentId>,
+{
     fn movers<const UNDO: bool>(&self, world: &mut World) -> (EntityCloner, EntityCloner) {
         if UNDO {
             (
-                move_components(world, self.insert.clone(), true),
-                move_components(world, self.backup.clone(), true),
+                move_components(world, (&self.insert).into_iter().copied(), true),
+                move_components(world, (&self.backup).into_iter().copied(), true),
             )
         } else {
             (
-                move_components(world, self.backup.clone(), true),
-                move_components(world, self.insert.clone(), true),
+                move_components(world, (&self.backup).into_iter().copied(), true),
+                move_components(world, (&self.insert).into_iter().copied(), true),
             )
         }
     }
+}
+
+fn move_components(
+    world: &mut World,
+    components: impl Iterator<Item = ComponentId>,
+    with_despawn_at_out_of_log: bool,
+) -> EntityCloner {
+    let mut builder = EntityCloner::build(world);
+    builder
+        .deny_all()
+        .without_required_components(move |builder| {
+            builder.allow_by_ids(components);
+            if with_despawn_at_out_of_log {
+                builder.allow::<DespawnAtOutOfLog>();
+            }
+        })
+        .move_components(true);
+    builder.finish()
 }
