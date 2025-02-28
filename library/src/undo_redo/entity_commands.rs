@@ -1,12 +1,192 @@
-use bevy::ecs::{
-    bundle::{Bundle, InsertMode},
+use bevy::{ecs::{
+    bundle::{Bundle, BundleId, InsertMode},
     component::{Component, ComponentId},
-    entity::Entity,
+    entity::{Entity, EntityClonerBuilder},
     system::{entity_command::insert_by_id, EntityCommand},
-    world::FromWorld,
-};
+    world::{FromWorld, OccupiedEntry},
+}, ptr::OwningPtr};
 
 use super::*;
+
+pub trait RevEntityWorldMut {
+    /// Reversible version of [`modify_component`](EntityWorldMut::insert).
+    fn rev_insert<T: Bundle>(&mut self, bundle: T) -> &mut Self;
+
+    /// Reversible version of [`modify_component`](EntityWorldMut::insert_if_new).
+    fn rev_insert_if_new<T: Bundle>(&mut self, bundle: T) -> &mut Self;
+
+    /// Reversible version of [`modify_component`](EntityWorldMut::insert_by_id).
+    ///
+    /// # Safety
+    ///
+    /// - [`ComponentId`] must be from the same world as [`EntityWorldMut`]
+    /// - [`OwningPtr`] must be a valid reference to the type represented by [`ComponentId`]
+    unsafe fn rev_insert_by_id(
+        &mut self,
+        component_id: ComponentId,
+        component: OwningPtr<'_>,
+    ) -> &mut Self;
+
+    /// Reversible version of [`modify_component`](EntityWorldMut::insert_by_ids).
+    ///
+    /// # Safety
+    /// 
+    /// - Each [`ComponentId`] must be from the same world as [`EntityWorldMut`]
+    /// - Each [`OwningPtr`] must be a valid reference to the type represented by [`ComponentId`]
+    unsafe fn rev_insert_by_ids<'a, I: Iterator<Item = OwningPtr<'a>>>(
+        &mut self,
+        component_ids: &[ComponentId],
+        iter_components: I,
+    ) -> &mut Self;
+
+    /// Reversible version of [`modify_component`](EntityWorldMut::remove).
+    fn rev_remove<T: Bundle>(&mut self) -> &mut Self;
+
+    /// Reversible version of [`modify_component`](EntityWorldMut::remove_with_requires).
+    fn rev_remove_with_requires<T: Bundle>(&mut self) -> &mut Self;
+
+    /// Reversible version of [`modify_component`](EntityWorldMut::retain).
+    fn rev_retain<T: Bundle>(&mut self) -> &mut Self;
+
+    /// Reversible version of [`modify_component`](EntityWorldMut::remove_by_id).
+    fn rev_remove_by_id(&mut self, component_id: ComponentId) -> &mut Self;
+
+    /// Reversible version of [`modify_component`](EntityWorldMut::remove_by_ids).
+    fn rev_remove_by_ids(&mut self, component_ids: &[ComponentId]) -> &mut Self;
+
+    /// Reversible version of [`modify_component`](EntityWorldMut::clear).
+    fn rev_clear(&mut self) -> &mut Self;
+
+    /// Reversible version of [`modify_component`](EntityWorldMut::despawn).
+    fn rev_despawn(self);
+
+    /// Reversible version of [`modify_component`](EntityWorldMut::despawn_recursive).
+    fn rev_despawn_recursive(self);
+
+    /// Reversible version of [`modify_component`](EntityWorldMut::is_despawned).
+    fn rev_is_despawned(&self) -> bool;
+
+    /// Reversible version of [`modify_component`](EntityWorldMut::clone_with).
+    fn rev_clone_with(
+        &mut self,
+        target: Entity,
+        config: impl FnOnce(&mut EntityClonerBuilder) + Send + Sync + 'static,
+    ) -> &mut Self;
+
+    /// Reversible version of [`modify_component`](EntityWorldMut::clone_and_spawn).
+    fn rev_clone_and_spawn(&mut self) -> Entity;
+
+    /// Reversible version of [`modify_component`](EntityWorldMut::clone_and_spawn_with).
+    fn rev_clone_and_spawn_with(
+        &mut self,
+        config: impl FnOnce(&mut EntityClonerBuilder) + Send + Sync + 'static,
+    ) -> Entity;
+
+    /// Reversible version of [`modify_component`](EntityWorldMut::clone_components).
+    fn rev_clone_components<B: Bundle>(&mut self, target: Entity) -> &mut Self;
+
+    /// Reversible version of [`modify_component`](EntityWorldMut::move_components).
+    fn rev_move_components<B: Bundle>(&mut self, target: Entity) -> &mut Self;
+}
+
+impl RevEntityWorldMut for EntityWorldMut<'_> {
+    fn rev_insert<T: Bundle>(&mut self, bundle: T) -> &mut Self {
+        insert_inner(self, bundle, InsertMode::Replace)
+    }
+
+    fn rev_insert_if_new<T: Bundle>(&mut self, bundle: T) -> &mut Self {
+        insert_inner(self, bundle, InsertMode::Keep)
+    }
+
+    unsafe fn rev_insert_by_id(
+        &mut self,
+        component_id: ComponentId,
+        component: OwningPtr<'_>,
+    ) -> &mut Self {
+        todo!()
+    }
+
+    unsafe fn rev_insert_by_ids<'a, I: Iterator<Item = OwningPtr<'a>>>(
+        &mut self,
+        component_ids: &[ComponentId],
+        iter_components: I,
+    ) -> &mut Self {
+        todo!()
+    }
+
+    fn rev_remove<T: Bundle>(&mut self) -> &mut Self {
+        remove_inner::<T, false>(self)
+    }
+
+    fn rev_remove_with_requires<T: Bundle>(&mut self) -> &mut Self {
+        remove_inner::<T, true>(self)
+    }
+
+    fn rev_retain<T: Bundle>(&mut self) -> &mut Self {
+        todo!()
+    }
+
+    fn rev_remove_by_id(&mut self, component_id: ComponentId) -> &mut Self {
+        todo!()
+    }
+
+    fn rev_remove_by_ids(&mut self, component_ids: &[ComponentId]) -> &mut Self {
+        todo!()
+    }
+
+    fn rev_clear(&mut self) -> &mut Self {
+        todo!()
+    }
+
+    fn rev_despawn(self) {
+        todo!()
+    }
+
+    fn rev_despawn_recursive(self) {
+        todo!()
+    }
+
+    fn rev_is_despawned(&self) -> bool {
+        todo!()
+    }
+
+    fn rev_clone_with(
+        &mut self,
+        target: Entity,
+        config: impl FnOnce(&mut EntityClonerBuilder) + Send + Sync + 'static,
+    ) -> &mut Self {
+        todo!()
+    }
+
+    fn rev_clone_and_spawn(&mut self) -> Entity {
+        todo!()
+    }
+
+    fn rev_clone_and_spawn_with(
+        &mut self,
+        config: impl FnOnce(&mut EntityClonerBuilder) + Send + Sync + 'static,
+    ) -> Entity {
+        todo!()
+    }
+
+    fn rev_clone_components<B: Bundle>(&mut self, target: Entity) -> &mut Self {
+        todo!()
+    }
+
+    fn rev_move_components<B: Bundle>(&mut self, target: Entity) -> &mut Self {
+        todo!()
+    }
+}
+
+pub trait RevEntry<'w, 'a, T: Component> {
+    fn insert_entry(self, component: T) -> OccupiedEntry<'w, 'a, T>;
+    fn or_insert(self, default: T) -> OccupiedEntry<'w, 'a, T>;
+    fn or_insert_with<F: FnOnce() -> T>(self, default: F) -> OccupiedEntry<'w, 'a, T>;
+}
+
+pub trait RevEntryDefault<'w, 'a, T: Component + Default> {
+    fn or_default(self) -> OccupiedEntry<'w, 'a, T>;
+}
 
 struct RevInsertKeep {
     entity: Entity,
@@ -78,21 +258,31 @@ where
     }
 }
 
-fn insert_inner<B: Bundle>(mut entity: EntityWorldMut, bundle: B, mode: InsertMode) {
-    let bundle_id = unsafe {
-        // SAFETY: registering bundle leaves entity location unaffected
-        entity.world_mut().register_bundle::<B>().id()
-    };
+fn bundle_id_and_buffer<B: Bundle>(entity: &mut EntityWorldMut) -> (BundleId, Entity) {
+    let marker = DespawnAtOutOfLog::from(entity.world());
+    unsafe {
+        // SAFETY: 
+        // - registering bundle
+        // - spawning a new entity
+        // ... leave the entity location unaffected
+        let world = entity.world_mut();
+        (
+            world.register_bundle::<B>().id(),
+            world.spawn(marker).id()
+        )
+    }
+}
+
+fn insert_inner<'a, 'w: 'a, B: Bundle>(entity: &'a mut EntityWorldMut<'w>, bundle: B, mode: InsertMode) -> &'a mut EntityWorldMut<'w> {
+    let (bundle_id, buffer) = bundle_id_and_buffer::<B>(entity);
     let bundle_info = entity.world().bundles().get(bundle_id).unwrap();
 
     if mode == InsertMode::Replace {
-        let backup = archetype_insert_replace_backup(bundle_info, entity.archetype());
+        let backup = archetype_insert_replace_remove(bundle_info, entity.archetype());
         if !backup.is_empty() {
             let insert = archetype_insert_replace(bundle_info, entity.archetype());
             let id = entity.id();
             entity.world_scope(|world| {
-                let marker = DespawnAtOutOfLog::from_world(world);
-                let buffer = world.spawn(marker).id();
                 let undo_redo = RevInsertReplace {
                     entity: id,
                     buffer,
@@ -102,24 +292,89 @@ fn insert_inner<B: Bundle>(mut entity: EntityWorldMut, bundle: B, mode: InsertMo
                 world.buffer_undo_redo(undo_redo);
             });
             entity.insert(bundle);
-            return;
+            return entity;
         }
     }
 
     let undo_redo = RevInsertKeep {
         entity: entity.id(),
-        buffer: entity.world().entities().reserve_entity(),
+        buffer,
         components: archetype_insert_keep(bundle_info, entity.archetype()),
     };
     entity.buffer_undo_redo(undo_redo);
-    entity.insert_if_new(bundle);
+    entity.insert_if_new(bundle)
+}
+
+struct Remove<Components> {
+    entity: Entity,
+    buffer: Entity,
+    components: Components
+}
+
+impl<Components> Remove<Components>
+where
+    for<'a> &'a Components: IntoIterator<Item = &'a ComponentId>,
+{
+    fn undo_redo<const UNDO: bool>(&self, world: &mut World) {
+        let mut mover = move_components(world, (&self.components).into_iter().copied(), false);
+        if UNDO {
+            mover.clone_entity(
+                world,
+                self.buffer,
+                self.entity,
+            );
+        } else {
+            mover.clone_entity(
+                world,
+                self.entity,
+                self.buffer,
+            );
+        }
+    }
+}
+
+impl<Components> UndoRedo for Remove<Components>
+where
+    Components: Send + 'static,
+    for<'a> &'a Components: IntoIterator<Item = &'a ComponentId>,
+{
+    fn undo(&mut self, world: &mut World) {
+        self.undo_redo::<true>(world);
+    }
+    fn redo(&mut self, world: &mut World) {
+        self.undo_redo::<false>(world);
+    }
+}
+
+fn remove_inner<'a, 'w, B: Bundle, const WITH_REQUIRES: bool>(entity: &'a mut EntityWorldMut<'w>) -> &'a mut EntityWorldMut<'w> {
+    let (bundle_id, buffer) = bundle_id_and_buffer::<B>(entity);
+    let bundle_info = entity.world().bundles().get(bundle_id).unwrap();
+    let components = if WITH_REQUIRES {
+        archetype_replace_with_requires(bundle_info, entity.archetype())
+    } else {
+        archetype_insert_replace_remove(bundle_info, entity.archetype())
+    };
+    let undo_redo = Remove {
+        entity: entity.id(),
+        buffer,
+        components
+    };
+    entity.world_scope(|world| {
+        undo_redo.undo_redo::<false>(world);
+    });
+    if WITH_REQUIRES {
+        entity.remove_with_requires::<B>();
+    } else {
+        entity.remove::<B>();
+    }
+    entity.buffer_undo_redo(undo_redo)
 }
 
 /// Reversible version of [`insert`](bevy::ecs::system::entity_command::insert).
 #[track_caller]
 pub fn rev_insert<B: Bundle>(bundle: B, mode: InsertMode) -> impl EntityCommand {
-    move |entity: EntityWorldMut| {
-        insert_inner(entity, bundle, mode);
+    move |mut entity: EntityWorldMut| {
+        insert_inner(&mut entity, bundle, mode);
     }
 }
 
@@ -135,6 +390,12 @@ pub unsafe fn rev_insert_by_id<T: Component + Send + 'static>(
     mode: InsertMode,
 ) -> impl EntityCommand {
     move |mut entity: EntityWorldMut| {
+        let marker = DespawnAtOutOfLog::from(entity.world());
+        let buffer = unsafe {
+            // SAFETY: Spawning a new entity does not affect the current entity's location
+            entity.world_mut().spawn(marker).id()
+        };
+
         let components = |include_component: bool| -> Box<[ComponentId]> {
             let archetype = entity.archetype();
             entity
@@ -154,8 +415,6 @@ pub unsafe fn rev_insert_by_id<T: Component + Send + 'static>(
             let insert = components(true);
             let id = entity.id();
             entity.world_scope(|world| {
-                let marker = DespawnAtOutOfLog::from_world(world);
-                let buffer = world.spawn(marker).id();
                 let undo_redo = RevInsertReplace {
                     entity: id,
                     buffer,
@@ -170,7 +429,7 @@ pub unsafe fn rev_insert_by_id<T: Component + Send + 'static>(
         } else {
             let undo_redo = RevInsertKeep {
                 entity: entity.id(),
-                buffer: entity.world().entities().reserve_entity(),
+                buffer,
                 components: components(contains_component),
             };
             entity.buffer_undo_redo(undo_redo);
@@ -189,26 +448,45 @@ pub unsafe fn rev_insert_by_id<T: Component + Send + 'static>(
 pub fn rev_insert_from_world<T: Component + FromWorld>(mode: InsertMode) -> impl EntityCommand {
     move |mut entity: EntityWorldMut| {
         let value = entity.world_scope(|world| T::from_world(world));
-        insert_inner(entity, value, mode);
+        insert_inner(&mut entity, value, mode);
     }
 }
 
 /// Reversible version of [`remove`](bevy::ecs::system::entity_command::remove).
 #[track_caller]
-pub fn rev_remove<T: Bundle>() -> impl EntityCommand {
-    todo!()
+pub fn rev_remove<B: Bundle>() -> impl EntityCommand {
+    remove_inner::<B, false>
 }
 
 /// Reversible version of [`remove_with_requires`](bevy::ecs::system::entity_command::remove_with_requires).
 #[track_caller]
-pub fn rev_remove_with_requires<T: Bundle>() -> impl EntityCommand {
-    todo!()
+pub fn rev_remove_with_requires<B: Bundle>() -> impl EntityCommand {
+    remove_inner::<B, true>
 }
 
 /// Reversible version of [`remove_by_id`](bevy::ecs::system::entity_command::remove_by_id).
 #[track_caller]
 pub fn rev_remove_by_id(component_id: ComponentId) -> impl EntityCommand {
-    todo!()
+    move |mut entity: EntityWorldMut| {
+        if !entity.contains_id(component_id) {
+            return;
+        }
+        let marker = DespawnAtOutOfLog::from(entity.world());
+        let buffer = unsafe {
+            // SAFETY: spawning a new entity leaves the current entity's location unaffected
+            entity.world_mut().spawn(marker).id()
+        };
+        let undo_redo = Remove {
+            entity: entity.id(),
+            buffer,
+            components: [component_id]
+        };
+        entity.world_scope(|world| {
+            undo_redo.undo_redo::<false>(world);
+        });
+        entity.remove_by_id(component_id);
+        entity.buffer_undo_redo(undo_redo);
+    }
 }
 
 /// Reversible version of [`clear`](bevy::ecs::system::entity_command::clear).
@@ -219,7 +497,7 @@ pub fn rev_clear() -> impl EntityCommand {
 
 /// Reversible version of [`retain`](bevy::ecs::system::entity_command::retain).
 #[track_caller]
-pub fn rev_retain<T: Bundle>() -> impl EntityCommand {
+pub fn rev_retain<B: Bundle>() -> impl EntityCommand {
     todo!()
 }
 
