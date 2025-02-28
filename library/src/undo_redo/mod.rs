@@ -6,13 +6,7 @@ use std::{
 
 use bevy::{
     ecs::{
-        archetype::Archetype,
-        bundle::BundleInfo,
-        component::{Component, ComponentId},
-        entity::{Entity, EntityCloner},
-        resource::Resource,
-        system::{Commands, EntityCommands},
-        world::{DeferredWorld, EntityWorldMut, FromWorld, World},
+        archetype::Archetype, bundle::BundleInfo, component::{Component, ComponentId}, entity::{Entity, EntityCloner}, query::{QueryBuilder, QueryState, With, Without}, resource::Resource, system::{Commands, EntityCommands, Query, Res, SystemState}, world::{DeferredWorld, EntityWorldMut, FromWorld, World}
     },
     utils::synccell::SyncCell,
 };
@@ -220,7 +214,18 @@ impl DespawnAtOutOfLog {
 
 impl FromWorld for DespawnAtOutOfLog {
     fn from_world(world: &mut World) -> Self {
-        let meta = world.get_resource::<RevMeta>().expect("todo");
+        (&*world).into()
+    }
+}
+
+impl<'a> From<&'a World> for DespawnAtOutOfLog {
+    fn from(world: &'a World) -> Self {
+        world.get_resource::<RevMeta>().expect("todo").into()
+    }
+}
+
+impl<'a> From<&'a RevMeta> for DespawnAtOutOfLog {
+    fn from(meta: &'a RevMeta) -> Self {
         Self::new(meta.now())
     }
 }
@@ -370,12 +375,22 @@ fn archetype_insert_replace(bundle_info: &BundleInfo, archetype: &Archetype) -> 
         .collect()
 }
 
-fn archetype_insert_replace_backup(
+fn archetype_insert_replace_remove(
     bundle_info: &BundleInfo,
     archetype: &Archetype,
 ) -> Box<[ComponentId]> {
     bundle_info
         .iter_explicit_components()
+        .filter(|component_id| archetype.contains(*component_id))
+        .collect()
+}
+
+fn archetype_replace_with_requires(
+    bundle_info: &BundleInfo,
+    archetype: &Archetype,
+) -> Box<[ComponentId]> {
+    bundle_info
+        .iter_contributed_components()
         .filter(|component_id| archetype.contains(*component_id))
         .collect()
 }
@@ -422,4 +437,61 @@ fn move_components(
         })
         .move_components(true);
     builder.finish()
+}
+
+
+#[derive(Component)]
+struct RevBuffer;
+
+type BufferWithoutState = QueryState<(Entity, &'static DespawnAtOutOfLog), Without<RevBuffer>>;
+
+struct BufferWithout<const N: usize> {
+    entities_without_components: [Entity; N],
+    query_state_index: usize
+}
+
+pub fn get_temp_entity_without(world: &mut World, components: impl Iterator<Item = ComponentId>) -> Entity {
+    todo!()
+}
+
+pub fn get_temp_entity_without_buffered(world: &mut World, components: impl Iterator<Item = ComponentId>, index: Option<usize>) -> (Entity, usize) {
+    todo!()
+}
+
+pub fn get_temp_entities_without(world: &mut World, components: impl Iterator<Item = ComponentId>, amount: usize) -> Vec<Entity> {
+    todo!()
+}
+
+pub fn get_temp_entities_without_buffered(world: &mut World, components: impl Iterator<Item = ComponentId>, amount: usize, index: Option<usize>) -> (Vec<Entity>, usize) {
+    todo!()
+}
+
+fn buffer_without<const N: usize>(world: &mut World, components: impl Iterator<Item = ComponentId>, query_state_index: Option<usize>) -> (Entity, BufferWithoutState) {
+
+    // todo: buffer this somehow
+    let mut builder = QueryBuilder::<(Entity, &'static DespawnAtOutOfLog), Without<RevBuffer>>::new(world);
+    for component_id in components {
+        builder.without_id(component_id);
+    }
+    let query_state = builder.build();
+    
+    #[derive(Resource)]
+    struct BufferWithoutState(QueryState<(Entity, &'static DespawnAtOutOfLog, &'static Archetype), With<RevBuffer>>);
+
+    impl FromWorld for BufferWithoutState {
+        fn from_world(world: &mut World) -> Self {
+            Self(FromWorld::from_world(world))
+        }
+    }
+
+    let marker = DespawnAtOutOfLog::from_world(world);
+    world.init_resource::<BufferWithoutState>();
+    let entity = world.resource_scope::<BufferWithoutState, _>(|world, mut res| {
+        res.0.iter(&world).filter(|(_, other, archetype)| {
+            other.added_at() == marker.added_at() && components.iter.all(|component_id| !archetype.contains(*component_id))
+        }).next().map(|(entity, _, _)| entity)
+    }).unwrap_or_else(f);
+
+    todo!()
+
 }
