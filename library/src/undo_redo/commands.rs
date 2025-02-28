@@ -18,7 +18,7 @@ use bevy::{
 use crate::undo_redo::{move_components, ReplaceComponents};
 
 use super::{
-    archetype_insert_keep, archetype_insert_replace, archetype_insert_replace_backup,
+    archetype_insert_keep, archetype_insert_replace, archetype_insert_replace_remove,
     BuffersUndoRedo, DespawnAtOutOfLog, EmptyEntityScope, RevDisabled, UndoRedo,
 };
 
@@ -40,6 +40,7 @@ impl RevCommands for Commands<'_, '_> {
     }
 }
 
+// todo: move all components in a buffer on despawn
 /// Reversible version of [`spawn_batch`](bevy::ecs::system::command::spawn_batch).
 ///
 /// If the entities are spawned with [`Disabled`], undoing this will do nothing though exiting the log when this command is undone still despawns the entities.
@@ -198,7 +199,7 @@ where
             } else {
                 let mut insert = archetype_insert_replace(bundle_info, archetype);
                 insert.sort();
-                let mut backup = archetype_insert_replace_backup(bundle_info, archetype);
+                let mut backup = archetype_insert_replace_remove(bundle_info, archetype);
                 if !backup.is_empty() {
                     backup.sort();
                     let components = ReplaceComponents { insert, backup };
@@ -208,8 +209,8 @@ where
                 }
             }
         }
-        let buffer_entities: Box<[Entity]> =
-            world.entities().reserve_entities(len as u32).collect();
+        let marker = DespawnAtOutOfLog::from_world(world);
+        let buffer_entities: Box<[Entity]> = world.spawn_batch(std::iter::repeat(marker).take(len)).collect();
         let mut buffer_iter = buffer_entities.iter().copied();
         let keep: Box<[InsertBatchKeep]> = entities_per_insert_components
             .into_iter()
