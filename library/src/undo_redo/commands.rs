@@ -210,7 +210,9 @@ where
             }
         }
         let marker = DespawnAtOutOfLog::from_world(world);
-        let buffer_entities: Box<[Entity]> = world.spawn_batch(std::iter::repeat(marker).take(len)).collect();
+        let buffer_entities: Box<[Entity]> = world
+            .spawn_batch(std::iter::repeat(marker).take(len))
+            .collect();
         let mut buffer_iter = buffer_entities.iter().copied();
         let keep: Box<[InsertBatchKeep]> = entities_per_insert_components
             .into_iter()

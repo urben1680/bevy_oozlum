@@ -1,10 +1,13 @@
-use bevy::{ecs::{
-    bundle::{Bundle, BundleId, InsertMode},
-    component::{Component, ComponentId},
-    entity::{Entity, EntityClonerBuilder},
-    system::{entity_command::insert_by_id, EntityCommand},
-    world::{FromWorld, OccupiedEntry},
-}, ptr::OwningPtr};
+use bevy::{
+    ecs::{
+        bundle::{Bundle, BundleId, InsertMode},
+        component::{Component, ComponentId},
+        entity::{Entity, EntityClonerBuilder},
+        system::{entity_command::insert_by_id, EntityCommand},
+        world::{FromWorld, OccupiedEntry},
+    },
+    ptr::OwningPtr,
+};
 
 use super::*;
 
@@ -30,7 +33,7 @@ pub trait RevEntityWorldMut {
     /// Reversible version of [`modify_component`](EntityWorldMut::insert_by_ids).
     ///
     /// # Safety
-    /// 
+    ///
     /// - Each [`ComponentId`] must be from the same world as [`EntityWorldMut`]
     /// - Each [`OwningPtr`] must be a valid reference to the type represented by [`ComponentId`]
     unsafe fn rev_insert_by_ids<'a, I: Iterator<Item = OwningPtr<'a>>>(
@@ -261,19 +264,20 @@ where
 fn bundle_id_and_buffer<B: Bundle>(entity: &mut EntityWorldMut) -> (BundleId, Entity) {
     let marker = DespawnAtOutOfLog::from(entity.world());
     unsafe {
-        // SAFETY: 
+        // SAFETY:
         // - registering bundle
         // - spawning a new entity
         // ... leave the entity location unaffected
         let world = entity.world_mut();
-        (
-            world.register_bundle::<B>().id(),
-            world.spawn(marker).id()
-        )
+        (world.register_bundle::<B>().id(), world.spawn(marker).id())
     }
 }
 
-fn insert_inner<'a, 'w: 'a, B: Bundle>(entity: &'a mut EntityWorldMut<'w>, bundle: B, mode: InsertMode) -> &'a mut EntityWorldMut<'w> {
+fn insert_inner<'a, 'w: 'a, B: Bundle>(
+    entity: &'a mut EntityWorldMut<'w>,
+    bundle: B,
+    mode: InsertMode,
+) -> &'a mut EntityWorldMut<'w> {
     let (bundle_id, buffer) = bundle_id_and_buffer::<B>(entity);
     let bundle_info = entity.world().bundles().get(bundle_id).unwrap();
 
@@ -308,7 +312,7 @@ fn insert_inner<'a, 'w: 'a, B: Bundle>(entity: &'a mut EntityWorldMut<'w>, bundl
 struct Remove<Components> {
     entity: Entity,
     buffer: Entity,
-    components: Components
+    components: Components,
 }
 
 impl<Components> Remove<Components>
@@ -318,17 +322,9 @@ where
     fn undo_redo<const UNDO: bool>(&self, world: &mut World) {
         let mut mover = move_components(world, (&self.components).into_iter().copied(), false);
         if UNDO {
-            mover.clone_entity(
-                world,
-                self.buffer,
-                self.entity,
-            );
+            mover.clone_entity(world, self.buffer, self.entity);
         } else {
-            mover.clone_entity(
-                world,
-                self.entity,
-                self.buffer,
-            );
+            mover.clone_entity(world, self.entity, self.buffer);
         }
     }
 }
@@ -346,7 +342,9 @@ where
     }
 }
 
-fn remove_inner<'a, 'w, B: Bundle, const WITH_REQUIRES: bool>(entity: &'a mut EntityWorldMut<'w>) -> &'a mut EntityWorldMut<'w> {
+fn remove_inner<'a, 'w, B: Bundle, const WITH_REQUIRES: bool>(
+    entity: &'a mut EntityWorldMut<'w>,
+) -> &'a mut EntityWorldMut<'w> {
     let (bundle_id, buffer) = bundle_id_and_buffer::<B>(entity);
     let bundle_info = entity.world().bundles().get(bundle_id).unwrap();
     let components = if WITH_REQUIRES {
@@ -357,7 +355,7 @@ fn remove_inner<'a, 'w, B: Bundle, const WITH_REQUIRES: bool>(entity: &'a mut En
     let undo_redo = Remove {
         entity: entity.id(),
         buffer,
-        components
+        components,
     };
     entity.world_scope(|world| {
         undo_redo.undo_redo::<false>(world);
@@ -479,7 +477,7 @@ pub fn rev_remove_by_id(component_id: ComponentId) -> impl EntityCommand {
         let undo_redo = Remove {
             entity: entity.id(),
             buffer,
-            components: [component_id]
+            components: [component_id],
         };
         entity.world_scope(|world| {
             undo_redo.undo_redo::<false>(world);

@@ -25,6 +25,8 @@ Enhancements:
 -- buffer despawn system
 -- no first-party cleanup API
 -- new tests
+- all init_resource to plugin
+- assert components are clonable with panic link to github issue
 
 Docs
 - documentations
