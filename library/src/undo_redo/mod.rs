@@ -459,14 +459,14 @@ fn move_components(
 #[require(RevDisabled)]
 pub struct SharedBuffer;
 
-#[derive(Default)]
-struct SharedBufferInternerMap(
-    HashMap<
-        InternedSharedBuffers,
+struct BufferData {
+    query_state:
         QueryState<(Entity, &'static DespawnAtOutOfLog), (With<SharedBuffer>, With<RevDisabled>)>,
-        PassHash,
-    >,
-);
+    cloner: SyncCell<EntityCloner>,
+}
+
+#[derive(Default)]
+struct SharedBufferInternerMap(HashMap<InternedSharedBuffers, BufferData, PassHash>);
 
 impl SharedBufferInternerMap {
     fn without_ids(
@@ -482,14 +482,29 @@ impl SharedBufferInternerMap {
         }
         let key = InternedSharedBuffers(hasher.finish());
         self.0.entry(key).or_insert_with(|| {
+            // build query state to find entities lacking `components`
             let mut builder = QueryBuilder::<
                 (Entity, &'static DespawnAtOutOfLog),
                 (With<SharedBuffer>, With<RevDisabled>),
             >::new(world);
-            for component_id in components {
+            for component_id in components.iter().copied() {
                 builder.without_id(component_id);
             }
-            builder.build()
+            let query_state = builder.build();
+
+            // build cloner to move `components`
+            // todo: assert component to be clonable
+            let mut builder = EntityCloner::build(world);
+            builder.deny_all();
+            builder.without_required_components(|builder| {
+                builder.allow_by_ids(components);
+            });
+            builder.move_components(true);
+            let cloner = SyncCell::new(builder.finish());
+            BufferData {
+                query_state,
+                cloner,
+            }
         });
         key
     }
@@ -638,6 +653,7 @@ impl InternedSharedBuffers {
                 .0
                 .get_mut(&self)
                 .expect("todo")
+                .query_state
                 .iter(&world)
                 .filter(|(_, marker)| marker.added_at() == logged_at)
                 .map(|(entity, _)| entity)
@@ -657,6 +673,7 @@ impl InternedSharedBuffers {
                 .0
                 .get_mut(&self)
                 .expect("todo")
+                .query_state
                 .iter(&world)
                 .filter(|(_, marker)| marker.added_at() == logged_at)
                 .map(|(entity, _)| entity)
@@ -667,6 +684,37 @@ impl InternedSharedBuffers {
             let bundle = (DespawnAtOutOfLog::new(logged_at), SharedBuffer);
             entities.extend(world.spawn_batch(std::iter::repeat(bundle).take(remaining)));
             entities
+        })
+    }
+    pub fn move_from_buffer(self, world: &mut World, buffer: Entity, target: Entity) {
+        world.resource_scope::<SharedBufferInterner, ()>(|world, mut interner| {
+            interner
+                .query_states
+                .0
+                .get_mut(&self)
+                .expect("todo")
+                .cloner
+                .get()
+                .clone_entity(world, buffer, target);
+        })
+    }
+    pub fn move_to_buffer(self, world: &mut World, source: Entity) -> Entity {
+        let now = world.get_resource::<RevMeta>().expect("todo").now();
+        self.move_to_buffer_log(world, source, now)
+    }
+    pub fn move_to_buffer_log(self, world: &mut World, source: Entity, logged_at: u64) -> Entity {
+        let bundle = (DespawnAtOutOfLog::new(logged_at), SharedBuffer);
+        world.resource_scope::<SharedBufferInterner, Entity>(|world, mut interner| {
+            let data = interner.query_states.0.get_mut(&self).expect("todo");
+            let existing = data
+                .query_state
+                .iter(&world)
+                .filter(|(_, marker)| marker.added_at() == logged_at)
+                .map(|(entity, _)| entity)
+                .next();
+            let target = existing.unwrap_or_else(|| world.spawn(bundle).id());
+            data.cloner.get().clone_entity(world, source, target);
+            target
         })
     }
 }
