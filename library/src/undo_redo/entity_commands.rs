@@ -1,5 +1,6 @@
 use bevy::{
     ecs::{
+        archetype::ArchetypeId,
         bundle::{Bundle, BundleId, InsertMode},
         component::{Component, ComponentId},
         entity::{Entity, EntityClonerBuilder},
@@ -94,11 +95,94 @@ pub trait RevEntityWorldMut {
 
 impl RevEntityWorldMut for EntityWorldMut<'_> {
     fn rev_insert<T: Bundle>(&mut self, bundle: T) -> &mut Self {
-        insert_inner(self, bundle, InsertMode::Replace)
+        #[derive(Hash)]
+        struct Backup(ArchetypeId, BundleId);
+        #[derive(Hash)]
+        struct Insert(ArchetypeId, BundleId);
+        
+        let archetype_id = self.archetype().id();
+        let entity = self.id();
+        self.world_scope(|world| {
+            let bundle_id = world.register_bundle::<T>().id();
+            let backup_components = move |world: &mut World| {
+                let archetype = world.archetypes().get(archetype_id).unwrap();
+                world
+                    .bundles()
+                    .get(bundle_id)
+                    .unwrap()
+                    .explicit_components()
+                    .iter()
+                    .copied()
+                    .filter(move |component_id| archetype.contains(*component_id))
+                    .collect::<Vec<ComponentId>>()
+            };
+            let mut backup_buffer = ComponentBuffer::without_ids_by_cache_value(
+                world, 
+                false, 
+                Backup(archetype_id, bundle_id), 
+                backup_components, 
+                entity
+            );
+            if !backup_buffer.is_noop() {
+                backup_buffer.move_components(world);
+                world.buffer_undo_redo(backup_buffer);
+            }
+            let insert_components = |world: &mut World| {
+                let archetype = world.archetypes().get(archetype_id).unwrap();
+                let bundle = world
+                    .bundles()
+                    .get(bundle_id)
+                    .unwrap();
+                bundle
+                    .required_components()
+                    .iter()
+                    .copied()
+                    .filter(|component_id| !archetype.contains(*component_id))
+                    .chain(bundle.explicit_components().iter().copied())
+                    .collect::<Vec<ComponentId>>()
+            };
+            let insert_buffer = ComponentBuffer::without_ids_by_cache_value(
+                world, 
+                false, 
+                Insert(archetype_id, bundle_id), 
+                insert_components, 
+                entity
+            );
+            world.buffer_undo_redo(insert_buffer);
+        });
+        self.insert(bundle)
     }
 
     fn rev_insert_if_new<T: Bundle>(&mut self, bundle: T) -> &mut Self {
-        insert_inner(self, bundle, InsertMode::Keep)
+        #[derive(Hash)]
+        struct IfNew(ArchetypeId, BundleId);
+        
+        let archetype_id = self.archetype().id();
+        let entity = self.id();
+        self.world_scope(|world| {
+            let bundle_id = world.register_bundle::<T>().id();
+            let components = move |world: &mut World| {
+                let archetype = world.archetypes().get(archetype_id).unwrap();
+                world
+                    .bundles()
+                    .get(bundle_id)
+                    .unwrap()
+                    .contributed_components()
+                    .iter()
+                    .copied()
+                    .filter(move |component_id| !archetype.contains(*component_id))
+                    .collect::<Vec<ComponentId>>()
+            };
+            let buffer = ComponentBuffer::without_ids_by_cache_value(
+                world, 
+                false, 
+                IfNew(archetype_id, bundle_id), 
+                components, 
+                entity
+            );
+            world.buffer_undo_redo(buffer);
+        });
+        self.insert_if_new(bundle)
     }
 
     unsafe fn rev_insert_by_id(
@@ -106,7 +190,21 @@ impl RevEntityWorldMut for EntityWorldMut<'_> {
         component_id: ComponentId,
         component: OwningPtr<'_>,
     ) -> &mut Self {
-        todo!()
+        self.world_scope(|world| {
+            let components = move |world: &mut World| {
+                let archetype = world.archetypes().get(archetype_id).unwrap();
+                world
+                    .components()
+                    .get(bundle_id)
+                    .unwrap()
+                    .contributed_components()
+                    .iter()
+                    .copied()
+                    .filter(move |component_id| !archetype.contains(*component_id))
+                    .collect::<Vec<ComponentId>>()
+            };
+
+        })
     }
 
     unsafe fn rev_insert_by_ids<'a, I: Iterator<Item = OwningPtr<'a>>>(
