@@ -9,8 +9,8 @@ use bevy::{
 
 use crate::{
     meta::RevMeta,
-    prelude::RevDisabled,
-    schedule::{IntoRevSystemConfigs, IntoRevSystemSetConfigs, RevSchedule},
+    prelude::{RevBuffers, RevDisabled},
+    schedule::{IntoRevSystemConfigs, IntoRevSystemSetConfigs, RevSchedule}, undo_redo::ComponentBufferRes,
 };
 
 pub trait RevApp {
@@ -114,5 +114,7 @@ impl Plugin for RevSystemsPlugin {
             Self::AddMeta(..) => {}
         }
         app.register_disabling_component::<RevDisabled>();
+        app.init_resource::<RevBuffers>();
+        app.init_resource::<ComponentBufferRes>();
     }
 }
