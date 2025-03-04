@@ -26,7 +26,8 @@ Enhancements:
 -- no first-party cleanup API
 -- new tests
 - all init_resource to plugin
-- assert components are clonable with panic link to github issue
+- assert buffer components remain empty for component
+- sync points before exclusive systems need to be reflected 
 
 Docs
 - documentations

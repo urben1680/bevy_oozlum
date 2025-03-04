@@ -100,7 +100,7 @@ impl RevSchedule for Schedule {
                     ForwardSet.run_if(is_forward::<true>),
                     BackwardSet.run_if(is_forward::<false>),
                 )
-                    .chain()
+                    .chain() // todo: remove chain to reduce sync points
                     .in_set(RevSystemsSet),
             );
         }

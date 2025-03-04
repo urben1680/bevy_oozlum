@@ -877,7 +877,7 @@ fn exclusive_then_non_exclusive_ignore_deferred() {
 }
 
 #[test]
-#[ignore] // https://github.com/bevyengine/bevy/issues/17828
+//#[ignore] // https://github.com/bevyengine/bevy/issues/17828
 fn non_exclusive_then_exclusive_ignore_deferred() {
     test_run(
         a_then_b(false, true, true),

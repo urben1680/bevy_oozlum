@@ -1,11 +1,10 @@
 use bevy::{
     ecs::{
-        archetype::ArchetypeId,
         bundle::{Bundle, BundleId, InsertMode},
         component::{Component, ComponentId},
         entity::{Entity, EntityClonerBuilder},
         system::{entity_command::insert_by_id, EntityCommand},
-        world::{FromWorld, OccupiedEntry},
+        world::OccupiedEntry,
     },
     ptr::OwningPtr,
 };
@@ -13,13 +12,13 @@ use bevy::{
 use super::*;
 
 pub trait RevEntityWorldMut {
-    /// Reversible version of [`modify_component`](EntityWorldMut::insert).
+    /// Reversible version of [`EntityWorldMut::insert`].
     fn rev_insert<T: Bundle>(&mut self, bundle: T) -> &mut Self;
 
-    /// Reversible version of [`modify_component`](EntityWorldMut::insert_if_new).
+    /// Reversible version of [`EntityWorldMut::insert_if_new`].
     fn rev_insert_if_new<T: Bundle>(&mut self, bundle: T) -> &mut Self;
 
-    /// Reversible version of [`modify_component`](EntityWorldMut::insert_by_id).
+    /// Reversible version of [`EntityWorldMut::insert_by_id`].
     ///
     /// # Safety
     ///
@@ -31,7 +30,7 @@ pub trait RevEntityWorldMut {
         component: OwningPtr<'_>,
     ) -> &mut Self;
 
-    /// Reversible version of [`modify_component`](EntityWorldMut::insert_by_ids).
+    /// Reversible version of [`EntityWorldMut::insert_by_ids`].
     ///
     /// # Safety
     ///
@@ -43,68 +42,63 @@ pub trait RevEntityWorldMut {
         iter_components: I,
     ) -> &mut Self;
 
-    /// Reversible version of [`modify_component`](EntityWorldMut::remove).
+    /// Reversible version of [`EntityWorldMut::remove`].
     fn rev_remove<T: Bundle>(&mut self) -> &mut Self;
 
-    /// Reversible version of [`modify_component`](EntityWorldMut::remove_with_requires).
+    /// Reversible version of [`EntityWorldMut::remove_with_requires`].
     fn rev_remove_with_requires<T: Bundle>(&mut self) -> &mut Self;
 
-    /// Reversible version of [`modify_component`](EntityWorldMut::retain).
+    /// Reversible version of [`EntityWorldMut::retain`].
     fn rev_retain<T: Bundle>(&mut self) -> &mut Self;
 
-    /// Reversible version of [`modify_component`](EntityWorldMut::remove_by_id).
+    /// Reversible version of [`EntityWorldMut::remove_by_id`].
     fn rev_remove_by_id(&mut self, component_id: ComponentId) -> &mut Self;
 
-    /// Reversible version of [`modify_component`](EntityWorldMut::remove_by_ids).
+    /// Reversible version of [`EntityWorldMut::remove_by_ids`].
     fn rev_remove_by_ids(&mut self, component_ids: &[ComponentId]) -> &mut Self;
 
-    /// Reversible version of [`modify_component`](EntityWorldMut::clear).
+    /// Reversible version of [`EntityWorldMut::clear`].
     fn rev_clear(&mut self) -> &mut Self;
 
-    /// Reversible version of [`modify_component`](EntityWorldMut::despawn).
+    /// Reversible version of [`EntityWorldMut::despawn`].
     fn rev_despawn(self);
 
-    /// Reversible version of [`modify_component`](EntityWorldMut::despawn_recursive).
+    /// Reversible version of [`EntityWorldMut::despawn_recursive`].
     fn rev_despawn_recursive(self);
 
-    /// Reversible version of [`modify_component`](EntityWorldMut::is_despawned).
+    /// Reversible version of [`EntityWorldMut::is_despawned`].
     fn rev_is_despawned(&self) -> bool;
 
-    /// Reversible version of [`modify_component`](EntityWorldMut::clone_with).
+    /// Reversible version of [`EntityWorldMut::clone_with`].
     fn rev_clone_with(
         &mut self,
         target: Entity,
         config: impl FnOnce(&mut EntityClonerBuilder) + Send + Sync + 'static,
     ) -> &mut Self;
 
-    /// Reversible version of [`modify_component`](EntityWorldMut::clone_and_spawn).
+    /// Reversible version of [`EntityWorldMut::clone_and_spawn`].
     fn rev_clone_and_spawn(&mut self) -> Entity;
 
-    /// Reversible version of [`modify_component`](EntityWorldMut::clone_and_spawn_with).
+    /// Reversible version of [`EntityWorldMut::clone_and_spawn_with`].
     fn rev_clone_and_spawn_with(
         &mut self,
         config: impl FnOnce(&mut EntityClonerBuilder) + Send + Sync + 'static,
     ) -> Entity;
 
-    /// Reversible version of [`modify_component`](EntityWorldMut::clone_components).
+    /// Reversible version of [`EntityWorldMut::clone_components`].
     fn rev_clone_components<B: Bundle>(&mut self, target: Entity) -> &mut Self;
 
-    /// Reversible version of [`modify_component`](EntityWorldMut::move_components).
+    /// Reversible version of [`EntityWorldMut::move_components`].
     fn rev_move_components<B: Bundle>(&mut self, target: Entity) -> &mut Self;
 }
 
 impl RevEntityWorldMut for EntityWorldMut<'_> {
     fn rev_insert<T: Bundle>(&mut self, bundle: T) -> &mut Self {
-        #[derive(Hash)]
-        struct Backup(ArchetypeId, BundleId);
-        #[derive(Hash)]
-        struct Insert(ArchetypeId, BundleId);
-        
         let archetype_id = self.archetype().id();
         let entity = self.id();
         self.world_scope(|world| {
             let bundle_id = world.register_bundle::<T>().id();
-            let backup_components = move |world: &mut World| {
+            let backup_components = |world: &mut World| {
                 let archetype = world.archetypes().get(archetype_id).unwrap();
                 world
                     .bundles()
@@ -113,26 +107,24 @@ impl RevEntityWorldMut for EntityWorldMut<'_> {
                     .explicit_components()
                     .iter()
                     .copied()
-                    .filter(move |component_id| archetype.contains(*component_id))
+                    .filter(|component_id| archetype.contains(*component_id))
                     .collect::<Vec<ComponentId>>()
             };
-            let mut backup_buffer = ComponentBuffer::without_ids_by_cache_value(
-                world, 
-                false, 
-                Backup(archetype_id, bundle_id), 
-                backup_components, 
-                entity
+            struct Backup;
+            let mut backup_buffer = ComponentBuffer::without_ids_by_cache_mix::<Backup, _>(
+                world,
+                entity,
+                (archetype_id, bundle_id),
+                backup_components,
             );
             if !backup_buffer.is_noop() {
                 backup_buffer.move_components(world);
                 world.buffer_undo_redo(backup_buffer);
             }
+
             let insert_components = |world: &mut World| {
                 let archetype = world.archetypes().get(archetype_id).unwrap();
-                let bundle = world
-                    .bundles()
-                    .get(bundle_id)
-                    .unwrap();
+                let bundle = world.bundles().get(bundle_id).unwrap();
                 bundle
                     .required_components()
                     .iter()
@@ -141,12 +133,12 @@ impl RevEntityWorldMut for EntityWorldMut<'_> {
                     .chain(bundle.explicit_components().iter().copied())
                     .collect::<Vec<ComponentId>>()
             };
-            let insert_buffer = ComponentBuffer::without_ids_by_cache_value(
-                world, 
-                false, 
-                Insert(archetype_id, bundle_id), 
-                insert_components, 
-                entity
+            struct Insert;
+            let insert_buffer = ComponentBuffer::without_ids_by_cache_mix::<Insert, _>(
+                world,
+                entity,
+                (archetype_id, bundle_id),
+                insert_components,
             );
             world.buffer_undo_redo(insert_buffer);
         });
@@ -154,14 +146,11 @@ impl RevEntityWorldMut for EntityWorldMut<'_> {
     }
 
     fn rev_insert_if_new<T: Bundle>(&mut self, bundle: T) -> &mut Self {
-        #[derive(Hash)]
-        struct IfNew(ArchetypeId, BundleId);
-        
         let archetype_id = self.archetype().id();
         let entity = self.id();
-        self.world_scope(|world| {
+        let noop = self.world_scope(|world| {
             let bundle_id = world.register_bundle::<T>().id();
-            let components = move |world: &mut World| {
+            let components = |world: &mut World| {
                 let archetype = world.archetypes().get(archetype_id).unwrap();
                 world
                     .bundles()
@@ -170,19 +159,26 @@ impl RevEntityWorldMut for EntityWorldMut<'_> {
                     .contributed_components()
                     .iter()
                     .copied()
-                    .filter(move |component_id| !archetype.contains(*component_id))
+                    .filter(|component_id| !archetype.contains(*component_id))
                     .collect::<Vec<ComponentId>>()
             };
-            let buffer = ComponentBuffer::without_ids_by_cache_value(
-                world, 
-                false, 
-                IfNew(archetype_id, bundle_id), 
-                components, 
-                entity
+            struct IfNew;
+            let buffer = ComponentBuffer::without_ids_by_cache_mix::<IfNew, _>(
+                world,
+                entity,
+                (archetype_id, bundle_id),
+                components,
             );
-            world.buffer_undo_redo(buffer);
+            let noop = buffer.is_noop();
+            if !noop {
+                world.buffer_undo_redo(buffer);
+            }
+            noop
         });
-        self.insert_if_new(bundle)
+        if !noop {
+            self.insert_if_new(bundle);
+        }
+        self
     }
 
     unsafe fn rev_insert_by_id(
@@ -190,21 +186,41 @@ impl RevEntityWorldMut for EntityWorldMut<'_> {
         component_id: ComponentId,
         component: OwningPtr<'_>,
     ) -> &mut Self {
+        let archetype_id = self.archetype().id();
+        let entity = self.id();
+        let contains_component = self.contains_id(component_id);
         self.world_scope(|world| {
-            let components = move |world: &mut World| {
+            if contains_component {
+                let mut backup_buffer = ComponentBuffer::without_ids(
+                    world, 
+                    entity, 
+                    [component_id]
+                );
+                backup_buffer.move_components(world);
+                world.buffer_undo_redo(backup_buffer);
+            }
+            let insert_components = |world: &mut World| {
                 let archetype = world.archetypes().get(archetype_id).unwrap();
                 world
                     .components()
-                    .get(bundle_id)
+                    .get_info(component_id)
                     .unwrap()
-                    .contributed_components()
-                    .iter()
-                    .copied()
-                    .filter(move |component_id| !archetype.contains(*component_id))
+                    .required_components()
+                    .iter_ids()
+                    .filter(|component_id| !archetype.contains(*component_id))
+                    .chain([component_id])
                     .collect::<Vec<ComponentId>>()
             };
-
-        })
+            struct IfNew;
+            let insert_buffer = ComponentBuffer::without_ids_by_cache_mix::<IfNew, _>(
+                world,
+                entity,
+                (archetype_id, component_id),
+                insert_components,
+            );
+            world.buffer_undo_redo(insert_buffer);
+        });
+        self.insert_by_id(component_id, component)
     }
 
     unsafe fn rev_insert_by_ids<'a, I: Iterator<Item = OwningPtr<'a>>>(
@@ -212,7 +228,44 @@ impl RevEntityWorldMut for EntityWorldMut<'_> {
         component_ids: &[ComponentId],
         iter_components: I,
     ) -> &mut Self {
-        todo!()
+        let archetype_id = self.archetype().id();
+        let entity = self.id();
+        self.world_scope(|world| {
+            let archetype = world.archetypes().get(archetype_id).unwrap();
+            let backup_components = component_ids
+                .into_iter()
+                .copied()
+                .filter(|component_id| archetype.contains(*component_id))
+                .collect::<Vec<ComponentId>>();
+            let insert_components = component_ids
+                .into_iter()
+                .copied()
+                .flat_map(|component_id| world
+                    .components()
+                    .get_info(component_id)
+                    .unwrap()
+                    .required_components()
+                    .iter_ids()
+                    .chain([component_id]))
+                .filter(|component_id| !archetype.contains(*component_id))
+                .collect::<HashSet<ComponentId>>();
+            if !backup_components.is_empty() {
+                let mut backup_buffer = ComponentBuffer::without_ids(
+                    world,
+                    entity,
+                    backup_components
+                );
+                backup_buffer.move_components(world);
+                world.buffer_undo_redo(backup_buffer);
+            }
+            let insert_buffer = ComponentBuffer::without_ids(
+                world, 
+                entity, 
+                insert_components
+            );
+            world.buffer_undo_redo(insert_buffer);
+        });
+        self.insert_by_ids(component_ids, iter_components)
     }
 
     fn rev_remove<T: Bundle>(&mut self) -> &mut Self {
@@ -539,50 +592,30 @@ pub unsafe fn rev_insert_by_id<T: Component + Send + 'static>(
     }
 }
 
+/*
+
 /// Reversible version of [`insert_from_world`](bevy::ecs::system::entity_command::insert_from_world).
 #[track_caller]
 pub fn rev_insert_from_world<T: Component + FromWorld>(mode: InsertMode) -> impl EntityCommand {
-    move |mut entity: EntityWorldMut| {
-        let value = entity.world_scope(|world| T::from_world(world));
-        insert_inner(&mut entity, value, mode);
-    }
+    todo!()
 }
 
 /// Reversible version of [`remove`](bevy::ecs::system::entity_command::remove).
 #[track_caller]
 pub fn rev_remove<B: Bundle>() -> impl EntityCommand {
-    remove_inner::<B, false>
+    todo!()
 }
 
 /// Reversible version of [`remove_with_requires`](bevy::ecs::system::entity_command::remove_with_requires).
 #[track_caller]
 pub fn rev_remove_with_requires<B: Bundle>() -> impl EntityCommand {
-    remove_inner::<B, true>
+    todo!()
 }
 
 /// Reversible version of [`remove_by_id`](bevy::ecs::system::entity_command::remove_by_id).
 #[track_caller]
 pub fn rev_remove_by_id(component_id: ComponentId) -> impl EntityCommand {
-    move |mut entity: EntityWorldMut| {
-        if !entity.contains_id(component_id) {
-            return;
-        }
-        let marker = DespawnAtOutOfLog::from(entity.world());
-        let buffer = unsafe {
-            // SAFETY: spawning a new entity leaves the current entity's location unaffected
-            entity.world_mut().spawn(marker).id()
-        };
-        let undo_redo = Remove {
-            entity: entity.id(),
-            buffer,
-            components: [component_id],
-        };
-        entity.world_scope(|world| {
-            undo_redo.undo_redo::<false>(world);
-        });
-        entity.remove_by_id(component_id);
-        entity.buffer_undo_redo(undo_redo);
-    }
+    todo!()
 }
 
 /// Reversible version of [`clear`](bevy::ecs::system::entity_command::clear).
@@ -602,3 +635,4 @@ pub fn rev_retain<B: Bundle>() -> impl EntityCommand {
 pub fn rev_despawn() -> impl EntityCommand {
     todo!()
 }
+    */

@@ -10,7 +10,8 @@ use bevy::{
 use crate::{
     meta::RevMeta,
     prelude::{RevBuffers, RevDisabled},
-    schedule::{IntoRevSystemConfigs, IntoRevSystemSetConfigs, RevSchedule}, undo_redo::ComponentBufferRes,
+    schedule::{IntoRevSystemConfigs, IntoRevSystemSetConfigs, RevSchedule},
+    undo_redo::ComponentBufferRes,
 };
 
 pub trait RevApp {
