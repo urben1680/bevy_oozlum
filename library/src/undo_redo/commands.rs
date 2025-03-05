@@ -1,9 +1,9 @@
 use bevy::{
     ecs::{
-        archetype::ArchetypeId,
-        bundle::{Bundle, InsertMode, NoBundleEffect},
+        archetype::{Archetype, ArchetypeId},
+        bundle::{Bundle, BundleInfo, InsertMode, NoBundleEffect},
         component::ComponentId,
-        entity::Entity,
+        entity::{Entity, EntityCloner},
         resource::Resource,
         result::Result as CommandResult,
         system::{Command, Commands},
@@ -15,11 +15,8 @@ use bevy::{
     },
 };
 
-use crate::undo_redo::{move_components, ReplaceComponents};
-
 use super::{
-    archetype_insert_keep, archetype_insert_replace, archetype_insert_replace_remove,
-    BuffersUndoRedo, DespawnAtOutOfLog, EmptyEntityScope, RevDisabled, UndoRedo,
+    BuffersUndoRedo, DespawnAtOutOfLog, UndoRedo,
 };
 
 pub trait RevCommands {
@@ -38,6 +35,115 @@ impl RevCommands for Commands<'_, '_> {
     fn rev_remove_resource<R: Resource>(&mut self) {
         self.queue(rev_remove_resource::<R>())
     }
+}
+#[derive(Resource)]
+struct EmptyEntity(Entity);
+
+impl FromWorld for EmptyEntity {
+    fn from_world(world: &mut World) -> Self {
+        // do not just take any existing empty entity, it likely belongs to other logic
+        Self(world.spawn_empty().id())
+    }
+}
+pub trait EmptyEntityScope {
+    /// Get a scope of the world and an entity id that is empty.
+    ///
+    /// When the closure returns, the entity is cleared from any remaining components.
+    ///
+    /// The entity may be changed, for example when components are moved into it and another
+    /// entity became empty. One should not otherwise put any assumptions on the entity
+    /// after returning as other code calling this method may change the empty entity as well.
+    fn empty_entity_scope<Out>(&mut self, c: impl FnOnce(&mut Self, &mut Entity) -> Out) -> Out;
+}
+
+impl EmptyEntityScope for World {
+    fn empty_entity_scope<Out>(&mut self, c: impl FnOnce(&mut Self, &mut Entity) -> Out) -> Out {
+        self.init_resource::<EmptyEntity>();
+        self.resource_scope::<EmptyEntity, Out>(|world, mut entity| {
+            let out = c(world, &mut entity.0);
+            world.entity_mut(entity.0).clear();
+            out
+        })
+    }
+}
+
+fn archetype_insert_keep(bundle_info: &BundleInfo, archetype: &Archetype) -> Box<[ComponentId]> {
+    bundle_info
+        .iter_contributed_components()
+        .filter(|component_id| !archetype.contains(*component_id))
+        .collect()
+}
+
+fn archetype_insert_replace(bundle_info: &BundleInfo, archetype: &Archetype) -> Box<[ComponentId]> {
+    bundle_info
+        .iter_required_components()
+        .filter(|component_id| !archetype.contains(*component_id))
+        .chain(bundle_info.iter_explicit_components())
+        .collect()
+}
+
+fn archetype_insert_replace_remove(
+    bundle_info: &BundleInfo,
+    archetype: &Archetype,
+) -> Box<[ComponentId]> {
+    bundle_info
+        .iter_explicit_components()
+        .filter(|component_id| archetype.contains(*component_id))
+        .collect()
+}
+
+fn archetype_replace_with_requires(
+    bundle_info: &BundleInfo,
+    archetype: &Archetype,
+) -> Box<[ComponentId]> {
+    bundle_info
+        .iter_contributed_components()
+        .filter(|component_id| archetype.contains(*component_id))
+        .collect()
+}
+
+#[derive(PartialEq, Eq, Hash)]
+struct ReplaceComponents<Insert = [ComponentId; 1], Backup = [ComponentId; 1]> {
+    insert: Insert,
+    backup: Backup,
+}
+
+impl<Insert, Backup> ReplaceComponents<Insert, Backup>
+where
+    for<'a> &'a Insert: IntoIterator<Item = &'a ComponentId>,
+    for<'a> &'a Backup: IntoIterator<Item = &'a ComponentId>,
+{
+    fn movers<const UNDO: bool>(&self, world: &mut World) -> (EntityCloner, EntityCloner) {
+        if UNDO {
+            (
+                move_components(world, (&self.insert).into_iter().copied(), true),
+                move_components(world, (&self.backup).into_iter().copied(), true),
+            )
+        } else {
+            (
+                move_components(world, (&self.backup).into_iter().copied(), true),
+                move_components(world, (&self.insert).into_iter().copied(), true),
+            )
+        }
+    }
+}
+
+fn move_components(
+    world: &mut World,
+    components: impl Iterator<Item = ComponentId>,
+    with_despawn_at_out_of_log: bool,
+) -> EntityCloner {
+    let mut builder = EntityCloner::build(world);
+    builder
+        .deny_all()
+        .without_required_components(move |builder| {
+            builder.allow_by_ids(components);
+            if with_despawn_at_out_of_log {
+                builder.allow::<DespawnAtOutOfLog>();
+            }
+        })
+        .move_components(true);
+    builder.finish()
 }
 
 // todo: move all components in a buffer on despawn
@@ -62,7 +168,7 @@ where
                 self.entities
                     .iter()
                     .cloned()
-                    .map(|entity| (entity, (RevDisabled, self.marker))),
+                    .map(|entity| (entity, self.marker)),
             );
         }
         fn redo(&mut self, world: &mut World) {
@@ -70,7 +176,7 @@ where
             for &entity in &*self.entities {
                 commands
                     .entity(entity)
-                    .remove::<(RevDisabled, DespawnAtOutOfLog)>();
+                    .remove::<DespawnAtOutOfLog>();
             }
             world.flush();
         }
