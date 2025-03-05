@@ -7,7 +7,7 @@ use bevy::{
         change_detection::Mut,
         component::{ComponentId, Tick},
         entity::Entity,
-        query::{Access, QueryState, With},
+        query::{Access, QueryState},
         resource::Resource,
         system::{IntoSystem, Local, ReadOnlySystemParam, Res, System, SystemMeta, SystemParam},
         world::{unsafe_world_cell::UnsafeWorldCell, World},
@@ -21,7 +21,6 @@ use bevy::reflect::{ReflectDeserialize, ReflectSerialize};
 
 use crate::{
     log::OutOfLog,
-    prelude::RevDisabled,
     schedule::RevUpdate,
     undo_redo::{DespawnAtOutOfLog, RevBuffers},
 };
@@ -336,7 +335,7 @@ impl RevMeta {
     }
     pub fn try_run_rev_update(
         world: &mut World,
-        buffers: &mut QueryState<(Entity, &DespawnAtOutOfLog), With<RevDisabled>>,
+        buffers: &mut QueryState<(Entity, &DespawnAtOutOfLog)>,
         mut out_of_log_buffers: Local<Vec<Entity>>,
     ) -> Result<(), TryRunRevUpdateError> {
         #[derive(Resource, Clone, Copy)]
@@ -417,7 +416,7 @@ impl RevMeta {
     }
     pub fn run_rev_update(
         world: &mut World,
-        buffers: &mut QueryState<(Entity, &DespawnAtOutOfLog), With<RevDisabled>>,
+        buffers: &mut QueryState<(Entity, &DespawnAtOutOfLog)>,
         out_of_log_buffers: Local<Vec<Entity>>,
     ) {
         match Self::try_run_rev_update(world, buffers, out_of_log_buffers) {
