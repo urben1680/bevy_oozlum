@@ -1,6 +1,11 @@
 use bevy::{
     ecs::{
-        bundle::{Bundle, BundleId, InsertMode}, component::{Component, ComponentId}, entity::{Entity, EntityClonerBuilder}, hierarchy::{ChildSpawner, Children}, system::{entity_command::insert_by_id, EntityCommand}, world::{EntityRef, OccupiedEntry}
+        bundle::{Bundle, InsertMode},
+        component::{Component, ComponentId},
+        entity::{Entity, EntityClonerBuilder},
+        hierarchy::{ChildSpawner, Children},
+        system::{entity_command::insert_by_id, EntityCommand},
+        world::{EntityRef, OccupiedEntry},
     },
     ptr::OwningPtr,
 };
@@ -57,9 +62,9 @@ pub trait RevEntityWorldMut {
     fn rev_clear(&mut self) -> &mut Self;
 
     /// Reversible version of [`EntityWorldMut::despawn`].
-    /// 
+    ///
     /// Note that this despawns the entity not now but later when this action goes out of log.
-    /// 
+    ///
     /// Until then the entity is disabled via the [`DespawnAtOutOfLog`] component.
     fn rev_despawn(self);
 
@@ -368,11 +373,8 @@ impl RevEntityWorldMut for EntityWorldMut<'_> {
         self
     }
 
-    fn rev_despawn(mut self) {
-        let entity = self.id();
-        self.world_scope(|world| {
-            RevDespawn::apply(world, entity);
-        })
+    fn rev_despawn(self) {
+        rev_despawn_inner(self);
     }
 
     fn rev_is_despawned(&self) -> bool {

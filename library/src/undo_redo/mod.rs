@@ -1,14 +1,28 @@
 use std::{
-    collections::VecDeque, error::Error, fmt::{Debug, Display}, hash::{BuildHasher, Hash, Hasher}, iter::FusedIterator, sync::Arc
+    collections::VecDeque,
+    error::Error,
+    fmt::{Debug, Display},
+    hash::{BuildHasher, Hash, Hasher},
+    iter::FusedIterator,
+    sync::Arc,
 };
 
 use bevy::{
     ecs::{
-        component::{Component, ComponentCloneBehavior, ComponentId}, entity::{hash_set::EntityHashSet, Entity, EntityCloner}, hierarchy::Children, query::{QueryBuilder, QueryState, With}, resource::Resource, system::{Commands, EntityCommands}, world::{DeferredWorld, EntityWorldMut, FromWorld, World}
-    }, log::error, platform_support::{
+        component::{Component, ComponentCloneBehavior, ComponentId},
+        entity::{hash_set::EntityHashSet, Entity, EntityCloner},
+        hierarchy::Children,
+        query::{QueryBuilder, QueryState, With},
+        resource::Resource,
+        system::{Commands, EntityCommands},
+        world::{DeferredWorld, EntityWorldMut, FromWorld, World},
+    },
+    log::error,
+    platform_support::{
         collections::{hash_map::Entry, HashMap, HashSet},
         hash::{FixedHasher, PassHash},
-    }, utils::synccell::SyncCell
+    },
+    utils::synccell::SyncCell,
 };
 
 use crate::{
@@ -190,6 +204,7 @@ impl<T: UndoRedo> UndoRedo for Box<[T]> {
 }
 
 pub trait RevWorld {
+    fn rev_despawn(&mut self, entity: Entity) -> bool;
     fn rev_buffer_components(
         &mut self,
         entity: Entity,
@@ -216,6 +231,10 @@ pub trait RevWorld {
 }
 
 impl RevWorld for World {
+    fn rev_despawn(&mut self, entity: Entity) -> bool {
+        let entity_mut = self.entity_mut(entity);
+        rev_despawn_inner(entity_mut)
+    }
     fn rev_buffer_components(
         &mut self,
         entity: Entity,
@@ -293,22 +312,6 @@ impl DespawnAtOutOfLog {
     }
 }
 
-fn get_children<const CONTAINS_ID: bool>(world: &World, entity: Entity, component_id: ComponentId, children_set: &mut EntityHashSet) {
-    let entity_ref = world.entity(entity);
-    if entity_ref.contains_id(component_id) != CONTAINS_ID {
-        return;
-    }
-    if !children_set.insert(entity) {
-        return;
-    }
-    let Some(children) = entity_ref.get::<Children>() else {
-        return;
-    };
-    for &child in children {
-        get_children::<CONTAINS_ID>(world, child, component_id, children_set);
-    }
-}
-
 impl FromWorld for DespawnAtOutOfLog {
     fn from_world(world: &mut World) -> Self {
         (&*world).into()
@@ -324,113 +327,6 @@ impl<'a> From<&'a World> for DespawnAtOutOfLog {
 impl<'a> From<&'a RevMeta> for DespawnAtOutOfLog {
     fn from(meta: &'a RevMeta) -> Self {
         Self::new(meta.now())
-    }
-}
-
-#[derive(Clone)]
-enum RevDespawn {
-    Single {
-        entity: Entity,
-        marker: DespawnAtOutOfLog
-    },
-    Hierarchy {
-        entities: Arc<[Entity]>,
-        marker: DespawnAtOutOfLog,
-    }
-}
-
-impl RevDespawn {
-    fn apply(world: &mut World, entity: Entity) {
-        fn get_children(world: &World, entity: Entity, component_id: ComponentId, set: &mut EntityHashSet) {
-            let entity_ref = world.entity(entity);
-            if entity_ref.contains_id(component_id) {
-                return;
-            }
-            if !set.insert(entity) {
-                return;
-            }
-            let Some(children) = entity_ref.get::<Children>() else {
-                return;
-            };
-            for &child in children {
-                get_children(world, child, component_id, set);
-            }
-        }
-
-        let at = world.get_resource::<RevMeta>().expect("todo").now();
-        let marker = DespawnAtOutOfLog(at);
-
-        let component_id = world.component_id::<DespawnAtOutOfLog>().unwrap();
-        let mut entities = EntityHashSet::new();
-        get_children(world, entity, component_id, &mut entities);
-
-        let mut this = match entities.len() {
-            0 => return,
-            1 => Self::Single { entity, marker },
-            _ => Self::Hierarchy { 
-                entities: entities.into_iter().collect(), 
-                marker
-            }
-        };
-
-        this.redo(world);
-        world.buffer_undo_redo(this);
-    }
-}
-
-impl UndoRedo for RevDespawn {
-    fn undo(&mut self, world: &mut World) {
-        let component_id = world.component_id::<DespawnAtOutOfLog>().expect("todo");
-        let mut commands = world.commands();
-        match self {
-            Self::Single { entity, .. } => {
-                commands.entity(*entity).remove_by_id(component_id);
-            },
-            Self::Hierarchy { entities, .. } => {
-                for &entity in entities.iter() {
-                    commands.entity(entity).remove_by_id(component_id);
-                }
-            }
-        }
-        world.flush();
-    }
-    fn redo(&mut self, world: &mut World) {
-        struct Iter {
-            entities: Arc<[Entity]>,
-            index: usize,
-            marker: DespawnAtOutOfLog
-        }
-
-        impl Iterator for Iter {
-            type Item = (Entity, DespawnAtOutOfLog);
-            fn next(&mut self) -> Option<Self::Item> {
-                self.entities.get(self.index).map(|entity| {
-                    self.index += 1;
-                    (*entity, self.marker)
-                })
-            }
-            fn size_hint(&self) -> (usize, Option<usize>) {
-                let len = self.len();
-                (len, Some(len))
-            }
-        }
-
-        impl ExactSizeIterator for Iter {
-            fn len(&self) -> usize {
-                self.entities.len() - self.index
-            }
-        }
-
-        impl FusedIterator for Iter {}
-
-        match *self {
-            Self::Single { entity, marker } => world.insert_batch([(entity, marker)]),
-            Self::Hierarchy { ref entities, marker } => world.insert_batch(Iter {
-                entities: entities.clone(),
-                index: 0,
-                marker: marker
-            })
-        }
     }
 }
 
@@ -706,6 +602,138 @@ impl UndoRedo for ComponentBuffer {
     fn redo(&mut self, world: &mut World) {
         self.move_components(world);
     }
+}
+
+
+struct RevDespawnSingle {
+    entity: Entity,
+    marker: DespawnAtOutOfLog,
+}
+
+struct RevDespawnHierarchy {
+    entities: Arc<[Entity]>,
+    marker: DespawnAtOutOfLog,
+}
+
+impl UndoRedo for RevDespawnSingle {
+    fn undo(&mut self, world: &mut World) {
+        world.entity_mut(self.entity).remove::<DespawnAtOutOfLog>();
+    }
+    fn redo(&mut self, world: &mut World) {
+        world.entity_mut(self.entity).insert(self.marker);
+    }
+}
+
+impl UndoRedo for RevDespawnHierarchy {
+    fn undo(&mut self, world: &mut World) {
+        let component_id = world.component_id::<DespawnAtOutOfLog>().expect("todo");
+        let mut commands = world.commands();
+        for &entity in self.entities.iter().rev() {
+            commands.entity(entity).remove_by_id(component_id);
+        }
+        world.flush();
+    }
+    fn redo(&mut self, world: &mut World) {
+        struct Iter {
+            entities: Arc<[Entity]>,
+            index: usize,
+            marker: DespawnAtOutOfLog,
+        }
+
+        impl Iterator for Iter {
+            type Item = (Entity, DespawnAtOutOfLog);
+            fn next(&mut self) -> Option<Self::Item> {
+                self.entities.get(self.index).map(|entity| {
+                    self.index += 1;
+                    (*entity, self.marker)
+                })
+            }
+            fn size_hint(&self) -> (usize, Option<usize>) {
+                let len = self.len();
+                (len, Some(len))
+            }
+        }
+
+        impl ExactSizeIterator for Iter {
+            fn len(&self) -> usize {
+                self.entities.len() - self.index
+            }
+        }
+
+        impl FusedIterator for Iter {}
+
+        world.insert_batch(Iter {
+            entities: self.entities.clone(),
+            index: 0,
+            marker: self.marker,
+        })
+    }
+}
+
+fn rev_despawn_single(world: &mut World, entity: Entity, marker: DespawnAtOutOfLog) -> bool {
+    let mut undo_redo = RevDespawnSingle { entity, marker };
+    undo_redo.redo(world);
+    world.buffer_undo_redo(undo_redo);
+    true
+}
+
+fn rev_despawn_children(
+    world: &World,
+    entity: Entity,
+    component_id: ComponentId,
+    entities: &mut EntityHashSet,
+) {
+    let entity_mut = world.entity(entity);
+    if entity_mut.contains_id(component_id) {
+        return;
+    }
+    if !entities.insert(entity) {
+        return;
+    }
+    let Some(children) = entity_mut.get::<Children>() else {
+        return;
+    };
+    for &child in children {
+        rev_despawn_children(world, child, component_id, entities);
+    }
+}
+
+fn rev_despawn_inner(mut entity_mut: EntityWorldMut) -> bool {
+    let component_id = entity_mut.world().component_id::<DespawnAtOutOfLog>().unwrap();
+    if entity_mut.contains_id(component_id) {
+        return false;
+    }
+    
+    let at = entity_mut.get_resource::<RevMeta>().expect("todo").now();
+    let marker = DespawnAtOutOfLog(at);
+
+    let entity = entity_mut.id();
+    let children = entity_mut
+        .get::<Children>()
+        .map(|children| children.iter().copied().collect::<Vec<Entity>>())
+        .filter(|children| !children.is_empty());
+    
+    entity_mut.world_scope(|world| {
+        let Some(children) = children else {
+            return rev_despawn_single(world, entity, marker);
+        };
+        let mut entities = [entity].into_iter().collect();
+        for child in children {
+            rev_despawn_children(world, child, component_id, &mut entities);
+        }
+        if entities.len() < 2 {
+            return rev_despawn_single(world, entity, marker);
+        }
+
+        let mut undo_redo = RevDespawnHierarchy {
+            entities: entities.into_iter().collect(),
+            marker,
+        };
+        undo_redo.redo(world);
+        world.buffer_undo_redo(undo_redo);
+
+        true
+    })
 }
 
 #[macro_export]

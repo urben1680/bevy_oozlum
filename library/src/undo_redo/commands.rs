@@ -15,9 +15,7 @@ use bevy::{
     },
 };
 
-use super::{
-    BuffersUndoRedo, DespawnAtOutOfLog, UndoRedo,
-};
+use super::{BuffersUndoRedo, DespawnAtOutOfLog, UndoRedo};
 
 pub trait RevCommands {
     fn rev_init_resource<R: Resource + FromWorld>(&mut self);
@@ -174,9 +172,7 @@ where
         fn redo(&mut self, world: &mut World) {
             let mut commands = world.commands();
             for &entity in &*self.entities {
-                commands
-                    .entity(entity)
-                    .remove::<DespawnAtOutOfLog>();
+                commands.entity(entity).remove::<DespawnAtOutOfLog>();
             }
             world.flush();
         }
