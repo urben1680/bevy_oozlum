@@ -17,7 +17,7 @@ TODO:
 -- test not only multi-thread executor
 
 Enhancements:
-- reduce todo!() and //todo
+- reduce todo!() and //todo and unwrap (in favor of expect)
 - #[inline]s
 - track_location and bevy_reflect feature (both are not documented?), rename serde -> serialize
 - deprecate Finalize
@@ -27,7 +27,8 @@ Enhancements:
 -- new tests
 - all init_resource to plugin
 - assert buffer components remain empty for component
-- sync points before exclusive systems need to be reflected 
+- sync points before exclusive systems need to be reflected
+- migration tracking issue
 
 Docs
 - documentations
@@ -70,7 +71,8 @@ pub mod prelude {
         RevSystemsSet, RevUpdate,
     };
     pub use crate::undo_redo::{
-        BuffersUndoRedo as _, FinalizeDirection, RevBuffers, RevCommands as _, RevDisabled,
+        unique_for_location, BuffersUndoRedo as _, DespawnAtOutOfLog, FinalizeDirection,
+        RevBuffers, RevCommands as _, RevEntityWorldMut as _, RevEntry as _, RevWorld as _,
         UndoRedoDirection,
     };
 }
