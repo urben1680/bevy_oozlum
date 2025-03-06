@@ -9,7 +9,7 @@ use std::{
 
 use bevy::{
     ecs::{
-        archetype::{Archetype, ArchetypeId, Archetypes}, component::{Component, ComponentCloneBehavior, ComponentId}, entity::{hash_set::EntityHashSet, Entity, EntityCloner}, hierarchy::Children, query::{QueryBuilder, QueryState, With}, resource::Resource, system::{Commands, EntityCommands}, world::{DeferredWorld, EntityWorldMut, FromWorld, World}
+        archetype::{Archetype, ArchetypeGeneration, ArchetypeId, Archetypes}, component::{Component, ComponentCloneBehavior, ComponentId}, entity::{hash_set::EntityHashSet, Entity, EntityCloner}, hierarchy::Children, query::{QueryBuilder, QueryState, With}, resource::Resource, storage::TableId, system::{Commands, EntityCommands}, world::{DeferredWorld, EntityWorldMut, FromWorld, World}
     },
     log::error,
     platform_support::{
@@ -429,21 +429,22 @@ pub struct SharedBuffer;
 
 struct ComponentBufferDataDraft {
     components: Box<[ComponentId]>,
-    // generated on insert while not being needed, needs to be cleaned up when inserted
     unused_required: Box<[ComponentId]>,
-    // primarily find entity in these where the DespawnAtOutOfLog matches
-    move_to_existing: Vec<ArchetypeId>,
-    // secondarily find entity in these where the DespawnAtOutOfLog matches
-    move_to_new: Vec<ArchetypeId>,
-    // fallback to spawning new entity
-
-    // archetypes that need self.components to be inserted into the key value to be matched
-    containing_archetypes: HashMap<Box<[ComponentId]>, ArchetypeId>
+    archetypes_without_components: Vec<ArchetypeId>,
+    archetypes_moved_from: usize,
+    generation: ArchetypeGeneration
 }
 
 impl ComponentBufferDataDraft {
-    fn update_archetypes(&mut self, archetypes: &Archetypes, new_archetypes: &[Archetype]) {
-        
+    fn update(&mut self, world: &World) {
+        let archetypes = world.archetypes();
+        for new_archetype in &archetypes[self.generation..] {
+
+        }
+        self.generation = archetypes.generation();
+    }
+    fn get_buffer(&mut self, ) -> Entity {
+        todo!()
     }
 }
 
