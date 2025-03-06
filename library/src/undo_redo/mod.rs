@@ -9,13 +9,7 @@ use std::{
 
 use bevy::{
     ecs::{
-        component::{Component, ComponentCloneBehavior, ComponentId},
-        entity::{hash_set::EntityHashSet, Entity, EntityCloner},
-        hierarchy::Children,
-        query::{QueryBuilder, QueryState, With},
-        resource::Resource,
-        system::{Commands, EntityCommands},
-        world::{DeferredWorld, EntityWorldMut, FromWorld, World},
+        archetype::{Archetype, ArchetypeId, Archetypes}, component::{Component, ComponentCloneBehavior, ComponentId}, entity::{hash_set::EntityHashSet, Entity, EntityCloner}, hierarchy::Children, query::{QueryBuilder, QueryState, With}, resource::Resource, system::{Commands, EntityCommands}, world::{DeferredWorld, EntityWorldMut, FromWorld, World}
     },
     log::error,
     platform_support::{
@@ -433,9 +427,30 @@ impl<'a> Error for UndoRedoLogError<'a> {}
 #[component(immutable)]
 pub struct SharedBuffer;
 
+struct ComponentBufferDataDraft {
+    components: Box<[ComponentId]>,
+    // generated on insert while not being needed, needs to be cleaned up when inserted
+    unused_required: Box<[ComponentId]>,
+    // primarily find entity in these where the DespawnAtOutOfLog matches
+    move_to_existing: Vec<ArchetypeId>,
+    // secondarily find entity in these where the DespawnAtOutOfLog matches
+    move_to_new: Vec<ArchetypeId>,
+    // fallback to spawning new entity
+
+    // archetypes that need self.components to be inserted into the key value to be matched
+    containing_archetypes: HashMap<Box<[ComponentId]>, ArchetypeId>
+}
+
+impl ComponentBufferDataDraft {
+    fn update_archetypes(&mut self, archetypes: &Archetypes, new_archetypes: &[Archetype]) {
+        
+    }
+}
+
 struct ComponentBufferData {
     query_state: QueryState<(Entity, &'static DespawnAtOutOfLog), With<SharedBuffer>>,
     components: Box<[ComponentId]>,
+    // unused_required_components
 }
 
 impl ComponentBufferData {
@@ -569,6 +584,7 @@ impl ComponentBuffer {
         world.resource_scope::<ComponentBufferRes, _>(|world, mut component_buffers| {
             let (source, target) = if self.components_buffered {
                 (self.buffer, self.entity)
+                // todo: leftover required components should be removed
             } else {
                 (self.entity, self.buffer)
             };
