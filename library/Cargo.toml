@@ -8,6 +8,7 @@ edition = "2021"
 [dependencies]
 bevy = { git = "https://github.com/bevyengine/bevy" }
 variadics_please = "1.1"
+fixedbitset = "0.5" # keep this in sync with bevy
 serde = { version = "1.0", features = ["derive"], optional = true }
 
 [dev-dependencies]
