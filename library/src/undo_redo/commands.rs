@@ -15,6 +15,8 @@ use bevy::{
     },
 };
 
+use crate::meta::RevMeta;
+
 use super::{BuffersUndoRedo, DespawnAtOutOfLog, UndoRedo};
 
 pub trait RevCommands {
@@ -179,8 +181,8 @@ where
     }
 
     |world: &mut World| {
+        let marker = DespawnAtOutOfLog::new(world.resource::<RevMeta>());
         let entities = world.spawn_batch(bundles_iter).collect();
-        let marker = DespawnAtOutOfLog::from_world(world);
         world.buffer_undo_redo(SpawnBatch { entities, marker });
     }
 }
@@ -311,7 +313,7 @@ where
                 }
             }
         }
-        let marker = DespawnAtOutOfLog::from_world(world);
+        let marker = DespawnAtOutOfLog::new(world.resource::<RevMeta>());
         let buffer_entities: Box<[Entity]> = world
             .spawn_batch(std::iter::repeat(marker).take(len))
             .collect();
