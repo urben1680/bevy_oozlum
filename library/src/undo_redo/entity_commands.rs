@@ -1,6 +1,12 @@
 use bevy::{
     ecs::{
-        archetype::Archetype, bundle::{Bundle, InsertMode}, component::{Component, ComponentId}, entity::{Entity, EntityClonerBuilder}, hierarchy::{ChildSpawner, Children}, system::{entity_command::insert_by_id, EntityCommand}, world::{EntityRef, OccupiedEntry}
+        archetype::Archetype,
+        bundle::{Bundle, InsertMode},
+        component::{Component, ComponentId},
+        entity::{Entity, EntityClonerBuilder},
+        hierarchy::{ChildSpawner, Children},
+        system::{entity_command::insert_by_id, EntityCommand},
+        world::OccupiedEntry,
     },
     ptr::OwningPtr,
 };
@@ -195,26 +201,8 @@ impl RevEntityWorldMut for EntityWorldMut<'_> {
         component_id: ComponentId,
         component: OwningPtr<'_>,
     ) -> &mut Self {
-        let archetype_id = self.archetype().id();
-        if self.contains_id(component_id) {
-            self.rev_buffer_components([component_id]);
-        }
-        self.rev_buffer_components_at_undo_cached(
-            unique_for_location!(archetype_id, component_id),
-            |world: &mut World| {
-                let archetype = world.archetypes().get(archetype_id).unwrap();
-                world
-                    .components()
-                    .get_info(component_id)
-                    .unwrap()
-                    .required_components()
-                    .iter_ids()
-                    .filter(|component_id| !archetype.contains(*component_id))
-                    .chain([component_id])
-                    .collect::<Vec<ComponentId>>()
-            },
-        )
-        .insert_by_id(component_id, component)
+        rev_insert_inner(self, component_id);
+        self.insert_by_id(component_id, component)
     }
 
     unsafe fn rev_insert_by_ids<'a, I: Iterator<Item = OwningPtr<'a>>>(
@@ -388,10 +376,7 @@ impl RevEntityWorldMut for EntityWorldMut<'_> {
         let meta = self.get_resource::<RevMeta>().expect("todo");
         let marker = DespawnAtOutOfLog::new(meta);
         let entity = self.clone_and_spawn();
-        self.buffer_undo_redo(UndoRedoSwap(RevDespawnSingle {
-            entity,
-            marker
-        }));
+        self.buffer_undo_redo(UndoRedoSwap(RevDespawnSingle { entity, marker }));
         entity
     }
 
@@ -402,10 +387,7 @@ impl RevEntityWorldMut for EntityWorldMut<'_> {
         let meta = self.get_resource::<RevMeta>().expect("todo");
         let marker = DespawnAtOutOfLog::new(meta);
         let entity = self.clone_and_spawn_with(config);
-        self.buffer_undo_redo(UndoRedoSwap(RevDespawnSingle {
-            entity,
-            marker
-        }));
+        self.buffer_undo_redo(UndoRedoSwap(RevDespawnSingle { entity, marker }));
         entity
     }
 
@@ -439,9 +421,12 @@ impl RevEntityWorldMut for EntityWorldMut<'_> {
                         .explicit_components()
                         .iter()
                         .copied()
-                        .filter(|&component_id| source_archetype.contains(component_id) && target_archetype.contains(component_id))
+                        .filter(|&component_id| {
+                            source_archetype.contains(component_id)
+                                && target_archetype.contains(component_id)
+                        })
                         .collect::<Vec<_>>()
-                }
+                },
             );
             world.rev_buffer_components_at_undo_cached(
                 target,
@@ -449,29 +434,59 @@ impl RevEntityWorldMut for EntityWorldMut<'_> {
                 |world| {
                     let source_archetype = get_archetype(&world, source_archetype_id);
                     let target_archetype = get_archetype(&world, target_archetype_id);
-                    let bundle_info = world
-                        .bundles()
-                        .get(bundle_id)
-                        .unwrap();
+                    let bundle_info = world.bundles().get(bundle_id).unwrap();
                     bundle_info
                         .explicit_components()
                         .iter()
                         .copied()
                         .filter(|&component_id| source_archetype.contains(component_id))
-                        .chain(bundle_info
-                            .required_components()
-                            .iter()
-                            .copied()
-                            .filter(|&component_id| source_archetype.contains(component_id) && !target_archetype.contains(component_id))
-                        )
+                        .chain(bundle_info.required_components().iter().copied().filter(
+                            |&component_id| {
+                                source_archetype.contains(component_id)
+                                    && !target_archetype.contains(component_id)
+                            },
+                        ))
                         .collect::<Vec<_>>()
-                }
+                },
             );
         });
         self.clone_components::<B>(target)
     }
 
     fn rev_move_components<B: Bundle>(&mut self, target: Entity) -> &mut Self {
+        struct RevMove {
+            source: Entity,
+            target: Entity,
+            components: Box<[ComponentId]>,
+        }
+
+        impl RevMove {
+            fn undo_redo<const UNDO: bool>(&self, world: &mut World) {
+                let (target, source) = if UNDO {
+                    (self.target, self.source)
+                } else {
+                    (self.source, self.target)
+                };
+                EntityCloner::build(world)
+                    .deny_all()
+                    .without_required_components(|builder| {
+                        builder.allow_by_ids(self.components.iter().copied());
+                    })
+                    .move_components(true)
+                    .clone_entity(source, target);
+            }
+        }
+
+        impl UndoRedo for RevMove {
+            fn undo(&mut self, world: &mut World) {
+                self.undo_redo::<true>(world);
+            }
+            fn redo(&mut self, world: &mut World) {
+                self.undo_redo::<false>(world);
+            }
+        }
+
+        let source = self.id();
         let bundle_id = unsafe {
             // SAFETY: Bundle registration does not affect entity location
             self.world_mut().register_bundle::<B>().id()
@@ -487,25 +502,38 @@ impl RevEntityWorldMut for EntityWorldMut<'_> {
                 unreachable!()
             })
             .archetype_id;
+        let key = unique_for_location!(source_archetype_id, target_archetype_id, bundle_id);
         self.world_scope(|world| {
-            world.rev_buffer_components_cached(
+            world.rev_buffer_components_cached(target, key, |world| {
+                let source_archetype = get_archetype(&world, source_archetype_id);
+                let target_archetype = get_archetype(&world, target_archetype_id);
+                world
+                    .bundles()
+                    .get(bundle_id)
+                    .unwrap()
+                    .contributed_components() // EntityWorldMut::move_components treats required and explicit components the same
+                    .iter()
+                    .copied()
+                    .filter(|&component_id| {
+                        source_archetype.contains(component_id)
+                            && target_archetype.contains(component_id)
+                    })
+                    .collect::<Vec<_>>()
+            });
+
+            let components = world
+                .resource::<ComponentBufferRes>()
+                .get_buffer_components(key)
+                .iter()
+                .copied()
+                .collect();
+            let mut undo_redo = RevMove {
+                source,
                 target,
-                unique_for_location!(source_archetype_id, target_archetype_id, bundle_id),
-                |world| {
-                    let source_archetype = get_archetype(&world, source_archetype_id);
-                    let target_archetype = get_archetype(&world, target_archetype_id);
-                    world
-                        .bundles()
-                        .get(bundle_id)
-                        .unwrap()
-                        .explicit_components()
-                        .iter()
-                        .copied()
-                        .filter(|&component_id| source_archetype.contains(component_id) && target_archetype.contains(component_id))
-                        .collect::<Vec<_>>()
-                }
-            );
-            todo!("init new mover type that does the move and buffers itself like rev_despawn_internal")
+                components,
+            };
+            undo_redo.redo(world);
+            world.buffer_undo_redo(undo_redo);
         });
         self
     }
@@ -593,7 +621,7 @@ pub fn rev_insert<B: Bundle>(bundle: B, mode: InsertMode) -> impl EntityCommand 
     move |mut entity: EntityWorldMut| {
         match mode {
             InsertMode::Keep => entity.rev_insert_if_new(bundle),
-            InsertMode::Replace => entity.rev_insert(bundle)
+            InsertMode::Replace => entity.rev_insert(bundle),
         };
     }
 }
@@ -610,32 +638,34 @@ pub unsafe fn rev_insert_by_id<T: Component + Send + 'static>(
     mode: InsertMode,
 ) -> impl EntityCommand {
     move |mut entity: EntityWorldMut| {
-        match mode {
-            InsertMode::Keep => todo!(),
-            InsertMode::Replace => {
-                let archetype_id = entity.archetype().id();
-                if entity.contains_id(component_id) {
-                    entity.rev_buffer_components([component_id]);
-                }
-                entity.rev_buffer_components_at_undo_cached(
-                    unique_for_location!(archetype_id, component_id),
-                    |world: &mut World| {
-                        let archetype = world.archetypes().get(archetype_id).unwrap();
-                        world
-                            .components()
-                            .get_info(component_id)
-                            .unwrap()
-                            .required_components()
-                            .iter_ids()
-                            .filter(|component_id| !archetype.contains(*component_id))
-                            .chain([component_id])
-                            .collect::<Vec<ComponentId>>()
-                    },
-                )
-                .insert_by_id(component_id, OwningPtr::<T>::from(value))
-            }
-        };
+        if entity.contains_id(component_id) && mode == InsertMode::Keep {
+            return;
+        }
+        rev_insert_inner(&mut entity, component_id);
+        insert_by_id(component_id, value, mode).apply(entity)
     }
+}
+
+fn rev_insert_inner(entity: &mut EntityWorldMut, component_id: ComponentId) {
+    let archetype_id = entity.archetype().id();
+    if entity.contains_id(component_id) {
+        entity.rev_buffer_components([component_id]);
+    }
+    entity.rev_buffer_components_at_undo_cached(
+        unique_for_location!(archetype_id, component_id),
+        |world: &mut World| {
+            let archetype = world.archetypes().get(archetype_id).unwrap();
+            world
+                .components()
+                .get_info(component_id)
+                .unwrap()
+                .required_components()
+                .iter_ids()
+                .filter(|component_id| !archetype.contains(*component_id))
+                .chain([component_id])
+                .collect::<Vec<ComponentId>>()
+        },
+    );
 }
 
 /// Reversible version of [`insert_from_world`](bevy::ecs::system::entity_command::insert_from_world).

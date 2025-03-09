@@ -34,6 +34,9 @@ use crate::{
 mod commands;
 mod entity_commands;
 
+#[cfg(test)]
+mod test;
+
 pub use commands::*;
 pub use entity_commands::*;
 
@@ -168,7 +171,7 @@ impl<T: UndoRedo> UndoRedo for UndoRedoSwap<T> {
     fn redo(&mut self, world: &mut World) {
         self.0.undo(world);
     }
-} 
+}
 
 impl<T: UndoRedo> UndoRedo for Vec<T> {
     fn undo(&mut self, world: &mut World) {
@@ -233,7 +236,7 @@ pub trait RevWorld {
         cache: impl Hash,
         components: impl FnOnce(&mut World) -> I,
     ) -> bool;
-    fn ongoing_component_buffer(&self) -> bool;
+    fn rev_buffer_components_moving(&self) -> bool;
 }
 
 impl RevWorld for World {
@@ -297,7 +300,7 @@ impl RevWorld for World {
                 .is_some()
         })
     }
-    fn ongoing_component_buffer(&self) -> bool {
+    fn rev_buffer_components_moving(&self) -> bool {
         self.get_resource::<ComponentBufferRes>()
             .is_some_and(|component_buffers| component_buffers.ongoing_buffer)
     }
@@ -329,9 +332,9 @@ impl DespawnAtOutOfLog {
         let mut res = world.resource_mut::<ComponentBufferRes>();
         if res.buffered_in_archetype_at != now {
             res.buffered_in_archetype_at = now;
-            res.buffered_in_archetypes.clear();
+            res.archetypes_buffered_to_this_frame.clear();
         }
-        res.buffered_in_archetypes
+        res.archetypes_buffered_to_this_frame
             .insert(location.archetype_id.index());
     }
 }
@@ -447,7 +450,7 @@ impl ComponentBufferData {
     fn get_buffer_entity(
         &mut self,
         world: &mut World,
-        archetypes_buffered_in: &FixedBitSet,
+        archetypes_buffered_to_this_frame: &FixedBitSet,
     ) -> Entity {
         let meta = world.get_resource::<RevMeta>().unwrap();
         let now_marker = DespawnAtOutOfLog::new(meta);
@@ -468,7 +471,7 @@ impl ComponentBufferData {
         // try find existing buffer entity, favoring archetypes that have been moved from already so no new archetypes are created
         let archetypes = self.without_components.iter().copied().enumerate();
         for (i, archetype_id) in archetypes {
-            if !archetypes_buffered_in.contains(archetype_id.index()) {
+            if !archetypes_buffered_to_this_frame.contains(archetype_id.index()) {
                 continue;
             }
             let archetype = world.archetypes().get(archetype_id).unwrap();
@@ -504,7 +507,8 @@ pub(crate) struct ComponentBufferRes {
     unclonable: HashSet<ComponentId>,
     empty_with_marker: ArchetypeId,
     cache: HashMap<u64, Option<u64>, PassHash>,
-    buffered_in_archetypes: FixedBitSet,
+    archetypes_buffered_to_this_frame: FixedBitSet,
+    archetypes_buffered_from_any_frame: FixedBitSet,
     buffered_in_archetype_at: u64,
     ongoing_buffer: bool,
 }
@@ -519,7 +523,8 @@ impl FromWorld for ComponentBufferRes {
             unclonable: HashSet::default(),
             empty_with_marker,
             cache: HashMap::default(),
-            buffered_in_archetypes: FixedBitSet::new(),
+            archetypes_buffered_to_this_frame: FixedBitSet::new(),
+            archetypes_buffered_from_any_frame: FixedBitSet::new(),
             buffered_in_archetype_at: 0,
             ongoing_buffer: false,
         }
@@ -534,16 +539,14 @@ impl ComponentBufferRes {
         cache: impl Hash,
         components: impl FnOnce(&mut World) -> I,
     ) -> Option<ComponentBuffer> {
-        let mut hasher = FixedHasher::default().build_hasher();
-        cache.hash(&mut hasher);
-        let cache = hasher.finish();
+        let cache = hash_cache(cache);
         if let Some(key) = self.cache.get(&cache).copied() {
             let key = key?;
             let buffer = self
                 .buffers
                 .get_mut(&key)
                 .expect("todo")
-                .get_buffer_entity(world, &self.buffered_in_archetypes);
+                .get_buffer_entity(world, &self.archetypes_buffered_to_this_frame);
             Some(ComponentBuffer {
                 key,
                 entity,
@@ -614,7 +617,7 @@ impl ComponentBufferRes {
                 generation: world.archetypes().generation(),
             }
         });
-        let buffer = data.get_buffer_entity(world, &self.buffered_in_archetypes);
+        let buffer = data.get_buffer_entity(world, &self.archetypes_buffered_to_this_frame);
         Some(ComponentBuffer {
             key,
             entity,
@@ -622,6 +625,16 @@ impl ComponentBufferRes {
             components_buffered: false,
         })
     }
+    fn get_buffer_components(&self, cache: impl Hash) -> &[ComponentId] {
+        let cache = hash_cache(cache);
+        &self.buffers.get(&cache).unwrap().components
+    }
+}
+
+fn hash_cache(cache: impl Hash) -> u64 {
+    let mut hasher = FixedHasher::default().build_hasher();
+    cache.hash(&mut hasher);
+    hasher.finish()
 }
 
 #[derive(Debug)]
