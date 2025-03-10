@@ -4,10 +4,7 @@ use bevy::ecs::schedule::{
 
 use variadics_please::all_tuples;
 
-use super::{
-    condition::add_condition,
-    set_configs::{IntoRevSystemSetConfigs, RevSystemSetConfigs},
-};
+use super::set_configs::{IntoRevSystemSetConfigs, RevSystemSetConfigs};
 
 pub struct RevSystemConfigs {
     pub(crate) systems: SystemConfigs,
@@ -52,21 +49,32 @@ where
         configs
     }
     fn rev_distributive_run_if<M>(self, condition: impl Condition<M> + Clone) -> RevSystemConfigs {
-        let mut configs = self.into_rev_configs();
-        let nodes = match &mut configs.systems {
-            NodeConfigs::Configs { configs, .. } => configs,
-            NodeConfigs::NodeConfig(_) => {
-                unreachable!("`configs.systems` is always `(fwd_sys, bwd_cmd, bwd_sys)` or further nested tuples")
+        fn distribute<M>(
+            set_configs: &mut RevSystemSetConfigs,
+            nodes: &mut SystemConfigs,
+            condition: impl Condition<M> + Clone,
+        ) {
+            let nodes = match nodes {
+                NodeConfigs::Configs { configs, .. } => configs,
+                NodeConfigs::NodeConfig(_) => {
+                    unreachable!(
+                        "first iteration: `configs.systems` is always `(fwd_sys, bwd_cmd, bwd_sys)` or further nested tuples.\n
+                        next iterations: would not have been called if this is a NodeConfig as these cause a break of recursion."
+                    )
+                }
+            };
+            if matches!(nodes.get(0), Some(NodeConfigs::NodeConfig(_))) {
+                // detected fwd_sys of single system from `(fwd_sys, bwd_cmd, bwd_sys).into_configs()`
+                set_configs.rev_run_if_inner(condition);
+                return;
             }
-        };
-        if matches!(nodes.get(0), Some(NodeConfigs::NodeConfig(_))) {
-            // detected fwd_sys of single system from `(fwd_sys, bwd_cmd, bwd_sys).into_configs()`
-            return configs.rev_run_if(condition);
+            for node in nodes {
+                distribute(set_configs, node, condition.clone());
+            }
         }
-        for node in nodes {
-            let set = add_condition(&mut configs.sets.condition_sets, condition.clone());
-            node.in_set_inner(set);
-        }
+
+        let mut configs: RevSystemConfigs = self.into_rev_configs();
+        distribute(&mut configs.sets, &mut configs.systems, condition);
         configs
     }
     fn rev_ambiguous_with<M>(self, set: impl IntoSystemSet<M>) -> RevSystemConfigs {
