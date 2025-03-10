@@ -24,6 +24,14 @@ pub struct RevSystemSetConfigs {
     pub(crate) condition_sets: SystemSetConfigs,
 }
 
+impl RevSystemSetConfigs {
+    pub(super) fn rev_run_if_inner<M>(&mut self, condition: impl Condition<M>) {
+        let set = add_condition(&mut self.condition_sets, condition);
+        self.fwd_sys_sets.in_set_inner(set);
+        self.bwd_cmd_sys_sets.in_set_inner(set);
+    }
+}
+
 pub trait IntoRevSystemSetConfigs<Marker>: Sized {
     #[doc(hidden)]
     fn into_rev_configs(self) -> RevSystemSetConfigs;
@@ -108,14 +116,8 @@ pub trait IntoRevSystemSetConfigs<Marker>: Sized {
     }
     fn rev_run_if<M>(self, condition: impl Condition<M>) -> RevSystemSetConfigs {
         let mut configs = self.into_rev_configs();
-        let set = add_condition(&mut configs.condition_sets, condition);
-        RevSystemSetConfigs {
-            fwd_sys_sets: configs.fwd_sys_sets.in_set(set),
-            bwd_cmd_sets: configs.bwd_cmd_sets,
-            bwd_sys_sets: configs.bwd_sys_sets,
-            bwd_cmd_sys_sets: configs.bwd_cmd_sys_sets.in_set(set),
-            condition_sets: configs.condition_sets,
-        }
+        configs.rev_run_if_inner(condition);
+        configs
     }
     fn rev_ambiguous_with<M>(self, set: impl IntoSystemSet<M>) -> RevSystemSetConfigs {
         let configs = self.into_rev_configs();
