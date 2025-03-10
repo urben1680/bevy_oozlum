@@ -54,6 +54,8 @@ ISSUES/DISCUSSIONS:
 - more compact FrameTransitionLog
 -- VecDeque<u8> with variable len entries
 -- has to provide the same api
+- not supported:
+-- EntityWorldMut::clone_with because EntityClonerBuilder is not offering reads on which components are cloned
 */
 
 pub mod app;
