@@ -1,16 +1,21 @@
 use std::{
+    alloc::Layout,
     collections::VecDeque,
     error::Error,
     fmt::{Debug, Display},
     hash::{BuildHasher, Hash, Hasher},
     iter::FusedIterator,
+    ptr::NonNull,
     sync::Arc,
 };
 
 use bevy::{
     ecs::{
         archetype::{ArchetypeGeneration, ArchetypeId},
-        component::{Component, ComponentCloneBehavior, ComponentId, HookContext},
+        component::{
+            Component, ComponentCloneBehavior, ComponentDescriptor, ComponentId, HookContext,
+            StorageType,
+        },
         entity::{hash_set::EntityHashSet, Entity, EntityCloner},
         hierarchy::Children,
         resource::Resource,
@@ -22,6 +27,7 @@ use bevy::{
         collections::{HashMap, HashSet},
         hash::{FixedHasher, PassHash},
     },
+    ptr::OwningPtr,
     utils::synccell::SyncCell,
 };
 use fixedbitset::FixedBitSet;
@@ -218,24 +224,24 @@ pub trait RevWorld {
         &mut self,
         entity: Entity,
         components: impl IntoIterator<Item = ComponentId>,
-    ) -> bool;
+    ) -> Option<Entity>;
     fn rev_buffer_components_cached<I: IntoIterator<Item = ComponentId>>(
         &mut self,
         entity: Entity,
         cache: impl Hash,
         components: impl FnOnce(&mut World) -> I,
-    ) -> bool;
+    ) -> Option<Entity>;
     fn rev_buffer_components_at_undo(
         &mut self,
         entity: Entity,
         components: impl IntoIterator<Item = ComponentId>,
-    ) -> bool;
+    ) -> Option<Entity>;
     fn rev_buffer_components_at_undo_cached<I: IntoIterator<Item = ComponentId>>(
         &mut self,
         entity: Entity,
         cache: impl Hash,
         components: impl FnOnce(&mut World) -> I,
-    ) -> bool;
+    ) -> Option<Entity>;
     fn rev_buffer_components_moving(&self) -> bool;
 }
 
@@ -248,15 +254,16 @@ impl RevWorld for World {
         &mut self,
         entity: Entity,
         components: impl IntoIterator<Item = ComponentId>,
-    ) -> bool {
+    ) -> Option<Entity> {
         self.resource_scope::<ComponentBufferRes, _>(|world, mut component_buffers| {
             component_buffers
                 .get_buffer(world, entity, components)
                 .map(|mut buffer| {
+                    let buffer_entity = buffer.buffer;
                     buffer.move_components(world);
                     world.buffer_undo_redo(buffer);
+                    buffer_entity
                 })
-                .is_some()
         })
     }
     fn rev_buffer_components_cached<I: IntoIterator<Item = ComponentId>>(
@@ -264,27 +271,32 @@ impl RevWorld for World {
         entity: Entity,
         cache: impl Hash,
         components: impl FnOnce(&mut World) -> I,
-    ) -> bool {
+    ) -> Option<Entity> {
         self.resource_scope::<ComponentBufferRes, _>(|world, mut component_buffers| {
             component_buffers
                 .get_buffer_cached(world, entity, cache, components)
                 .map(|mut buffer| {
+                    let buffer_entity = buffer.buffer;
                     buffer.move_components(world);
                     world.buffer_undo_redo(buffer);
+                    buffer_entity
                 })
-                .is_some()
         })
     }
     fn rev_buffer_components_at_undo(
         &mut self,
         entity: Entity,
         components: impl IntoIterator<Item = ComponentId>,
-    ) -> bool {
+    ) -> Option<Entity> {
         self.resource_scope::<ComponentBufferRes, _>(|world, mut component_buffers| {
             component_buffers
                 .get_buffer(world, entity, components)
-                .map(|buffer| world.buffer_undo_redo(buffer))
-                .is_some()
+                .map(|buffer| {
+                    let buffer_entity = buffer.buffer;
+                    buffer.reserve_components(world, &*component_buffers);
+                    world.buffer_undo_redo(buffer);
+                    buffer_entity
+                })
         })
     }
     fn rev_buffer_components_at_undo_cached<I: IntoIterator<Item = ComponentId>>(
@@ -292,12 +304,16 @@ impl RevWorld for World {
         entity: Entity,
         cache: impl Hash,
         components: impl FnOnce(&mut World) -> I,
-    ) -> bool {
+    ) -> Option<Entity> {
         self.resource_scope::<ComponentBufferRes, _>(|world, mut component_buffers| {
             component_buffers
                 .get_buffer_cached(world, entity, cache, components)
-                .map(|buffer| world.buffer_undo_redo(buffer))
-                .is_some()
+                .map(|buffer| {
+                    let buffer_entity = buffer.buffer;
+                    buffer.reserve_components(world, &*component_buffers);
+                    world.buffer_undo_redo(buffer);
+                    buffer_entity
+                })
         })
     }
     fn rev_buffer_components_moving(&self) -> bool {
@@ -440,6 +456,7 @@ impl<'a> Error for UndoRedoLogError<'a> {}
 
 struct ComponentBufferData {
     components: Box<[ComponentId]>,
+    undo_reservations: Box<[ComponentId]>,
     unwanted_required: Box<[ComponentId]>,
     without_components: Vec<ArchetypeId>,
     moved_from: usize,
@@ -462,7 +479,11 @@ impl ComponentBufferData {
                 .iter()
                 .filter(|archetype| {
                     archetype.contains(marker_id)
-                        && self.components.iter().all(|id| !archetype.contains(*id))
+                        && self
+                            .components
+                            .iter()
+                            .chain(&self.undo_reservations)
+                            .all(|id| !archetype.contains(*id))
                 })
                 .map(|archetype| archetype.id()),
         );
@@ -504,6 +525,7 @@ impl ComponentBufferData {
 #[derive(Resource)]
 pub(crate) struct ComponentBufferRes {
     buffers: HashMap<u64, ComponentBufferData, PassHash>,
+    undo_reservations: HashMap<ComponentId, ComponentId>,
     unclonable: HashSet<ComponentId>,
     empty_with_marker: ArchetypeId,
     cache: HashMap<u64, Option<u64>, PassHash>,
@@ -520,6 +542,7 @@ impl FromWorld for ComponentBufferRes {
         entity.despawn();
         Self {
             buffers: HashMap::default(),
+            undo_reservations: HashMap::default(),
             unclonable: HashSet::default(),
             empty_with_marker,
             cache: HashMap::default(),
@@ -595,6 +618,31 @@ impl ComponentBufferRes {
         }
         let key = hasher.finish();
         let data = self.buffers.entry(key).or_insert_with(|| {
+            let undo_reservations = components
+                .iter()
+                .map(|&component_id| {
+                    *self
+                        .undo_reservations
+                        .entry(component_id)
+                        .or_insert_with(|| {
+                            let descriptor = unsafe {
+                                // SAFETY: (): Send + Sync + !Drop
+                                ComponentDescriptor::new_with_layout(
+                                    format!(
+                                        "BufferReservation({})",
+                                        world.components().get_info(component_id).unwrap().name()
+                                    ),
+                                    StorageType::Table,
+                                    Layout::new::<()>(),
+                                    None, // !Drop
+                                    false,
+                                    ComponentCloneBehavior::Ignore,
+                                )
+                            };
+                            world.register_component_with_descriptor(descriptor)
+                        })
+                })
+                .collect::<Box<[ComponentId]>>();
             let mut unwanted_required = components
                 .iter()
                 .flat_map(|component_id| {
@@ -611,6 +659,7 @@ impl ComponentBufferRes {
             }
             ComponentBufferData {
                 components,
+                undo_reservations,
                 unwanted_required: unwanted_required.into_iter().collect(),
                 without_components: vec![self.empty_with_marker],
                 moved_from: 1,
@@ -646,6 +695,52 @@ struct ComponentBuffer {
 }
 
 impl ComponentBuffer {
+    fn reserve_components(&self, world: &mut World, buffer_data: &ComponentBufferRes) {
+        struct Reserved {
+            key: u64,
+            buffer: Entity,
+        }
+
+        impl UndoRedo for Reserved {
+            fn undo(&mut self, world: &mut World) {
+                world.resource_scope::<ComponentBufferRes, ()>(|world, buffer_data| {
+                    let undo_reservations = &*buffer_data.buffers[&self.key].undo_reservations;
+                    world
+                        .entity_mut(self.buffer)
+                        .remove_by_ids(undo_reservations);
+                })
+            }
+            fn redo(&mut self, world: &mut World) {
+                world.resource_scope::<ComponentBufferRes, ()>(|world, buffer_data| {
+                    self.redo_inner(world, &buffer_data);
+                })
+            }
+        }
+
+        impl Reserved {
+            fn redo_inner(&self, world: &mut World, buffer_data: &ComponentBufferRes) {
+                let undo_reservations = &*buffer_data.buffers[&self.key].undo_reservations;
+                let iter = std::iter::repeat_with(|| unsafe {
+                    // SAFETY: () is a ZST which makes NonNull::dangling a valid pointer to read from regardless of lifetimes
+                    OwningPtr::new(NonNull::dangling())
+                })
+                .take(undo_reservations.len());
+                let mut buffer = world.entity_mut(self.buffer);
+                unsafe {
+                    // SAFETY: ids are registered in this world for () that the iterator yields OwningPtr of
+                    buffer.insert_by_ids(undo_reservations, iter);
+                }
+            }
+        }
+
+        let undo_redo = Reserved {
+            key: self.key,
+            buffer: self.buffer,
+        };
+
+        undo_redo.redo_inner(world, buffer_data);
+        world.buffer_undo_redo(undo_redo);
+    }
     fn move_components(&mut self, world: &mut World) {
         world.resource_scope::<ComponentBufferRes, _>(|world, mut component_buffers| {
             component_buffers.ongoing_buffer = true;
