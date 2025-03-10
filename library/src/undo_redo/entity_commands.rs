@@ -5,6 +5,7 @@ use bevy::{
         component::{Component, ComponentId},
         entity::{Entity, EntityClonerBuilder},
         hierarchy::{ChildSpawner, Children},
+        relationship::{RelatedSpawner, Relationship, RelationshipTarget},
         system::{entity_command::insert_by_id, EntityCommand},
         world::OccupiedEntry,
     },
@@ -72,13 +73,6 @@ pub trait RevEntityWorldMut {
     /// Reversible version of [`EntityWorldMut::is_despawned`].
     fn rev_is_despawned(&self) -> bool;
 
-    /// Reversible version of [`EntityWorldMut::clone_with`].
-    fn rev_clone_with(
-        &mut self,
-        target: Entity,
-        config: impl FnOnce(&mut EntityClonerBuilder) + Send + Sync + 'static,
-    ) -> &mut Self;
-
     /// Reversible version of [`EntityWorldMut::clone_and_spawn`].
     fn rev_clone_and_spawn(&mut self) -> Entity;
 
@@ -93,6 +87,30 @@ pub trait RevEntityWorldMut {
 
     /// Reversible version of [`EntityWorldMut::move_components`].
     fn rev_move_components<B: Bundle>(&mut self, target: Entity) -> &mut Self;
+
+    /// Reversible version of [`EntityWorldMut::with_related`].
+    fn rev_with_related<R: Relationship>(
+        &mut self,
+        func: impl FnOnce(&mut RelatedSpawner<R>),
+    ) -> &mut Self;
+
+    /// Reversible version of [`EntityWorldMut::add_related`].
+    fn rev_add_related<R: Relationship>(&mut self, related: &[Entity]) -> &mut Self;
+
+    /// Reversible version of [`EntityWorldMut::add_one_related`].
+    fn rev_add_one_related<R: Relationship>(&mut self, entity: Entity) -> &mut Self;
+
+    /// Reversible version of [`EntityWorldMut::despawn_related`].
+    fn rev_despawn_related<S: RelationshipTarget>(&mut self) -> &mut Self;
+
+    /// Reversible version of [`EntityWorldMut::insert_recursive`].
+    fn rev_insert_recursive<S: RelationshipTarget>(
+        &mut self,
+        bundle: impl Bundle + Clone,
+    ) -> &mut Self;
+
+    /// Reversible version of [`EntityWorldMut::remove_recursive`].
+    fn rev_remove_recursive<S: RelationshipTarget, B: Bundle>(&mut self) -> &mut Self;
 
     /// Reversible version of [`EntityWorldMut::with_children`].
     fn rev_with_children(&mut self, func: impl FnOnce(&mut ChildSpawner)) -> &mut Self;
@@ -171,7 +189,7 @@ impl RevEntityWorldMut for EntityWorldMut<'_> {
     fn rev_insert_if_new<T: Bundle>(&mut self, bundle: T) -> &mut Self {
         let archetype_id = self.archetype().id();
         let entity = self.id();
-        let noop = self.world_scope(|world| {
+        let buffer_entity = self.world_scope(|world| {
             let bundle_id = world.register_bundle::<T>().id();
             world.rev_buffer_components_at_undo_cached(
                 entity,
@@ -190,7 +208,7 @@ impl RevEntityWorldMut for EntityWorldMut<'_> {
                 },
             )
         });
-        if !noop {
+        if buffer_entity.is_none() {
             self.insert_if_new(bundle);
         }
         self
@@ -364,14 +382,6 @@ impl RevEntityWorldMut for EntityWorldMut<'_> {
         self.contains::<DespawnAtOutOfLog>()
     }
 
-    fn rev_clone_with(
-        &mut self,
-        target: Entity,
-        config: impl FnOnce(&mut EntityClonerBuilder) + Send + Sync + 'static,
-    ) -> &mut Self {
-        todo!()
-    }
-
     fn rev_clone_and_spawn(&mut self) -> Entity {
         let meta = self.get_resource::<RevMeta>().expect("todo");
         let marker = DespawnAtOutOfLog::new(meta);
@@ -536,6 +546,42 @@ impl RevEntityWorldMut for EntityWorldMut<'_> {
             world.buffer_undo_redo(undo_redo);
         });
         self
+    }
+
+    fn rev_with_related<R: Relationship>(
+        &mut self,
+        func: impl FnOnce(&mut RelatedSpawner<R>),
+    ) -> &mut Self {
+        todo!()
+    }
+
+    fn rev_add_related<R: Relationship>(&mut self, related: &[Entity]) -> &mut Self {
+        let id = self.id();
+        self.world_scope(|world| {
+            for related in related {
+                world.entity_mut(*related).rev_insert(R::from(id));
+            }
+        });
+        self
+    }
+
+    fn rev_add_one_related<R: Relationship>(&mut self, entity: Entity) -> &mut Self {
+        self.rev_add_related::<R>(&[entity])
+    }
+
+    fn rev_despawn_related<S: RelationshipTarget>(&mut self) -> &mut Self {
+        todo!();
+    }
+
+    fn rev_insert_recursive<S: RelationshipTarget>(
+        &mut self,
+        bundle: impl Bundle + Clone,
+    ) -> &mut Self {
+        todo!()
+    }
+
+    fn rev_remove_recursive<S: RelationshipTarget, B: Bundle>(&mut self) -> &mut Self {
+        todo!()
     }
 
     fn rev_with_children(&mut self, func: impl FnOnce(&mut ChildSpawner)) -> &mut Self {
@@ -723,7 +769,7 @@ pub fn rev_retain<B: Bundle>() -> impl EntityCommand {
 /// Reversible version of [`despawn`](bevy::ecs::system::entity_command::despawn).
 #[track_caller]
 pub fn rev_despawn() -> impl EntityCommand {
-    |mut entity: EntityWorldMut| {
+    |entity: EntityWorldMut| {
         entity.rev_despawn();
     }
 }
