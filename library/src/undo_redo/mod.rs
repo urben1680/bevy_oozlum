@@ -1,36 +1,27 @@
 use std::{
-    alloc::Layout,
     collections::VecDeque,
     error::Error,
     fmt::{Debug, Display},
-    hash::{BuildHasher, Hash, Hasher},
+    hash::Hash,
     iter::FusedIterator,
-    ptr::NonNull,
     sync::Arc,
 };
 
 use bevy::{
     ecs::{
-        archetype::{ArchetypeGeneration, ArchetypeId},
-        component::{
-            Component, ComponentCloneBehavior, ComponentDescriptor, ComponentId, HookContext,
-            StorageType,
-        },
+        archetype::ArchetypeId,
+        change_detection::Mut,
+        component::{Component, ComponentId, HookContext},
         entity::{hash_set::EntityHashSet, Entity, EntityCloner},
         hierarchy::Children,
         resource::Resource,
         system::{Commands, EntityCommands},
-        world::{DeferredWorld, EntityWorldMut, FromWorld, Mut, World},
+        world::{DeferredWorld, EntityWorldMut, FromWorld, World},
     },
-    log::error,
-    platform_support::{
-        collections::{HashMap, HashSet},
-        hash::{FixedHasher, PassHash},
-    },
-    ptr::OwningPtr,
+    platform_support::collections::HashSet,
     utils::synccell::SyncCell,
 };
-use fixedbitset::FixedBitSet;
+use component_buffer::BufferComponentsInProgress;
 
 use crate::{
     log::{DenseTransitionsLog, FrameTransitionLog},
@@ -38,12 +29,14 @@ use crate::{
 };
 
 mod commands;
+mod component_buffer;
 mod entity_commands;
 
 #[cfg(test)]
 mod test;
 
 pub use commands::*;
+pub(crate) use component_buffer::ComponentBufferRes;
 pub use entity_commands::*;
 
 // todo rename
@@ -220,29 +213,29 @@ impl<T: UndoRedo> UndoRedo for Box<[T]> {
 
 pub trait RevWorld {
     fn rev_despawn(&mut self, entity: Entity) -> bool;
-    fn rev_buffer_components(
+    fn buffer_components(
         &mut self,
         entity: Entity,
         components: impl IntoIterator<Item = ComponentId>,
     ) -> Option<Entity>;
-    fn rev_buffer_components_cached<I: IntoIterator<Item = ComponentId>>(
+    fn buffer_components_cached<I: IntoIterator<Item = ComponentId>>(
         &mut self,
         entity: Entity,
         cache: impl Hash,
         components: impl FnOnce(&mut World) -> I,
     ) -> Option<Entity>;
-    fn rev_buffer_components_at_undo(
+    fn buffer_components_at_undo(
         &mut self,
         entity: Entity,
         components: impl IntoIterator<Item = ComponentId>,
     ) -> Option<Entity>;
-    fn rev_buffer_components_at_undo_cached<I: IntoIterator<Item = ComponentId>>(
+    fn buffer_components_at_undo_cached<I: IntoIterator<Item = ComponentId>>(
         &mut self,
         entity: Entity,
         cache: impl Hash,
         components: impl FnOnce(&mut World) -> I,
     ) -> Option<Entity>;
-    fn rev_buffer_components_moving(&self) -> bool;
+    fn buffer_components_in_progress(&self) -> bool;
 }
 
 impl RevWorld for World {
@@ -250,55 +243,46 @@ impl RevWorld for World {
         let entity_mut = self.entity_mut(entity);
         rev_despawn_inner(entity_mut)
     }
-    fn rev_buffer_components(
+    fn buffer_components(
         &mut self,
         entity: Entity,
         components: impl IntoIterator<Item = ComponentId>,
     ) -> Option<Entity> {
-        self.resource_scope::<ComponentBufferRes, _>(|world, mut component_buffers| {
-            component_buffers
-                .get_buffer(world, entity, components)
-                .map(|buffer| buffer.move_components_and_buffer(world, component_buffers))
+        self.resource_scope(|world, mut component_buffers: Mut<ComponentBufferRes>| {
+            component_buffers.buffer_components(world, entity, components, true)
         })
     }
-    fn rev_buffer_components_cached<I: IntoIterator<Item = ComponentId>>(
+    fn buffer_components_cached<I: IntoIterator<Item = ComponentId>>(
         &mut self,
         entity: Entity,
         cache: impl Hash,
         components: impl FnOnce(&mut World) -> I,
     ) -> Option<Entity> {
-        self.resource_scope::<ComponentBufferRes, _>(|world, mut component_buffers| {
-            component_buffers
-                .get_buffer_cached(world, entity, cache, components)
-                .map(|buffer| buffer.move_components_and_buffer(world, component_buffers))
+        self.resource_scope(|world, mut component_buffers: Mut<ComponentBufferRes>| {
+            component_buffers.buffer_components_cached(world, entity, cache, components, true)
         })
     }
-    fn rev_buffer_components_at_undo(
+    fn buffer_components_at_undo(
         &mut self,
         entity: Entity,
         components: impl IntoIterator<Item = ComponentId>,
     ) -> Option<Entity> {
-        self.resource_scope::<ComponentBufferRes, _>(|world, mut component_buffers| {
-            component_buffers
-                .get_buffer(world, entity, components)
-                .map(|buffer| buffer.reserve_components_and_buffer(world, &component_buffers))
+        self.resource_scope(|world, mut component_buffers: Mut<ComponentBufferRes>| {
+            component_buffers.buffer_components(world, entity, components, false)
         })
     }
-    fn rev_buffer_components_at_undo_cached<I: IntoIterator<Item = ComponentId>>(
+    fn buffer_components_at_undo_cached<I: IntoIterator<Item = ComponentId>>(
         &mut self,
         entity: Entity,
         cache: impl Hash,
         components: impl FnOnce(&mut World) -> I,
     ) -> Option<Entity> {
-        self.resource_scope::<ComponentBufferRes, _>(|world, mut component_buffers| {
-            component_buffers
-                .get_buffer_cached(world, entity, cache, components)
-                .map(|buffer| buffer.reserve_components_and_buffer(world, &component_buffers))
+        self.resource_scope(|world, mut component_buffers: Mut<ComponentBufferRes>| {
+            component_buffers.buffer_components_cached(world, entity, cache, components, false)
         })
     }
-    fn rev_buffer_components_moving(&self) -> bool {
-        self.get_resource::<ComponentBufferRes>()
-            .is_some_and(|component_buffers| component_buffers.ongoing_buffer)
+    fn buffer_components_in_progress(&self) -> bool {
+        self.contains_resource::<BufferComponentsInProgress>()
     }
 }
 
@@ -325,13 +309,10 @@ impl DespawnAtOutOfLog {
         let Some(location) = world.entities().get(hook.entity) else {
             return;
         };
-        let mut res = world.resource_mut::<ComponentBufferRes>();
-        if res.buffered_in_archetype_at != now {
-            res.buffered_in_archetype_at = now;
-            res.archetypes_buffered_to_this_frame.clear();
-        }
-        res.archetypes_buffered_to_this_frame
-            .insert(location.archetype_id.index());
+        let Some(mut component_buffers) = world.get_resource_mut::<ComponentBufferRes>() else {
+            return;
+        };
+        component_buffers.inserted_marker(now, location.archetype_id);
     }
 }
 
@@ -433,6 +414,8 @@ impl<'a> Display for UndoRedoLogError<'a> {
 }
 
 impl<'a> Error for UndoRedoLogError<'a> {}
+
+/*
 
 struct ComponentBufferData {
     components: Box<[ComponentId]>,
@@ -790,6 +773,7 @@ impl UndoRedo for ComponentBuffer {
         });
     }
 }
+*/
 
 struct RevDespawnSingle {
     entity: Entity,
@@ -936,479 +920,3 @@ macro_rules! unique_for_location {
 }
 
 pub use unique_for_location;
-
-// new buffer variant with dyn bundles
-
-mod buffer_dyn_bundle {
-    use bevy::ecs::bundle::BundleId;
-
-    use super::*;
-
-    struct BufferQuery {
-        without_components: BufferArchetypes,
-        without_components_and_reservations: BufferArchetypes,
-        reservations: BundleId,
-        generation: ArchetypeGeneration,
-    }
-
-    struct BufferArchetypes {
-        archetypes: Vec<ArchetypeId>,
-        moved_from: usize,
-    }
-
-    #[derive(Resource)]
-    pub(crate) struct ComponentBufferRes {
-        buffers: HashMap<BundleId, BufferQuery>,
-        reservations: HashMap<ComponentId, ComponentId>,
-        unclonable: HashSet<ComponentId>,
-        empty_with_marker: ArchetypeId,
-        cache: HashMap<u64, Option<BundleId>, PassHash>,
-        archetypes_buffered_to_this_frame: FixedBitSet,
-        buffered_in_archetype_at: u64,
-        ongoing_buffer: bool,
-    }
-
-    impl ComponentBufferRes {
-        fn get_buffer_cached<I: IntoIterator<Item = ComponentId>>(
-            &mut self,
-            world: &mut World,
-            entity: Entity,
-            cache: impl Hash,
-            move_now: bool,
-            components: impl FnOnce(&mut World) -> I,
-        ) -> Option<Entity> {
-            let cache = hash_cache(cache);
-            if let Some(key) = self.cache.get(&cache).copied() {
-                let key = key?;
-                let query = self
-                    .buffers
-                    .get_mut(&key)
-                    .expect("todo");
-                Some(query.apply_and_get_buffer(
-                    key, 
-                    world, 
-                    entity,
-                    &self.archetypes_buffered_to_this_frame, 
-                    move_now
-                ))
-            } else {
-                let components = components(world);
-                match self.collect_components(world, components) {
-                    Some((key, components)) => {
-                        self.cache.insert(cache, Some(key));
-                        Some(self.foo(
-                            world,
-                            entity,
-                            move_now,
-                            key,
-                            components
-                        ))
-                    },
-                    None => {
-                        self.cache.insert(cache, None);
-                        None
-                    }
-                }
-            }
-        }
-        fn get_buffer(
-            &mut self,
-            world: &mut World,
-            entity: Entity,
-            move_now: bool,
-            components: impl IntoIterator<Item = ComponentId>,
-        ) -> Option<Entity> {
-            self.collect_components(world, components).map(|(key, components)| {
-                self.foo(
-                    world,
-                    entity,
-                    move_now,
-                    key,
-                    components
-                )
-            })
-        }
-        fn foo(
-            &mut self,
-            world: &mut World,
-            entity: Entity,
-            move_now: bool,
-            key: BundleId,
-            components: Vec<ComponentId>
-        ) -> Entity {
-            let query = self.buffers.entry(key).or_insert_with(|| {
-                BufferQuery::new(
-                    world,
-                    components,
-                    &mut self.reservations,
-                    self.empty_with_marker,
-                )
-            });
-            let meta = world.get_resource::<RevMeta>().expect("todo");
-            let now_marker = DespawnAtOutOfLog::new(meta);
-            let marker_id = world.component_id::<DespawnAtOutOfLog>().expect("todo");
-            query.extend_archetypes(world, key, marker_id);
-            let buffer = if move_now {
-                query.without_components.get_buffer_entity(
-                    world,
-                    &self.archetypes_buffered_to_this_frame,
-                    now_marker,
-                    marker_id,
-                )
-            } else {
-                query.without_components_and_reservations.get_buffer_entity(
-                    world,
-                    &self.archetypes_buffered_to_this_frame,
-                    now_marker,
-                    marker_id,
-                )
-            };
-
-            let buffer_entity = buffer.id();
-            let mut undo_redo = ComponentBuffer {
-                components: key,
-                entity,
-                buffer: buffer_entity,
-                components_buffered: false
-            };
-
-            if move_now {
-                undo_redo.move_components(world);
-            } else {
-                undo_redo.reserve_components(query.reservations, buffer);
-            }
-            world.buffer_undo_redo(undo_redo);
-            buffer_entity
-        }
-        fn collect_components(
-            &mut self,
-            world: &mut World,
-            components: impl IntoIterator<Item = ComponentId>,
-        ) -> Option<(BundleId, Vec<ComponentId>)> {
-            let components: Vec<ComponentId> = components
-                .into_iter()
-                .filter(|&component_id| {
-                    // todo: remove filter when linked issue is fixed
-                    let component_info = world.components().get_info(component_id).unwrap();
-                    let unclonable = component_info.clone_behavior() == &ComponentCloneBehavior::Ignore;
-                    if unclonable && self.unclonable.insert(component_id) {
-                        error!(
-                            "Unclonable component {} will be ignored by reversible structural operations, it's insert, remove \
-                            or overwrite will not be reversible, see https://github.com/bevyengine/bevy/issues/18079",
-                            component_info.name()
-                        );
-                    }
-                    unclonable
-                })
-                .collect();
-
-            if components.is_empty() {
-                return None;
-            }
-
-            Some((world.register_dynamic_bundle(&components).id(), components))
-        }
-    }
-
-    impl BufferQuery {
-        fn new(
-            world: &mut World,
-            components: Vec<ComponentId>,
-            reservations: &mut HashMap<ComponentId, ComponentId>,
-            empty_with_marker: ArchetypeId,
-        ) -> Self {
-            let reservations: Vec<ComponentId> = components
-                .into_iter()
-                .map(|component_id| {
-                    *reservations.entry(component_id).or_insert_with(|| {
-                        let descriptor = unsafe {
-                            // SAFETY: (): Send + Sync + !Drop
-                            ComponentDescriptor::new_with_layout(
-                                format!(
-                                    "reservation to buffer {} ({component_id:?})",
-                                    world.components().get_info(component_id).unwrap().name()
-                                ),
-                                StorageType::Table,
-                                Layout::new::<()>(),
-                                None, // !Drop
-                                false,
-                                ComponentCloneBehavior::Ignore,
-                            )
-                        };
-                        world.register_component_with_descriptor(descriptor)
-                    })
-                })
-                .collect();
-            let reservations = world.register_dynamic_bundle(&reservations).id();
-            Self {
-                reservations,
-                without_components: BufferArchetypes {
-                    archetypes: vec![empty_with_marker],
-                    moved_from: 1,
-                },
-                without_components_and_reservations: BufferArchetypes {
-                    archetypes: Vec::new(),
-                    moved_from: 0,
-                },
-                generation: ArchetypeGeneration::initial(),
-            }
-        }
-        fn get_buffer_entity<'a>(
-            &mut self,
-            key: BundleId,
-            world: &'a mut World,
-            archetypes_buffered_to_this_frame: &FixedBitSet,
-            move_now: bool,
-        ) -> EntityWorldMut<'a> {
-            let meta = world.get_resource::<RevMeta>().expect("todo");
-            let now_marker = DespawnAtOutOfLog::new(meta);
-            let marker_id = world.component_id::<DespawnAtOutOfLog>().expect("todo");
-            self.extend_archetypes(world, key, marker_id);
-            if move_now {
-                self.without_components.get_buffer_entity(
-                    world,
-                    archetypes_buffered_to_this_frame,
-                    now_marker,
-                    marker_id,
-                )
-            } else {
-                self.without_components_and_reservations.get_buffer_entity(
-                    world,
-                    archetypes_buffered_to_this_frame,
-                    now_marker,
-                    marker_id,
-                )
-            }
-        }
-        fn apply_and_get_buffer(
-            &mut self,
-            key: BundleId,
-            world: &mut World,
-            entity: Entity,
-            archetypes_buffered_to_this_frame: &FixedBitSet,
-            move_now: bool,
-        ) -> Entity {
-            let meta = world.get_resource::<RevMeta>().expect("todo");
-            let now_marker = DespawnAtOutOfLog::new(meta);
-            let marker_id = world.component_id::<DespawnAtOutOfLog>().expect("todo");
-            self.extend_archetypes(world, key, marker_id);
-            let buffer = if move_now {
-                self.without_components.get_buffer_entity(
-                    world,
-                    archetypes_buffered_to_this_frame,
-                    now_marker,
-                    marker_id,
-                )
-            } else {
-                self.without_components_and_reservations.get_buffer_entity(
-                    world,
-                    archetypes_buffered_to_this_frame,
-                    now_marker,
-                    marker_id,
-                )
-            };
-
-            let buffer_entity = buffer.id();
-            let mut undo_redo = ComponentBuffer {
-                components: key,
-                entity,
-                buffer: buffer_entity,
-                components_buffered: false
-            };
-
-            if move_now {
-                undo_redo.move_components(world);
-            } else {
-                undo_redo.reserve_components(self.reservations, buffer);
-            }
-            world.buffer_undo_redo(undo_redo);
-            buffer_entity
-        }
-        fn extend_archetypes(&mut self, world: &World, key: BundleId, marker_id: ComponentId) {
-            if world.archetypes().generation() == self.generation {
-                return;
-            }
-
-            let get_ids = |id| world.bundles().get(id).expect("todo").explicit_components();
-            let components = get_ids(key);
-            let reservations = get_ids(self.reservations);
-
-            for archetype in &world.archetypes()[self.generation..] {
-                if archetype.contains(marker_id)
-                    && components.iter().all(|id| !archetype.contains(*id))
-                {
-                    self.without_components.archetypes.push(archetype.id());
-                    if reservations.iter().all(|id| !archetype.contains(*id)) {
-                        self.without_components_and_reservations
-                            .archetypes
-                            .push(archetype.id());
-                    }
-                }
-            }
-
-            self.generation = world.archetypes().generation();
-        }
-    }
-
-    impl BufferArchetypes {
-        fn get_buffer_entity<'a>(
-            &mut self,
-            world: &'a mut World,
-            archetypes_buffered_to_this_frame: &FixedBitSet,
-            now_marker: DespawnAtOutOfLog,
-            marker_id: ComponentId,
-        ) -> EntityWorldMut<'a> {
-            let archetypes = self.archetypes.iter().copied().enumerate();
-            for (i, archetype_id) in archetypes {
-                if !archetypes_buffered_to_this_frame.contains(archetype_id.index()) {
-                    continue;
-                }
-                let archetype = world.archetypes().get(archetype_id).expect("todo");
-                let table = world
-                    .storages()
-                    .tables
-                    .get(archetype.table_id())
-                    .expect("todo");
-                for archetype_entity in archetype.entities() {
-                    let ptr = unsafe {
-                        // SAFETY: this non-pub resource cannot have been transfered from the world it was created at to another
-                        table.get_component(marker_id, archetype_entity.table_row())
-                    }
-                    .expect("todo");
-                    let marker = unsafe {
-                        // SAFETY: marker_id was just read from the world for this type
-                        ptr.deref::<DespawnAtOutOfLog>()
-                    };
-                    if *marker == now_marker {
-                        if i >= self.moved_from {
-                            self.archetypes.swap(i, self.moved_from);
-                            self.moved_from += 1;
-                        }
-                        return world.entity_mut(archetype_entity.id());
-                    }
-                }
-            }
-
-            // spawn a new buffer as no available has been found, the archetype here matches self.archetypes_without_components[0]
-            world.spawn(now_marker)
-        }
-    }
-    
-    #[derive(Debug)]
-    struct ComponentBuffer {
-        components: BundleId,
-        entity: Entity,
-        buffer: Entity,
-        components_buffered: bool,
-    }
-
-    impl ComponentBuffer {
-        fn move_components(&mut self, world: &mut World) {
-            fn move_components(world: &mut World, components: &[ComponentId], source: Entity, target: Entity) {
-                EntityCloner::build(world)
-                    .deny_all()
-                    .move_components(true)
-                    .without_required_components(|builder| {
-                        builder.allow_by_ids(components.iter().copied());
-                    })
-                    .clone_entity(source, target);
-            }
-
-            let bundle = world
-                .bundles()
-                .get(self.components)
-                .expect("todo");
-            let components: Box<[ComponentId]> = bundle.explicit_components().into();
-
-            if self.components_buffered {
-                move_components(world, &components, self.buffer, self.entity);
-            } else if bundle.required_components().is_empty() {
-                move_components(world, &components, self.entity, self.buffer);
-            } else {
-                let archetype_id = world.entities().get(self.buffer).expect("todo").archetype_id;
-                let archetype = world.archetypes().get(archetype_id).expect("todo");
-                let unwanted: Vec<ComponentId> = bundle
-                    .required_components()
-                    .iter()
-                    .copied()
-                    .filter(|component_id| !archetype.contains(*component_id))
-                    .collect();
-                move_components(world, &components, self.entity, self.buffer);
-                if !unwanted.is_empty() {
-                    world
-                        .entity_mut(self.buffer)
-                        .remove_by_ids(&unwanted);
-                }
-            }
-            self.components_buffered = !self.components_buffered;
-        }
-
-        fn reserve_components(
-            &self,
-            reservations: BundleId,
-            mut buffer: EntityWorldMut
-        ) {
-            
-            struct Reserved {
-                reservations: BundleId,
-                buffer: Entity,
-            }
-
-            impl UndoRedo for Reserved {
-                fn undo(&mut self, world: &mut World) {
-                    let component_ids = self.component_ids(&world);
-                    world
-                        .entity_mut(self.buffer)
-                        .remove_by_ids(&component_ids);
-                }
-                fn redo(&mut self, world: &mut World) {
-                    self.redo_inner(&mut world.entity_mut(self.buffer));
-                }
-            }
-
-            impl Reserved {
-                fn component_ids(&self, world: &World) -> Box<[ComponentId]> {
-                    world
-                        .bundles()
-                        .get(self.reservations)
-                        .expect("todo")
-                        .explicit_components()
-                        .into()
-                }
-                fn redo_inner(&self, buffer: &mut EntityWorldMut) {
-                    let component_ids = self.component_ids(buffer.world());
-                    let iter = std::iter::repeat_with(|| unsafe {
-                        // SAFETY: () is a ZST which makes NonNull::dangling a valid pointer to read from regardless of lifetimes
-                        OwningPtr::new(NonNull::dangling())
-                    })
-                    .take(component_ids.len());
-                    unsafe {
-                        // SAFETY: ids are registered in this world for () that the iterator yields OwningPtr of
-                        buffer.insert_by_ids(&component_ids, iter);
-                    }
-                }
-            }
-
-            let undo_redo = Reserved {
-                reservations,
-                buffer: buffer.id(),
-            };
-
-            undo_redo.redo_inner(&mut buffer);
-            buffer.buffer_undo_redo(undo_redo);
-        }
-    }
-
-    impl UndoRedo for ComponentBuffer {
-        fn undo(&mut self, world: &mut World) {
-            world.resource_scope(|world, mut buffer_data: Mut<ComponentBufferRes>| {
-                buffer_data.ongoing_buffer = true;
-                self.move_components(world);
-                buffer_data.ongoing_buffer = false;
-            });
-        }
-        fn redo(&mut self, world: &mut World) {
-            self.undo(world);
-        }
-    }
-}

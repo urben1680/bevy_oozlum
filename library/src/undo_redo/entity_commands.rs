@@ -191,7 +191,7 @@ impl RevEntityWorldMut for EntityWorldMut<'_> {
         let entity = self.id();
         let buffer_entity = self.world_scope(|world| {
             let bundle_id = world.register_bundle::<T>().id();
-            world.rev_buffer_components_at_undo_cached(
+            world.buffer_components_at_undo_cached(
                 entity,
                 unique_for_location!(archetype_id, bundle_id),
                 |world: &mut World| {
@@ -260,7 +260,7 @@ impl RevEntityWorldMut for EntityWorldMut<'_> {
         let entity = self.id();
         self.world_scope(|world| {
             let bundle_id = world.register_bundle::<T>().id();
-            world.rev_buffer_components_cached(
+            world.buffer_components_cached(
                 entity,
                 unique_for_location!(archetype_id, bundle_id),
                 |world: &mut World| {
@@ -285,7 +285,7 @@ impl RevEntityWorldMut for EntityWorldMut<'_> {
         let entity = self.id();
         self.world_scope(|world| {
             let bundle_id = world.register_bundle::<T>().id();
-            world.rev_buffer_components_cached(
+            world.buffer_components_cached(
                 entity,
                 unique_for_location!(archetype_id, bundle_id),
                 |world: &mut World| {
@@ -310,7 +310,7 @@ impl RevEntityWorldMut for EntityWorldMut<'_> {
         let entity = self.id();
         self.world_scope(|world| {
             let bundle_id = world.register_bundle::<T>().id();
-            world.rev_buffer_components_cached(
+            world.buffer_components_cached(
                 entity,
                 unique_for_location!(archetype_id, bundle_id),
                 |world: &mut World| {
@@ -341,7 +341,7 @@ impl RevEntityWorldMut for EntityWorldMut<'_> {
         }
         let entity = self.id();
         self.world_scope(|world| {
-            world.rev_buffer_components(entity, [component_id]);
+            world.buffer_components(entity, [component_id]);
         });
         self
     }
@@ -349,7 +349,7 @@ impl RevEntityWorldMut for EntityWorldMut<'_> {
     fn rev_remove_by_ids(&mut self, component_ids: &[ComponentId]) -> &mut Self {
         let entity = self.id();
         self.world_scope(|world| {
-            world.rev_buffer_components(entity, component_ids.into_iter().copied());
+            world.buffer_components(entity, component_ids.into_iter().copied());
         });
         self
     }
@@ -358,7 +358,7 @@ impl RevEntityWorldMut for EntityWorldMut<'_> {
         let archetype_id = self.archetype().id();
         let entity = self.id();
         self.world_scope(|world| {
-            world.rev_buffer_components_cached(
+            world.buffer_components_cached(
                 entity,
                 unique_for_location!(archetype_id),
                 |world: &mut World| {
@@ -418,7 +418,7 @@ impl RevEntityWorldMut for EntityWorldMut<'_> {
             })
             .archetype_id;
         self.world_scope(|world| {
-            world.rev_buffer_components_cached(
+            world.buffer_components_cached(
                 target,
                 unique_for_location!(source_archetype_id, target_archetype_id, bundle_id),
                 |world| {
@@ -438,7 +438,7 @@ impl RevEntityWorldMut for EntityWorldMut<'_> {
                         .collect::<Vec<_>>()
                 },
             );
-            world.rev_buffer_components_at_undo_cached(
+            world.buffer_components_at_undo_cached(
                 target,
                 unique_for_location!(source_archetype_id, target_archetype_id, bundle_id),
                 |world| {
@@ -514,7 +514,7 @@ impl RevEntityWorldMut for EntityWorldMut<'_> {
             .archetype_id;
         let key = unique_for_location!(source_archetype_id, target_archetype_id, bundle_id);
         self.world_scope(|world| {
-            world.rev_buffer_components_cached(target, key, |world| {
+            world.buffer_components_cached(target, key, |world| {
                 let source_archetype = get_archetype(&world, source_archetype_id);
                 let target_archetype = get_archetype(&world, target_archetype_id);
                 world
@@ -605,7 +605,7 @@ impl RevEntityWorldMut for EntityWorldMut<'_> {
         components: impl IntoIterator<Item = ComponentId>,
     ) -> &mut Self {
         let entity = self.id();
-        self.world_scope(|world| world.rev_buffer_components(entity, components));
+        self.world_scope(|world| world.buffer_components(entity, components));
         self
     }
 
@@ -615,7 +615,7 @@ impl RevEntityWorldMut for EntityWorldMut<'_> {
         components: impl FnOnce(&mut World) -> I,
     ) -> &mut Self {
         let entity = self.id();
-        self.world_scope(|world| world.rev_buffer_components_cached(entity, cache, components));
+        self.world_scope(|world| world.buffer_components_cached(entity, cache, components));
         self
     }
 
@@ -628,7 +628,7 @@ impl RevEntityWorldMut for EntityWorldMut<'_> {
             // SAFETY: only resources are mutated, no component moves happen yet
             self.world_mut()
         };
-        world.rev_buffer_components_at_undo(entity, components);
+        world.buffer_components_at_undo(entity, components);
         self
     }
 
@@ -642,7 +642,7 @@ impl RevEntityWorldMut for EntityWorldMut<'_> {
             // SAFETY: only resources are mutated, no component moves happen yet
             self.world_mut()
         };
-        world.rev_buffer_components_at_undo_cached(entity, cache, components);
+        world.buffer_components_at_undo_cached(entity, cache, components);
         self
     }
 }
