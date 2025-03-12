@@ -73,7 +73,8 @@ pub mod prelude {
         RevSystemsSet, RevUpdate,
     };
     pub use crate::undo_redo::{
-        unique_for_location, BuffersUndoRedo as _, DespawnAtOutOfLog, RevBuffers, RevCommands as _,
-        RevEntityWorldMut as _, RevEntry as _, RevWorld as _, UndoRedoDirection, UndoRedoSwap,
+        unique_for_location, BuffersUndoRedo as _, DespawnAtOutOfLog, RevCommands as _,
+        RevEntityWorldMut as _, RevEntry as _, RevWorld as _, UndoRedoBuffer, UndoRedoDirection,
+        UndoRedoSwap,
     };
 }
