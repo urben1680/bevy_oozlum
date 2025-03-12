@@ -11,7 +11,7 @@ use bevy::{
         archetype::ArchetypeComponentId,
         component::{ComponentId, Tick},
         query::Access,
-        schedule::{InternedSystemSet, IntoSystemConfigs, IntoSystemSetConfigs, SystemSet},
+        schedule::{ApplyDeferred, InternedSystemSet, IntoSystemConfigs, IntoSystemSetConfigs, SystemSet},
         system::{IntoSystem, ReadOnlySystem, System, SystemIn},
         world::{unsafe_world_cell::UnsafeWorldCell, DeferredWorld, World},
     },
@@ -23,7 +23,7 @@ use crate::{
     schedule::{
         error_per_flag, BackwardSet, BwdCmdSet, BwdCmdSysSet, BwdSysSet, ForwardSet, FwdSysSet,
     },
-    undo_redo::{RevBuffers, UndoRedoLog},
+    undo_redo::{UndoRedoBuffer, UndoRedoLog},
 };
 
 use super::{IntoRevSystemConfigs, RevSystemConfigs, RevSystemSetConfigs};
@@ -50,6 +50,7 @@ where
         let bwd_cmd_name = name(" (backward commands)");
 
         let default_system_sets: Vec<InternedSystemSet> = system.default_system_sets();
+        let is_exclusive = system.is_exclusive(); // todo, add sync point before system
 
         let inner = Mutex::new(Inner {
             system,
@@ -444,7 +445,7 @@ fn initialize_arc_system<'a, T: System>(
     name: &String,
     world: &mut World,
 ) -> MutexGuard<'a, Inner<T>> {
-    world.init_resource::<RevBuffers>();
+    world.init_resource::<UndoRedoBuffer>();
     *tick = world.change_tick();
     let mut shared = shared.inner.try_lock().unwrap_or_else(expect_lock(name));
     if !shared.initialized {
@@ -530,13 +531,16 @@ mod test {
         .add_observer(observer)
         .add_observer(empty_observer)
         .update();
-        assert!(app.world().resource::<RevBuffers>().undo_redo_is_empty());
+        assert!(app
+            .world()
+            .resource::<UndoRedoBuffer>()
+            .undo_redo_is_empty());
     }
 
     #[test]
     fn non_exclusive_system_drains_all_undo_redo() {
         assert_system_drains_all_undo_redo(
-            |mut buffer: ResMut<RevBuffers>, mut commands: Commands| {
+            |mut buffer: ResMut<UndoRedoBuffer>, mut commands: Commands| {
                 buffer.buffer_undo_redo(blank_undo_redo);
                 commands.buffer_undo_redo(blank_undo_redo);
                 commands.queue(|world: &mut World| {
