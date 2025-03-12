@@ -9,9 +9,9 @@ use bevy::{
 
 use crate::{
     meta::RevMeta,
-    prelude::RevBuffers,
+    prelude::UndoRedoBuffer,
     schedule::{IntoRevSystemConfigs, IntoRevSystemSetConfigs, RevSchedule},
-    undo_redo::{ComponentBufferRes, DespawnAtOutOfLog},
+    undo_redo::{BufferBundles, DespawnAtOutOfLog},
 };
 
 pub trait RevApp {
@@ -115,7 +115,7 @@ impl Plugin for RevSystemsPlugin {
             Self::AddMeta(..) => {}
         }
         app.register_disabling_component::<DespawnAtOutOfLog>();
-        app.init_resource::<RevBuffers>();
-        app.init_resource::<ComponentBufferRes>();
+        app.init_resource::<UndoRedoBuffer>();
+        app.init_resource::<BufferBundles>();
     }
 }
