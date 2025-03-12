@@ -22,7 +22,7 @@ use bevy::reflect::{ReflectDeserialize, ReflectSerialize};
 use crate::{
     log::OutOfLog,
     schedule::RevUpdate,
-    undo_redo::{DespawnAtOutOfLog, RevBuffers},
+    undo_redo::{DespawnAtOutOfLog, UndoRedoBuffer},
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -355,7 +355,7 @@ impl RevMeta {
         }
 
         world.resource_scope(|world: &mut World, mut meta: Mut<Self>| {
-            let buffer = world.get_resource_or_init::<RevBuffers>();
+            let buffer = world.get_resource_or_init::<UndoRedoBuffer>();
 
             if !buffer.undo_redo_is_empty() {
                 return Err(TryRunRevUpdateError::UndoRedoBufferNotEmptyBeforeUpdate(
