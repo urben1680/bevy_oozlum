@@ -2,7 +2,7 @@ use std::{
     collections::VecDeque,
     error::Error,
     fmt::{Debug, Display},
-    hash::Hash,
+    hash::{BuildHasher, Hash, Hasher},
     iter::FusedIterator,
     sync::Arc,
 };
@@ -10,18 +10,21 @@ use std::{
 use bevy::{
     ecs::{
         archetype::ArchetypeId,
+        bundle::BundleId,
         change_detection::Mut,
-        component::{Component, ComponentId},
+        component::{Component, ComponentCloneBehavior, ComponentId},
         entity::{hash_set::EntityHashSet, Entity, EntityCloner},
         hierarchy::Children,
         resource::Resource,
         system::{Commands, EntityCommands},
         world::{DeferredWorld, EntityWorldMut, FromWorld, World},
     },
-    platform_support::collections::HashSet,
+    platform_support::{
+        collections::{HashMap, HashSet},
+        hash::{FixedHasher, PassHash},
+    },
     utils::synccell::SyncCell,
 };
-use component_buffer::BufferComponentsInProgress;
 
 use crate::{
     log::{DenseTransitionsLog, FrameTransitionLog},
@@ -29,14 +32,12 @@ use crate::{
 };
 
 mod commands;
-mod component_buffer;
 mod entity_commands;
 
 #[cfg(test)]
 mod test;
 
 pub use commands::*;
-pub(crate) use component_buffer::BufferBundles;
 pub use entity_commands::*;
 
 // todo rename
@@ -213,29 +214,21 @@ impl<T: UndoRedo> UndoRedo for Box<[T]> {
 
 pub trait RevWorld {
     fn rev_despawn(&mut self, entity: Entity) -> bool;
-    fn buffer_components(
-        &mut self,
-        entity: Entity,
-        components: impl IntoIterator<Item = ComponentId>,
-    ) -> Option<Entity>;
-    fn buffer_components_cached<I: IntoIterator<Item = ComponentId>>(
+    fn buffer_bundle(&mut self, entity: Entity, bundle: BundleId);
+    fn buffer_bundle_cached(
         &mut self,
         entity: Entity,
         cache: impl Hash,
-        components: impl FnOnce(&mut World) -> I,
-    ) -> Option<Entity>;
-    fn buffer_components_at_undo(
-        &mut self,
-        entity: Entity,
-        components: impl IntoIterator<Item = ComponentId>,
-    ) -> Option<Entity>;
-    fn buffer_components_at_undo_cached<I: IntoIterator<Item = ComponentId>>(
+        bundle: impl FnOnce(&mut World) -> BundleId,
+    );
+    fn buffer_bundle_at_undo(&mut self, entity: Entity, bundle: BundleId);
+    fn buffer_bundle_at_undo_cached(
         &mut self,
         entity: Entity,
         cache: impl Hash,
-        components: impl FnOnce(&mut World) -> I,
-    ) -> Option<Entity>;
-    fn buffer_components_in_progress(&self) -> bool;
+        bundle: impl FnOnce(&mut World) -> BundleId,
+    );
+    fn buffer_bundle_in_progress(&self) -> bool;
 }
 
 impl RevWorld for World {
@@ -243,48 +236,160 @@ impl RevWorld for World {
         let entity_mut = self.entity_mut(entity);
         rev_despawn_inner(entity_mut)
     }
-    fn buffer_components(
-        &mut self,
-        entity: Entity,
-        components: impl IntoIterator<Item = ComponentId>,
-    ) -> Option<Entity> {
-        self.resource_scope(|world, mut component_buffers: Mut<BufferBundles>| {
-            component_buffers.buffer_components(world, entity, components, true)
-        })
+
+    fn buffer_bundle(&mut self, entity: Entity, bundle: BundleId) {
+        let mut undo_redo = BundleBuffer::new(&self, entity, bundle);
+        undo_redo.move_bundle(self);
+        self.buffer_undo_redo(undo_redo);
     }
-    fn buffer_components_cached<I: IntoIterator<Item = ComponentId>>(
-        &mut self,
-        entity: Entity,
-        cache: impl Hash,
-        components: impl FnOnce(&mut World) -> I,
-    ) -> Option<Entity> {
-        self.resource_scope(|world, mut component_buffers: Mut<BufferBundles>| {
-            component_buffers.buffer_components_cached(world, entity, cache, components, true)
-        })
-    }
-    fn buffer_components_at_undo(
-        &mut self,
-        entity: Entity,
-        components: impl IntoIterator<Item = ComponentId>,
-    ) -> Option<Entity> {
-        self.resource_scope(|world, mut component_buffers: Mut<BufferBundles>| {
-            component_buffers.buffer_components(world, entity, components, false)
-        })
-    }
-    fn buffer_components_at_undo_cached<I: IntoIterator<Item = ComponentId>>(
+
+    fn buffer_bundle_cached(
         &mut self,
         entity: Entity,
         cache: impl Hash,
-        components: impl FnOnce(&mut World) -> I,
-    ) -> Option<Entity> {
-        self.resource_scope(|world, mut component_buffers: Mut<BufferBundles>| {
-            component_buffers.buffer_components_cached(world, entity, cache, components, false)
-        })
+        bundle: impl FnOnce(&mut World) -> BundleId,
+    ) {
+        let bundle = buffer_components_cached(self, cache, bundle);
+        self.buffer_bundle(entity, bundle);
     }
-    fn buffer_components_in_progress(&self) -> bool {
-        self.contains_resource::<BufferComponentsInProgress>()
+
+    fn buffer_bundle_at_undo(&mut self, entity: Entity, bundle: BundleId) {
+        let undo_redo = BundleBuffer::new(&self, entity, bundle);
+        self.buffer_undo_redo(undo_redo);
+    }
+
+    fn buffer_bundle_at_undo_cached(
+        &mut self,
+        entity: Entity,
+        cache: impl Hash,
+        bundle: impl FnOnce(&mut World) -> BundleId,
+    ) {
+        let bundle = buffer_components_cached(self, cache, bundle);
+        self.buffer_bundle_at_undo(entity, bundle);
+    }
+
+    fn buffer_bundle_in_progress(&self) -> bool {
+        self.contains_resource::<BufferBundleInProgress>()
     }
 }
+
+struct BundleBuffer {
+    bundle: BundleId,
+    entity: Entity,
+    state: BufferState,
+}
+
+enum BufferState {
+    Unspawned(DespawnAtOutOfLog),
+    Empty(Entity),
+    Filled(Entity),
+}
+
+impl BundleBuffer {
+    fn new(world: &World, entity: Entity, bundle: BundleId) -> Self {
+        let meta = world.get_resource::<RevMeta>().expect("todo");
+        let marker = DespawnAtOutOfLog::new(meta);
+        Self {
+            bundle,
+            entity,
+            state: BufferState::Unspawned(marker),
+        }
+    }
+    fn move_bundle(&mut self, world: &mut World) {
+        let (target, source);
+        match self.state {
+            BufferState::Unspawned(marker) => {
+                target = world.spawn(marker).id();
+                source = self.entity;
+                self.state = BufferState::Filled(target);
+            }
+            BufferState::Empty(buffer) => {
+                target = buffer;
+                source = self.entity;
+                self.state = BufferState::Filled(buffer);
+            }
+            BufferState::Filled(buffer) => {
+                target = self.entity;
+                source = buffer;
+                self.state = BufferState::Empty(buffer);
+            }
+        }
+
+        let bundle = world.bundles().get(self.bundle).expect("todo");
+        let components: Box<[ComponentId]> = bundle.explicit_components().into();
+
+        let progress_res = world.buffer_bundle_in_progress();
+        if !progress_res {
+            world.insert_resource(BufferBundleInProgress);
+        }
+        EntityCloner::build(world)
+            .deny_all()
+            .move_components(true)
+            .without_required_components(|builder| {
+                builder.allow_by_ids(components.iter().copied());
+            })
+            .clone_entity(source, target);
+        if !progress_res {
+            world.remove_resource::<BufferBundleInProgress>();
+        }
+    }
+}
+
+impl UndoRedo for BundleBuffer {
+    fn undo(&mut self, world: &mut World) {
+        self.move_bundle(world);
+    }
+    fn redo(&mut self, world: &mut World) {
+        self.move_bundle(world);
+    }
+}
+
+#[derive(Resource)]
+struct BufferBundleInProgress;
+
+fn buffer_components_cached(
+    world: &mut World,
+    cache: impl Hash,
+    bundle: impl FnOnce(&mut World) -> BundleId,
+) -> BundleId {
+    world.resource_scope(|world, mut cache_res: Mut<CachedBufferIds>| {
+        let mut hasher = FixedHasher::default().build_hasher();
+        cache.hash(&mut hasher);
+        let cache = hasher.finish();
+        *cache_res.0.entry(cache).or_insert_with(|| bundle(world))
+    })
+}
+
+fn check_unclonable_bundle(world: &mut World, bundle: BundleId) {
+    let ids: Box<[ComponentId]> = world
+        .bundles()
+        .get(bundle)
+        .expect("todo")
+        .contributed_components()
+        .into();
+    check_unclonable_components(world, &ids);
+}
+
+fn check_unclonable_components(world: &mut World, ids: &[ComponentId]) {
+    #[derive(Resource)]
+    struct Unclonable(HashSet<ComponentId>);
+    world.resource_scope(|world, mut unclonable_res: Mut<Unclonable>| {
+        for &component_id in ids {
+            let component_info = world.components().get_info(component_id).expect("todo");
+            let unclonable = component_info.clone_behavior() == &ComponentCloneBehavior::Ignore;
+            if unclonable && unclonable_res.0.insert(component_id) {
+                bevy::log::error!(
+                    "Component {} is unclonable, it's insert, remove or overwrite will not \
+                    be reversible, see https://github.com/bevyengine/bevy/issues/18079",
+                    component_info.name()
+                );
+            }
+        }
+    });
+}
+
+#[derive(Resource, Default)]
+pub(crate) struct CachedBufferIds(HashMap<u64, BundleId, PassHash>);
 
 #[derive(Component, Clone, Copy, Debug, Hash, PartialOrd, Ord, PartialEq, Eq)]
 #[component(immutable)]
@@ -536,9 +641,10 @@ fn rev_despawn_inner(mut entity_mut: EntityWorldMut) -> bool {
 #[macro_export]
 macro_rules! unique_for_location {
     ($($hashable: ident),*) => {
+        // extra scope to keep `UniquePerInvoke`s isolated
         {
-            struct Private;
-            (std::any::TypeId::of::<Private>(), $($hashable,)*)
+            struct UniquePerInvoke;
+            (std::any::TypeId::of::<UniquePerInvoke>(), $($hashable,)*)
         }
     }
 }

@@ -11,7 +11,9 @@ use bevy::{
         archetype::ArchetypeComponentId,
         component::{ComponentId, Tick},
         query::Access,
-        schedule::{ApplyDeferred, InternedSystemSet, IntoSystemConfigs, IntoSystemSetConfigs, SystemSet},
+        schedule::{
+            ApplyDeferred, InternedSystemSet, IntoSystemConfigs, IntoSystemSetConfigs, SystemSet,
+        },
         system::{IntoSystem, ReadOnlySystem, System, SystemIn},
         world::{unsafe_world_cell::UnsafeWorldCell, DeferredWorld, World},
     },
