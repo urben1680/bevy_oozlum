@@ -11,7 +11,7 @@ use crate::{
     meta::RevMeta,
     prelude::UndoRedoBuffer,
     schedule::{IntoRevSystemConfigs, IntoRevSystemSetConfigs, RevSchedule},
-    undo_redo::{CachedBufferIds, DespawnAtOutOfLog},
+    undo_redo::DespawnAtOutOfLog,
 };
 
 pub trait RevApp {
@@ -116,6 +116,5 @@ impl Plugin for RevSystemsPlugin {
         }
         app.register_disabling_component::<DespawnAtOutOfLog>();
         app.init_resource::<UndoRedoBuffer>();
-        app.init_resource::<CachedBufferIds>();
     }
 }
