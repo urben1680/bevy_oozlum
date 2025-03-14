@@ -11,7 +11,6 @@ use bevy::{
     ecs::{
         archetype::ArchetypeId,
         bundle::BundleId,
-        change_detection::Mut,
         component::{Component, ComponentCloneBehavior, ComponentId},
         entity::{hash_set::EntityHashSet, Entity, EntityCloner},
         hierarchy::Children,
@@ -212,23 +211,50 @@ impl<T: UndoRedo> UndoRedo for Box<[T]> {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum BufferAt {
+    /// The components will be buffered now which removes them from the entity.
+    ///
+    /// When this is undone, the components are moved back into the entity from the buffer.
+    ///
+    /// Redoing this results in buffering and removing them from the entity again.
+    ///
+    /// This variant is useful as reversible removals of these components.
+    ///
+    /// **Make sure to not manually remove the components and solely use this buffering.**
+    Now,
+    /// The components will be buffered when this action is undone, which then removed them
+    /// from the entity. Until then they remain at the entity.
+    ///
+    /// When this id redone, the components are moved back into the entity from the buffer.
+    ///
+    /// This variant is useful to make accompanied insertions of these components _without_
+    /// overwrites reversible.
+    Undo,
+    /// Combines [`BufferAt::Now`] and [`BufferAt::Undo`], utilizing two separate buffers.
+    ///
+    /// This variant is useful to make accompanied insertions of these components _with_
+    /// overwrites reversible.
+    ///
+    /// **Make sure to do such insertions right after and not before this buffering.**
+    NowAndUndo,
+}
+
 pub trait RevWorld {
     fn rev_despawn(&mut self, entity: Entity) -> bool;
-    fn buffer_bundle(&mut self, entity: Entity, bundle: BundleId);
-    fn buffer_bundle_cached(
+    fn buffer_components(
         &mut self,
         entity: Entity,
-        cache: impl Hash,
-        bundle: impl FnOnce(&mut World) -> BundleId,
-    );
-    fn buffer_bundle_at_undo(&mut self, entity: Entity, bundle: BundleId);
-    fn buffer_bundle_at_undo_cached(
+        at: BufferAt,
+        components: Vec<ComponentId>,
+    ) -> &mut Self;
+    fn buffer_components_cached(
         &mut self,
         entity: Entity,
-        cache: impl Hash,
-        bundle: impl FnOnce(&mut World) -> BundleId,
-    );
-    fn buffer_bundle_in_progress(&self) -> bool;
+        key: impl Hash,
+        components: impl FnOnce(&mut World) -> (BufferAt, Vec<ComponentId>),
+    ) -> &mut Self;
+    fn buffer_components_in_progress(&self) -> bool;
 }
 
 impl RevWorld for World {
@@ -237,48 +263,109 @@ impl RevWorld for World {
         rev_despawn_inner(entity_mut)
     }
 
-    fn buffer_bundle(&mut self, entity: Entity, bundle: BundleId) {
-        let mut undo_redo = BundleBuffer::new(&self, entity, bundle);
-        undo_redo.move_bundle(self);
-        self.buffer_undo_redo(undo_redo);
-    }
-
-    fn buffer_bundle_cached(
+    fn buffer_components(
         &mut self,
         entity: Entity,
-        cache: impl Hash,
-        bundle: impl FnOnce(&mut World) -> BundleId,
-    ) {
-        let bundle = buffer_components_cached(self, cache, bundle);
-        self.buffer_bundle(entity, bundle);
+        at: BufferAt,
+        components: Vec<ComponentId>,
+    ) -> &mut Self {
+        if components.is_empty() {
+            return self;
+        }
+        let bundle = components_to_bundle(self, components);
+        buffer_bundle(self, entity, at, bundle);
+        self
     }
 
-    fn buffer_bundle_at_undo(&mut self, entity: Entity, bundle: BundleId) {
-        let undo_redo = BundleBuffer::new(&self, entity, bundle);
-        self.buffer_undo_redo(undo_redo);
-    }
-
-    fn buffer_bundle_at_undo_cached(
+    fn buffer_components_cached(
         &mut self,
         entity: Entity,
-        cache: impl Hash,
-        bundle: impl FnOnce(&mut World) -> BundleId,
-    ) {
-        let bundle = buffer_components_cached(self, cache, bundle);
-        self.buffer_bundle_at_undo(entity, bundle);
+        key: impl Hash,
+        components: impl FnOnce(&mut World) -> (BufferAt, Vec<ComponentId>),
+    ) -> &mut Self {
+        #[derive(Resource, Default)]
+        pub(crate) struct CachedBundles(HashMap<u64, Option<(BufferAt, BundleId)>, PassHash>);
+
+        let mut hasher = FixedHasher::default().build_hasher();
+        key.hash(&mut hasher);
+        let key = hasher.finish();
+
+        let mut cache = self.remove_resource::<CachedBundles>().unwrap_or_default();
+
+        let maybe_components = *cache.0.entry(key).or_insert_with(|| {
+            let (at, components) = components(self);
+            if components.is_empty() {
+                None
+            } else {
+                Some((at, components_to_bundle(self, components)))
+            }
+        });
+
+        self.insert_resource(cache);
+
+        if let Some((at, bundle)) = maybe_components {
+            buffer_bundle(self, entity, at, bundle);
+        }
+
+        self
     }
 
-    fn buffer_bundle_in_progress(&self) -> bool {
+    fn buffer_components_in_progress(&self) -> bool {
         self.contains_resource::<BufferBundleInProgress>()
     }
 }
 
+// todo: replace this with register_dynamic_bundle when linked issue is fixed
+fn components_to_bundle(world: &mut World, components: Vec<ComponentId>) -> BundleId {
+    #[derive(Resource, Default)]
+    struct CheckedClonable(HashSet<ComponentId>);
+
+    let mut checked = world
+        .remove_resource::<CheckedClonable>()
+        .unwrap_or_default();
+    for &component_id in &components {
+        if checked.0.insert(component_id) {
+            let component_info = world.components().get_info(component_id).expect("todo");
+            if component_info.clone_behavior() == &ComponentCloneBehavior::Ignore {
+                bevy::log::error!(
+                    "Component {} is unclonable, it's insert, remove or overwrite will \
+                    not be reversible, see https://github.com/bevyengine/bevy/issues/18079",
+                    component_info.name()
+                );
+            }
+        }
+    }
+    world.insert_resource(checked);
+
+    world.register_dynamic_bundle(&components).id()
+}
+
+fn buffer_bundle(world: &mut World, entity: Entity, at: BufferAt, bundle: BundleId) {
+    let mut buffer = BundleBuffer::new(world, entity, bundle);
+    match at {
+        BufferAt::Now => {
+            buffer.move_bundle(world);
+            world.buffer_undo_redo(buffer);
+        }
+        BufferAt::Undo => {
+            world.buffer_undo_redo(buffer);
+        }
+        BufferAt::NowAndUndo => {
+            let at_undo = buffer.clone(); // no buffer entity set yet so each spawns their own
+            buffer.move_bundle(world);
+            world.buffer_undo_redo(buffer).buffer_undo_redo(at_undo);
+        }
+    }
+}
+
+#[derive(Clone)]
 struct BundleBuffer {
     bundle: BundleId,
     entity: Entity,
     state: BufferState,
 }
 
+#[derive(Clone)]
 enum BufferState {
     Unspawned(DespawnAtOutOfLog),
     Empty(Entity),
@@ -297,28 +384,28 @@ impl BundleBuffer {
     }
     fn move_bundle(&mut self, world: &mut World) {
         let (target, source);
-        match self.state {
+        self.state = match self.state {
             BufferState::Unspawned(marker) => {
                 target = world.spawn(marker).id();
                 source = self.entity;
-                self.state = BufferState::Filled(target);
+                BufferState::Filled(target)
             }
             BufferState::Empty(buffer) => {
                 target = buffer;
                 source = self.entity;
-                self.state = BufferState::Filled(buffer);
+                BufferState::Filled(buffer)
             }
             BufferState::Filled(buffer) => {
                 target = self.entity;
                 source = buffer;
-                self.state = BufferState::Empty(buffer);
+                BufferState::Empty(buffer)
             }
-        }
+        };
 
         let bundle = world.bundles().get(self.bundle).expect("todo");
         let components: Box<[ComponentId]> = bundle.explicit_components().into();
 
-        let progress_res = world.buffer_bundle_in_progress();
+        let progress_res = world.buffer_components_in_progress();
         if !progress_res {
             world.insert_resource(BufferBundleInProgress);
         }
@@ -347,37 +434,17 @@ impl UndoRedo for BundleBuffer {
 #[derive(Resource)]
 struct BufferBundleInProgress;
 
-fn buffer_components_cached(
-    world: &mut World,
-    cache: impl Hash,
-    bundle: impl FnOnce(&mut World) -> BundleId,
-) -> BundleId {
-    world.resource_scope(|world, mut cache_res: Mut<CachedBufferIds>| {
-        let mut hasher = FixedHasher::default().build_hasher();
-        cache.hash(&mut hasher);
-        let cache = hasher.finish();
-        *cache_res.0.entry(cache).or_insert_with(|| bundle(world))
-    })
-}
-
-fn check_unclonable_bundle(world: &mut World, bundle: BundleId) {
-    let ids: Box<[ComponentId]> = world
-        .bundles()
-        .get(bundle)
-        .expect("todo")
-        .contributed_components()
-        .into();
-    check_unclonable_components(world, &ids);
-}
-
+// todo: remove this when linked issue was fixed
 fn check_unclonable_components(world: &mut World, ids: &[ComponentId]) {
-    #[derive(Resource)]
-    struct Unclonable(HashSet<ComponentId>);
-    world.resource_scope(|world, mut unclonable_res: Mut<Unclonable>| {
-        for &component_id in ids {
+    #[derive(Resource, Default)]
+    struct CheckedClonableIds(HashSet<ComponentId>);
+    let mut checked = world
+        .remove_resource::<CheckedClonableIds>()
+        .unwrap_or_default();
+    for &component_id in ids {
+        if checked.0.insert(component_id) {
             let component_info = world.components().get_info(component_id).expect("todo");
-            let unclonable = component_info.clone_behavior() == &ComponentCloneBehavior::Ignore;
-            if unclonable && unclonable_res.0.insert(component_id) {
+            if component_info.clone_behavior() == &ComponentCloneBehavior::Ignore {
                 bevy::log::error!(
                     "Component {} is unclonable, it's insert, remove or overwrite will not \
                     be reversible, see https://github.com/bevyengine/bevy/issues/18079",
@@ -385,11 +452,9 @@ fn check_unclonable_components(world: &mut World, ids: &[ComponentId]) {
                 );
             }
         }
-    });
+    }
+    world.insert_resource(checked);
 }
-
-#[derive(Resource, Default)]
-pub(crate) struct CachedBufferIds(HashMap<u64, BundleId, PassHash>);
 
 #[derive(Component, Clone, Copy, Debug, Hash, PartialOrd, Ord, PartialEq, Eq)]
 #[component(immutable)]
@@ -640,9 +705,10 @@ fn rev_despawn_inner(mut entity_mut: EntityWorldMut) -> bool {
 
 #[macro_export]
 macro_rules! unique_for_location {
-    ($($hashable: ident),*) => {
+    ($($hashable: expr),*) => {
         // extra scope to keep `UniquePerInvoke`s isolated
         {
+            #[derive(Copy, Clone)]
             struct UniquePerInvoke;
             (std::any::TypeId::of::<UniquePerInvoke>(), $($hashable,)*)
         }
