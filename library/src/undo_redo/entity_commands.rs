@@ -1,15 +1,10 @@
+use std::any::TypeId;
+
 use bevy::{
     ecs::{
-        archetype::Archetype,
-        bundle::{Bundle, InsertMode},
-        component::{Component, ComponentId},
-        entity::{Entity, EntityClonerBuilder},
-        hierarchy::{ChildSpawner, Children},
-        relationship::{RelatedSpawner, Relationship, RelationshipTarget},
-        system::{entity_command::insert_by_id, EntityCommand},
-        world::OccupiedEntry,
+        archetype::Archetype, bundle::{Bundle, InsertMode}, component::{Component, ComponentId}, entity::{Entity, EntityClonerBuilder}, hierarchy::{ChildSpawner, Children}, observer::TriggerTargets, relationship::{RelatedSpawner, Relationship, RelationshipTarget}, system::{entity_command::insert_by_id, EntityCommand}, world::OccupiedEntry
     },
-    ptr::OwningPtr,
+    ptr::OwningPtr, reflect::Type,
 };
 
 use super::*;
@@ -124,94 +119,63 @@ pub trait RevEntityWorldMut {
     /// Reversible version of [`EntityWorldMut::with_child`].
     fn rev_with_child(&mut self, bundle: impl Bundle) -> &mut Self;
 
-    fn rev_buffer_components(
-        &mut self,
-        components: impl IntoIterator<Item = ComponentId>,
-    ) -> &mut Self;
+    fn buffer_components(&mut self, at: BufferAt, components: Vec<ComponentId>) -> &mut Self;
 
-    fn rev_buffer_components_cached<I: IntoIterator<Item = ComponentId>>(
+    fn buffer_components_cached(
         &mut self,
-        cache: impl Hash,
-        components: impl FnOnce(&mut World) -> I,
+        key: impl Hash,
+        components: impl FnOnce(&mut World) -> (BufferAt, Vec<ComponentId>),
     ) -> &mut Self;
+}
 
-    fn rev_buffer_components_at_undo(
-        &mut self,
-        components: impl IntoIterator<Item = ComponentId>,
-    ) -> &mut Self;
-
-    fn rev_buffer_components_at_undo_cached<I: IntoIterator<Item = ComponentId>>(
-        &mut self,
-        cache: impl Hash,
-        components: impl FnOnce(&mut World) -> I,
-    ) -> &mut Self;
+enum Cache {
+    BundleExplicit(BundleId),
+    BundleArchetype {
+        bundle: BundleId,
+        archetype: ArchetypeId,
+    },
 }
 
 impl RevEntityWorldMut for EntityWorldMut<'_> {
     fn rev_insert<T: Bundle>(&mut self, bundle: T) -> &mut Self {
         let archetype_id = self.archetype().id();
-        let bundle_id = unsafe {
-            // SAFETY: Bundle registration does not affect entity location
-            self.world_mut().register_bundle::<T>().id()
-        };
-        self.rev_buffer_components_cached(
-            unique_for_location!(archetype_id, bundle_id),
+        self.buffer_components_cached(
+            unique_for_location!(archetype_id, TypeId::of::<T>()),
             |world: &mut World| {
-                let archetype = world.archetypes().get(archetype_id).unwrap();
-                world
-                    .bundles()
-                    .get(bundle_id)
-                    .unwrap()
-                    .explicit_components()
-                    .iter()
-                    .copied()
-                    .filter(|component_id| archetype.contains(*component_id))
-                    .collect::<Vec<ComponentId>>()
-            },
-        )
-        .rev_buffer_components_at_undo_cached(
-            unique_for_location!(archetype_id, bundle_id),
-            |world: &mut World| {
-                let archetype = world.archetypes().get(archetype_id).unwrap();
-                let bundle = world.bundles().get(bundle_id).unwrap();
-                bundle
-                    .required_components()
-                    .iter()
-                    .copied()
-                    .filter(|component_id| !archetype.contains(*component_id))
-                    .chain(bundle.explicit_components().iter().copied())
-                    .collect::<Vec<ComponentId>>()
+                let bundle_id = world.register_bundle::<T>().id();
+                insert_bundle_to_components(world, bundle_id, archetype_id)
             },
         )
         .insert(bundle)
     }
 
     fn rev_insert_if_new<T: Bundle>(&mut self, bundle: T) -> &mut Self {
+        // Bundle explicit:  A(2), B(2), C(2)
+        // Bundle required:                    D(2), E(2)
+
+        // Entity before:    A(1), B(1),             E(1)
+        // Entity after:     A(1), B(1), C(2), D(2), E(1)
+
+        // Buffer at undo:               C(2), D(2)
+
         let archetype_id = self.archetype().id();
-        let entity = self.id();
-        let buffer_entity = self.world_scope(|world| {
-            let bundle_id = world.register_bundle::<T>().id();
-            world.buffer_components_at_undo_cached(
-                entity,
-                unique_for_location!(archetype_id, bundle_id),
-                |world: &mut World| {
-                    let archetype = world.archetypes().get(archetype_id).unwrap();
-                    world
-                        .bundles()
-                        .get(bundle_id)
-                        .unwrap()
-                        .contributed_components()
-                        .iter()
-                        .copied()
-                        .filter(|component_id| !archetype.contains(*component_id))
-                        .collect::<Vec<ComponentId>>()
-                },
-            )
-        });
-        if buffer_entity.is_none() {
-            self.insert_if_new(bundle);
-        }
-        self
+        self.insert_if_new(bundle).buffer_components_cached(
+            unique_for_location!(archetype_id, TypeId::of::<T>()),
+            |world| {
+                let bundle_id = world.register_bundle::<T>().id();
+                let archetype = world.archetypes().get(archetype_id).unwrap();
+                let components = world
+                    .bundles()
+                    .get(bundle_id)
+                    .unwrap()
+                    .contributed_components()
+                    .iter()
+                    .copied()
+                    .filter(|component_id| !archetype.contains(*component_id))
+                    .collect();
+                (BufferAt::Undo, components)
+            },
+        )
     }
 
     unsafe fn rev_insert_by_id(
@@ -228,150 +192,108 @@ impl RevEntityWorldMut for EntityWorldMut<'_> {
         component_ids: &[ComponentId],
         iter_components: I,
     ) -> &mut Self {
-        let archetype = self.archetype();
-        let backup_components = component_ids
-            .into_iter()
-            .copied()
-            .filter(|component_id| archetype.contains(*component_id))
-            .collect::<Vec<ComponentId>>();
-        let insert_components = component_ids
-            .into_iter()
-            .copied()
-            .flat_map(|component_id| {
-                self.world()
-                    .components()
-                    .get_info(component_id)
-                    .unwrap()
-                    .required_components()
-                    .iter_ids()
-                    .chain([component_id])
-            })
-            .filter(|component_id| !archetype.contains(*component_id))
-            .collect::<HashSet<ComponentId>>();
-        if !backup_components.is_empty() {
-            self.rev_buffer_components(backup_components);
-        }
-        self.rev_buffer_components_at_undo(insert_components)
-            .insert_by_ids(component_ids, iter_components)
+        let archetype_id = self.archetype().id();
+        let bundle_id = unsafe {
+            // SAFETY: registering a bundle does not change the entity's location
+            self.world_mut().register_dynamic_bundle(component_ids).id()
+        };
+        self.buffer_components_cached(
+            unique_for_location!(archetype_id, bundle_id),
+            |world: &mut World| insert_bundle_to_components(world, bundle_id, archetype_id),
+        )
+        .insert_by_ids(component_ids, iter_components)
     }
 
     fn rev_remove<T: Bundle>(&mut self) -> &mut Self {
         let archetype_id = self.archetype().id();
-        let entity = self.id();
-        self.world_scope(|world| {
-            let bundle_id = world.register_bundle::<T>().id();
-            world.buffer_components_cached(
-                entity,
-                unique_for_location!(archetype_id, bundle_id),
-                |world: &mut World| {
-                    let archetype = world.archetypes().get(archetype_id).unwrap();
-                    world
-                        .bundles()
-                        .get(bundle_id)
-                        .unwrap()
-                        .explicit_components()
-                        .into_iter()
-                        .copied()
-                        .filter(|component_id| archetype.contains(*component_id))
-                        .collect::<Vec<ComponentId>>()
-                },
-            );
-        });
-        self
+        self.buffer_components_cached(
+            unique_for_location!(archetype_id, TypeId::of::<T>()),
+            |world| {
+                let bundle_id = world.register_bundle::<T>().id();
+                let bundle = world.bundles().get(bundle_id).unwrap();
+                let archetype = world.archetypes().get(archetype_id).unwrap();
+                let components: Vec<_> = bundle
+                    .explicit_components()
+                    .iter()
+                    .filter(|component_id| archetype.contains(**component_id))
+                    .copied()
+                    .collect();
+                (BufferAt::Now, components)
+            },
+        )
     }
 
     fn rev_remove_with_requires<T: Bundle>(&mut self) -> &mut Self {
         let archetype_id = self.archetype().id();
-        let entity = self.id();
-        self.world_scope(|world| {
-            let bundle_id = world.register_bundle::<T>().id();
-            world.buffer_components_cached(
-                entity,
-                unique_for_location!(archetype_id, bundle_id),
-                |world: &mut World| {
-                    let archetype = world.archetypes().get(archetype_id).unwrap();
-                    world
-                        .bundles()
-                        .get(bundle_id)
-                        .unwrap()
-                        .contributed_components()
-                        .into_iter()
-                        .copied()
-                        .filter(|component_id| archetype.contains(*component_id))
-                        .collect::<Vec<ComponentId>>()
-                },
-            );
-        });
-        self
+        self.buffer_components_cached(
+            unique_for_location!(archetype_id, TypeId::of::<T>()),
+            |world| {
+                let bundle_id = world.register_bundle::<T>().id();
+                let bundle = world.bundles().get(bundle_id).unwrap();
+                let archetype = world.archetypes().get(archetype_id).unwrap();
+                let components: Vec<_> = bundle
+                    .contributed_components()
+                    .iter()
+                    .filter(|component_id| archetype.contains(**component_id))
+                    .copied()
+                    .collect();
+                (BufferAt::Now, components)
+            },
+        )
     }
 
     fn rev_retain<T: Bundle>(&mut self) -> &mut Self {
         let archetype_id = self.archetype().id();
-        let entity = self.id();
-        self.world_scope(|world| {
-            let bundle_id = world.register_bundle::<T>().id();
-            world.buffer_components_cached(
-                entity,
-                unique_for_location!(archetype_id, bundle_id),
-                |world: &mut World| {
-                    let bundle_components = world
-                        .bundles()
-                        .get(bundle_id)
-                        .unwrap()
-                        .contributed_components()
-                        .into_iter()
-                        .copied()
-                        .collect::<HashSet<ComponentId>>();
-                    world
-                        .archetypes()
-                        .get(archetype_id)
-                        .unwrap()
-                        .components()
-                        .filter(|component_id| !bundle_components.contains(component_id))
-                        .collect::<Vec<ComponentId>>()
-                },
-            );
-        });
-        self
+        self.buffer_components_cached(
+            unique_for_location!(archetype_id, TypeId::of::<T>()),
+            |world| {
+                let contributed_components: HashSet<_> = world
+                    .register_bundle::<T>()
+                    .contributed_components()
+                    .iter()
+                    .copied()
+                    .collect();
+                let components = world
+                    .archetypes()
+                    .get(archetype_id)
+                    .unwrap()
+                    .components()
+                    .filter(|component_id| !contributed_components.contains(component_id))
+                    .collect();
+                (BufferAt::Now, components)
+            }, 
+        )
     }
 
     fn rev_remove_by_id(&mut self, component_id: ComponentId) -> &mut Self {
         if !self.contains_id(component_id) {
             return self;
         }
-        let entity = self.id();
-        self.world_scope(|world| {
-            world.buffer_components(entity, [component_id]);
-        });
-        self
+        self.buffer_components(BufferAt::Now, vec![component_id])
     }
 
     fn rev_remove_by_ids(&mut self, component_ids: &[ComponentId]) -> &mut Self {
-        let entity = self.id();
-        self.world_scope(|world| {
-            world.buffer_components(entity, component_ids.into_iter().copied());
-        });
-        self
+        let components = component_ids
+            .components()
+            .filter(|component_id| self.archetype().contains(*component_id))
+            .collect();
+        self.buffer_components(BufferAt::Now, components)
     }
 
     fn rev_clear(&mut self) -> &mut Self {
         let archetype_id = self.archetype().id();
-        let entity = self.id();
-        self.world_scope(|world| {
-            world.buffer_components_cached(
-                entity,
-                unique_for_location!(archetype_id),
-                |world: &mut World| {
-                    world
-                        .archetypes()
-                        .get(archetype_id)
-                        .unwrap()
-                        .components()
-                        .collect::<Box<[ComponentId]>>() // stored as such in archetype
-                },
-            );
-        });
-        self
+        self.buffer_components_cached(
+            unique_for_location!(archetype_id),
+            |world| {
+                let components = world
+                    .archetypes()
+                    .get(archetype_id)
+                    .unwrap()
+                    .components()
+                    .collect();
+                (BufferAt::Now, components)
+            }
+        )
     }
 
     fn rev_despawn(self) {
@@ -600,51 +522,72 @@ impl RevEntityWorldMut for EntityWorldMut<'_> {
         todo!()
     }
 
-    fn rev_buffer_components(
-        &mut self,
-        components: impl IntoIterator<Item = ComponentId>,
-    ) -> &mut Self {
+    fn buffer_components(&mut self, at: BufferAt, components: Vec<ComponentId>) -> &mut Self {
         let entity = self.id();
-        self.world_scope(|world| world.buffer_components(entity, components));
+        if at == BufferAt::Undo {
+            unsafe {
+                // SAFETY: No components of this entity are buffered yet,
+                // only resources are mutated and a bundle is registered.
+                self.world_mut().buffer_components(entity, at, components);
+            }
+        } else {
+            self.world_scope(|world| {
+                world.buffer_components(entity, at, components);
+            })
+        }
         self
     }
 
-    fn rev_buffer_components_cached<I: IntoIterator<Item = ComponentId>>(
+    fn buffer_components_cached(
         &mut self,
-        cache: impl Hash,
-        components: impl FnOnce(&mut World) -> I,
+        key: impl Hash,
+        components: impl FnOnce(&mut World) -> (BufferAt, Vec<ComponentId>),
     ) -> &mut Self {
         let entity = self.id();
-        self.world_scope(|world| world.buffer_components_cached(entity, cache, components));
+        self.world_scope(|world| {
+            world.buffer_components_cached(entity, key, components);
+        });
         self
     }
+}
 
-    fn rev_buffer_components_at_undo(
-        &mut self,
-        components: impl IntoIterator<Item = ComponentId>,
-    ) -> &mut Self {
-        let entity = self.id();
-        let world = unsafe {
-            // SAFETY: only resources are mutated, no component moves happen yet
-            self.world_mut()
-        };
-        world.buffer_components_at_undo(entity, components);
-        self
-    }
+fn insert_bundle_to_components(
+    world: &World,
+    bundle_id: BundleId,
+    archetype_id: ArchetypeId,
+) -> (BufferAt, Vec<ComponentId>) {
+    // Bundle explicit:  A(2), B(2), C(2)
+    // Bundle required:                    D(2), E(2)
 
-    fn rev_buffer_components_at_undo_cached<I: IntoIterator<Item = ComponentId>>(
-        &mut self,
-        cache: impl Hash,
-        components: impl FnOnce(&mut World) -> I,
-    ) -> &mut Self {
-        let entity = self.id();
-        let world = unsafe {
-            // SAFETY: only resources are mutated, no component moves happen yet
-            self.world_mut()
-        };
-        world.buffer_components_at_undo_cached(entity, cache, components);
-        self
-    }
+    // Entity before:    A(1), B(1),             E(1)
+    // Entity after:     A(2), B(2), C(2), D(2), E(1)
+
+    // Buffer 1:         A(1), B(1), C(*), D(*)        *if any appears at redo
+    // Buffer 2 at undo: A(2), B(2), C(2), D(2)
+
+    let bundle = world.bundles().get(bundle_id).unwrap();
+    let archetype = world.archetypes().get(archetype_id).unwrap();
+    let components = bundle
+        .explicit_components()
+        .iter()
+        .chain(
+            bundle
+                .required_components()
+                .iter()
+                .filter(|component_id| !archetype.contains(**component_id)),
+        )
+        .copied()
+        .collect();
+    let overwrites = bundle
+        .explicit_components()
+        .iter()
+        .any(|component_id| archetype.contains(*component_id));
+    let at = if overwrites {
+        BufferAt::NowAndUndo
+    } else {
+        BufferAt::Undo
+    };
+    (at, components)
 }
 
 fn get_archetype(world: &World, archetype_id: ArchetypeId) -> &Archetype {
@@ -695,9 +638,9 @@ pub unsafe fn rev_insert_by_id<T: Component + Send + 'static>(
 fn rev_insert_inner(entity: &mut EntityWorldMut, component_id: ComponentId) {
     let archetype_id = entity.archetype().id();
     if entity.contains_id(component_id) {
-        entity.rev_buffer_components([component_id]);
+        entity.buffer_components_cached([component_id]);
     }
-    entity.rev_buffer_components_at_undo_cached(
+    entity.buffer_bundle_at_undo_cached(
         unique_for_location!(archetype_id, component_id),
         |world: &mut World| {
             let archetype = world.archetypes().get(archetype_id).unwrap();
