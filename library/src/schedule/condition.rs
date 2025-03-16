@@ -12,7 +12,7 @@ use bevy::{
         component::{ComponentId, Tick},
         query::Access,
         schedule::{
-            Condition, InternedSystemSet, IntoSystemSetConfigs, SystemSet, SystemSetConfigs,
+            Condition, InternedSystemSet, IntoScheduleConfigs, ScheduleConfigs, SystemSet
         },
         system::{IntoSystem, ReadOnlySystem, System, SystemIn},
         world::{unsafe_world_cell::UnsafeWorldCell, DeferredWorld, World},
@@ -43,7 +43,7 @@ impl Hash for RevConditionSet {
 }
 
 pub(crate) fn add_condition<Marker>(
-    configs: &mut SystemSetConfigs,
+    configs: &mut ScheduleConfigs<InternedSystemSet>,
     condition: impl Condition<Marker>,
 ) -> InternedSystemSet {
     static SET_COUNTER: AtomicU32 = AtomicU32::new(0);

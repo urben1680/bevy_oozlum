@@ -29,6 +29,12 @@ Enhancements:
 - assert buffer components remain empty for component
 - sync points before exclusive systems need to be reflected
 - migration tracking issue
+- reversible commands traits of:
+-- Commands
+-- EntityCommands
+-- RelatedSpawnerCommands
+-- EntityEntryCommands
+-- ChildSpawnerCommands
 
 Docs
 - documentations
@@ -39,15 +45,6 @@ Docs
 ISSUES/DISCUSSIONS:
 - reversible change detection (copy over to new repo)
 - analyze test schedule::non_exclusive_then_exclusive_ignore_deferred, consider revamping test strategy
-- reversible entity commands
--- main has all that is needed but might all be too fresh and up for changes before 0.16
--- approach:
--- 1. methods that are rev_ variants of bevy's commands + entity commands
---    still are vanilla Command/EntityCommand implementors
---    ideally work with fallible commands API
---    entity disabling (unspaw, undespawn) needs to be aware if entity is already disabled
---      maybe add another marker component that requires Disabled
--- 2. extend RevCommands trait, introduce RevEntityCommands
 - manual sync point configuration
 -- apply_deferred
 -- ScheduleBuildSettings::auto_insert_apply_deferred
@@ -74,7 +71,6 @@ pub mod prelude {
     };
     pub use crate::undo_redo::{
         unique_for_location, BuffersUndoRedo as _, DespawnAtOutOfLog, RevCommands as _,
-        RevEntityWorldMut as _, RevEntry as _, RevWorld as _, UndoRedoBuffer, UndoRedoDirection,
-        UndoRedoSwap,
+        RevEntityWorldMut as _, RevWorld as _, UndoRedoBuffer, UndoRedoDirection, UndoRedoSwap,
     };
 }

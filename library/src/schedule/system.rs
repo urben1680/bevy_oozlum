@@ -12,7 +12,7 @@ use bevy::{
         component::{ComponentId, Tick},
         query::Access,
         schedule::{
-            ApplyDeferred, InternedSystemSet, IntoSystemConfigs, IntoSystemSetConfigs, SystemSet,
+            ApplyDeferred, InternedSystemSet, IntoScheduleConfigs, SystemSet
         },
         system::{IntoSystem, ReadOnlySystem, System, SystemIn},
         world::{unsafe_world_cell::UnsafeWorldCell, DeferredWorld, World},
@@ -478,7 +478,7 @@ mod test {
             component::{Component, HookContext},
             event::Event,
             observer::Trigger,
-            schedule::IntoSystemConfigs,
+            schedule::IntoScheduleConfigs,
             system::{Commands, IntoSystem},
             world::{DeferredWorld, World},
         },

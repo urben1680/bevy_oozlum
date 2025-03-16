@@ -3,7 +3,7 @@ use std::fmt::Debug;
 use bevy::{
     ecs::{
         change_detection::Res,
-        schedule::{InternedSystemSet, IntoSystemSetConfigs, Schedule, ScheduleLabel, SystemSet},
+        schedule::{InternedSystemSet, IntoScheduleConfigs, Schedule, ScheduleLabel, SystemSet},
     },
     prelude::IntoSystemSet,
 };

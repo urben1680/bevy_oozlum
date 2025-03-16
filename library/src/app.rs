@@ -1,8 +1,7 @@
 use bevy::{
     app::{App, FixedUpdate, Plugin},
     ecs::schedule::{
-        InternedScheduleLabel, InternedSystemSet, IntoSystemConfigs, ScheduleLabel, Schedules,
-        SystemSet,
+        InternedScheduleLabel, InternedSystemSet, IntoScheduleConfigs, ScheduleLabel, Schedules, SystemSet
     },
     utils::default,
 };

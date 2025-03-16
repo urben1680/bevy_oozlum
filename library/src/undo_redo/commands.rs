@@ -2,22 +2,23 @@ use bevy::{
     ecs::{
         archetype::{Archetype, ArchetypeId},
         bundle::{Bundle, BundleInfo, InsertMode, NoBundleEffect},
-        component::ComponentId,
+        component::{Component, ComponentId},
         entity::{Entity, EntityCloner},
         error::Result as CommandResult,
         resource::Resource,
-        system::{Command, Commands},
-        world::{error::TryInsertBatchError, FromWorld, World},
+        system::{Command, Commands, EntityCommand},
+        world::{error::TryInsertBatchError, EntityWorldMut, FromWorld, World},
     },
     platform_support::{
         collections::{hash_map::Entry, HashMap},
         hash::FixedHasher,
     },
+    ptr::OwningPtr,
 };
 
 use crate::meta::RevMeta;
 
-use super::{BuffersUndoRedo, DespawnAtOutOfLog, UndoRedo};
+use super::{BuffersUndoRedo, DespawnAtOutOfLog, RevEntityWorldMut, RevWorld, UndoRedo};
 
 pub trait RevCommands {
     fn rev_init_resource<R: Resource + FromWorld>(&mut self);
@@ -36,6 +37,8 @@ impl RevCommands for Commands<'_, '_> {
         self.queue(rev_remove_resource::<R>())
     }
 }
+
+//todo: deprecate
 #[derive(Resource)]
 struct EmptyEntity(Entity);
 
@@ -371,35 +374,11 @@ where
     }
 }
 
-struct ResourceSwap<R: Resource>(Option<R>);
-
-impl<R: Resource> UndoRedo for ResourceSwap<R> {
-    fn undo(&mut self, world: &mut World) {
-        match world.get_resource_mut::<R>() {
-            Some(mut r1) => match self.0.as_mut() {
-                Some(r2) => core::mem::swap(&mut *r1, r2),
-                None => self.0 = world.remove_resource::<R>(),
-            },
-            None => {
-                if let Some(r2) = self.0.take() {
-                    world.insert_resource(r2)
-                }
-            }
-        }
-    }
-    fn redo(&mut self, world: &mut World) {
-        self.undo(world)
-    }
-}
-
 /// Reversible version of [`init_resource`](bevy::ecs::system::command::init_resource).
 #[track_caller]
 pub fn rev_init_resource<R: Resource + FromWorld>() -> impl Command {
     |world: &mut World| {
-        if !world.contains_resource::<R>() {
-            world.init_resource::<R>();
-            world.buffer_undo_redo(ResourceSwap::<R>(None));
-        }
+        world.rev_init_resource::<R>();
     }
 }
 
@@ -407,18 +386,107 @@ pub fn rev_init_resource<R: Resource + FromWorld>() -> impl Command {
 #[track_caller]
 pub fn rev_insert_resource<R: Resource>(resource: R) -> impl Command {
     |world: &mut World| {
-        let swap = ResourceSwap(world.remove_resource::<R>());
-        world.insert_resource(resource);
-        world.buffer_undo_redo(swap);
+        world.rev_insert_resource(resource);
     }
 }
 
 /// Reversible version of [`remove_resource`](bevy::ecs::system::command::remove_resource).
 pub fn rev_remove_resource<R: Resource>() -> impl Command {
     |world: &mut World| {
-        if let Some(resource) = world.remove_resource::<R>() {
-            world.buffer_undo_redo(ResourceSwap(Some(resource)));
+        world.rev_remove_resource::<R>()
+    }
+}
+
+/// Reversible version of [`insert`](bevy::ecs::system::entity_command::insert).
+#[track_caller]
+pub fn rev_insert<B: Bundle>(bundle: B, mode: InsertMode) -> impl EntityCommand {
+    move |mut entity: EntityWorldMut| {
+        match mode {
+            InsertMode::Keep => entity.rev_insert_if_new(bundle),
+            InsertMode::Replace => entity.rev_insert(bundle),
+        };
+    }
+}
+
+/// Reversible version of [`insert_by_id`](bevy::ecs::system::entity_command::insert_by_id).
+///
+/// # Safety
+///
+/// - [`ComponentId`] must be from the same world as the target entity.
+/// - `T` must have the same layout as the one passed during `component_id` creation.
+pub unsafe fn rev_insert_by_id<T: Component + Send + 'static>(
+    component_id: ComponentId,
+    value: T,
+    mode: InsertMode,
+) -> impl EntityCommand {
+    move |mut entity: EntityWorldMut| {
+        if entity.contains_id(component_id) && mode == InsertMode::Keep {
+            return;
         }
+        OwningPtr::make(value, |ptr| {
+            // SAFETY: user promised fulfilling the contract in this command's docs
+            entity.rev_insert_by_id(component_id, ptr);
+        })
+    }
+}
+
+/// Reversible version of [`insert_from_world`](bevy::ecs::system::entity_command::insert_from_world).
+#[track_caller]
+pub fn rev_insert_from_world<T: Component + FromWorld>(mode: InsertMode) -> impl EntityCommand {
+    move |mut entity: EntityWorldMut| {
+        let value = entity.world_scope(|world| T::from_world(world));
+        match mode {
+            InsertMode::Keep => entity.insert_if_new(value),
+            InsertMode::Replace => entity.insert(value),
+        };
+    }
+}
+
+/// Reversible version of [`remove`](bevy::ecs::system::entity_command::remove).
+#[track_caller]
+pub fn rev_remove<B: Bundle>() -> impl EntityCommand {
+    |mut entity: EntityWorldMut| {
+        entity.rev_remove::<B>();
+    }
+}
+
+/// Reversible version of [`remove_with_requires`](bevy::ecs::system::entity_command::remove_with_requires).
+#[track_caller]
+pub fn rev_remove_with_requires<B: Bundle>() -> impl EntityCommand {
+    |mut entity: EntityWorldMut| {
+        entity.rev_remove_with_requires::<B>();
+    }
+}
+
+/// Reversible version of [`remove_by_id`](bevy::ecs::system::entity_command::remove_by_id).
+#[track_caller]
+pub fn rev_remove_by_id(component_id: ComponentId) -> impl EntityCommand {
+    move |mut entity: EntityWorldMut| {
+        entity.rev_remove_by_id(component_id);
+    }
+}
+
+/// Reversible version of [`clear`](bevy::ecs::system::entity_command::clear).
+#[track_caller]
+pub fn rev_clear() -> impl EntityCommand {
+    |mut entity: EntityWorldMut| {
+        entity.rev_clear();
+    }
+}
+
+/// Reversible version of [`retain`](bevy::ecs::system::entity_command::retain).
+#[track_caller]
+pub fn rev_retain<B: Bundle>() -> impl EntityCommand {
+    |mut entity: EntityWorldMut| {
+        entity.rev_retain::<B>();
+    }
+}
+
+/// Reversible version of [`despawn`](bevy::ecs::system::entity_command::despawn).
+#[track_caller]
+pub fn rev_despawn() -> impl EntityCommand {
+    |entity: EntityWorldMut| {
+        entity.rev_despawn();
     }
 }
 

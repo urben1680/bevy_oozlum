@@ -85,7 +85,6 @@ fn row1(app: &mut App) {
         if meta.direction() != RevDirection::NOT_LOG || !pressed.num1 {
             return;
         }
-        // blocked on https://github.com/bevyengine/bevy/pull/13120
         commands./*rev_*/spawn(Waste {
             tossed_at: meta.now(),
             row: 1,

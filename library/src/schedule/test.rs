@@ -14,7 +14,7 @@ use bevy::{
         event::Event,
         observer::Trigger,
         resource::Resource,
-        schedule::{IntoSystemConfigs, IntoSystemSet},
+        schedule::{IntoScheduleConfigs, IntoSystemSet},
         system::{Commands, IntoSystem},
         world::{DeferredWorld, World},
     },

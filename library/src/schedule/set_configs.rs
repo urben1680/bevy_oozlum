@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use bevy::ecs::schedule::{
-    Condition, IntoSystemSet, IntoSystemSetConfigs, SystemSet, SystemSetConfigs,
+    Condition, InternedSystemSet, IntoScheduleConfigs, IntoSystemSet, ScheduleConfigs, SystemSet
 };
 
 use variadics_please::all_tuples;
@@ -13,15 +13,15 @@ use super::{
 
 pub struct RevSystemSetConfigs {
     /// Contains [`FwdArcSet`]s for each system for the [`super::ForwardSet`].
-    pub(crate) fwd_sys_sets: SystemSetConfigs,
+    pub(crate) fwd_sys_sets: ScheduleConfigs<InternedSystemSet>,
     /// todo
-    pub(crate) bwd_cmd_sets: SystemSetConfigs,
+    pub(crate) bwd_cmd_sets: ScheduleConfigs<InternedSystemSet>,
     /// Contains [`BwdArcSet`]s which are subsets of [`BwdArcCmdSet`] with only each `bwd_arc`.
-    pub(crate) bwd_sys_sets: SystemSetConfigs,
+    pub(crate) bwd_sys_sets: ScheduleConfigs<InternedSystemSet>,
     /// todo
-    pub(crate) bwd_cmd_sys_sets: SystemSetConfigs,
+    pub(crate) bwd_cmd_sys_sets: ScheduleConfigs<InternedSystemSet>,
     /// todo
-    pub(crate) condition_sets: SystemSetConfigs,
+    pub(crate) condition_sets: ScheduleConfigs<InternedSystemSet>,
 }
 
 impl RevSystemSetConfigs {
@@ -213,14 +213,14 @@ impl RevSystemSetConfigs {
 }
 
 struct ForwardSetConfig {
-    fwd_sys_sets: SystemSetConfigs,
-    condition_sets: SystemSetConfigs,
+    fwd_sys_sets: ScheduleConfigs<InternedSystemSet>,
+    condition_sets: ScheduleConfigs<InternedSystemSet>,
 }
 
 struct BackwardSetConfigs {
-    bwd_cmd_sets: SystemSetConfigs,
-    bwd_sys_sets: SystemSetConfigs,
-    bwd_cmd_sys_sets: SystemSetConfigs,
+    bwd_cmd_sets: ScheduleConfigs<InternedSystemSet>,
+    bwd_sys_sets: ScheduleConfigs<InternedSystemSet>,
+    bwd_cmd_sys_sets: ScheduleConfigs<InternedSystemSet>,
 }
 
 macro_rules! impl_into_rev_set_configs {

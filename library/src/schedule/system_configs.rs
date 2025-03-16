@@ -1,13 +1,13 @@
-use bevy::ecs::schedule::{
-    Condition, IntoSystemConfigs, IntoSystemSet, NodeConfigs, SystemConfigs, SystemSet,
-};
+use bevy::ecs::{schedule::{
+    Condition, IntoScheduleConfigs, IntoSystemSet, ScheduleConfigs, SystemSet
+}, system::ScheduleSystem};
 
 use variadics_please::all_tuples;
 
 use super::set_configs::{IntoRevSystemSetConfigs, RevSystemSetConfigs};
 
 pub struct RevSystemConfigs {
-    pub(crate) systems: SystemConfigs,
+    pub(crate) systems: ScheduleConfigs<ScheduleSystem>,
     pub(crate) sets: RevSystemSetConfigs,
 }
 
@@ -51,19 +51,19 @@ where
     fn rev_distributive_run_if<M>(self, condition: impl Condition<M> + Clone) -> RevSystemConfigs {
         fn distribute<M>(
             set_configs: &mut RevSystemSetConfigs,
-            nodes: &mut SystemConfigs,
+            nodes: &mut ScheduleConfigs<ScheduleSystem>,
             condition: impl Condition<M> + Clone,
         ) {
             let nodes = match nodes {
-                NodeConfigs::Configs { configs, .. } => configs,
-                NodeConfigs::NodeConfig(_) => {
+                ScheduleConfigs::Configs { configs, .. } => configs,
+                ScheduleConfigs::ScheduleConfig(_) => {
                     unreachable!(
                         "first iteration: `configs.systems` is always `(fwd_sys, bwd_cmd, bwd_sys)` or further nested tuples.\n
                         next iterations: would not have been called if this is a NodeConfig as these cause a break of recursion."
                     )
                 }
             };
-            if matches!(nodes.get(0), Some(NodeConfigs::NodeConfig(_))) {
+            if matches!(nodes.get(0), Some(ScheduleConfigs::ScheduleConfig(_))) {
                 // detected fwd_sys of single system from `(fwd_sys, bwd_cmd, bwd_sys).into_configs()`
                 set_configs.rev_run_if_inner(condition);
                 return;
