@@ -35,6 +35,7 @@ Enhancements:
 -- RelatedSpawnerCommands
 -- EntityEntryCommands
 -- ChildSpawnerCommands
+- check if EntityWorldMut with relations need to handle children rev_despawn
 
 Docs
 - documentations
