@@ -485,6 +485,71 @@ fn rev_despawn_inner(mut entity_mut: EntityWorldMut) -> bool {
     })
 }
 
+fn insert_maybe_overwrite(
+    world: &World,
+    bundle_id: BundleId,
+    archetype_id: ArchetypeId,
+) -> (BufferAt, Vec<ComponentId>) {
+    // Bundle explicit:  A(2), B(2), C(2)
+    // Bundle required:                    D(2), E(2)
+
+    // Entity before:    A(1), B(1),             E(1)
+    // Entity after:     A(2), B(2), C(2), D(2), E(1)
+
+    // Buffer 1:         A(1), B(1), C(*), D(*)        *if any appear at redo
+    // Buffer 2 at undo: A(2), B(2), C(2), D(2)
+
+    let bundle = world.bundles().get(bundle_id).unwrap();
+    let archetype = world.archetypes().get(archetype_id).unwrap();
+    let components = bundle
+        .explicit_components()
+        .iter()
+        .chain(
+            bundle
+                .required_components()
+                .iter()
+                .filter(|component_id| !archetype.contains(**component_id)),
+        )
+        .copied()
+        .collect();
+    let overwrites = bundle
+        .explicit_components()
+        .iter()
+        .any(|component_id| archetype.contains(*component_id));
+    let at = if overwrites {
+        BufferAt::NowAndUndo
+    } else {
+        BufferAt::Undo
+    };
+    (at, components)
+}
+
+fn insert_no_overwrite(
+    world: &World,
+    bundle_id: BundleId,
+    archetype_id: ArchetypeId,
+) -> (BufferAt, Vec<ComponentId>) {
+    // Bundle explicit:  A(2), B(2), C(2)
+    // Bundle required:                    D(2), E(2)
+
+    // Entity before:    A(1), B(1),             E(1)
+    // Entity after:     A(1), B(1), C(2), D(2), E(1)
+
+    // Buffer at undo:               C(2), D(2)
+
+    let archetype = world.archetypes().get(archetype_id).unwrap();
+    let components = world
+        .bundles()
+        .get(bundle_id)
+        .unwrap()
+        .contributed_components()
+        .iter()
+        .copied()
+        .filter(|component_id| !archetype.contains(*component_id))
+        .collect();
+    (BufferAt::Undo, components)
+}
+
 #[macro_export]
 macro_rules! unique_for_location {
     ($($hashable: expr),*) => {
