@@ -150,40 +150,22 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
     fn rev_insert<T: Bundle>(&mut self, bundle: T) -> &mut Self {
         let archetype_id = self.archetype().id();
         self.buffer_components_cached(
-            unique_for_location!(archetype_id, TypeId::of::<T>()),
+            unique_for_location!(archetype_id, PhantomData::<T>),
             |world: &mut World| {
                 let bundle_id = world.register_bundle::<T>().id();
-                maybe_overwrite_insert(world, bundle_id, archetype_id)
+                insert_maybe_overwrite(world, bundle_id, archetype_id)
             },
         );
         self.insert(bundle)
     }
 
     fn rev_insert_if_new<T: Bundle>(&mut self, bundle: T) -> &mut Self {
-        // Bundle explicit:  A(2), B(2), C(2)
-        // Bundle required:                    D(2), E(2)
-
-        // Entity before:    A(1), B(1),             E(1)
-        // Entity after:     A(1), B(1), C(2), D(2), E(1)
-
-        // Buffer at undo:               C(2), D(2)
-
         let archetype_id = self.archetype().id();
         self.buffer_components_cached(
-            unique_for_location!(archetype_id, TypeId::of::<T>()),
+            unique_for_location!(archetype_id, PhantomData::<T>),
             |world| {
                 let bundle_id = world.register_bundle::<T>().id();
-                let archetype = world.archetypes().get(archetype_id).unwrap();
-                let components = world
-                    .bundles()
-                    .get(bundle_id)
-                    .unwrap()
-                    .contributed_components()
-                    .iter()
-                    .copied()
-                    .filter(|component_id| !archetype.contains(*component_id))
-                    .collect();
-                (BufferAt::Undo, components)
+                insert_no_overwrite(&world, bundle_id, archetype_id)
             },
         );
         self.insert_if_new(bundle)
@@ -209,7 +191,7 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
         };
         self.buffer_components_cached(
             unique_for_location!(archetype_id, bundle_id),
-            |world: &mut World| maybe_overwrite_insert(world, bundle_id, archetype_id),
+            |world: &mut World| insert_maybe_overwrite(world, bundle_id, archetype_id),
         );
         self.insert_by_ids(component_ids, iter_components)
     }
@@ -217,7 +199,7 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
     fn rev_remove<T: Bundle>(&mut self) -> &mut Self {
         let archetype_id = self.archetype().id();
         self.buffer_components_cached(
-            unique_for_location!(archetype_id, TypeId::of::<T>()),
+            unique_for_location!(archetype_id, PhantomData::<T>),
             |world| {
                 let bundle_id = world.register_bundle::<T>().id();
                 let bundle = world.bundles().get(bundle_id).unwrap();
@@ -237,7 +219,7 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
     fn rev_remove_with_requires<T: Bundle>(&mut self) -> &mut Self {
         let archetype_id = self.archetype().id();
         self.buffer_components_cached(
-            unique_for_location!(archetype_id, TypeId::of::<T>()),
+            unique_for_location!(archetype_id, PhantomData::<T>),
             |world| {
                 let bundle_id = world.register_bundle::<T>().id();
                 let bundle = world.bundles().get(bundle_id).unwrap();
@@ -263,7 +245,7 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
     fn rev_retain<T: Bundle>(&mut self) -> &mut Self {
         let archetype_id = self.archetype().id();
         self.buffer_components_cached(
-            unique_for_location!(archetype_id, TypeId::of::<T>()),
+            unique_for_location!(archetype_id, PhantomData::<T>),
             |world| {
                 let contributed_components: HashSet<_> = world
                     .register_bundle::<T>()
@@ -355,7 +337,7 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
                 unique_for_location!(archetype_id, TypeId::of::<B>()),
                 |world| {
                     let bundle_id = world.register_bundle::<B>().id();
-                    maybe_overwrite_insert(&world, bundle_id, archetype_id)
+                    insert_maybe_overwrite(&world, bundle_id, archetype_id)
                 },
             );
         });
@@ -692,45 +674,4 @@ impl<'w, 'a, T: Component> RevVacantEntry<'w, 'a, T> {
             _marker: PhantomData,
         }
     }
-}
-
-// todo: dont forget RevRelatedSpawnerCommands
-
-fn maybe_overwrite_insert(
-    world: &World,
-    bundle_id: BundleId,
-    archetype_id: ArchetypeId,
-) -> (BufferAt, Vec<ComponentId>) {
-    // Bundle explicit:  A(2), B(2), C(2)
-    // Bundle required:                    D(2), E(2)
-
-    // Entity before:    A(1), B(1),             E(1)
-    // Entity after:     A(2), B(2), C(2), D(2), E(1)
-
-    // Buffer 1:         A(1), B(1), C(*), D(*)        *if any appear at redo
-    // Buffer 2 at undo: A(2), B(2), C(2), D(2)
-
-    let bundle = world.bundles().get(bundle_id).unwrap();
-    let archetype = world.archetypes().get(archetype_id).unwrap();
-    let components = bundle
-        .explicit_components()
-        .iter()
-        .chain(
-            bundle
-                .required_components()
-                .iter()
-                .filter(|component_id| !archetype.contains(**component_id)),
-        )
-        .copied()
-        .collect();
-    let overwrites = bundle
-        .explicit_components()
-        .iter()
-        .any(|component_id| archetype.contains(*component_id));
-    let at = if overwrites {
-        BufferAt::NowAndUndo
-    } else {
-        BufferAt::Undo
-    };
-    (at, components)
 }
