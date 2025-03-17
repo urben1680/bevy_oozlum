@@ -392,9 +392,7 @@ pub fn rev_insert_resource<R: Resource>(resource: R) -> impl Command {
 
 /// Reversible version of [`remove_resource`](bevy::ecs::system::command::remove_resource).
 pub fn rev_remove_resource<R: Resource>() -> impl Command {
-    |world: &mut World| {
-        world.rev_remove_resource::<R>()
-    }
+    |world: &mut World| world.rev_remove_resource::<R>()
 }
 
 /// Reversible version of [`insert`](bevy::ecs::system::entity_command::insert).
