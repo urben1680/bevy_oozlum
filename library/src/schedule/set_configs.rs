@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use bevy::ecs::schedule::{
-    Condition, InternedSystemSet, IntoScheduleConfigs, IntoSystemSet, ScheduleConfigs, SystemSet
+    Condition, InternedSystemSet, IntoScheduleConfigs, IntoSystemSet, ScheduleConfigs, SystemSet,
 };
 
 use variadics_please::all_tuples;
