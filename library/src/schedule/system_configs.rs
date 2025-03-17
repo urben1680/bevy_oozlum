@@ -1,6 +1,7 @@
-use bevy::ecs::{schedule::{
-    Condition, IntoScheduleConfigs, IntoSystemSet, ScheduleConfigs, SystemSet
-}, system::ScheduleSystem};
+use bevy::ecs::{
+    schedule::{Condition, IntoScheduleConfigs, IntoSystemSet, ScheduleConfigs, SystemSet},
+    system::ScheduleSystem,
+};
 
 use variadics_please::all_tuples;
 
