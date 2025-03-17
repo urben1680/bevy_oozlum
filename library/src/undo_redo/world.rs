@@ -1,6 +1,8 @@
 use std::{
     any::TypeId,
     hash::{BuildHasher, Hash, Hasher},
+    marker::PhantomData,
+    sync::Arc,
 };
 
 use bevy::{
@@ -9,7 +11,7 @@ use bevy::{
         component::{ComponentCloneBehavior, ComponentId},
         entity::{Entity, EntityCloner},
         resource::Resource,
-        world::{EntityRef, EntityWorldMut, FromWorld, SpawnBatchIter, World},
+        world::{EntityRef, EntityWorldMut, FromWorld, World},
     },
     platform_support::{
         collections::{HashMap, HashSet},
@@ -17,11 +19,9 @@ use bevy::{
     },
 };
 
-use crate::meta::RevMeta;
+use crate::{meta::RevMeta, unique_for_location};
 
-use super::{
-    rev_despawn_inner, BufferAt, BufferComponentsInProgress, BuffersUndoRedo, DespawnAtOutOfLog, RevEntityWorldMut, UndoRedo
-};
+use super::*;
 
 pub trait RevWorld {
     /// Reversible version of [`World::despawn`].
@@ -45,7 +45,7 @@ pub trait RevWorld {
     fn rev_spawn<B: Bundle>(&mut self, bundle: B) -> EntityWorldMut;
 
     /// Reversible version of [`World::spawn_batch`].
-    fn rev_spawn_batch<I>(&mut self, iter: I) -> SpawnBatchIter<'_, <I as IntoIterator>::IntoIter>
+    fn rev_spawn_batch<I>(&mut self, iter: I) -> Arc<[Entity]>
     where
         I: IntoIterator,
         I::Item: Bundle<Effect: NoBundleEffect>;
@@ -126,7 +126,19 @@ impl RevWorld for World {
         I::IntoIter: Iterator<Item = (Entity, B)>,
         B: Bundle<Effect: NoBundleEffect>,
     {
-        todo!()
+        let batch: Vec<_> = batch.into_iter().collect();
+        for &(entity, _) in batch.iter() {
+            let archetype_id = self.entities().get(entity).unwrap().archetype_id;
+            self.buffer_components_cached(
+                entity,
+                unique_for_location!(archetype_id, PhantomData::<B>),
+                |world| {
+                    let bundle_id = world.register_bundle::<B>().id();
+                    insert_maybe_overwrite(world, bundle_id, archetype_id)
+                },
+            );
+        }
+        self.insert_batch(batch);
     }
 
     fn rev_insert_batch_if_new<I, B>(&mut self, batch: I)
@@ -135,7 +147,21 @@ impl RevWorld for World {
         I::IntoIter: Iterator<Item = (Entity, B)>,
         B: Bundle<Effect: NoBundleEffect>,
     {
-        todo!()
+        let batch = batch.into_iter();
+        let (min, max) = batch.size_hint();
+        let mut entities = Vec::with_capacity(max.unwrap_or(min));
+        self.insert_batch_if_new(batch.inspect(|(entity, _)| entities.push(*entity)));
+        for entity in entities {
+            let archetype_id = self.entities().get(entity).unwrap().archetype_id;
+            self.buffer_components_cached(
+                entity,
+                unique_for_location!(archetype_id, PhantomData::<B>),
+                |world| {
+                    let bundle_id = world.register_bundle::<B>().id();
+                    insert_no_overwrite(world, bundle_id, archetype_id)
+                },
+            );
+        }
     }
 
     fn rev_spawn<B: Bundle>(&mut self, bundle: B) -> EntityWorldMut {
@@ -149,19 +175,40 @@ impl RevWorld for World {
             entity_mut.world_mut()
         };
         buffer_bundle(world, entity, BufferAt::Undo, bundle_id);
-        entity_mut.buffer_undo_redo(Spawn {
-            entity,
-            marker
-        });
+        entity_mut.buffer_undo_redo(Spawn { entity, marker });
         entity_mut
     }
 
-    fn rev_spawn_batch<I>(&mut self, iter: I) -> SpawnBatchIter<'_, <I as IntoIterator>::IntoIter>
+    fn rev_spawn_batch<I>(&mut self, iter: I) -> Arc<[Entity]>
     where
         I: IntoIterator,
         I::Item: Bundle<Effect: NoBundleEffect>,
     {
-        todo!()
+        struct SpawnBatch {
+            entities: Arc<[Entity]>,
+            marker: DespawnAtOutOfLog,
+        }
+
+        impl UndoRedo for SpawnBatch {
+            fn undo(&mut self, world: &mut World) {
+                world.insert_batch(self.entities.iter().map(|entity| (*entity, self.marker)));
+            }
+            fn redo(&mut self, world: &mut World) {
+                let id = world.component_id::<DespawnAtOutOfLog>().expect("todo");
+                for entity in self.entities.iter() {
+                    world.entity_mut(*entity).remove_by_id(id);
+                }
+            }
+        }
+
+        let meta = self.get_resource::<RevMeta>().expect("todo");
+        let marker = DespawnAtOutOfLog::new(meta);
+        let entities: Arc<[Entity]> = self.spawn_batch(iter).collect();
+        self.buffer_undo_redo(SpawnBatch {
+            entities: entities.clone(),
+            marker,
+        });
+        entities
     }
 
     fn rev_spawn_empty(&mut self) -> EntityWorldMut<'_> {
@@ -169,10 +216,7 @@ impl RevWorld for World {
         let marker = DespawnAtOutOfLog::new(meta);
         let mut entity_mut = self.spawn_empty();
         let entity = entity_mut.id();
-        entity_mut.buffer_undo_redo(Spawn {
-            entity,
-            marker
-        });
+        entity_mut.buffer_undo_redo(Spawn { entity, marker });
         entity_mut
     }
 
@@ -248,7 +292,7 @@ impl RevWorld for World {
 
 struct Spawn {
     entity: Entity,
-    marker: DespawnAtOutOfLog
+    marker: DespawnAtOutOfLog,
 }
 
 impl UndoRedo for Spawn {
