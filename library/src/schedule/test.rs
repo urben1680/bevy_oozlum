@@ -449,26 +449,40 @@ fn a_then_b(
 ) -> Vec<Box<dyn for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>> {
     fn noop<const N: u8>() {}
 
-    let sys_a: fn() -> RevSystemConfigs;
-    let sys_a_pipe_noop: fn() -> RevSystemConfigs;
-    let noop_pipe_sys_a: fn() -> RevSystemConfigs;
+    let sys_a: fn() -> RevScheduleConfigs<ScheduleSystem>;
+    let sys_a_pipe_noop: fn() -> RevScheduleConfigs<ScheduleSystem>;
+    let noop_pipe_sys_a: fn() -> RevScheduleConfigs<ScheduleSystem>;
 
-    let sys_b: fn() -> RevSystemConfigs;
-    let sys_b_pipe_noop: fn() -> RevSystemConfigs;
-    let noop_pipe_sys_b: fn() -> RevSystemConfigs;
+    let sys_b: fn() -> RevScheduleConfigs<ScheduleSystem>;
+    let sys_b_pipe_noop: fn() -> RevScheduleConfigs<ScheduleSystem>;
+    let noop_pipe_sys_b: fn() -> RevScheduleConfigs<ScheduleSystem>;
 
     let set_sys_a: InternedSystemSet;
     let set_noop_a = noop::<3>.into_system_set().intern();
     let set_sys_b: InternedSystemSet;
     let set_noop_b = noop::<4>.into_system_set().intern();
 
-    let sys_after: fn(RevSystemConfigs, InternedSystemSet) -> RevSystemConfigs;
-    let sys_before: fn(RevSystemConfigs, InternedSystemSet) -> RevSystemConfigs;
-    let sys_chain: fn(RevSystemConfigs) -> RevSystemConfigs;
+    let sys_after: fn(
+        RevScheduleConfigs<ScheduleSystem>,
+        InternedSystemSet,
+    ) -> RevScheduleConfigs<ScheduleSystem>;
+    let sys_before: fn(
+        RevScheduleConfigs<ScheduleSystem>,
+        InternedSystemSet,
+    ) -> RevScheduleConfigs<ScheduleSystem>;
+    let sys_chain: fn(RevScheduleConfigs<ScheduleSystem>) -> RevScheduleConfigs<ScheduleSystem>;
 
-    let set_after: fn(RevSystemSetConfigs, InternedSystemSet) -> RevSystemSetConfigs;
-    let set_before: fn(RevSystemSetConfigs, InternedSystemSet) -> RevSystemSetConfigs;
-    let set_chain: fn(RevSystemSetConfigs) -> RevSystemSetConfigs;
+    let set_after: fn(
+        RevScheduleConfigs<InternedSystemSet>,
+        InternedSystemSet,
+    ) -> RevScheduleConfigs<InternedSystemSet>;
+    let set_before: fn(
+        RevScheduleConfigs<InternedSystemSet>,
+        InternedSystemSet,
+    ) -> RevScheduleConfigs<InternedSystemSet>;
+    let set_chain: fn(
+        RevScheduleConfigs<InternedSystemSet>,
+    ) -> RevScheduleConfigs<InternedSystemSet>;
 
     if a_exclusive {
         sys_a = || exclusive_system::<1>.into_rev_configs();
@@ -924,6 +938,7 @@ fn run_if() {
     fn at_2(meta: Res<RevMeta>) -> bool {
         meta.now() == 2
     }
+    /// do not make the exclusive system in the latter configs run to test rev_distributive_run
     fn at_2_once() -> impl Fn(Res<RevMeta>) -> bool + Clone {
         let was_2 = Arc::new(AtomicBool::new(false));
         move |meta| {
@@ -960,6 +975,7 @@ fn run_if() {
                 .rev_chain(),
         )
     }
+    // todo: add configs for rev_distributive_run_if on sets
     test_run(
         vec![config0, config1, config2, config3, config4],
         vec![
@@ -971,6 +987,14 @@ fn run_if() {
             vec![], // does not run at 3
         ],
     );
+}
+
+#[test]
+fn duplicate_system_chain_builds() {
+    // todo: assert these don't get mixed up by asserting on system states
+    let mut schedule = Schedule::new(RevUpdate);
+    schedule.rev_add_systems((non_exclusive_system::<1>, non_exclusive_system::<1>).rev_chain());
+    schedule.initialize(&mut World::new()).unwrap();
 }
 
 #[test]
