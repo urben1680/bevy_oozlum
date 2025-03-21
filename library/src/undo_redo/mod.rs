@@ -42,6 +42,7 @@ pub trait BuffersUndoRedo {
     /// - commands
     /// - hooks
     /// - observers
+    /// - bundle effects
     /// - [`SystemParam::apply`](bevy::ecs::system::SystemParam::apply)
     /// - [`SystemBuffer::apply`](bevy::ecs::system::SystemBuffer::apply)
     /// - [`System::apply_deferred`](bevy::ecs::system::System::apply_deferred)
