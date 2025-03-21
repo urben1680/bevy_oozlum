@@ -2,15 +2,20 @@ use std::{any::TypeId, marker::PhantomData};
 
 use bevy::{
     ecs::{
-        bundle::{Bundle, BundleFromComponents},
-        component::{Component, ComponentId},
+        bundle::{Bundle, BundleEffect, BundleFromComponents, DynamicBundle, NoBundleEffect},
+        component::{
+            Component, ComponentId, Components, ComponentsRegistrator, RequiredComponents,
+            StorageType,
+        },
         entity::{Entity, EntityClonerBuilder},
         hierarchy::ChildOf,
         observer::TriggerTargets,
         relationship::{Relationship, RelationshipTarget},
+        spawn::{Spawn, SpawnIter, SpawnableList},
     },
     ptr::OwningPtr,
 };
+use variadics_please::all_tuples;
 
 use super::*;
 
@@ -674,4 +679,203 @@ impl<'w, 'a, T: Component> RevVacantEntry<'w, 'a, T> {
             _marker: PhantomData,
         }
     }
+}
+
+pub trait RevSpawnableList<R>: SpawnableList<R> {
+    fn rev_spawn(self, world: &mut World, entity: Entity);
+}
+
+impl<R: Relationship, B: Bundle<Effect: NoBundleEffect>> RevSpawnableList<R> for Vec<B> {
+    fn rev_spawn(self, world: &mut World, entity: Entity) {
+        let mapped_bundles = self.into_iter().map(|b| (R::from(entity), b));
+        world.rev_spawn_batch(mapped_bundles);
+    }
+}
+
+impl<R: Relationship, B: Bundle> RevSpawnableList<R> for Spawn<B> {
+    fn rev_spawn(self, world: &mut World, entity: Entity) {
+        world.rev_spawn((R::from(entity), self.0));
+    }
+}
+
+impl<R: Relationship, I: Iterator<Item = B> + Send + Sync + 'static, B: Bundle> RevSpawnableList<R>
+    for SpawnIter<I>
+{
+    fn rev_spawn(self, world: &mut World, entity: Entity) {
+        for bundle in self.0 {
+            world.rev_spawn((R::from(entity), bundle));
+        }
+    }
+}
+
+pub struct RevSpawnWith<F>(pub F);
+
+impl<R: Relationship, F: FnOnce(&mut RevRelatedSpawner<R>) + Send + Sync + 'static> SpawnableList<R>
+    for RevSpawnWith<F>
+{
+    fn spawn(self, world: &mut World, entity: Entity) {
+        self.rev_spawn(world, entity)
+    }
+
+    fn size_hint(&self) -> usize {
+        1
+    }
+}
+
+impl<R: Relationship, F: FnOnce(&mut RevRelatedSpawner<R>) + Send + Sync + 'static>
+    RevSpawnableList<R> for RevSpawnWith<F>
+{
+    fn rev_spawn(self, world: &mut World, entity: Entity) {
+        world.entity_mut(entity).rev_with_related(self.0);
+    }
+}
+
+macro_rules! spawnable_list_impl {
+    ($($list: ident),*) => {
+        #[expect(
+            clippy::allow_attributes,
+            reason = "This is a tuple-related macro; as such, the lints below may not always apply."
+        )]
+        impl<R: Relationship, $($list: RevSpawnableList<R>),*> RevSpawnableList<R> for ($($list,)*) {
+            fn rev_spawn(self, _world: &mut World, _entity: Entity) {
+                #[allow(
+                    non_snake_case,
+                    reason = "The names of these variables are provided by the caller, not by us."
+                )]
+                let ($($list,)*) = self;
+                $($list.rev_spawn(_world, _entity);)*
+            }
+       }
+    }
+}
+
+all_tuples!(spawnable_list_impl, 0, 12, P);
+
+pub trait RevSpawnRelated: RelationshipTarget {
+    fn rev_spawn<L: RevSpawnableList<Self::Relationship>>(
+        list: L,
+    ) -> RevSpawnRelatedBundle<Self::Relationship, L>;
+    fn rev_spawn_one<B: Bundle>(bundle: B) -> RevSpawnOneRelated<Self::Relationship, B>;
+}
+
+impl<T: RelationshipTarget> RevSpawnRelated for T {
+    fn rev_spawn<L: RevSpawnableList<Self::Relationship>>(
+        list: L,
+    ) -> RevSpawnRelatedBundle<Self::Relationship, L> {
+        RevSpawnRelatedBundle {
+            list,
+            marker: PhantomData,
+        }
+    }
+
+    fn rev_spawn_one<B: Bundle>(bundle: B) -> RevSpawnOneRelated<Self::Relationship, B> {
+        RevSpawnOneRelated {
+            bundle,
+            marker: PhantomData,
+        }
+    }
+}
+
+pub struct RevSpawnOneRelated<R: Relationship, B: Bundle> {
+    bundle: B,
+    marker: PhantomData<R>,
+}
+
+pub struct RevSpawnRelatedBundle<R: Relationship, L: RevSpawnableList<R>> {
+    list: L,
+    marker: PhantomData<R>,
+}
+
+// SAFETY: This internally relies on the RelationshipTarget's Bundle implementation, which is sound.
+unsafe impl<R: Relationship, B: Bundle> Bundle for RevSpawnOneRelated<R, B> {
+    fn component_ids(components: &mut ComponentsRegistrator, ids: &mut impl FnMut(ComponentId)) {
+        <R::RelationshipTarget as Bundle>::component_ids(components, ids);
+    }
+
+    fn get_component_ids(components: &Components, ids: &mut impl FnMut(Option<ComponentId>)) {
+        <R::RelationshipTarget as Bundle>::get_component_ids(components, ids);
+    }
+
+    fn register_required_components(
+        components: &mut ComponentsRegistrator,
+        required_components: &mut RequiredComponents,
+    ) {
+        <R::RelationshipTarget as Bundle>::register_required_components(
+            components,
+            required_components,
+        );
+    }
+}
+
+impl<R: Relationship, B: Bundle> BundleEffect for RevSpawnOneRelated<R, B> {
+    fn apply(self, entity: &mut EntityWorldMut) {
+        entity.rev_with_related::<R>(|s| {
+            s.rev_spawn(self.bundle);
+        });
+    }
+}
+
+impl<R: Relationship, B: Bundle> DynamicBundle for RevSpawnOneRelated<R, B> {
+    type Effect = Self;
+
+    fn get_components(self, func: &mut impl FnMut(StorageType, OwningPtr<'_>)) -> Self::Effect {
+        <R::RelationshipTarget as RelationshipTarget>::with_capacity(1).get_components(func);
+        self
+    }
+}
+
+// SAFETY: This internally relies on the RelationshipTarget's Bundle implementation, which is sound.
+unsafe impl<R: Relationship, L: RevSpawnableList<R> + Send + Sync + 'static> Bundle
+    for RevSpawnRelatedBundle<R, L>
+{
+    fn component_ids(components: &mut ComponentsRegistrator, ids: &mut impl FnMut(ComponentId)) {
+        <R::RelationshipTarget as Bundle>::component_ids(components, ids);
+    }
+
+    fn get_component_ids(components: &Components, ids: &mut impl FnMut(Option<ComponentId>)) {
+        <R::RelationshipTarget as Bundle>::get_component_ids(components, ids);
+    }
+
+    fn register_required_components(
+        components: &mut ComponentsRegistrator,
+        required_components: &mut RequiredComponents,
+    ) {
+        <R::RelationshipTarget as Bundle>::register_required_components(
+            components,
+            required_components,
+        );
+    }
+}
+
+impl<R: Relationship, L: RevSpawnableList<R>> BundleEffect for RevSpawnRelatedBundle<R, L> {
+    fn apply(self, entity: &mut EntityWorldMut) {
+        let id = entity.id();
+        entity.world_scope(|world: &mut World| {
+            self.list.rev_spawn(world, id);
+        });
+    }
+}
+
+impl<R: Relationship, L: RevSpawnableList<R>> DynamicBundle for RevSpawnRelatedBundle<R, L> {
+    type Effect = Self;
+
+    fn get_components(self, func: &mut impl FnMut(StorageType, OwningPtr<'_>)) -> Self::Effect {
+        <R::RelationshipTarget as RelationshipTarget>::with_capacity(self.list.size_hint())
+            .get_components(func);
+        self
+    }
+}
+
+#[macro_export]
+macro_rules! rev_related {
+    ($relationship_target:ty [$($child:expr),*$(,)?]) => {
+       <$relationship_target>::rev_spawn(($(bevy::ecs::spawn::Spawn($child)),*))
+    };
+}
+
+#[macro_export]
+macro_rules! rev_children {
+    [$($child:expr),*$(,)?] => {
+       bevy::ecs::hierarchy::Children::rev_spawn(($(bevy::ecs::spawn::Spawn($child)),*))
+    };
 }
