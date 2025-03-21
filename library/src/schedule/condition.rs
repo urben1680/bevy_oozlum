@@ -1,17 +1,11 @@
-use std::{
-    any::TypeId,
-    borrow::Cow,
-    hash::Hash,
-    mem::replace,
-    sync::atomic::{AtomicU32, Ordering},
-};
+use std::{any::TypeId, borrow::Cow};
 
 use bevy::{
     ecs::{
         archetype::ArchetypeComponentId,
         component::{ComponentId, Tick},
         query::Access,
-        schedule::{Condition, InternedSystemSet, IntoScheduleConfigs, ScheduleConfigs, SystemSet},
+        schedule::{Condition, InternedSystemSet, IntoScheduleConfigs, ScheduleConfigs},
         system::{IntoSystem, ReadOnlySystem, System, SystemIn},
         world::{unsafe_world_cell::UnsafeWorldCell, DeferredWorld, World},
     },
@@ -21,30 +15,17 @@ use bevy::{
 use crate::{
     log::{OutOfLog, SparseTransitionLog},
     meta::{RevDirection, RevMeta},
-    schedule::{error_per_flag, ForwardSet},
+    schedule::error_per_flag,
 };
 
-#[derive(SystemSet, Clone, Debug, Eq)]
-#[allow(dead_code)]
-struct RevConditionSet(u32, Cow<'static, str>);
+use super::AtomicSet;
 
-impl PartialEq for RevConditionSet {
-    fn eq(&self, other: &Self) -> bool {
-        self.0 == other.0
-    }
-}
-
-impl Hash for RevConditionSet {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.0.hash(state)
-    }
-}
+pub(super) type ConditionSets = Option<Box<ScheduleConfigs<InternedSystemSet>>>;
 
 pub(crate) fn add_condition<Marker>(
-    configs: &mut ScheduleConfigs<InternedSystemSet>,
+    condition_sets: &mut ConditionSets,
     condition: impl Condition<Marker>,
 ) -> InternedSystemSet {
-    static SET_COUNTER: AtomicU32 = AtomicU32::new(0);
     let condition = IntoSystem::into_system(condition);
     let name = condition.name();
     let condition = RevCondition {
@@ -55,10 +36,11 @@ pub(crate) fn add_condition<Marker>(
         archetype_component_access: default(),
         out_of_log_err: false,
     };
-    let id = SET_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let set = RevConditionSet(id, name).intern();
-    let configs_by_value = replace(configs, ForwardSet.into_configs());
-    *configs = (configs_by_value, set.run_if(condition)).into_configs();
+    let set = AtomicSet::new(name);
+    *condition_sets = match condition_sets.take() {
+        Some(other) => Some(Box::new((*other, set.run_if(condition)).into_configs())),
+        None => Some(Box::new(set.run_if(condition))),
+    };
     set
 }
 
