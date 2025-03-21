@@ -1,8 +1,11 @@
 use bevy::{
     app::{App, FixedUpdate, Plugin},
-    ecs::schedule::{
-        InternedScheduleLabel, InternedSystemSet, IntoScheduleConfigs, ScheduleLabel, Schedules,
-        SystemSet,
+    ecs::{
+        schedule::{
+            InternedScheduleLabel, InternedSystemSet, IntoScheduleConfigs, ScheduleLabel,
+            Schedules, SystemSet,
+        },
+        system::ScheduleSystem,
     },
     utils::default,
 };
@@ -10,7 +13,7 @@ use bevy::{
 use crate::{
     meta::RevMeta,
     prelude::UndoRedoBuffer,
-    schedule::{IntoRevSystemConfigs, IntoRevSystemSetConfigs, RevSchedule},
+    schedule::{IntoRevScheduleConfigs, RevSchedule},
     undo_redo::DespawnAtOutOfLog,
 };
 
@@ -18,12 +21,12 @@ pub trait RevApp {
     fn rev_add_systems<Marker>(
         &mut self,
         schedule: impl ScheduleLabel,
-        systems: impl IntoRevSystemConfigs<Marker>,
+        systems: impl IntoRevScheduleConfigs<ScheduleSystem, Marker>,
     ) -> &mut Self;
     fn rev_configure_sets<Marker>(
         &mut self,
         schedule: impl ScheduleLabel,
-        sets: impl IntoRevSystemSetConfigs<Marker>,
+        sets: impl IntoRevScheduleConfigs<InternedSystemSet, Marker>,
     ) -> &mut Self;
 }
 
@@ -31,7 +34,7 @@ impl RevApp for App {
     fn rev_add_systems<Marker>(
         &mut self,
         schedule: impl ScheduleLabel,
-        systems: impl IntoRevSystemConfigs<Marker>,
+        systems: impl IntoRevScheduleConfigs<ScheduleSystem, Marker>,
     ) -> &mut Self {
         self.world_mut()
             .resource_mut::<Schedules>()
@@ -42,7 +45,7 @@ impl RevApp for App {
     fn rev_configure_sets<Marker>(
         &mut self,
         schedule: impl ScheduleLabel,
-        sets: impl IntoRevSystemSetConfigs<Marker>,
+        sets: impl IntoRevScheduleConfigs<InternedSystemSet, Marker>,
     ) -> &mut Self {
         self.world_mut()
             .resource_mut::<Schedules>()
