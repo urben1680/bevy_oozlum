@@ -11,8 +11,10 @@ use bevy::{
         archetype::ArchetypeComponentId,
         component::{ComponentId, Tick},
         query::Access,
-        schedule::{ApplyDeferred, InternedSystemSet, IntoScheduleConfigs, SystemSet},
-        system::{IntoSystem, ReadOnlySystem, System, SystemIn},
+        schedule::{
+            ApplyDeferred, InternedSystemSet, IntoScheduleConfigs, Schedulable, ScheduleConfigs,
+        },
+        system::{IntoSystem, ReadOnlySystem, ScheduleSystem, System, SystemIn},
         world::{unsafe_world_cell::UnsafeWorldCell, DeferredWorld, World},
     },
     utils::default,
@@ -26,20 +28,42 @@ use crate::{
     undo_redo::{UndoRedoBuffer, UndoRedoLog},
 };
 
-use super::{IntoRevSystemConfigs, RevSystemConfigs, RevSystemSetConfigs};
+use super::{AtomicSet, IntoRevScheduleConfigs, RevScheduleConfigs};
 
 // needed to not collide with all_tuples!
 #[doc(hidden)]
 pub struct ReversibleSystem<Marker>(PhantomData<Marker>);
 
-impl<Marker, T> IntoRevSystemConfigs<ReversibleSystem<Marker>> for T
+impl<Marker, T> IntoRevScheduleConfigs<ScheduleSystem, ReversibleSystem<Marker>> for T
 where
     T: IntoSystem<(), (), Marker> + 'static,
 {
-    fn into_rev_configs(self) -> RevSystemConfigs {
+    fn into_rev_configs(self) -> RevScheduleConfigs<ScheduleSystem> {
         let system = IntoSystem::into_system(self);
 
         let sys_name = system.name();
+
+        let unique_set = AtomicSet::new(sys_name.clone());
+
+        if system.type_id() == TypeId::of::<ApplyDeferred>() {
+            fn empty_configs<T: Schedulable<GroupMetadata: Default>>() -> ScheduleConfigs<T> {
+                ScheduleConfigs::Configs {
+                    configs: Vec::new(),
+                    collective_conditions: Vec::new(),
+                    metadata: default(),
+                }
+            }
+
+            return RevScheduleConfigs {
+                forward_systems: ApplyDeferred.into_configs(),
+                backward_commands: empty_configs(),
+                backward_systems: ApplyDeferred.in_set(unique_set),
+                backward_commands_systems: unique_set.into_configs(),
+                conditioned: empty_configs(),
+                conditions: None,
+            };
+        }
+
         let name = |string: &str| {
             let mut name = String::with_capacity(sys_name.len() + string.len());
             name.extend([&sys_name, string]);
@@ -50,7 +74,7 @@ where
         let bwd_cmd_name = name(" (backward commands)");
 
         let default_system_sets: Vec<InternedSystemSet> = system.default_system_sets();
-        let is_exclusive = system.is_exclusive(); // todo, add sync point before system
+        let is_exclusive = system.is_exclusive();
 
         let inner = Mutex::new(Inner {
             system,
@@ -63,12 +87,7 @@ where
             default_system_sets: default_system_sets.clone(),
         });
 
-        let mut set_iter = default_system_sets.into_iter();
-        let first_set = set_iter
-            .next()
-            .unwrap_or_else(|| panic!("System {sys_name} contais no default sets"));
-
-        let mut forward_sys = ArcSystem {
+        let mut forward_systems = ArcSystem {
             shared: shared.clone(),
             name: fwd_sys_name,
             tick: default(),
@@ -80,18 +99,30 @@ where
             component_access: default(),
             archetype_component_access: default(),
         }
-        .in_set(FwdSysSet(first_set));
+        .in_set(unique_set);
 
-        let mut backward_cmd = CommandsBackward {
+        if is_exclusive {
+            forward_systems = (ApplyDeferred, forward_systems).chain();
+        }
+
+        // include potential ApplyDeferred
+        forward_systems = forward_systems
+            .in_set(FwdSysSet(unique_set))
+            .in_set(ForwardSet);
+
+        let backward_commands = CommandsBackward {
             shared: shared.clone(),
             name: bwd_cmd_name,
             tick: default(),
             has_deferred: default(),
             commands_err: false,
         }
-        .in_set(BwdCmdSet(first_set));
+        .in_set(unique_set)
+        .in_set(BwdCmdSet(unique_set))
+        .in_set(BwdCmdSysSet(unique_set))
+        .in_set(BackwardSet);
 
-        let mut backward_sys = ArcSystem {
+        let backward_systems = ArcSystem {
             shared,
             name: bwd_sys_name,
             tick: default(),
@@ -103,46 +134,26 @@ where
             component_access: default(),
             archetype_component_access: default(),
         }
-        .in_set(BwdSysSet(first_set));
+        .in_set(unique_set)
+        .in_set(BwdSysSet(unique_set))
+        .in_set(BwdCmdSysSet(unique_set))
+        .after(BwdCmdSet(unique_set))
+        .in_set(BackwardSet);
 
-        let mut fwd_sys_sets = FwdSysSet(first_set).into_configs();
-        let mut bwd_cmd_sets = BwdCmdSet(first_set).in_set(BwdCmdSysSet(first_set));
-        let mut bwd_sys_sets = BwdSysSet(first_set)
-            .after(BwdCmdSet(first_set))
-            .in_set(BwdCmdSysSet(first_set));
-        let mut bwd_cmd_sys_sets = BwdCmdSysSet(first_set).into_configs();
+        let mut configs = RevScheduleConfigs {
+            forward_systems,
+            backward_commands,
+            backward_systems,
+            backward_commands_systems: BwdCmdSysSet(unique_set).into_configs(),
+            conditioned: unique_set.into_configs(),
+            conditions: None,
+        };
 
-        for set in set_iter {
-            forward_sys.in_set_inner(FwdSysSet(set).intern());
-            backward_cmd.in_set_inner(BwdCmdSet(set).intern());
-            backward_sys.in_set_inner(BwdSysSet(set).intern());
-
-            fwd_sys_sets = (fwd_sys_sets, FwdSysSet(set)).into_configs();
-            bwd_cmd_sets = (bwd_cmd_sets, BwdCmdSet(set).in_set(BwdCmdSysSet(set))).into_configs();
-            bwd_sys_sets = (
-                bwd_sys_sets,
-                BwdSysSet(set)
-                    .after(BwdCmdSet(set))
-                    .in_set(BwdCmdSysSet(set)),
-            )
-                .into_configs();
-            bwd_cmd_sys_sets = (bwd_cmd_sys_sets, BwdCmdSysSet(set)).into_configs();
+        for set in default_system_sets {
+            configs.in_set_inner(set)
         }
 
-        // Note that System::has_deferred may return no correct value before initializing the system.
-        // Because of this and that initializing the system here might be surprising for the user
-        // the CommandsBackward system is always added. it becomes noop if the system ends up having no
-        // deferred buffers. CommandsBackward::has_deferred returns the value of the actual system.
-        RevSystemConfigs {
-            systems: (forward_sys, backward_cmd, backward_sys).into_configs(),
-            sets: RevSystemSetConfigs {
-                fwd_sys_sets: fwd_sys_sets.in_set(ForwardSet),
-                bwd_cmd_sets,
-                bwd_sys_sets,
-                bwd_cmd_sys_sets: bwd_cmd_sys_sets.in_set(BackwardSet),
-                condition_sets: ForwardSet.into_configs(),
-            },
-        }
+        configs
     }
 }
 
