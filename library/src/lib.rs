@@ -27,15 +27,14 @@ Enhancements:
 -- new tests
 - all init_resource to plugin
 - assert buffer components remain empty for component
-- sync points before exclusive systems need to be reflected
-- migration tracking issue
+- schedule tests with ApplyDeferred
+- migration markdown file as a checklist what to do for each bevy release
 - reversible commands traits of:
 -- Commands
 -- EntityCommands
 -- RelatedSpawnerCommands
 -- EntityEntryCommands
 -- ChildSpawnerCommands
-- check if EntityWorldMut with relations need to handle children rev_despawn
 
 Docs
 - documentations
@@ -66,10 +65,7 @@ pub mod undo_redo;
 pub mod prelude {
     pub use crate::app::{RevApp as _, RevSystemsPlugin};
     pub use crate::meta::{RevDirection, RevMeta};
-    pub use crate::schedule::{
-        forward_set, IntoRevSystemConfigs as _, IntoRevSystemSetConfigs as _, RevSchedule as _,
-        RevSystemsSet, RevUpdate,
-    };
+    pub use crate::schedule::{forward_set, RevSchedule as _, RevSystemsSet, RevUpdate};
     pub use crate::undo_redo::{
         unique_for_location, BuffersUndoRedo as _, DespawnAtOutOfLog, RevCommands as _,
         RevEntityWorldMut as _, RevWorld as _, UndoRedoBuffer, UndoRedoDirection, UndoRedoSwap,
