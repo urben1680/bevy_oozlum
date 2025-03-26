@@ -525,7 +525,16 @@ impl<'w, R: Relationship> RevRelatedSpawner<'w, R> {
 
     /// Reversible version of [`RelatedSpawner::spawn`](bevy::ecs::relationship::RelatedSpawner::spawn).
     pub fn rev_spawn(&mut self, bundle: impl Bundle) -> EntityWorldMut<'_> {
-        self.world.rev_spawn((R::from(self.target), bundle))
+        let mut entity_mut = self.world.rev_spawn((R::from(self.target), bundle));
+        let entity = entity_mut.id();
+        entity_mut.world_scope(|world| {
+            world.buffer_undo_redo(InsertRelationship::<R, _> {
+                entity,
+                target: [self.target],
+                _marker: PhantomData,
+            });
+        });
+        entity_mut
     }
 
     /// See [`RelatedSpawner::spawn_empty`](bevy::ecs::relationship::RelatedSpawner::spawn_empty).
@@ -535,7 +544,7 @@ impl<'w, R: Relationship> RevRelatedSpawner<'w, R> {
 
     /// Reversible version of [`RelatedSpawner::spawn_empty`](bevy::ecs::relationship::RelatedSpawner::spawn_empty).
     pub fn rev_spawn_empty(&mut self) -> EntityWorldMut<'_> {
-        self.world.rev_spawn(R::from(self.target))
+        self.rev_spawn(())
     }
 
     /// See [`RelatedSpawner::target_entity`](bevy::ecs::relationship::RelatedSpawner::target_entity).
@@ -688,13 +697,23 @@ pub trait RevSpawnableList<R>: SpawnableList<R> {
 impl<R: Relationship, B: Bundle<Effect: NoBundleEffect>> RevSpawnableList<R> for Vec<B> {
     fn rev_spawn(self, world: &mut World, entity: Entity) {
         let mapped_bundles = self.into_iter().map(|b| (R::from(entity), b));
-        world.rev_spawn_batch(mapped_bundles);
+        let target = world.rev_spawn_batch(mapped_bundles);
+        world.buffer_undo_redo(InsertRelationship::<R, _> {
+            entity,
+            target,
+            _marker: PhantomData,
+        });
     }
 }
 
 impl<R: Relationship, B: Bundle> RevSpawnableList<R> for Spawn<B> {
     fn rev_spawn(self, world: &mut World, entity: Entity) {
-        world.rev_spawn((R::from(entity), self.0));
+        let target = [world.rev_spawn((R::from(entity), self.0)).id()];
+        world.buffer_undo_redo(InsertRelationship::<R, _> {
+            entity,
+            target,
+            _marker: PhantomData,
+        });
     }
 }
 
@@ -702,9 +721,15 @@ impl<R: Relationship, I: Iterator<Item = B> + Send + Sync + 'static, B: Bundle> 
     for SpawnIter<I>
 {
     fn rev_spawn(self, world: &mut World, entity: Entity) {
-        for bundle in self.0 {
-            world.rev_spawn((R::from(entity), bundle));
-        }
+        let target: Vec<Entity> = self
+            .0
+            .map(|bundle| world.rev_spawn((R::from(entity), bundle)).id())
+            .collect();
+        world.buffer_undo_redo(InsertRelationship::<R, _> {
+            entity,
+            target,
+            _marker: PhantomData,
+        });
     }
 }
 
@@ -863,6 +888,38 @@ impl<R: Relationship, L: RevSpawnableList<R>> DynamicBundle for RevSpawnRelatedB
         <R::RelationshipTarget as RelationshipTarget>::with_capacity(self.list.size_hint())
             .get_components(func);
         self
+    }
+}
+
+struct InsertRelationship<R, Target>
+where
+    R: Relationship,
+    Target: AsRef<[Entity]> + Send + Sync + 'static,
+{
+    entity: Entity,
+    target: Target,
+    _marker: PhantomData<R>,
+}
+
+impl<R, Target> UndoRedo for InsertRelationship<R, Target>
+where
+    R: Relationship,
+    Target: AsRef<[Entity]> + Send + Sync + 'static,
+{
+    fn undo(&mut self, world: &mut World) {
+        let component_id = world.component_id::<R>().unwrap();
+        for &target in self.target.as_ref().into_iter() {
+            world.entity_mut(target).remove_by_id(component_id);
+        }
+    }
+    fn redo(&mut self, world: &mut World) {
+        world.insert_batch(
+            self.target
+                .as_ref()
+                .into_iter()
+                .copied()
+                .map(|target| (target, R::from(self.entity))),
+        );
     }
 }
 

@@ -20,12 +20,9 @@ use crate::{
 
 use super::AtomicSet;
 
-pub(super) type ConditionSets = Option<Box<ScheduleConfigs<InternedSystemSet>>>;
-
-pub(crate) fn add_condition<Marker>(
-    condition_sets: &mut ConditionSets,
+pub(crate) fn rev_condition<Marker>(
     condition: impl Condition<Marker>,
-) -> InternedSystemSet {
+) -> (ScheduleConfigs<InternedSystemSet>, InternedSystemSet) {
     let condition = IntoSystem::into_system(condition);
     let name = condition.name();
     let condition = RevCondition {
@@ -37,11 +34,7 @@ pub(crate) fn add_condition<Marker>(
         out_of_log_err: false,
     };
     let set = AtomicSet::new(name);
-    *condition_sets = match condition_sets.take() {
-        Some(other) => Some(Box::new((*other, set.run_if(condition)).into_configs())),
-        None => Some(Box::new(set.run_if(condition))),
-    };
-    set
+    (set.run_if(condition), set)
 }
 
 struct RevCondition<T> {

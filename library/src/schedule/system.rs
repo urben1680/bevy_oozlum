@@ -40,9 +40,7 @@ where
 {
     fn into_rev_configs(self) -> RevScheduleConfigs<ScheduleSystem> {
         let system = IntoSystem::into_system(self);
-
         let sys_name = system.name();
-
         let unique_set = AtomicSet::new(sys_name.clone());
 
         if system.type_id() == TypeId::of::<ApplyDeferred>() {
@@ -60,7 +58,7 @@ where
                 backward_systems: ApplyDeferred.in_set(unique_set),
                 backward_commands_systems: unique_set.into_configs(),
                 conditioned: empty_configs(),
-                conditions: None,
+                conditions: Vec::new(),
             };
         }
 
@@ -73,8 +71,7 @@ where
         let bwd_sys_name = name(" (backward system)");
         let bwd_cmd_name = name(" (backward commands)");
 
-        let default_system_sets: Vec<InternedSystemSet> = system.default_system_sets();
-        let is_exclusive = system.is_exclusive();
+        let default_system_sets = system.default_system_sets();
 
         let inner = Mutex::new(Inner {
             system,
@@ -87,7 +84,7 @@ where
             default_system_sets: default_system_sets.clone(),
         });
 
-        let mut forward_systems = ArcSystem {
+        let forward_systems = ArcSystem {
             shared: shared.clone(),
             name: fwd_sys_name,
             tick: default(),
@@ -99,16 +96,9 @@ where
             component_access: default(),
             archetype_component_access: default(),
         }
-        .in_set(unique_set);
-
-        if is_exclusive {
-            forward_systems = (ApplyDeferred, forward_systems).chain();
-        }
-
-        // include potential ApplyDeferred
-        forward_systems = forward_systems
-            .in_set(FwdSysSet(unique_set))
-            .in_set(ForwardSet);
+        .in_set(unique_set)
+        .in_set(FwdSysSet(unique_set))
+        .in_set(ForwardSet);
 
         let backward_commands = CommandsBackward {
             shared: shared.clone(),
@@ -146,7 +136,7 @@ where
             backward_systems,
             backward_commands_systems: BwdCmdSysSet(unique_set).into_configs(),
             conditioned: unique_set.into_configs(),
-            conditions: None,
+            conditions: Vec::new(),
         };
 
         for set in default_system_sets {

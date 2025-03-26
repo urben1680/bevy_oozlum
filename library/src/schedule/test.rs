@@ -14,7 +14,7 @@ use bevy::{
         event::Event,
         observer::Trigger,
         resource::Resource,
-        schedule::{IntoScheduleConfigs, IntoSystemSet},
+        schedule::IntoSystemSet,
         system::{Commands, IntoSystem},
         world::{DeferredWorld, World},
     },
@@ -58,7 +58,7 @@ pub(super) fn panic_on_error_events() {
 #[derive(SystemSet, Copy, Clone, Debug, Hash, PartialEq, Eq)]
 struct TestSet(u8);
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq)]
 enum Test<T> {
     Sys(T),
 
@@ -107,6 +107,26 @@ impl UndoRedo for Test<u8> {
             .resource_mut::<TestLog>()
             .0
             .push(self.map(|n| (n, RevDirection::FORWARD_LOG)));
+    }
+}
+
+impl Debug for Test<(u8, RevDirection)> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Sys((i, _)) => write!(f, "Sys({i})"),
+
+            Self::SysObsv((i, _)) => write!(f, "Obsv({i})"),
+            Self::SysObsvObsv((i, _)) => write!(f, "ObsvObsv({i})"),
+            Self::SysObsvCmd((i, _)) => write!(f, "ObsvCmd({i})"),
+
+            Self::SysHook((i, _)) => write!(f, "Hook({i})"),
+            Self::SysHookObsv((i, _)) => write!(f, "HookObsv({i})"),
+            Self::SysHookCmd((i, _)) => write!(f, "HookCmd({i})"),
+
+            Self::SysCmd((i, _)) => write!(f, "Cmd({i})"),
+            Self::SysCmdHook((i, _)) => write!(f, "CmdHook({i})"),
+            Self::SysCmdObsv((i, _)) => write!(f, "CmdObsv({i})"),
+        }
     }
 }
 
@@ -439,7 +459,11 @@ fn test_step(
     } else {
         iter.rev().collect()
     };
-    assert_eq!(actual, expected, "log mismatch! config #{variant}, apply_final_deferred {apply_final_deferred}, {direction:?}, step #{step}");
+    assert_eq!(
+        actual,
+        expected,
+        "log mismatch! config #{variant}, apply_final_deferred {apply_final_deferred}, {direction:?}, step #{step}"
+    );
 }
 
 fn a_then_b(
@@ -897,14 +921,13 @@ fn exclusive_then_non_exclusive_ignore_deferred() {
 }
 
 #[test]
-//#[ignore] // https://github.com/bevyengine/bevy/issues/17828
 fn non_exclusive_then_exclusive_ignore_deferred() {
     test_run(
         a_then_b(false, true, true),
         vec![vec![
             TestBundle::NonExclusive(1),
-            TestBundle::Exclusive(2),
             TestBundle::NonExclusiveSyncPoint(1),
+            TestBundle::Exclusive(2),
         ]],
     )
 }
@@ -975,9 +998,23 @@ fn run_if() {
                 .rev_chain(),
         )
     }
-    // todo: add configs for rev_distributive_run_if on sets
+    fn config5(schedule: &mut Schedule) -> &mut Schedule {
+        schedule
+            .rev_add_systems(
+                (
+                    non_exclusive_system::<1>.rev_in_set(TestSet(1)),
+                    exclusive_system::<2>.rev_in_set(TestSet(2)),
+                )
+                    .rev_chain(),
+            )
+            .rev_configure_sets(
+                (TestSet(1), TestSet(2))
+                    .rev_chain()
+                    .rev_distributive_run_if(at_2_once()),
+            )
+    }
     test_run(
-        vec![config0, config1, config2, config3, config4],
+        vec![config0, config1, config2, config3, config4, config5],
         vec![
             vec![], // does not run at 1
             vec![
@@ -995,31 +1032,4 @@ fn duplicate_system_chain_builds() {
     let mut schedule = Schedule::new(RevUpdate);
     schedule.rev_add_systems((non_exclusive_system::<1>, non_exclusive_system::<1>).rev_chain());
     schedule.initialize(&mut World::new()).unwrap();
-}
-
-#[test]
-fn forward_set() {
-    fn config1(schedule: &mut Schedule) -> &mut Schedule {
-        schedule
-            .rev_add_systems(non_exclusive_system::<2>)
-            .add_systems(
-                non_exclusive_system::<1>.before(super::forward_set(non_exclusive_system::<2>)),
-            )
-    }
-    fn config2(schedule: &mut Schedule) -> &mut Schedule {
-        schedule
-            .rev_add_systems(non_exclusive_system::<1>)
-            .add_systems(
-                non_exclusive_system::<2>.after(super::forward_set(non_exclusive_system::<1>)),
-            )
-    }
-    test_run(
-        vec![config1, config2],
-        vec![vec![
-            TestBundle::NonExclusive(1),
-            TestBundle::NonExclusiveSyncPoint(1),
-            TestBundle::NonExclusive(2),
-            TestBundle::NonExclusiveSyncPoint(2),
-        ]],
-    );
 }

@@ -88,7 +88,10 @@ impl RevDirection {
         self != Self::BackwardLog
     }
     pub fn is_log(self) -> bool {
-        self != Self::Forward { log: false }
+        self != Self::NOT_LOG
+    }
+    pub fn is_present(self, world: &World) -> bool {
+        world.get_resource::<RevMeta>().and_then(RevMeta::get_direction) == Some(self)
     }
 }
 

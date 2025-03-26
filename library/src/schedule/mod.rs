@@ -14,11 +14,12 @@ use bevy::{
         system::ScheduleSystem,
     },
     prelude::IntoSystemSet,
+    utils::default,
 };
 
 use variadics_please::all_tuples;
 
-use condition::{add_condition, ConditionSets};
+use condition::rev_condition;
 
 use crate::meta::RevMeta;
 
@@ -71,13 +72,6 @@ struct BwdSysSet(InternedSystemSet);
 #[derive(SystemSet, Debug, Copy, Clone, Hash, PartialEq, Eq)]
 struct BwdCmdSysSet(InternedSystemSet);
 
-// todo: warn about cases where a system is actually a reversible system despite having no logic in the backward direction
-// - triggers reversible commands
-// - triggers commands that trigger reversible hooks/observers
-pub fn forward_set<M>(into_set: impl IntoSystemSet<M>) -> impl SystemSet {
-    FwdSysSet(into_set.into_system_set().intern())
-}
-
 #[derive(SystemSet, Clone, Debug, Eq)]
 struct AtomicSet<Name: Debug + Clone + Send + Sync + Eq + 'static = ()> {
     id: u32,
@@ -128,8 +122,12 @@ impl RevSchedule for Schedule {
             configs.backward_systems,
         ));
         self.configure_sets((configs.backward_commands_systems, configs.conditioned));
-        if let Some(conditions) = configs.conditions {
-            self.configure_sets(*conditions);
+        if !configs.conditions.is_empty() {
+            self.configure_sets(ScheduleConfigs::Configs {
+                configs: configs.conditions,
+                collective_conditions: Vec::new(),
+                metadata: default(),
+            });
         }
         self
     }
@@ -146,8 +144,12 @@ impl RevSchedule for Schedule {
             configs.backward_commands_systems,
             configs.conditioned,
         ));
-        if let Some(conditions) = configs.conditions {
-            self.configure_sets(*conditions);
+        if !configs.conditions.is_empty() {
+            self.configure_sets(ScheduleConfigs::Configs {
+                configs: configs.conditions,
+                collective_conditions: Vec::new(),
+                metadata: default(),
+            });
         }
         self
     }
@@ -179,12 +181,12 @@ pub struct RevScheduleConfigs<T: Schedulable> {
     backward_commands: ScheduleConfigs<T>,
     /// contains the ArcSystems for the backward set
     backward_systems: ScheduleConfigs<T>,
-    /// contains the sets that unify bwd_cmd and bwd_sys
+    /// contains the sets that unify the two backward systems
     backward_commands_systems: ScheduleConfigs<InternedSystemSet>,
-    /// contains the sets that unify fwd_sys, bwd_cmd and bwd_sys
+    /// contains the sets that unify all three systems
     conditioned: ScheduleConfigs<InternedSystemSet>,
     /// may contain set configs for conditions,
-    conditions: ConditionSets,
+    conditions: Vec<ScheduleConfigs<InternedSystemSet>>,
 }
 
 pub trait IntoRevScheduleConfigs<
@@ -268,9 +270,9 @@ pub trait IntoRevScheduleConfigs<
     }
     fn rev_run_if<M>(self, condition: impl Condition<M>) -> RevScheduleConfigs<T> {
         let mut configs = self.into_rev_configs();
-        configs
-            .conditioned
-            .in_set_inner(add_condition(&mut configs.conditions, condition));
+        let (condition, set) = rev_condition(condition);
+        configs.conditions.push(condition);
+        configs.conditioned.in_set_inner(set);
         configs
     }
     fn rev_distributive_run_if<M>(
@@ -278,17 +280,19 @@ pub trait IntoRevScheduleConfigs<
         condition: impl Condition<M> + Clone,
     ) -> RevScheduleConfigs<T> {
         fn distribute<M>(
-            conditioned_sets: &mut ScheduleConfigs<InternedSystemSet>,
-            condition_sets: &mut ConditionSets,
+            conditioned: &mut ScheduleConfigs<InternedSystemSet>,
+            conditions: &mut Vec<ScheduleConfigs<InternedSystemSet>>,
             condition: impl Condition<M> + Clone,
         ) {
-            match conditioned_sets {
+            match conditioned {
                 ScheduleConfigs::ScheduleConfig(_) => {
-                    conditioned_sets.in_set_inner(add_condition(condition_sets, condition));
+                    let (condition, set) = rev_condition(condition);
+                    conditions.push(condition);
+                    conditioned.in_set_inner(set);
                 }
                 ScheduleConfigs::Configs { configs, .. } => {
                     for config in configs {
-                        distribute(config, condition_sets, condition.clone());
+                        distribute(config, conditions, condition.clone());
                     }
                 }
             }
@@ -312,11 +316,11 @@ pub trait IntoRevScheduleConfigs<
         configs
     }
     fn rev_chain(self) -> RevScheduleConfigs<T> {
-        // Example for systems A, B and C in self:
+        // Example for systems A and B in self:
         // Forward
-        //  sys A -> sync -> sys B -> sync -> sys C -> sync
+        //  sys A -> sync -> sys B -> sync
         // Backward
-        //  cmd C -> sync -> sys C -> cmd B -> sync -> sys B -> cmd A -> sync -> sys A
+        //  cmd B -> sync -> sys B -> cmd A -> sync -> sys A
         let mut configs = self.into_rev_configs();
         configs.forward_systems = configs.forward_systems.chain();
         configs.backward_commands_systems =
@@ -324,19 +328,16 @@ pub trait IntoRevScheduleConfigs<
         configs
     }
     fn rev_chain_ignore_deferred(self) -> RevScheduleConfigs<T> {
-        // Example for systems A, B and C in self:
+        // Example for systems A and B (non-exclusive) in self:
         // Forward
-        //  sys A -> sys B -> sys C -> sync
+        //  sys A -> sys B -> sync
         // Backward
-        //  cmd C -> cmd B -> cmd A -> sync -> sys C -> sys B -> sys A
-        let set = AtomicSet::new("rev_chain_ignore_deferred");
+        //  cmd B -> cmd A -> sync -> sys B -> sys A
+
         let mut configs = self.into_rev_configs();
         configs.forward_systems = configs.forward_systems.chain_ignore_deferred();
-        configs.backward_commands = configs
-            .backward_commands
-            .chain_ignore_deferred()
-            .in_set(set);
-        configs.backward_systems = configs.backward_systems.chain_ignore_deferred().after(set);
+        configs.backward_commands = configs.backward_commands.chain_ignore_deferred();
+        configs.backward_systems = configs.backward_systems.chain_ignore_deferred();
         configs
     }
 }
@@ -358,7 +359,7 @@ impl<S: SystemSet> IntoRevScheduleConfigs<InternedSystemSet, ()> for S {
             backward_systems: BwdSysSet(set).into_configs(),
             backward_commands_systems: BwdCmdSysSet(set).in_set(set),
             conditioned: set.into_configs(),
-            conditions: None,
+            conditions: Vec::new(),
         }
     }
 }
@@ -391,7 +392,7 @@ impl<T: Schedulable<Metadata = GraphInfo, GroupMetadata = Chain>> RevScheduleCon
 struct ForwardConfigs<T: Schedulable> {
     forward_systems: ScheduleConfigs<T>,
     conditioned: ScheduleConfigs<InternedSystemSet>,
-    conditions: ConditionSets,
+    conditions: Vec<ScheduleConfigs<InternedSystemSet>>,
 }
 
 struct BackwardConfigs<T: Schedulable> {
@@ -422,21 +423,7 @@ macro_rules! impl_into_rev_schedule_configs {
 
                 let conditioned = ($($var.0.conditioned,)*).into_configs();
 
-                let conditions: Vec<_> = [$($var.0.conditions,)*]
-                    .into_iter()
-                    .flat_map(|set| set)
-                    .map(|set| *set)
-                    .collect();
-
-                let conditions = if conditions.is_empty() {
-                    None
-                } else {
-                    Some(Box::new(ScheduleConfigs::Configs {
-                        configs: conditions,
-                        collective_conditions: Vec::new(),
-                        metadata: Default::default(),
-                    }))
-                };
+                let conditions = [$($var.0.conditions,)*].into_iter().flatten().collect();
 
                 // let [var0, ..., varN]
                 //  : [BackwardConfigs, ..., BackwardConfigs]

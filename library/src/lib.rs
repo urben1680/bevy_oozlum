@@ -19,14 +19,9 @@ TODO:
 Enhancements:
 - reduce todo!() and //todo and unwrap (in favor of expect)
 - #[inline]s
-- track_location and bevy_reflect feature (both are not documented?), rename serde -> serialize
+- track_location and bevy_reflect feature (both are not documented?), rename feature serde -> serialize
 - deprecate Finalize
--- pub BufferEntity(u64) component
--- buffer despawn system
--- no first-party cleanup API
 -- new tests
-- all init_resource to plugin
-- assert buffer components remain empty for component
 - schedule tests with ApplyDeferred
 - migration markdown file as a checklist what to do for each bevy release
 - reversible commands traits of:
@@ -44,15 +39,14 @@ Docs
 
 ISSUES/DISCUSSIONS:
 - reversible change detection (copy over to new repo)
-- analyze test schedule::non_exclusive_then_exclusive_ignore_deferred, consider revamping test strategy
 - manual sync point configuration
--- apply_deferred
 -- ScheduleBuildSettings::auto_insert_apply_deferred
 - more compact FrameTransitionLog
 -- VecDeque<u8> with variable len entries
 -- has to provide the same api
 - not supported:
 -- EntityWorldMut::clone_with because EntityClonerBuilder is not offering reads on which components are cloned
+--- could be supported with RevEntityClonerBuilder
 */
 
 pub mod app;
@@ -65,7 +59,7 @@ pub mod undo_redo;
 pub mod prelude {
     pub use crate::app::{RevApp as _, RevSystemsPlugin};
     pub use crate::meta::{RevDirection, RevMeta};
-    pub use crate::schedule::{forward_set, RevSchedule as _, RevSystemsSet, RevUpdate};
+    pub use crate::schedule::{RevSchedule as _, RevSystemsSet, RevUpdate};
     pub use crate::undo_redo::{
         unique_for_location, BuffersUndoRedo as _, DespawnAtOutOfLog, RevCommands as _,
         RevEntityWorldMut as _, RevWorld as _, UndoRedoBuffer, UndoRedoDirection, UndoRedoSwap,
