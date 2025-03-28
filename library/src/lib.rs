@@ -61,7 +61,7 @@ pub mod prelude {
     pub use crate::meta::{RevDirection, RevMeta};
     pub use crate::schedule::{RevSchedule as _, RevSystemsSet, RevUpdate};
     pub use crate::undo_redo::{
-        unique_for_location, BuffersUndoRedo as _, DespawnAtOutOfLog, RevCommands as _,
-        RevEntityWorldMut as _, RevWorld as _, UndoRedoBuffer, UndoRedoDirection, UndoRedoSwap,
+        unique_for_location, BuffersUndoRedo as _, RevCommands as _, RevEntityWorldMut as _,
+        RevWorld as _, UndoRedoBuffer, UndoRedoDirection, UndoRedoSwap,
     };
 }
