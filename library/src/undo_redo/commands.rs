@@ -490,7 +490,7 @@ pub fn rev_despawn() -> impl EntityCommand {
 
 #[cfg(test)]
 mod test {
-    use crate::prelude::UndoRedoBuffer;
+    use crate::{prelude::UndoRedoBuffer, undo_redo::ResourceSwap};
 
     use super::*;
 
@@ -505,8 +505,7 @@ mod test {
         rev_init_resource::<TestRes>().apply(&mut world);
         let mut undo_redo = world
             .resource_mut::<UndoRedoBuffer>()
-            .pop_undo_redo()
-            .unwrap();
+            .pop_assert_type::<ResourceSwap<TestRes>>();
 
         assert_eq!(world.get_resource::<TestRes>(), Some(&TestRes(0)));
         undo_redo.undo(&mut world);
@@ -515,8 +514,7 @@ mod test {
         assert_eq!(world.get_resource::<TestRes>(), Some(&TestRes(0)));
 
         rev_init_resource::<TestRes>().apply(&mut world);
-        let undo_redo = world.resource_mut::<UndoRedoBuffer>().pop_undo_redo();
-        assert!(undo_redo.is_none());
+        assert!(world.resource::<UndoRedoBuffer>().is_empty());
     }
 
     #[test]
@@ -527,8 +525,7 @@ mod test {
         rev_insert_resource(TestRes(10)).apply(&mut world);
         let mut undo_redo = world
             .resource_mut::<UndoRedoBuffer>()
-            .pop_undo_redo()
-            .unwrap();
+            .pop_assert_type::<ResourceSwap<TestRes>>();
 
         assert_eq!(world.get_resource::<TestRes>(), Some(&TestRes(10)));
         undo_redo.undo(&mut world);
@@ -539,8 +536,7 @@ mod test {
         rev_insert_resource(TestRes(20)).apply(&mut world);
         let mut undo_redo = world
             .resource_mut::<UndoRedoBuffer>()
-            .pop_undo_redo()
-            .unwrap();
+            .pop_assert_type::<ResourceSwap<TestRes>>();
 
         assert_eq!(world.get_resource::<TestRes>(), Some(&TestRes(20)));
         undo_redo.undo(&mut world);
@@ -558,8 +554,7 @@ mod test {
         rev_remove_resource::<TestRes>().apply(&mut world);
         let mut undo_redo = world
             .resource_mut::<UndoRedoBuffer>()
-            .pop_undo_redo()
-            .unwrap();
+            .pop_assert_type::<ResourceSwap<TestRes>>();
 
         assert_eq!(world.get_resource::<TestRes>(), None);
         undo_redo.undo(&mut world);
@@ -568,7 +563,6 @@ mod test {
         assert_eq!(world.get_resource::<TestRes>(), None);
 
         rev_remove_resource::<TestRes>().apply(&mut world);
-        let undo_redo = world.resource_mut::<UndoRedoBuffer>().pop_undo_redo();
-        assert!(undo_redo.is_none());
+        assert!(world.resource::<UndoRedoBuffer>().is_empty());
     }
 }
