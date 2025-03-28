@@ -7,21 +7,22 @@ use std::{
 use bevy::{
     ecs::{
         change_detection::Res,
+        error::BevyError,
         schedule::{
-            graph::GraphInfo, Chain, Condition, InternedSystemSet, IntoScheduleConfigs,
-            Schedulable, Schedule, ScheduleConfigs, ScheduleLabel, SystemSet,
+            graph::GraphInfo, Chain, Condition, Fallible, Infallible, InternedSystemSet,
+            IntoScheduleConfigs, IntoSystemSet, Schedulable, Schedule, ScheduleConfigTupleMarker,
+            ScheduleConfigs, ScheduleLabel, SystemSet,
         },
-        system::ScheduleSystem,
+        system::{IntoSystem, ScheduleSystem},
     },
-    prelude::IntoSystemSet,
     utils::default,
 };
 
 use variadics_please::all_tuples;
 
-use condition::rev_condition;
-
 use crate::meta::RevMeta;
+use condition::rev_condition;
+use system::rev_system;
 
 mod condition;
 mod system;
@@ -157,7 +158,7 @@ impl RevSchedule for Schedule {
 
 fn set_base_sets(schedule: &mut Schedule) {
     fn is_forward<const TRUE: bool>(meta: Option<Res<RevMeta>>) -> bool {
-        meta.and_then(|meta| meta.get_direction())
+        meta.and_then(|meta| meta.get_present_direction())
             .is_some_and(|direction| direction.is_forward() == TRUE)
     }
 
@@ -197,9 +198,8 @@ pub trait IntoRevScheduleConfigs<
     #[doc(hidden)]
     fn into_rev_configs(self) -> RevScheduleConfigs<T>;
     fn rev_in_set(self, set: impl SystemSet) -> RevScheduleConfigs<T> {
-        let set = set.intern();
         let mut configs = self.into_rev_configs();
-        configs.in_set_inner(set);
+        configs.in_set_inner(set.intern());
         configs
     }
     fn rev_before<M>(self, set: impl IntoSystemSet<M>) -> RevScheduleConfigs<T> {
@@ -270,9 +270,9 @@ pub trait IntoRevScheduleConfigs<
     }
     fn rev_run_if<M>(self, condition: impl Condition<M>) -> RevScheduleConfigs<T> {
         let mut configs = self.into_rev_configs();
-        let (condition, set) = rev_condition(condition);
-        configs.conditions.push(condition);
+        let (set, condition) = rev_condition(condition);
         configs.conditioned.in_set_inner(set);
+        configs.conditions.push(condition);
         configs
     }
     fn rev_distributive_run_if<M>(
@@ -286,9 +286,9 @@ pub trait IntoRevScheduleConfigs<
         ) {
             match conditioned {
                 ScheduleConfigs::ScheduleConfig(_) => {
-                    let (condition, set) = rev_condition(condition);
-                    conditions.push(condition);
+                    let (set, condition) = rev_condition(condition);
                     conditioned.in_set_inner(set);
+                    conditions.push(condition);
                 }
                 ScheduleConfigs::Configs { configs, .. } => {
                     for config in configs {
@@ -328,7 +328,7 @@ pub trait IntoRevScheduleConfigs<
         configs
     }
     fn rev_chain_ignore_deferred(self) -> RevScheduleConfigs<T> {
-        // Example for systems A and B (non-exclusive) in self:
+        // Example for systems A and B in self:
         // Forward
         //  sys A -> sys B -> sync
         // Backward
@@ -364,6 +364,24 @@ impl<S: SystemSet> IntoRevScheduleConfigs<InternedSystemSet, ()> for S {
     }
 }
 
+impl<F, Marker> IntoRevScheduleConfigs<ScheduleSystem, (Infallible, Marker)> for F
+where
+    F: IntoSystem<(), (), Marker>,
+{
+    fn into_rev_configs(self) -> RevScheduleConfigs<ScheduleSystem> {
+        rev_system(self)
+    }
+}
+
+impl<F, Marker> IntoRevScheduleConfigs<ScheduleSystem, (Fallible, Marker)> for F
+where
+    F: IntoSystem<(), Result<(), BevyError>, Marker>,
+{
+    fn into_rev_configs(self) -> RevScheduleConfigs<ScheduleSystem> {
+        rev_system(self)
+    }
+}
+
 impl<T: Schedulable<Metadata = GraphInfo, GroupMetadata = Chain>> RevScheduleConfigs<T> {
     fn in_set_inner(&mut self, set: InternedSystemSet) {
         self.forward_systems.in_set_inner(FwdSysSet(set).intern());
@@ -372,7 +390,6 @@ impl<T: Schedulable<Metadata = GraphInfo, GroupMetadata = Chain>> RevScheduleCon
         self.backward_commands_systems
             .in_set_inner(BwdCmdSysSet(set).intern());
     }
-    /// Split configs to be more readable in impl_into_rev_schedule_configs! and as partially movable as nested tuples.
     fn split(self) -> (ForwardConfigs<T>, BackwardConfigs<T>) {
         (
             ForwardConfigs {
@@ -403,7 +420,7 @@ struct BackwardConfigs<T: Schedulable> {
 
 macro_rules! impl_into_rev_schedule_configs {
     ($(($T: ident, $M: ident, $var: ident)),*) => {
-        impl<S, $($T, $M),*> IntoRevScheduleConfigs<S, ($($M,)*)> for ($($T,)*)
+        impl<S, $($T, $M),*> IntoRevScheduleConfigs<S, (ScheduleConfigTupleMarker, $($M,)*)> for ($($T,)*)
         where
             S: Schedulable<Metadata = GraphInfo, GroupMetadata = Chain>,
             $($T: IntoRevScheduleConfigs<S, $M>,)*
