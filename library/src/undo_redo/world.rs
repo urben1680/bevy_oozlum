@@ -8,10 +8,11 @@ use std::{
 use bevy::{
     ecs::{
         bundle::{Bundle, BundleId, NoBundleEffect},
-        component::{ComponentCloneBehavior, ComponentId},
+        component::{ComponentCloneBehavior, ComponentId, ComponentMutability},
         entity::{Entity, EntityCloner},
+        relationship::Relationship,
         resource::Resource,
-        world::{EntityRef, EntityWorldMut, FromWorld, World},
+        world::{EntityRef, EntityWorldMut, FromWorld, Mut, World},
     },
     platform_support::{
         collections::{HashMap, HashSet},
@@ -290,6 +291,94 @@ impl RevWorld for World {
     }
 }
 
+#[derive(Resource, Default)]
+struct RelationshipBufferRes(HashMap<ComponentId, fn(&mut World, Entity, BufferAt)>);
+
+fn buffer_relationships(
+    world: &mut World,
+    entity: Entity,
+    at: BufferAt,
+    components: &[ComponentId],
+) {
+    if !world.contains_resource::<RelationshipBufferRes>() {
+        return;
+    }
+    world.resource_scope(|world, relationship_buffers: Mut<RelationshipBufferRes>| {
+        for component in components.iter() {
+            if let Some(c) = relationship_buffers.0.get(component) {
+                c(world, entity, at);
+            }
+        }
+    })
+}
+
+pub(crate) fn register_relationship_buffer<R: Relationship>(world: &mut World) {
+    struct RelationshipBuffer<R: Relationship> {
+        entity: Entity,
+        relationship: Option<R>,
+    }
+
+    impl<R: Relationship> UndoRedo for RelationshipBuffer<R> {
+        fn undo(&mut self, world: &mut World) {
+            let mut entity = world.entity_mut(self.entity);
+            if R::Mutability::MUTABLE {
+                let relationship = unsafe {
+                    // SAFETY: this if branch asserts the component is mutable
+                    entity.get_mut_assume_mutable::<R>()
+                };
+                match relationship {
+                    Some(mut r1) => match self.relationship.as_mut() {
+                        Some(r2) => core::mem::swap(&mut *r1, r2),
+                        None => self.relationship = entity.take::<R>(),
+                    },
+                    None => {
+                        if let Some(r2) = self.relationship.take() {
+                            entity.insert(r2);
+                        }
+                    }
+                }
+            } else {
+                match entity.take::<R>() {
+                    Some(mut r1) => match self.relationship.as_mut() {
+                        Some(r2) => {
+                            core::mem::swap(&mut r1, r2);
+                            entity.insert(r1);
+                        }
+                        None => self.relationship = Some(r1),
+                    },
+                    None => {
+                        if let Some(r2) = self.relationship.take() {
+                            entity.insert(r2);
+                        }
+                    }
+                }
+            }
+        }
+        fn redo(&mut self, world: &mut World) {
+            self.undo(world);
+        }
+    }
+
+    let component_id = world.register_component::<R>();
+    world
+        .get_resource_or_init::<RelationshipBufferRes>()
+        .0
+        .entry(component_id)
+        .or_insert_with(|| {
+            |world, entity, at| {
+                let mut relationship = None;
+                if at != BufferAt::Undo {
+                    relationship = world.entity_mut(entity).take::<R>();
+                }
+                let undo_redo = RelationshipBuffer {
+                    entity,
+                    relationship,
+                };
+                world.buffer_undo_redo(undo_redo);
+            }
+        });
+}
+
 struct Spawn {
     entity: Entity,
     marker: DespawnAtOutOfLog,
@@ -339,17 +428,25 @@ fn buffer_bundle(
     let mut buffer = BundleBuffer::new(world, entity, bundle);
     match at {
         BufferAt::Now => {
-            let out = buffer.move_bundle(world);
+            let entities = buffer.toggle_state(world);
+            let components = buffer.get_component_ids(world);
+            buffer_relationships(world, entity, at, &components);
+            let out = buffer.move_bundle(world, entities, &components);
             world.buffer_undo_redo(buffer);
             Some(world.entity(out))
         }
         BufferAt::Undo => {
+            let components = buffer.get_component_ids(world);
+            buffer_relationships(world, entity, at, &components);
             world.buffer_undo_redo(buffer);
             None
         }
         BufferAt::NowAndUndo => {
             let at_undo = buffer.clone(); // no buffer entity set yet so each spawns their own
-            let out = buffer.move_bundle(world);
+            let entities = buffer.toggle_state(world);
+            let components = buffer.get_component_ids(world);
+            buffer_relationships(world, entity, at, &components);
+            let out = buffer.move_bundle(world, entities, &components);
             world.buffer_undo_redo(buffer).buffer_undo_redo(at_undo);
             Some(world.entity(out))
         }
@@ -370,6 +467,12 @@ enum BufferState {
     Filled(Entity),
 }
 
+struct BundleEntities {
+    target: Entity,
+    source: Entity,
+    buffer: Entity,
+}
+
 impl BundleBuffer {
     fn new(world: &World, entity: Entity, bundle: BundleId) -> Self {
         let meta = world.get_resource::<RevMeta>().expect("todo");
@@ -380,32 +483,49 @@ impl BundleBuffer {
             state: BufferState::Unspawned(marker),
         }
     }
-    fn move_bundle(&mut self, world: &mut World) -> Entity {
-        let (target, source, out);
-        self.state = match self.state {
+    fn toggle_state(&mut self, world: &mut World) -> BundleEntities {
+        match self.state {
             BufferState::Unspawned(marker) => {
-                target = world.spawn(marker).id();
-                source = self.entity;
-                out = target;
-                BufferState::Filled(target)
+                let buffer = world.spawn(marker).id();
+                self.state = BufferState::Filled(buffer);
+                BundleEntities {
+                    target: buffer,
+                    source: self.entity,
+                    buffer,
+                }
             }
             BufferState::Filled(buffer) => {
-                target = self.entity;
-                source = buffer;
-                out = buffer;
-                BufferState::Empty(buffer)
+                self.state = BufferState::Empty(buffer);
+                BundleEntities {
+                    target: self.entity,
+                    source: buffer,
+                    buffer,
+                }
             }
             BufferState::Empty(buffer) => {
-                target = buffer;
-                source = self.entity;
-                out = buffer;
-                BufferState::Filled(buffer)
+                self.state = BufferState::Filled(buffer);
+                BundleEntities {
+                    target: buffer,
+                    source: self.entity,
+                    buffer,
+                }
             }
-        };
-
-        let bundle = world.bundles().get(self.bundle).expect("todo");
-        let components: Box<[ComponentId]> = bundle.explicit_components().into();
-
+        }
+    }
+    fn get_component_ids(&self, world: &World) -> Box<[ComponentId]> {
+        world
+            .bundles()
+            .get(self.bundle)
+            .expect("todo")
+            .explicit_components()
+            .into()
+    }
+    fn move_bundle(
+        &mut self,
+        world: &mut World,
+        entities: BundleEntities,
+        components: &[ComponentId],
+    ) -> Entity {
         let progress_res = world.buffer_components_in_progress();
         if !progress_res {
             world.insert_resource(BufferComponentsInProgress);
@@ -416,24 +536,26 @@ impl BundleBuffer {
             .without_required_components(|builder| {
                 builder.allow_by_ids(components.iter().copied());
             })
-            .clone_entity(source, target);
+            .clone_entity(entities.source, entities.target);
         if !progress_res {
             world.remove_resource::<BufferComponentsInProgress>();
         }
-        out
+        entities.buffer
     }
 }
 
 impl UndoRedo for BundleBuffer {
     fn undo(&mut self, world: &mut World) {
-        self.move_bundle(world);
+        let entities = self.toggle_state(world);
+        let components = self.get_component_ids(world);
+        self.move_bundle(world, entities, &components);
     }
     fn redo(&mut self, world: &mut World) {
-        self.move_bundle(world);
+        self.undo(world);
     }
 }
 
-struct ResourceSwap<R: Resource>(Option<R>);
+pub(super) struct ResourceSwap<R: Resource>(Option<R>);
 
 impl<R: Resource> UndoRedo for ResourceSwap<R> {
     fn undo(&mut self, world: &mut World) {
