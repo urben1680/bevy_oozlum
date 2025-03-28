@@ -7,12 +7,16 @@ use bevy::{
         change_detection::Mut,
         component::{ComponentId, Tick},
         entity::Entity,
+        error::BevyError,
         query::{Access, QueryState},
         resource::Resource,
-        system::{IntoSystem, Local, ReadOnlySystemParam, Res, System, SystemMeta, SystemParam},
+        system::{
+            IntoSystem, Local, ReadOnlySystemParam, Res, System, SystemMeta, SystemParam,
+            SystemParamValidationError,
+        },
         world::{unsafe_world_cell::UnsafeWorldCell, World},
     },
-    log::{error_once, info},
+    log::info,
     reflect::{std_traits::ReflectDefault, Reflect},
 };
 
@@ -26,29 +30,24 @@ use crate::{
 };
 
 #[derive(Clone, Debug, PartialEq)]
-pub enum TryRunRevUpdateError {
-    RevMetaMissingFirstCall,
-    RevMetaMissing { existed_previously: bool },
-    RevMetaRemovedInSchedule { frame: u64 },
+enum TryRunRevUpdateError {
+    RevMetaRemovedInSchedule {
+        frame: u64,
+    },
     UnexpectedInitialRunning(RevMeta),
     RevUpdateMissing(RevMeta),
-    UndoRedoBufferNotEmptyBeforeUpdate(RevMeta),
+    UndoRedoBufferNotEmptyBeforeUpdate {
+        meta: RevMeta,
+        buffer_types: Vec<&'static str>,
+    },
 }
 
 impl Display for TryRunRevUpdateError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::RevMetaMissingFirstCall => write!(
-                f,
-                "RevMeta does not exist yet, RevUpdate will not be called until it is inserted"
-            ),
-            Self::RevMetaMissing { .. } => write!(
-                f,
-                "RevMeta was removed, RevUpdate will not be called until it is inserted again"
-            ),
             Self::RevMetaRemovedInSchedule { frame } => write!(
                 f,
-                "RevMeta was removed in while RevUpdate ran at frame {frame}"
+                "RevMeta was removed while RevUpdate ran at frame {frame}"
             ),
             Self::UnexpectedInitialRunning(meta) => write!(
                 f,
@@ -58,9 +57,9 @@ impl Display for TryRunRevUpdateError {
             Self::RevUpdateMissing(meta) => {
                 write!(f, "RevUpdate was missing at frame {}", meta.now())
             }
-            Self::UndoRedoBufferNotEmptyBeforeUpdate(meta) => write!(
+            Self::UndoRedoBufferNotEmptyBeforeUpdate { meta, buffer_types } => write!(
                 f,
-                "UndoRedoBuffer was not fully drained at frame {}, RevUpdate is not run",
+                "UndoRedoBuffer was not fully drained at frame {}, RevUpdate is not run, undrained UndoRedo: {buffer_types:#?}",
                 meta.now()
             ),
         }
@@ -91,7 +90,10 @@ impl RevDirection {
         self != Self::NOT_LOG
     }
     pub fn is_present(self, world: &World) -> bool {
-        world.get_resource::<RevMeta>().and_then(RevMeta::get_direction) == Some(self)
+        world
+            .get_resource::<RevMeta>()
+            .and_then(RevMeta::get_present_direction)
+            == Some(self)
     }
 }
 
@@ -105,19 +107,16 @@ unsafe impl SystemParam for RevDirection {
     // todo: update implementation and doc for bevy 0.16 as the behavior of Res changes then again
     unsafe fn validate_param(
         &component_id: &Self::State,
-        system_meta: &SystemMeta,
+        _system_meta: &SystemMeta,
         world: UnsafeWorldCell,
-    ) -> bool {
+    ) -> Result<(), SystemParamValidationError> {
         // SAFETY: Read-only access is registered in init_state for this id and ptr read access is finished before return.
-        let Some(ptr) = world.get_resource_by_id(component_id) else {
-            system_meta.try_warn_param::<Res<RevMeta>>();
-            return false;
-        };
-        if ptr.deref::<RevMeta>().get_direction().is_none() {
-            system_meta.try_warn_param::<Self>();
-            return false;
-        }
-        true
+        world
+            .get_resource_by_id(component_id)
+            .map(|ptr| ptr.deref::<RevMeta>()) // SAFETY: todo
+            .and_then(RevMeta::get_present_direction)
+            .map(|_| ())
+            .ok_or(SystemParamValidationError::invalid())
     }
     unsafe fn get_param<'world, 'state>(
         state: &'state mut Self::State,
@@ -129,7 +128,7 @@ unsafe impl SystemParam for RevDirection {
             .get_resource_by_id(*state)
             .map(|ptr| ptr.deref::<RevMeta>())
             .unwrap()
-            .direction()
+            .present_direction()
     }
 }
 
@@ -186,7 +185,7 @@ impl InternalDirection {
             _ => *self,
         }
     }
-    fn get_direction(self) -> Option<RevDirection> {
+    fn get_present_direction(self) -> Option<RevDirection> {
         match self {
             Self::RunningForward => Some(RevDirection::NOT_LOG),
             Self::RunningForwardLog { .. } => Some(RevDirection::FORWARD_LOG),
@@ -194,7 +193,7 @@ impl InternalDirection {
             _ => None,
         }
     }
-    fn ran_direction(self) -> Option<RevDirection> {
+    fn get_past_direction(self) -> Option<RevDirection> {
         match self {
             Self::RanForward => Some(RevDirection::NOT_LOG),
             Self::RanForwardLog { .. } => Some(RevDirection::FORWARD_LOG),
@@ -258,14 +257,14 @@ impl RevMeta {
             queue: None,
         }
     }
-    pub fn direction(&self) -> RevDirection {
-        self.get_direction().expect("todo")
+    pub fn present_direction(&self) -> RevDirection {
+        self.get_present_direction().expect("todo")
     }
-    pub fn get_direction(&self) -> Option<RevDirection> {
-        self.direction.get_direction()
+    pub fn get_present_direction(&self) -> Option<RevDirection> {
+        self.direction.get_present_direction()
     }
-    pub fn ran_direction(&self) -> Option<RevDirection> {
-        self.direction.ran_direction()
+    pub fn get_past_direction(&self) -> Option<RevDirection> {
+        self.direction.get_past_direction()
     }
     pub fn paused(&self) -> bool {
         self.direction == InternalDirection::Pause
@@ -291,11 +290,9 @@ impl RevMeta {
     pub fn contains(&self, frame: u64) -> bool {
         self.future_end.wrapping_sub(frame) <= (self.future_end - self.past_end)
     }
-    // todo: no longer needed to have that many options, simplify
     pub fn past_contains(&self, frame: u64) -> bool {
         self.now.wrapping_sub(frame).wrapping_sub(1) < (self.now - self.past_end)
     }
-    // todo: no longer needed to have that many options, simplify
     pub fn future_contains(&self, frame: u64) -> bool {
         self.future_end.wrapping_sub(frame) < (self.future_end - self.now)
     }
@@ -336,38 +333,66 @@ impl RevMeta {
     pub fn queue_pause(&mut self) {
         self.queue = Some(InternalDirection::Pause);
     }
+
+    /// System to make the [`RevUpdate`] schedule run once.
+    ///
+    /// If [`RevMeta`] is in a [paused](RevMeta::paused) state or is missing, the schedule is not run. This is not
+    /// considered an error and the system returns with `Ok`.
+    ///
+    /// The forward variant of the schedule is run when [`RevDirection::Forward`] is present during it, otherwise
+    /// the backward variant is run.
+    ///
+    /// This system returns an error if ...
+    ///
+    /// - [`UndoRedoBuffer`] is not empty at the start of an attempted schedule run.
+    /// This indicates that the buffer resource has been tampered with besides the regular usage.
+    /// - `RevMeta` is in a running state before the schedule did start.
+    /// This indicates that this system ran recursively or `RevMeta` was manually inserted from a clone that was acquired
+    /// when the schedule ran a previous time. If `RevMeta` is manually inserted, then this should be done with
+    /// [RevMeta::new] or from a state it was removed as when no reversible schedule ran.
+    /// - `RevUpdate` was removed while `RevUpdate` ran.
+    /// - `RevUpdate` is missing.
+    /// This indicates that this system ran recursively, this schedule was never populated or it was removed. This error
+    /// will cause `RevMeta` to be reverted to its state it was in before the run was attempted.
     pub fn try_run_rev_update(
         world: &mut World,
         buffers: &mut QueryState<(Entity, &DespawnAtOutOfLog)>,
         mut out_of_log_buffers: Local<Vec<Entity>>,
-    ) -> Result<(), TryRunRevUpdateError> {
+    ) -> Result<(), BevyError> {
+        /// Use a Resource instead of Local so this system can be added multiple times and keeps track globally
         #[derive(Resource, Clone, Copy)]
         struct Existed(bool);
 
         if world.contains_resource::<Self>() {
             world.insert_resource(Existed(true));
         } else {
-            let err = match world.get_resource::<Existed>().copied() {
-                None => TryRunRevUpdateError::RevMetaMissingFirstCall,
-                Some(Existed(existed_previously)) => {
-                    TryRunRevUpdateError::RevMetaMissing { existed_previously }
-                }
-            };
+            let existed = world.remove_resource::<Existed>();
             world.insert_resource(Existed(false));
-            return Err(err);
+            match existed {
+                None => info!(
+                    "RevMeta does not exist yet, reversible schedule RevUpdate will not be called until it is inserted"
+                ),
+                Some(Existed(true)) => info!(
+                    "RevMeta was removed, reversible schedule RevUpdate will not be called until it is inserted again"
+                ),
+                Some(Existed(false)) => {}
+            };
+
+            // `RevMeta` missing is not an error but a possible way to make `RevUpdate` not run
+            return Ok(());
         }
 
         world.resource_scope(|world: &mut World, mut meta: Mut<Self>| {
             let buffer = world.get_resource_or_init::<UndoRedoBuffer>();
-
-            if !buffer.undo_redo_is_empty() {
-                return Err(TryRunRevUpdateError::UndoRedoBufferNotEmptyBeforeUpdate(
-                    meta.clone(),
-                ));
+            if !buffer.is_empty() {
+                Err(TryRunRevUpdateError::UndoRedoBufferNotEmptyBeforeUpdate {
+                    meta: meta.clone(),
+                    buffer_types: buffer.type_names().collect(),
+                })?;
             }
 
-            if meta.get_direction().is_some() {
-                return Err(TryRunRevUpdateError::UnexpectedInitialRunning(meta.clone()));
+            if meta.get_present_direction().is_some() {
+                Err(TryRunRevUpdateError::UnexpectedInitialRunning(meta.clone()))?;
             }
 
             let previous = meta.clone();
@@ -380,7 +405,7 @@ impl RevMeta {
 
                 match result {
                     Ok(()) => {
-                        if meta.direction() == RevDirection::NOT_LOG {
+                        if meta.present_direction() == RevDirection::NOT_LOG {
                             out_of_log_buffers.extend(
                                 buffers
                                     .iter(world)
@@ -400,42 +425,26 @@ impl RevMeta {
             });
 
             match result.transpose() {
-                Ok(frame) => {
-                    let Some(updated) = world.remove_resource::<Self>() else {
+                Ok(frame) => match world.remove_resource::<Self>() {
+                    None => {
                         let frame = frame.expect(
                             "RevMeta could not have been removed without running RevUpdate",
                         );
-                        return Err(TryRunRevUpdateError::RevMetaRemovedInSchedule { frame });
-                    };
-                    meta.max_world_states = updated.max_world_states;
-                    meta.queue = updated.queue;
-                    Ok(())
-                }
+                        Err(TryRunRevUpdateError::RevMetaRemovedInSchedule { frame })?
+                    }
+                    Some(updated) => {
+                        meta.max_world_states = updated.max_world_states;
+                        meta.queue = updated.queue;
+                        Ok(())
+                    }
+                },
                 Err(err) => {
                     world.remove_resource::<Self>();
                     *meta = previous;
-                    Err(err)
+                    Err(err)?
                 }
             }
         })
-    }
-    pub fn run_rev_update(
-        world: &mut World,
-        buffers: &mut QueryState<(Entity, &DespawnAtOutOfLog)>,
-        out_of_log_buffers: Local<Vec<Entity>>,
-    ) {
-        match Self::try_run_rev_update(world, buffers, out_of_log_buffers) {
-            Err(TryRunRevUpdateError::RevMetaMissingFirstCall) => info!(
-                "RevMeta does not exist yet, reversible schedule RevUpdate will not be called until it is inserted"
-            ),
-            Err(TryRunRevUpdateError::RevMetaMissing { existed_previously, .. }) => if existed_previously {
-                info!(
-                    "RevMeta was removed, reversible schedule RevUpdate will not be called until it is inserted again"
-                )
-            },
-            Err(err) => error_once!("{err}"),
-            _ => {}
-        }
     }
     /// Updates `RevMeta`. The closure is called if the updated direction is not paused.
     ///
@@ -458,11 +467,11 @@ impl RevMeta {
     /// If this is called recursively in the closure and the closure is called because the updated direction is not paused,
     /// this will panic. The same can happen if `RevMeta` is in an invalid state, cloned from inside the closure for example.
     pub fn update<Out>(&mut self, c: impl FnOnce(&mut Self) -> Out) -> Option<Out> {
-        if self.get_direction().is_some() {
+        if self.get_present_direction().is_some() {
             panic!("unexpected initial direction, expected pause or ran variant, do not call this method recursively\n{self:#?}");
         }
         self.update_internal();
-        self.get_direction().map(|_| {
+        self.get_present_direction().map(|_| {
             let out = c(self);
             self.direction.end_running();
             out
@@ -479,7 +488,7 @@ impl RevMeta {
         match self.queue.take() {
             Some(queue) => {
                 self.direction = queue;
-                self.now = match self.get_direction() {
+                self.now = match self.get_present_direction() {
                     Some(RevDirection::NOT_LOG) => return self.update_forward(),
                     Some(RevDirection::FORWARD_LOG) => self.now + 1,
                     Some(RevDirection::BackwardLog) => self.now - 1,
@@ -632,7 +641,7 @@ mod test {
         assert_eq!(meta.now, 1);
 
         meta.update_internal();
-        assert_eq!(meta.get_direction(), None);
+        assert_eq!(meta.get_present_direction(), None);
         assert_eq!(meta.now, 1);
     }
 
@@ -657,7 +666,7 @@ mod test {
         assert_eq!(meta.now, 0);
 
         meta.update_internal();
-        assert_eq!(meta.get_direction(), None);
+        assert_eq!(meta.get_present_direction(), None);
         assert_eq!(meta.now, 0);
     }
 
