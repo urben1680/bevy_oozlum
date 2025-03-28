@@ -36,7 +36,7 @@ fn get_plot(
         meta.update(|meta| {
             let frame = last_frame_where_modulo_eq_zero.update_and_get(meta);
             let character = get_character(frame, meta);
-            if meta.direction().is_forward() {
+            if meta.present_direction().is_forward() {
                 plot.push_back(character);
             } else {
                 plot.push_front(character);
@@ -103,7 +103,7 @@ impl LastFrameWhereModuloEqZero {
         /*
         return expected_result;
          */
-        match meta.direction() {
+        match meta.present_direction() {
             RevDirection::NOT_LOG => {
                 let now = meta.now();
                 let delta: u8 = (now - self.state_for_transition_logs).try_into().unwrap();
