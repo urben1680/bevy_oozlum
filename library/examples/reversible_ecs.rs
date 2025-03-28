@@ -11,6 +11,7 @@ use crossterm::{cursor::*, terminal::*, ExecutableCommand};
 use library::{
     log::{DenseTransitionLog, FrameTransitionLog, SparseTransitionLog},
     prelude::*,
+    schedule::IntoRevScheduleConfigs,
 };
 
 const MAX_LOG_LEN: usize = 71;
@@ -48,8 +49,8 @@ fn main() {
         .add_systems(
             FixedUpdate,
             (
-                control_rev_meta.before(RevMeta::run_rev_update),
-                render.after(RevMeta::run_rev_update),
+                control_rev_meta.before(RevMeta::try_run_rev_update),
+                render.after(RevMeta::try_run_rev_update),
             ),
         )
         .add_systems(RevUpdate, clear_input.after(RevSystemsSet))
@@ -73,7 +74,7 @@ struct Waste {
 struct LostWaste(usize);
 
 fn on_remove(mut world: DeferredWorld, _: HookContext) {
-    if world.resource::<RevMeta>().get_direction() == Some(RevDirection::NOT_LOG) {
+    if world.resource::<RevMeta>().get_present_direction() == Some(RevDirection::NOT_LOG) {
         world.resource_mut::<LostWaste>().0 += 1;
     }
 }
@@ -82,7 +83,7 @@ fn row1(app: &mut App) {
     app.rev_add_systems(RevUpdate, system.rev_in_set(Row(1)));
 
     fn system(meta: Res<RevMeta>, pressed: Res<KeysPressed>, mut commands: Commands) {
-        if meta.direction() != RevDirection::NOT_LOG || !pressed.num1 {
+        if meta.present_direction() != RevDirection::NOT_LOG || !pressed.num1 {
             return;
         }
         commands./*rev_*/spawn(Waste {
@@ -105,7 +106,7 @@ fn row2(app: &mut App) {
             tossed_at: meta.now(),
             row: 2,
         };
-        match meta.direction() {
+        match meta.present_direction() {
             RevDirection::NOT_LOG => {
                 for entity in log.drain_future() {
                     commands.entity(entity).despawn();
@@ -153,7 +154,7 @@ fn row3(app: &mut App) {
             tossed_at: meta.now(),
             row: 3,
         };
-        match meta.direction() {
+        match meta.present_direction() {
             RevDirection::NOT_LOG => {
                 for entity in entity_log.drain_future() {
                     commands.entity(entity).despawn();
@@ -195,7 +196,7 @@ fn row4(app: &mut App) {
     app.rev_add_systems(RevUpdate, system.rev_in_set(Row(4)));
 
     fn system(meta: Res<RevMeta>, pressed: Res<KeysPressed>, mut commands: Commands) {
-        if meta.direction().is_log() || !pressed.num4 {
+        if meta.present_direction().is_log() || !pressed.num4 {
             return;
         }
         let waste = Waste {
@@ -228,7 +229,7 @@ fn row5(app: &mut App) {
 
     // buffered UndoRedo from on_add ends up in this system's state and thus needs to be added as a reversible system
     fn system(meta: Res<RevMeta>, pressed: Res<KeysPressed>, mut commands: Commands) {
-        if meta.direction().is_log() || !pressed.num5 {
+        if meta.present_direction().is_log() || !pressed.num5 {
             return;
         }
         commands.spawn(Waste {
@@ -238,7 +239,7 @@ fn row5(app: &mut App) {
     }
 
     fn on_add(mut world: DeferredWorld, context: HookContext) {
-        if world.resource::<RevMeta>().direction().is_log() {
+        if world.resource::<RevMeta>().present_direction().is_log() {
             return;
         }
         let entity = context.entity;
@@ -271,7 +272,7 @@ fn row6(app: &mut App) {
     struct WasteObserverEvent(Waste);
 
     fn system(meta: Res<RevMeta>, pressed: Res<KeysPressed>, mut commands: Commands) {
-        if meta.direction().is_log() || !pressed.num6 {
+        if meta.present_direction().is_log() || !pressed.num6 {
             return;
         }
         let waste = Waste {
@@ -492,7 +493,7 @@ fn render(
         "{}^",
         " ".repeat(padding_cols + meta.future_len() as usize + 1)
     );
-    if meta.ran_direction() != Some(RevDirection::NOT_LOG) || lost == 10 {
+    if meta.get_past_direction() != Some(RevDirection::NOT_LOG) || lost == 10 {
         println!("           (waste lost: {lost_bar})    ESC: close");
     } else {
         println!(" 1-6: toss waste (lost: {lost_bar})    ESC: close");
