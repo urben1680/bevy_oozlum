@@ -1,6 +1,8 @@
 use bevy::{
     app::{App, FixedUpdate, Plugin},
     ecs::{
+        hierarchy::ChildOf,
+        relationship::Relationship,
         schedule::{
             InternedScheduleLabel, InternedSystemSet, IntoScheduleConfigs, ScheduleLabel,
             Schedules, SystemSet,
@@ -14,7 +16,7 @@ use crate::{
     meta::RevMeta,
     prelude::UndoRedoBuffer,
     schedule::{IntoRevScheduleConfigs, RevSchedule},
-    undo_redo::DespawnAtOutOfLog,
+    undo_redo::{register_relationship_buffer, DespawnAtOutOfLog},
 };
 
 pub trait RevApp {
@@ -28,6 +30,7 @@ pub trait RevApp {
         schedule: impl ScheduleLabel,
         sets: impl IntoRevScheduleConfigs<InternedSystemSet, Marker>,
     ) -> &mut Self;
+    fn register_relationship_buffer<R: Relationship>(&mut self);
 }
 
 impl RevApp for App {
@@ -52,6 +55,9 @@ impl RevApp for App {
             .entry(schedule)
             .rev_configure_sets(sets);
         self
+    }
+    fn register_relationship_buffer<R: Relationship>(&mut self) {
+        register_relationship_buffer::<R>(self.world_mut());
     }
 }
 
@@ -110,14 +116,15 @@ impl Plugin for RevSystemsPlugin {
         };
         match self {
             Self::AddMetaAndRunner(_, schedule) | Self::AddRunner(schedule) => {
-                app.add_systems(*schedule, RevMeta::run_rev_update);
+                app.add_systems(*schedule, RevMeta::try_run_rev_update);
             }
             Self::AddMetaAndRunnerInSet(_, schedule, set) | Self::AddRunnerInSet(schedule, set) => {
-                app.add_systems(*schedule, RevMeta::run_rev_update.in_set(*set));
+                app.add_systems(*schedule, RevMeta::try_run_rev_update.in_set(*set));
             }
             Self::AddMeta(..) => {}
         }
         app.register_disabling_component::<DespawnAtOutOfLog>();
         app.init_resource::<UndoRedoBuffer>();
+        app.register_relationship_buffer::<ChildOf>();
     }
 }
