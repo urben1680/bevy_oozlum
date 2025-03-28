@@ -6,7 +6,7 @@ use bevy::{
         component::{ComponentId, Tick},
         query::Access,
         schedule::{Condition, InternedSystemSet, IntoScheduleConfigs, ScheduleConfigs},
-        system::{IntoSystem, ReadOnlySystem, System, SystemIn},
+        system::{IntoSystem, ReadOnlySystem, System, SystemIn, SystemParamValidationError},
         world::{unsafe_world_cell::UnsafeWorldCell, DeferredWorld, World},
     },
     utils::default,
@@ -20,9 +20,9 @@ use crate::{
 
 use super::AtomicSet;
 
-pub(crate) fn rev_condition<Marker>(
+pub(super) fn rev_condition<Marker>(
     condition: impl Condition<Marker>,
-) -> (ScheduleConfigs<InternedSystemSet>, InternedSystemSet) {
+) -> (InternedSystemSet, ScheduleConfigs<InternedSystemSet>) {
     let condition = IntoSystem::into_system(condition);
     let name = condition.name();
     let condition = RevCondition {
@@ -34,7 +34,7 @@ pub(crate) fn rev_condition<Marker>(
         out_of_log_err: false,
     };
     let set = AtomicSet::new(name);
-    (set.run_if(condition), set)
+    (set, set.run_if(condition))
 }
 
 struct RevCondition<T> {
@@ -46,45 +46,6 @@ struct RevCondition<T> {
     archetype_component_access: Access<ArchetypeComponentId>,
 
     out_of_log_err: bool,
-}
-
-impl<T: ReadOnlySystem<Out = bool>> RevCondition<T> {
-    fn run_inner(
-        &mut self,
-        meta: &RevMeta,
-        valid: bool,
-        eval_cond: impl FnOnce(&mut T) -> bool,
-    ) -> bool {
-        match meta.direction() {
-            RevDirection::NOT_LOG => {
-                let out = valid && eval_cond(&mut self.condition);
-                self.log.push_and_pop_past(
-                    meta.past_len() as usize,
-                    out.then_some(())
-                );
-                out
-            },
-            // todo, simplify error msg, can only be internal bug
-            RevDirection::FORWARD_LOG => {
-                match self.log.forward_log() {
-                    Ok(option) => option.is_some(),
-                    Err(OutOfLog) => error_per_flag!(&mut self.out_of_log_err, "Reversible condition {} got out of log. \
-                        Make sure the reversible schedule this condition is in is correctly called in both the forward and backward direction. \
-                        It seems that one or more backward schedule calls were missed. \
-                        If this condition is in the RevUpdate schedule, this is likely a crate bug.\n{meta:?}", self.name())
-                }
-            },
-            RevDirection::BackwardLog => {
-                match self.log.backward_log() {
-                    Ok(option) => option.is_some(),
-                    Err(OutOfLog) => error_per_flag!(&mut self.out_of_log_err, "Reversible condition {} got out of log. \
-                        Make sure the reversible schedule this condition is in is correctly called in both the forward and backward direction. \
-                        It seems that one or more forward schedule calls were missed. \
-                        If this condition is in the RevUpdate schedule, this is likely a crate bug.\n{meta:?}", self.name())
-                }
-            }
-        }
-    }
 }
 
 impl<T: ReadOnlySystem<Out = bool>> System for RevCondition<T> {
@@ -124,8 +85,11 @@ impl<T: ReadOnlySystem<Out = bool>> System for RevCondition<T> {
             &mut self.archetype_component_access,
         );
     }
-    unsafe fn validate_param_unsafe(&mut self, world: UnsafeWorldCell) -> bool {
-        unsafe {
+    unsafe fn validate_param_unsafe(
+        &mut self,
+        world: UnsafeWorldCell,
+    ) -> Result<(), SystemParamValidationError> {
+        let direction = unsafe {
             // SAFETY:
             // - Registered read access to resource
             // - T cannot have write access because T: ReadOnlySystem
@@ -136,19 +100,29 @@ impl<T: ReadOnlySystem<Out = bool>> System for RevCondition<T> {
             // todo
             ptr.deref::<RevMeta>()
         })
-        .map(RevMeta::get_direction)
-        .is_some()
+        .and_then(RevMeta::get_present_direction);
+
+        match direction {
+            None => Err(SystemParamValidationError::skipped()),
+            Some(RevDirection::NOT_LOG) => self.condition.validate_param_unsafe(world),
+            _ => Ok(()),
+        }
     }
-    fn validate_param(&mut self, world: &World) -> bool {
-        world
+    fn validate_param(&mut self, world: &World) -> Result<(), SystemParamValidationError> {
+        let direction = world
             .get_resource_by_id(self.meta_id.unwrap())
             .map(|ptr| unsafe {
                 // SAFETY:
                 // todo
                 ptr.deref::<RevMeta>()
             })
-            .map(RevMeta::get_direction)
-            .is_some()
+            .and_then(RevMeta::get_present_direction);
+
+        match direction {
+            None => Err(SystemParamValidationError::invalid()),
+            Some(RevDirection::NOT_LOG) => self.condition.validate_param(world),
+            _ => Ok(()),
+        }
     }
     unsafe fn run_unsafe(&mut self, input: SystemIn<'_, Self>, world: UnsafeWorldCell) -> bool {
         let meta = unsafe {
@@ -161,24 +135,35 @@ impl<T: ReadOnlySystem<Out = bool>> System for RevCondition<T> {
         // SAFETY:
         // todo
         let meta = meta.deref::<RevMeta>();
-        // SAFETY:
-        // todo
-        let valid = self.condition.validate_param_unsafe(world);
-        self.run_inner(meta, valid, |cond| unsafe {
-            // SAFETY:
-            // - condition registered it's own accesses that were used to update Self's accesses
-            // - update_archetype_component_access was called by the caller of Self::run_unsafe
-            cond.run_unsafe(input, world)
-        })
-    }
-    fn run(&mut self, input: SystemIn<'_, Self>, world: &mut World) -> Self::Out {
-        let meta = {
-            world.get_resource::<RevMeta>() // todo: by_id
+        match meta.present_direction() {
+            RevDirection::NOT_LOG => {
+                let out = self.condition.run_unsafe(input, world);
+                self.log.push_and_pop_past(
+                    meta.past_len() as usize,
+                    out.then_some(())
+                );
+                out
+            },
+            // todo, simplify error msg, can only be internal bug
+            RevDirection::FORWARD_LOG => {
+                match self.log.forward_log() {
+                    Ok(option) => option.is_some(),
+                    Err(OutOfLog) => error_per_flag!(&mut self.out_of_log_err, "Reversible condition {} got out of log. \
+                        Make sure the reversible schedule this condition is in is correctly called in both the forward and backward direction. \
+                        It seems that one or more backward schedule calls were missed. \
+                        If this condition is in the RevUpdate schedule, this is likely a crate bug.\n{meta:?}", self.name())
+                }
+            },
+            RevDirection::BackwardLog => {
+                match self.log.backward_log() {
+                    Ok(option) => option.is_some(),
+                    Err(OutOfLog) => error_per_flag!(&mut self.out_of_log_err, "Reversible condition {} got out of log. \
+                        Make sure the reversible schedule this condition is in is correctly called in both the forward and backward direction. \
+                        It seems that one or more forward schedule calls were missed. \
+                        If this condition is in the RevUpdate schedule, this is likely a crate bug.\n{meta:?}", self.name())
+                }
+            }
         }
-        .expect("Self::validate_param ensured Some")
-        .clone();
-        let valid = self.condition.validate_param(world);
-        self.run_inner(&meta, valid, |cond| cond.run(input, world))
     }
     fn apply_deferred(&mut self, _world: &mut World) {}
     fn queue_deferred(&mut self, _world: DeferredWorld) {}
