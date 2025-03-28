@@ -1,5 +1,5 @@
 use std::{
-    collections::VecDeque,
+    any::{type_name, type_name_of_val},
     error::Error,
     fmt::{Debug, Display},
     hash::Hash,
@@ -107,8 +107,12 @@ impl BuffersUndoRedo for DeferredWorld<'_> {
 
 impl BuffersUndoRedo for UndoRedoBuffer {
     fn buffer_undo_redo(&mut self, undo_redo: impl UndoRedo) -> &mut Self {
-        self.undo_redo_buffer
-            .push_back(SyncCell::new(Box::new(undo_redo)));
+        let name = type_name_of_val(&undo_redo);
+        let boxed = BoxedUndoRedo {
+            undo_redo: SyncCell::new(Box::new(undo_redo)),
+            name,
+        };
+        self.0.push(boxed);
         self
     }
 }
@@ -121,19 +125,53 @@ const EXPECT_BUFFER: &'static str =
 /// Commands and hooks can buffer [`UndoRedo`] implementors via [`&mut World`](World)/[`DeferredWorld`] instead.
 ///
 /// Do not remove or overwrite this resource.
-#[derive(Resource, Default)]
-pub struct UndoRedoBuffer {
-    // uses a VecDeque so `CommandsLog` can use `VecDeque::append`
-    undo_redo_buffer: VecDeque<SyncCell<Box<dyn UndoRedo>>>,
-}
+#[derive(Resource, Default, Debug)]
+pub struct UndoRedoBuffer(Vec<BoxedUndoRedo>);
 
 impl UndoRedoBuffer {
-    pub fn undo_redo_is_empty(&self) -> bool {
-        self.undo_redo_buffer.is_empty()
+    /// Returns `true` when the buffer is empty, otherwise returns `false`.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
     }
-    #[cfg(test)]
-    pub fn pop_undo_redo(&mut self) -> Option<Box<dyn UndoRedo>> {
-        self.undo_redo_buffer.pop_back().map(SyncCell::to_inner)
+
+    pub fn type_names(&self) -> impl ExactSizeIterator<Item = &'static str> + '_ {
+        self.0.iter().map(|boxed| boxed.name)
+    }
+
+    /// Pops the most recently pushed `UndoRedo` by a [`BuffersUndoRedo`] implementor which may be deferred.
+    ///
+    /// This will make it unobtainable for the internal log of the reversible system.
+    ///
+    /// Because of this, **this method should only be used for tests of `UndoRedo` implementors**.
+    ///
+    /// The type equality is asserted on the names returned by [`type_name`] which may be not fully accurate.
+    ///
+    /// In other cases consider to use [Self::type_names] or the `Debug` implemention to inspect which types are contained.
+    ///
+    /// Assertions on the buffer being empty can be done with [Self::is_empty] instead.
+    ///
+    /// # Panics
+    ///
+    /// This method panics if the inner collection is empty or if the popped type has a different name than `T`.
+    pub fn pop_assert_type<T: UndoRedo>(&mut self) -> Box<dyn UndoRedo> {
+        let expected = type_name::<T>();
+        let boxed = self
+            .0
+            .pop()
+            .unwrap_or_else(|| panic!("expected `Some({expected})`, found `None`"));
+        assert_eq!(boxed.name, expected);
+        SyncCell::to_inner(boxed.undo_redo)
+    }
+}
+
+struct BoxedUndoRedo {
+    undo_redo: SyncCell<Box<dyn UndoRedo>>,
+    name: &'static str,
+}
+
+impl Debug for BoxedUndoRedo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.name)
     }
 }
 
@@ -241,14 +279,15 @@ pub enum BufferAt {
 
 #[derive(Component, Clone, Copy, Debug, Hash, PartialOrd, Ord, PartialEq, Eq)]
 #[component(immutable)]
+#[doc(hidden)] // pub for pub RevMeta::(try_)run_rev_update system
 pub struct DespawnAtOutOfLog(u64);
 
 impl DespawnAtOutOfLog {
-    pub fn new(meta: &RevMeta) -> Self {
-        assert_eq!(meta.get_direction(), Some(RevDirection::NOT_LOG));
+    pub(crate) fn new(meta: &RevMeta) -> Self {
+        assert_eq!(meta.get_present_direction(), Some(RevDirection::NOT_LOG));
         Self(meta.now())
     }
-    pub fn added_at(self) -> u64 {
+    pub(crate) fn added_at(self) -> u64 {
         self.0
     }
 }
@@ -261,33 +300,38 @@ pub(crate) struct UndoRedoLog {
 
 #[derive(Debug)]
 #[allow(dead_code)]
-pub(crate) enum UndoRedoLogError<'a> {
-    RevMetaMissing { system_name: &'a str },
-    UndoRedoBufferMissing { now: u64, system_name: &'a str },
-    RevDirectionMismatch { now: u64, system_name: &'a str },
-    OutOfLog { now: u64, system_name: &'a str },
+pub(crate) enum UndoRedoLogError {
+    RevMetaMissing { system_name: String },
+    UndoRedoBufferMissing { now: u64, system_name: String },
+    RevDirectionMismatch { now: u64, system_name: String },
+    OutOfLog { now: u64, system_name: String },
 }
 
 impl UndoRedoLog {
-    pub(crate) fn forward<'a>(
+    pub(crate) fn forward(
         &mut self,
         world: &mut World,
-        system_name: &'a str,
-    ) -> Result<(), UndoRedoLogError<'a>> {
+        system_name: &str,
+    ) -> Result<(), UndoRedoLogError> {
         let meta = world
             .get_resource::<RevMeta>()
-            .ok_or(UndoRedoLogError::RevMetaMissing { system_name })?
+            .ok_or_else(|| UndoRedoLogError::RevMetaMissing {
+                system_name: system_name.to_owned(),
+            })?
             .clone();
         let now = meta.now();
-        match meta.get_direction() {
+        match meta.get_present_direction() {
             Some(RevDirection::NOT_LOG) => {
-                let mut buffer = world
-                    .get_resource_mut::<UndoRedoBuffer>()
-                    .ok_or_else(|| UndoRedoLogError::UndoRedoBufferMissing { now, system_name })?;
-                if !buffer.undo_redo_is_empty() {
+                let mut buffer = world.get_resource_mut::<UndoRedoBuffer>().ok_or_else(|| {
+                    UndoRedoLogError::UndoRedoBufferMissing {
+                        now,
+                        system_name: system_name.to_owned(),
+                    }
+                })?;
+                if !buffer.0.is_empty() {
                     let past_len = self.frame_log.push_and_get_past_len(&meta);
                     self.undo_redo_log.push_and_drain_past(past_len, |mut log| {
-                        log.append(&mut buffer.undo_redo_buffer)
+                        log.extend(buffer.0.drain(..).map(|boxed| boxed.undo_redo))
                     });
                 }
             }
@@ -298,29 +342,42 @@ impl UndoRedoLog {
                 let iter = self
                     .undo_redo_log
                     .forward_log()
-                    .map_err(|_| UndoRedoLogError::OutOfLog { now, system_name })?
+                    .map_err(|_| UndoRedoLogError::OutOfLog {
+                        now,
+                        system_name: system_name.to_owned(),
+                    })?
                     .value
                     .map(SyncCell::get);
                 for command in iter {
                     command.redo(world);
                 }
             }
-            _ => return Err(UndoRedoLogError::RevDirectionMismatch { now, system_name }),
+            _ => {
+                return Err(UndoRedoLogError::RevDirectionMismatch {
+                    now,
+                    system_name: system_name.to_owned(),
+                })
+            }
         }
         Ok(())
     }
-    pub(crate) fn backward<'a>(
+    pub(crate) fn backward(
         &mut self,
         world: &mut World,
-        system_name: &'a str,
-    ) -> Result<(), UndoRedoLogError<'a>> {
+        system_name: &str,
+    ) -> Result<(), UndoRedoLogError> {
         let meta = world
             .get_resource::<RevMeta>()
-            .ok_or(UndoRedoLogError::RevMetaMissing { system_name })?
+            .ok_or_else(|| UndoRedoLogError::RevMetaMissing {
+                system_name: system_name.to_owned(),
+            })?
             .clone();
         let now = meta.now();
-        if meta.get_direction() != Some(RevDirection::BackwardLog) {
-            return Err(UndoRedoLogError::RevDirectionMismatch { now, system_name });
+        if meta.get_present_direction() != Some(RevDirection::BackwardLog) {
+            return Err(UndoRedoLogError::RevDirectionMismatch {
+                now,
+                system_name: system_name.to_owned(),
+            });
         }
         if !self.frame_log.backward_log(&meta) {
             return Ok(());
@@ -328,7 +385,10 @@ impl UndoRedoLog {
         let iter = self
             .undo_redo_log
             .backward_log()
-            .map_err(|_| UndoRedoLogError::OutOfLog { now, system_name })?
+            .map_err(|_| UndoRedoLogError::OutOfLog {
+                now,
+                system_name: system_name.to_owned(),
+            })?
             .value
             .map(SyncCell::get)
             .rev();
@@ -339,7 +399,7 @@ impl UndoRedoLog {
     }
 }
 
-impl<'a> Display for UndoRedoLogError<'a> {
+impl Display for UndoRedoLogError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::RevMetaMissing { system_name } => write!(f, "RevMeta was removed but is needed to update the UndoRedo log of reversible system {system_name}"),
@@ -350,7 +410,7 @@ impl<'a> Display for UndoRedoLogError<'a> {
     }
 }
 
-impl<'a> Error for UndoRedoLogError<'a> {}
+impl Error for UndoRedoLogError {}
 
 struct RevDespawnSingle {
     entity: Entity,
