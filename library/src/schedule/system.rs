@@ -1,8 +1,7 @@
 use std::{
-    any::TypeId,
+    any::{type_name, TypeId},
     borrow::Cow,
     fmt::Debug,
-    marker::PhantomData,
     sync::{Arc, Mutex, MutexGuard},
 };
 
@@ -14,7 +13,10 @@ use bevy::{
         schedule::{
             ApplyDeferred, InternedSystemSet, IntoScheduleConfigs, Schedulable, ScheduleConfigs,
         },
-        system::{IntoSystem, ReadOnlySystem, ScheduleSystem, System, SystemIn},
+        system::{
+            IntoSystem, ReadOnlySystem, ScheduleSystem, System, SystemIn, SystemInput,
+            SystemParamValidationError,
+        },
         world::{unsafe_world_cell::UnsafeWorldCell, DeferredWorld, World},
     },
     utils::default,
@@ -28,130 +30,124 @@ use crate::{
     undo_redo::{UndoRedoBuffer, UndoRedoLog},
 };
 
-use super::{AtomicSet, IntoRevScheduleConfigs, RevScheduleConfigs};
+use super::{AtomicSet, RevScheduleConfigs};
 
-// needed to not collide with all_tuples!
-#[doc(hidden)]
-pub struct ReversibleSystem<Marker>(PhantomData<Marker>);
-
-impl<Marker, T> IntoRevScheduleConfigs<ScheduleSystem, ReversibleSystem<Marker>> for T
+pub(super) fn rev_system<T, In, Out, M1, M2>(system: T) -> RevScheduleConfigs<ScheduleSystem>
 where
-    T: IntoSystem<(), (), Marker> + 'static,
+    T: IntoSystem<In, Out, M1>,
+    RevSystem<T::System, false>: IntoScheduleConfigs<ScheduleSystem, M2>,
+    RevSystem<T::System, true>: IntoScheduleConfigs<ScheduleSystem, M2>,
+    In: SystemInput,
 {
-    fn into_rev_configs(self) -> RevScheduleConfigs<ScheduleSystem> {
-        let system = IntoSystem::into_system(self);
-        let sys_name = system.name();
-        let unique_set = AtomicSet::new(sys_name.clone());
+    let system = IntoSystem::into_system(system);
+    let sys_name = system.name();
+    let unique_set = AtomicSet::new(sys_name.clone());
 
-        if system.type_id() == TypeId::of::<ApplyDeferred>() {
-            fn empty_configs<T: Schedulable<GroupMetadata: Default>>() -> ScheduleConfigs<T> {
-                ScheduleConfigs::Configs {
-                    configs: Vec::new(),
-                    collective_conditions: Vec::new(),
-                    metadata: default(),
-                }
+    if system.type_id() == TypeId::of::<ApplyDeferred>() {
+        fn empty_configs<T: Schedulable<GroupMetadata: Default>>() -> ScheduleConfigs<T> {
+            ScheduleConfigs::Configs {
+                configs: Vec::new(),
+                collective_conditions: Vec::new(),
+                metadata: default(),
             }
-
-            return RevScheduleConfigs {
-                forward_systems: ApplyDeferred.into_configs(),
-                backward_commands: empty_configs(),
-                backward_systems: ApplyDeferred.in_set(unique_set),
-                backward_commands_systems: unique_set.into_configs(),
-                conditioned: empty_configs(),
-                conditions: Vec::new(),
-            };
         }
 
-        let name = |string: &str| {
-            let mut name = String::with_capacity(sys_name.len() + string.len());
-            name.extend([&sys_name, string]);
-            name
-        };
-        let fwd_sys_name = name(" (forward system)");
-        let bwd_sys_name = name(" (backward system)");
-        let bwd_cmd_name = name(" (backward commands)");
-
-        let default_system_sets = system.default_system_sets();
-
-        let inner = Mutex::new(Inner {
-            system,
-            initialized: false,
-            commands_log: default(),
-        });
-
-        let shared = Arc::new(Shared {
-            inner,
-            default_system_sets: default_system_sets.clone(),
-        });
-
-        let forward_systems = ArcSystem {
-            shared: shared.clone(),
-            name: fwd_sys_name,
-            tick: default(),
-            is_send: default(),
-            is_exclusive: default(),
-            has_deferred: default(),
-            forward: true,
-            commands_err: false,
-            component_access: default(),
-            archetype_component_access: default(),
-        }
-        .in_set(unique_set)
-        .in_set(FwdSysSet(unique_set))
-        .in_set(ForwardSet);
-
-        let backward_commands = CommandsBackward {
-            shared: shared.clone(),
-            name: bwd_cmd_name,
-            tick: default(),
-            has_deferred: default(),
-            commands_err: false,
-        }
-        .in_set(unique_set)
-        .in_set(BwdCmdSet(unique_set))
-        .in_set(BwdCmdSysSet(unique_set))
-        .in_set(BackwardSet);
-
-        let backward_systems = ArcSystem {
-            shared,
-            name: bwd_sys_name,
-            tick: default(),
-            is_send: default(),
-            is_exclusive: default(),
-            has_deferred: default(),
-            forward: false,
-            commands_err: false,
-            component_access: default(),
-            archetype_component_access: default(),
-        }
-        .in_set(unique_set)
-        .in_set(BwdSysSet(unique_set))
-        .in_set(BwdCmdSysSet(unique_set))
-        .after(BwdCmdSet(unique_set))
-        .in_set(BackwardSet);
-
-        let mut configs = RevScheduleConfigs {
-            forward_systems,
-            backward_commands,
-            backward_systems,
-            backward_commands_systems: BwdCmdSysSet(unique_set).into_configs(),
-            conditioned: unique_set.into_configs(),
+        return RevScheduleConfigs {
+            forward_systems: ApplyDeferred.into_configs(),
+            backward_commands: empty_configs(),
+            backward_systems: ApplyDeferred.in_set(unique_set),
+            backward_commands_systems: unique_set.into_configs(),
+            conditioned: empty_configs(),
             conditions: Vec::new(),
         };
-
-        for set in default_system_sets {
-            configs.in_set_inner(set)
-        }
-
-        configs
     }
+
+    let name = |string: &str| {
+        let mut name = String::with_capacity(sys_name.len() + string.len());
+        name.extend([&sys_name, string]);
+        name
+    };
+    let fwd_sys_name = name(" (forward system)");
+    let bwd_sys_name = name(" (backward system)");
+    let bwd_cmd_name = name(" (backward commands)");
+
+    let default_system_sets = system.default_system_sets();
+
+    let inner = Mutex::new(Inner {
+        system,
+        initialized: false,
+        commands_log: default(),
+    });
+
+    let shared = Arc::new(Shared {
+        inner,
+        default_system_sets: default_system_sets.clone(),
+    });
+
+    let forward_systems = RevSystem::<_, true> {
+        shared: shared.clone(),
+        name: fwd_sys_name,
+        tick: default(),
+        is_send: default(),
+        is_exclusive: default(),
+        has_deferred: default(),
+        commands_err: false,
+        component_access: default(),
+        archetype_component_access: default(),
+    }
+    .in_set(unique_set)
+    .in_set(FwdSysSet(unique_set))
+    .in_set(ForwardSet);
+
+    let backward_commands = CommandsBackward {
+        shared: shared.clone(),
+        name: bwd_cmd_name,
+        tick: default(),
+        has_deferred: default(),
+        commands_err: false,
+    }
+    .in_set(unique_set)
+    .in_set(BwdCmdSet(unique_set))
+    .in_set(BwdCmdSysSet(unique_set))
+    .in_set(BackwardSet);
+
+    let backward_systems = RevSystem::<_, false> {
+        shared,
+        name: bwd_sys_name,
+        tick: default(),
+        is_send: default(),
+        is_exclusive: default(),
+        has_deferred: default(),
+        commands_err: false,
+        component_access: default(),
+        archetype_component_access: default(),
+    }
+    .in_set(unique_set)
+    .in_set(BwdSysSet(unique_set))
+    .in_set(BwdCmdSysSet(unique_set))
+    .in_set(BackwardSet)
+    .after(BwdCmdSet(unique_set));
+
+    let mut configs = RevScheduleConfigs {
+        forward_systems,
+        backward_commands,
+        backward_systems,
+        backward_commands_systems: BwdCmdSysSet(unique_set).into_configs(),
+        conditioned: unique_set.into_configs(),
+        conditions: Vec::new(),
+    };
+
+    for set in default_system_sets {
+        configs.in_set_inner(set)
+    }
+
+    configs
 }
 
-struct ArcSystem<T> {
+pub(super) struct RevSystem<T, const FORWARD: bool> {
     shared: Arc<Shared<T>>,
     name: String,
     tick: Tick,
-    forward: bool,
     commands_err: bool,
     is_send: bool,
     is_exclusive: bool,
@@ -173,9 +169,36 @@ struct Inner<T> {
     commands_log: UndoRedoLog,
 }
 
-impl<T: System> System for ArcSystem<T> {
-    type In = <T as System>::In;
-    type Out = <T as System>::Out;
+impl<T, const FORWARD: bool> Debug for RevSystem<T, FORWARD> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct(type_name::<Self>())
+            .field("shared", &self.shared)
+            .field("name", &self.name)
+            .field("tick", &self.tick)
+            .field("commands_err", &self.commands_err)
+            .field("is_send", &self.is_send)
+            .field("is_exclusive", &self.is_exclusive)
+            .field("has_deferred", &self.has_deferred)
+            .field("component_access", &self.component_access)
+            .field(
+                "archetype_component_access",
+                &self.archetype_component_access,
+            )
+            .finish()
+    }
+}
+
+impl<T> Debug for Shared<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct(type_name::<Self>())
+            .field("default_system_sets", &self.default_system_sets)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<T: System, const FORWARD: bool> System for RevSystem<T, FORWARD> {
+    type In = T::In;
+    type Out = T::Out;
 
     fn name(&self) -> Cow<'static, str> {
         Cow::Owned(self.name.clone())
@@ -198,10 +221,13 @@ impl<T: System> System for ArcSystem<T> {
     fn has_deferred(&self) -> bool {
         self.has_deferred
     }
-    unsafe fn validate_param_unsafe(&mut self, world: UnsafeWorldCell) -> bool {
+    unsafe fn validate_param_unsafe(
+        &mut self,
+        world: UnsafeWorldCell,
+    ) -> Result<(), SystemParamValidationError> {
         // commands log needs to read RevMeta
-        if self.is_exclusive && !world.get_resource::<RevMeta>().is_some() {
-            return false;
+        if self.is_exclusive && world.get_resource::<RevMeta>().is_none() {
+            return Err(SystemParamValidationError::invalid());
         }
         self.shared
             .inner
@@ -210,10 +236,10 @@ impl<T: System> System for ArcSystem<T> {
             .system
             .validate_param_unsafe(world)
     }
-    fn validate_param(&mut self, world: &World) -> bool {
+    fn validate_param(&mut self, world: &World) -> Result<(), SystemParamValidationError> {
         // commands log needs to read RevMeta
         if self.is_exclusive && !world.contains_resource::<RevMeta>() {
-            return false;
+            return Err(SystemParamValidationError::invalid());
         }
         self.shared
             .inner
@@ -227,18 +253,6 @@ impl<T: System> System for ArcSystem<T> {
         input: SystemIn<'_, Self>,
         world: UnsafeWorldCell,
     ) -> Self::Out {
-        assert!(
-            !self.is_exclusive,
-            "expected scheduler to use System::run for exclusive system"
-        );
-        self.shared
-            .inner
-            .try_lock()
-            .unwrap_or_else(expect_lock(&self.name))
-            .system
-            .run_unsafe(input, world)
-    }
-    fn run(&mut self, input: SystemIn<'_, Self>, world: &mut World) -> Self::Out {
         let mut shared = self
             .shared
             .inner
@@ -246,10 +260,11 @@ impl<T: System> System for ArcSystem<T> {
             .unwrap_or_else(expect_lock(&self.name));
 
         if !self.is_exclusive() {
-            shared.system.run(input, world)
-        } else if self.forward {
-            let out = shared.system.run(input, world);
-            if let Err(err) = shared.commands_log.forward(world, &self.name) {
+            shared.system.run_unsafe(input, world)
+        } else if FORWARD {
+            let out = shared.system.run_unsafe(input, world);
+            // SAFETY: exclusive systems have full unique access to the world
+            if let Err(err) = shared.commands_log.forward(world.world_mut(), &self.name) {
                 error_per_flag!(
                     &mut self.commands_err,
                     "Reversible commands from reversible exclusive system {} could not be done/redone: {err:#?}",
@@ -258,19 +273,20 @@ impl<T: System> System for ArcSystem<T> {
             }
             out
         } else {
-            if let Err(err) = shared.commands_log.backward(world, &self.name) {
+            // SAFETY: exclusive systems have full unique access to the world
+            if let Err(err) = shared.commands_log.backward(world.world_mut(), &self.name) {
                 error_per_flag!(
                     &mut self.commands_err,
                     "Reversible commands from reversible exclusive system {} could not be undone: {err:#?}",
                     self.name
                 )
             }
-            shared.system.run(input, world)
+            shared.system.run_unsafe(input, world)
         }
     }
     fn apply_deferred(&mut self, world: &mut World) {
-        if !self.has_deferred || self.is_exclusive {
-            // exclusive systems have an empty body in this trait method, see ExclusiveFunctionSystem
+        if self.is_exclusive {
+            // ExclusiveSystemFunction::apply_deferred is noop
             return;
         }
 
@@ -282,7 +298,7 @@ impl<T: System> System for ArcSystem<T> {
 
         shared.system.apply_deferred(world);
 
-        if !self.forward {
+        if !FORWARD {
             return;
         }
 
@@ -331,7 +347,9 @@ impl<T: System> System for ArcSystem<T> {
 }
 
 // SAFETY: todo
-unsafe impl<T: ReadOnlySystem> ReadOnlySystem for ArcSystem<T> {
+unsafe impl<T: ReadOnlySystem<In = (), Out = ()>, const FORWARD: bool> ReadOnlySystem
+    for RevSystem<T, FORWARD>
+{
     fn run_readonly(&mut self, input: SystemIn<'_, Self>, world: &World) -> Self::Out {
         self.shared
             .inner
@@ -373,10 +391,13 @@ impl<T: System> System for CommandsBackward<T> {
     fn has_deferred(&self) -> bool {
         self.has_deferred
     }
-    unsafe fn validate_param_unsafe(&mut self, world: UnsafeWorldCell) -> bool {
+    unsafe fn validate_param_unsafe(
+        &mut self,
+        world: UnsafeWorldCell,
+    ) -> Result<(), SystemParamValidationError> {
         // noop if has no deferred
         if !self.has_deferred {
-            return false;
+            return Err(SystemParamValidationError::skipped());
         }
         // keep symmetry
         self.shared
@@ -386,10 +407,10 @@ impl<T: System> System for CommandsBackward<T> {
             .system
             .validate_param_unsafe(world)
     }
-    fn validate_param(&mut self, world: &World) -> bool {
+    fn validate_param(&mut self, world: &World) -> Result<(), SystemParamValidationError> {
         // noop if has no deferred
         if !self.has_deferred {
-            return false;
+            return Err(SystemParamValidationError::skipped());
         }
         // keep symmetry
         self.shared
@@ -400,7 +421,6 @@ impl<T: System> System for CommandsBackward<T> {
             .validate_param(world)
     }
     unsafe fn run_unsafe(&mut self, _input: (), _world: UnsafeWorldCell) {}
-    fn run(&mut self, _input: (), _world: &mut World) {}
     fn apply_deferred(&mut self, world: &mut World) {
         let result = self
             .shared
@@ -532,10 +552,8 @@ mod test {
         .add_observer(observer)
         .add_observer(empty_observer)
         .update();
-        assert!(app
-            .world()
-            .resource::<UndoRedoBuffer>()
-            .undo_redo_is_empty());
+        let buffer = app.world().resource::<UndoRedoBuffer>();
+        assert!(buffer.is_empty(), "{buffer:?}");
     }
 
     #[test]
