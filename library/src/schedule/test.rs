@@ -220,7 +220,7 @@ fn non_exclusive_system_commands_only<const N: u8>(
 
 /// Will not add sync point
 fn exclusive_system<const N: u8>(world: &mut World) {
-    let direction = world.resource::<RevMeta>().direction();
+    let direction = world.resource::<RevMeta>().present_direction();
     world
         .resource_mut::<TestLog>()
         .0
@@ -278,7 +278,7 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
 
     // set up schedules
     let mut schedule = Schedule::new(FixedUpdate);
-    schedule.add_systems(RevMeta::run_rev_update);
+    schedule.add_systems(RevMeta::try_run_rev_update);
     let err = schedule.initialize(&mut world).err();
     assert!(err.is_none(), "FixedUpdate init fail: {:?}, config #{variant}, apply_final_deferred {apply_final_deferred}", err.unwrap());
     world.add_schedule(schedule);
