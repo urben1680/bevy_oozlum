@@ -35,8 +35,8 @@ use super::{AtomicSet, RevScheduleConfigs};
 pub(super) fn rev_system<T, In, Out, M1, M2>(system: T) -> RevScheduleConfigs<ScheduleSystem>
 where
     T: IntoSystem<In, Out, M1>,
-    RevSystem<T::System, false>: IntoScheduleConfigs<ScheduleSystem, M2>,
     RevSystem<T::System, true>: IntoScheduleConfigs<ScheduleSystem, M2>,
+    RevSystem<T::System, false>: IntoScheduleConfigs<ScheduleSystem, M2>,
     In: SystemInput,
 {
     let system = IntoSystem::into_system(system);
@@ -67,9 +67,9 @@ where
         name.extend([&sys_name, string]);
         name
     };
-    let fwd_sys_name = name(" (forward system)");
-    let bwd_sys_name = name(" (backward system)");
-    let bwd_cmd_name = name(" (backward commands)");
+    let forward_system_name = name(" (forward system)");
+    let backward_commands_name = name(" (backward commands)");
+    let backward_system_name = name(" (backward system)");
 
     let default_system_sets = system.default_system_sets();
 
@@ -86,7 +86,7 @@ where
 
     let forward_systems = RevSystem::<_, true> {
         shared: shared.clone(),
-        name: fwd_sys_name,
+        name: forward_system_name,
         tick: default(),
         is_send: default(),
         is_exclusive: default(),
@@ -101,7 +101,7 @@ where
 
     let backward_commands = CommandsBackward {
         shared: shared.clone(),
-        name: bwd_cmd_name,
+        name: backward_commands_name,
         tick: default(),
         has_deferred: default(),
         commands_err: false,
@@ -113,7 +113,7 @@ where
 
     let backward_systems = RevSystem::<_, false> {
         shared,
-        name: bwd_sys_name,
+        name: backward_system_name,
         tick: default(),
         is_send: default(),
         is_exclusive: default(),
@@ -311,7 +311,7 @@ impl<T: System, const FORWARD: bool> System for RevSystem<T, FORWARD> {
         unimplemented!("{} used as an observer", std::any::type_name::<T>())
     }
     fn initialize(&mut self, world: &mut World) {
-        let shared = initialize_arc_system(&mut self.shared, &mut self.tick, &self.name, world);
+        let shared = initialize_inner(&mut self.shared, &mut self.tick, &self.name, world);
         self.is_send = shared.system.is_send();
         self.is_exclusive = shared.system.is_exclusive();
         self.has_deferred = shared.system.has_deferred();
@@ -399,7 +399,7 @@ impl<T: System> System for CommandsBackward<T> {
         if !self.has_deferred {
             return Err(SystemParamValidationError::skipped());
         }
-        // keep symmetry
+        // keep symmetry?
         self.shared
             .inner
             .try_lock()
@@ -412,7 +412,7 @@ impl<T: System> System for CommandsBackward<T> {
         if !self.has_deferred {
             return Err(SystemParamValidationError::skipped());
         }
-        // keep symmetry
+        // keep symmetry?
         self.shared
             .inner
             .try_lock()
@@ -449,7 +449,7 @@ impl<T: System> System for CommandsBackward<T> {
         self.shared.default_system_sets.clone()
     }
     fn initialize(&mut self, world: &mut World) {
-        let shared = initialize_arc_system(&mut self.shared, &mut self.tick, &self.name, world);
+        let shared = initialize_inner(&mut self.shared, &mut self.tick, &self.name, world);
         self.has_deferred = shared.system.has_deferred();
     }
     fn update_archetype_component_access(&mut self, _world: UnsafeWorldCell) {}
@@ -460,7 +460,7 @@ unsafe impl<T: System> ReadOnlySystem for CommandsBackward<T> {
     fn run_readonly(&mut self, _input: (), _world: &World) {}
 }
 
-fn initialize_arc_system<'a, T: System>(
+fn initialize_inner<'a, T: System>(
     shared: &'a mut Arc<Shared<T>>,
     tick: &mut Tick,
     name: &String,

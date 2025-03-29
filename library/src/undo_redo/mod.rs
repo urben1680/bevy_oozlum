@@ -23,7 +23,7 @@ use bevy::{
 };
 
 use crate::{
-    log::{DenseTransitionsLog, FrameTransitionLog},
+    log::{DenseTransitionsLog, FrameTransitionLog, FrameTransitionLogError},
     meta::{RevDirection, RevMeta},
 };
 
@@ -299,12 +299,27 @@ pub(crate) struct UndoRedoLog {
 }
 
 #[derive(Debug)]
-#[allow(dead_code)]
 pub(crate) enum UndoRedoLogError {
-    RevMetaMissing { system_name: String },
-    UndoRedoBufferMissing { now: u64, system_name: String },
-    RevDirectionMismatch { now: u64, system_name: String },
-    OutOfLog { now: u64, system_name: String },
+    RevMetaMissing {
+        system_name: String,
+    },
+    UndoRedoBufferMissing {
+        now: u64,
+        system_name: String,
+    },
+    RevDirectionMismatch {
+        now: u64,
+        system_name: String,
+    },
+    MissedFrame {
+        frame: u64,
+        now: u64,
+        system_name: String,
+    },
+    OutOfLog {
+        now: u64,
+        system_name: String,
+    },
 }
 
 impl UndoRedoLog {
@@ -334,9 +349,14 @@ impl UndoRedoLog {
                         log.extend(buffer.0.drain(..).map(|boxed| boxed.undo_redo))
                     });
                 }
+                Ok(())
             }
             Some(RevDirection::FORWARD_LOG) => {
-                if !self.frame_log.forward_log(&meta) {
+                if !self
+                    .frame_log
+                    .try_forward_log(&meta)
+                    .map_err(map_frame_log_err(now, system_name))?
+                {
                     return Ok(());
                 };
                 let iter = self
@@ -351,15 +371,13 @@ impl UndoRedoLog {
                 for command in iter {
                     command.redo(world);
                 }
+                Ok(())
             }
-            _ => {
-                return Err(UndoRedoLogError::RevDirectionMismatch {
-                    now,
-                    system_name: system_name.to_owned(),
-                })
-            }
+            _ => Err(UndoRedoLogError::RevDirectionMismatch {
+                now,
+                system_name: system_name.to_owned(),
+            }),
         }
-        Ok(())
     }
     pub(crate) fn backward(
         &mut self,
@@ -379,7 +397,11 @@ impl UndoRedoLog {
                 system_name: system_name.to_owned(),
             });
         }
-        if !self.frame_log.backward_log(&meta) {
+        if !self
+            .frame_log
+            .try_backward_log(&meta)
+            .map_err(map_frame_log_err(now, system_name))?
+        {
             return Ok(());
         };
         let iter = self
@@ -402,15 +424,48 @@ impl UndoRedoLog {
 impl Display for UndoRedoLogError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::RevMetaMissing { system_name } => write!(f, "RevMeta was removed but is needed to update the UndoRedo log of reversible system {system_name}"),
-            Self::UndoRedoBufferMissing { now, system_name } => write!(f, "UndoRedoBuffer was removed at frame {now} but is needed to update the UndoRedo log of reversible system {system_name}"),
-            Self::RevDirectionMismatch { now, system_name } => write!(f, "RevDirection changed to an incorrect value at frame {now} before the update of the UndoRedo log of reversible system {system_name}"),
-            Self::OutOfLog { now, system_name } => write!(f, "the UndoRedo log of the reversible system {system_name} is in an invalid state at frame {now}"),
+            Self::RevMetaMissing { system_name } => write!(
+                f,
+                "RevMeta was removed but is needed to update the UndoRedo log of reversible system {system_name}"
+            ),
+            Self::UndoRedoBufferMissing { now, system_name } => write!(
+                f,
+                "UndoRedoBuffer was removed at frame {now} but is needed to update the UndoRedo log of reversible system {system_name}"
+            ),
+            Self::RevDirectionMismatch { now, system_name } => write!(
+                f,
+                "RevDirection changed to an incorrect value at frame {now} before the update of the UndoRedo log of reversible system {system_name}"
+            ),
+            Self::MissedFrame { frame, now, system_name } => write!(
+                f,
+                "the UndoRedo log of the reversible system {system_name} ran at {now} and missed to run at {frame}"
+            ),
+            Self::OutOfLog { now, system_name } => write!(
+                f,
+                "the UndoRedo log of the reversible system {system_name} is in an invalid state at frame {now}"
+            ),
         }
     }
 }
 
 impl Error for UndoRedoLogError {}
+
+fn map_frame_log_err(
+    now: u64,
+    system_name: &str,
+) -> impl FnOnce(FrameTransitionLogError) -> UndoRedoLogError + '_ {
+    move |err| match err {
+        FrameTransitionLogError::MissedFrame(frame) => UndoRedoLogError::MissedFrame {
+            frame,
+            now,
+            system_name: system_name.to_owned(),
+        },
+        FrameTransitionLogError::OutOfLog => UndoRedoLogError::OutOfLog {
+            now,
+            system_name: system_name.to_owned(),
+        },
+    }
+}
 
 struct RevDespawnSingle {
     entity: Entity,

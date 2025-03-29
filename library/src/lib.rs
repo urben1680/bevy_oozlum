@@ -20,8 +20,6 @@ Enhancements:
 - reduce todo!() and //todo and unwrap (in favor of expect)
 - #[inline]s
 - track_location and bevy_reflect feature (both are not documented?), rename feature serde -> serialize
-- deprecate Finalize
--- new tests
 - schedule tests with ApplyDeferred
 - migration markdown file as a checklist what to do for each bevy release
 - reversible commands traits of:

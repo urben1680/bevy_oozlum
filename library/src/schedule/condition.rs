@@ -5,8 +5,9 @@ use bevy::{
         archetype::ArchetypeComponentId,
         component::{ComponentId, Tick},
         query::Access,
+        resource::Resource,
         schedule::{Condition, InternedSystemSet, IntoScheduleConfigs, ScheduleConfigs},
-        system::{IntoSystem, ReadOnlySystem, System, SystemIn, SystemParamValidationError},
+        system::{IntoSystem, ReadOnlySystem, Res, System, SystemIn, SystemParamValidationError},
         world::{unsafe_world_cell::UnsafeWorldCell, DeferredWorld, World},
     },
     utils::default,
@@ -73,17 +74,48 @@ impl<T: ReadOnlySystem<Out = bool>> System for RevCondition<T> {
         self.condition.has_deferred()
     }
     fn initialize(&mut self, world: &mut World) {
+        /// Not everything of the bevy API that is needed here to update archetype_component_access is public,
+        /// so this is a rather complicated way to do it while trying to make it cheap after the first call.
+        /// The benefit is that this is agnostic to implementation details of how impl SystemParam for Res works.
+        #[derive(Resource)]
+        struct RevMetaAccesses {
+            component_access: Access<ComponentId>,
+            archarchetype_component_access: Access<ArchetypeComponentId>,
+        }
+
         self.condition.initialize(world);
         self.meta_id = Some(world.register_resource::<RevMeta>());
         self.component_access
             .extend(self.condition.component_access());
         self.archetype_component_access
             .extend(self.condition.archetype_component_access());
-        RevMeta::add_read_if_no_write(
-            world,
-            &mut self.component_access,
-            &mut self.archetype_component_access,
-        );
+
+        let access = match world.get_resource::<RevMetaAccesses>() {
+            Some(access) => access,
+            None => {
+                let mut system = IntoSystem::into_system(|_: Res<RevMeta>| {});
+                system.initialize(world);
+                world.insert_resource(RevMetaAccesses {
+                    component_access: system.component_access().clone(),
+                    archarchetype_component_access: system.archetype_component_access().clone(),
+                });
+                world.resource::<RevMetaAccesses>()
+            }
+        };
+
+        if access
+            .component_access
+            .is_compatible(&self.component_access)
+        {
+            self.component_access.extend(&access.component_access);
+        }
+        if access
+            .archarchetype_component_access
+            .is_compatible(&self.archetype_component_access)
+        {
+            self.archetype_component_access
+                .extend(&access.archarchetype_component_access);
+        }
     }
     unsafe fn validate_param_unsafe(
         &mut self,
@@ -103,7 +135,7 @@ impl<T: ReadOnlySystem<Out = bool>> System for RevCondition<T> {
         .and_then(RevMeta::get_present_direction);
 
         match direction {
-            None => Err(SystemParamValidationError::skipped()),
+            None => Err(SystemParamValidationError::invalid()),
             Some(RevDirection::NOT_LOG) => self.condition.validate_param_unsafe(world),
             _ => Ok(()),
         }

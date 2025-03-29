@@ -3,16 +3,14 @@ use std::{error::Error, fmt::Display};
 
 use bevy::{
     ecs::{
-        archetype::ArchetypeComponentId,
         change_detection::Mut,
         component::{ComponentId, Tick},
         entity::Entity,
         error::BevyError,
-        query::{Access, QueryState},
+        query::QueryState,
         resource::Resource,
         system::{
-            IntoSystem, Local, ReadOnlySystemParam, Res, System, SystemMeta, SystemParam,
-            SystemParamValidationError,
+            Local, ReadOnlySystemParam, Res, SystemMeta, SystemParam, SystemParamValidationError,
         },
         world::{unsafe_world_cell::UnsafeWorldCell, World},
     },
@@ -525,43 +523,6 @@ impl RevMeta {
             if self.past_len() >= max_world_states {
                 self.past_end = self.now + 1 - max_world_states;
             }
-        }
-    }
-    pub(crate) fn add_read_if_no_write(
-        world: &mut World,
-        component_access: &mut Access<ComponentId>,
-        archetype_component_access: &mut Access<ArchetypeComponentId>,
-    ) {
-        /// Not everything of the bevy API that is needed here to update archetype_component_access is public,
-        /// so this is a rather complicated way to do it while trying to make it cheap after the first call.
-        /// The benefit is that this is agnostic to implementation details of how impl SystemParam for Res works.
-        #[derive(Resource)]
-        struct RevMetaAccesses {
-            component_access: Access<ComponentId>,
-            archarchetype_component_access: Access<ArchetypeComponentId>,
-        }
-
-        let access = match world.get_resource::<RevMetaAccesses>() {
-            Some(access) => access,
-            None => {
-                let mut system = IntoSystem::into_system(|_: Res<Self>| {});
-                system.initialize(world);
-                world.insert_resource(RevMetaAccesses {
-                    component_access: system.component_access().clone(),
-                    archarchetype_component_access: system.archetype_component_access().clone(),
-                });
-                world.resource::<RevMetaAccesses>()
-            }
-        };
-
-        if access.component_access.is_compatible(&component_access) {
-            component_access.extend(&access.component_access);
-        }
-        if access
-            .archarchetype_component_access
-            .is_compatible(&archetype_component_access)
-        {
-            archetype_component_access.extend(&access.archarchetype_component_access);
         }
     }
 }
