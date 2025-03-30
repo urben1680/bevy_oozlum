@@ -10,7 +10,6 @@ use bevy::{
         bundle::{Bundle, BundleId, NoBundleEffect},
         component::{ComponentCloneBehavior, ComponentId, ComponentMutability},
         entity::{Entity, EntityCloner},
-        relationship::Relationship,
         resource::Resource,
         world::{EntityRef, EntityWorldMut, FromWorld, Mut, World},
     },
@@ -292,63 +291,63 @@ impl RevWorld for World {
 }
 
 #[derive(Resource, Default)]
-struct RelationshipBufferRes(HashMap<ComponentId, fn(&mut World, Entity, BufferAt)>);
+struct NonEntityBufferRes(HashMap<ComponentId, fn(&mut World, Entity, BufferAt)>);
 
-fn buffer_relationships(
+fn non_entity_buffer(
     world: &mut World,
     entity: Entity,
     at: BufferAt,
     components: &[ComponentId],
 ) {
-    if !world.contains_resource::<RelationshipBufferRes>() {
+    if !world.contains_resource::<NonEntityBufferRes>() {
         return;
     }
-    world.resource_scope(|world, relationship_buffers: Mut<RelationshipBufferRes>| {
+    world.resource_scope(|world, non_entity_buffers: Mut<NonEntityBufferRes>| {
         for component in components.iter() {
-            if let Some(c) = relationship_buffers.0.get(component) {
+            if let Some(c) = non_entity_buffers.0.get(component) {
                 c(world, entity, at);
             }
         }
     })
 }
 
-pub(crate) fn register_relationship_buffer<R: Relationship>(world: &mut World) {
-    struct RelationshipBuffer<R: Relationship> {
+pub(crate) fn register_non_entity_buffer<T: Component>(world: &mut World) {
+    struct NonEntityBuffer<T: Component> {
         entity: Entity,
-        relationship: Option<R>,
+        component: Option<T>,
     }
 
-    impl<R: Relationship> UndoRedo for RelationshipBuffer<R> {
+    impl<T: Component> UndoRedo for NonEntityBuffer<T> {
         fn undo(&mut self, world: &mut World) {
             let mut entity = world.entity_mut(self.entity);
-            if R::Mutability::MUTABLE {
-                let relationship = unsafe {
+            if T::Mutability::MUTABLE {
+                let component = unsafe {
                     // SAFETY: this if branch asserts the component is mutable
-                    entity.get_mut_assume_mutable::<R>()
+                    entity.get_mut_assume_mutable::<T>()
                 };
-                match relationship {
-                    Some(mut r1) => match self.relationship.as_mut() {
-                        Some(r2) => core::mem::swap(&mut *r1, r2),
-                        None => self.relationship = entity.take::<R>(),
+                match component {
+                    Some(mut c1) => match self.component.as_mut() {
+                        Some(c2) => core::mem::swap(&mut *c1, c2),
+                        None => self.component = entity.take::<T>(),
                     },
                     None => {
-                        if let Some(r2) = self.relationship.take() {
-                            entity.insert(r2);
+                        if let Some(c2) = self.component.take() {
+                            entity.insert(c2);
                         }
                     }
                 }
             } else {
-                match entity.take::<R>() {
-                    Some(mut r1) => match self.relationship.as_mut() {
-                        Some(r2) => {
-                            core::mem::swap(&mut r1, r2);
-                            entity.insert(r1);
+                match entity.take::<T>() {
+                    Some(mut c1) => match self.component.as_mut() {
+                        Some(c2) => {
+                            core::mem::swap(&mut c1, c2);
+                            entity.insert(c1);
                         }
-                        None => self.relationship = Some(r1),
+                        None => self.component = Some(c1),
                     },
                     None => {
-                        if let Some(r2) = self.relationship.take() {
-                            entity.insert(r2);
+                        if let Some(c2) = self.component.take() {
+                            entity.insert(c2);
                         }
                     }
                 }
@@ -359,20 +358,20 @@ pub(crate) fn register_relationship_buffer<R: Relationship>(world: &mut World) {
         }
     }
 
-    let component_id = world.register_component::<R>();
+    let component_id = world.register_component::<T>();
     world
-        .get_resource_or_init::<RelationshipBufferRes>()
+        .get_resource_or_init::<NonEntityBufferRes>()
         .0
         .entry(component_id)
         .or_insert_with(|| {
             |world, entity, at| {
-                let mut relationship = None;
+                let mut component = None;
                 if at != BufferAt::Undo {
-                    relationship = world.entity_mut(entity).take::<R>();
+                    component = world.entity_mut(entity).take::<T>();
                 }
-                let undo_redo = RelationshipBuffer {
+                let undo_redo = NonEntityBuffer {
                     entity,
-                    relationship,
+                    component,
                 };
                 world.buffer_undo_redo(undo_redo);
             }
@@ -430,14 +429,14 @@ fn buffer_bundle(
         BufferAt::Now => {
             let entities = buffer.toggle_state(world);
             let components = buffer.get_component_ids(world);
-            buffer_relationships(world, entity, at, &components);
+            non_entity_buffer(world, entity, at, &components);
             let out = buffer.move_bundle(world, entities, &components);
             world.buffer_undo_redo(buffer);
             Some(world.entity(out))
         }
         BufferAt::Undo => {
             let components = buffer.get_component_ids(world);
-            buffer_relationships(world, entity, at, &components);
+            non_entity_buffer(world, entity, at, &components);
             world.buffer_undo_redo(buffer);
             None
         }
@@ -445,7 +444,7 @@ fn buffer_bundle(
             let at_undo = buffer.clone(); // no buffer entity set yet so each spawns their own
             let entities = buffer.toggle_state(world);
             let components = buffer.get_component_ids(world);
-            buffer_relationships(world, entity, at, &components);
+            non_entity_buffer(world, entity, at, &components);
             let out = buffer.move_bundle(world, entities, &components);
             world.buffer_undo_redo(buffer).buffer_undo_redo(at_undo);
             Some(world.entity(out))

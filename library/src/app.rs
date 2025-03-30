@@ -1,13 +1,10 @@
 use bevy::{
     app::{App, FixedUpdate, Plugin},
     ecs::{
-        hierarchy::ChildOf,
-        relationship::Relationship,
-        schedule::{
+        component::Component, hierarchy::ChildOf, schedule::{
             InternedScheduleLabel, InternedSystemSet, IntoScheduleConfigs, ScheduleLabel,
             Schedules, SystemSet,
-        },
-        system::ScheduleSystem,
+        }, system::ScheduleSystem
     },
     utils::default,
 };
@@ -16,7 +13,7 @@ use crate::{
     meta::RevMeta,
     prelude::UndoRedoBuffer,
     schedule::{IntoRevScheduleConfigs, RevSchedule},
-    undo_redo::{register_relationship_buffer, DespawnAtOutOfLog},
+    undo_redo::{register_non_entity_buffer, DespawnAtOutOfLog},
 };
 
 pub trait RevApp {
@@ -30,7 +27,7 @@ pub trait RevApp {
         schedule: impl ScheduleLabel,
         sets: impl IntoRevScheduleConfigs<InternedSystemSet, Marker>,
     ) -> &mut Self;
-    fn register_relationship_buffer<R: Relationship>(&mut self);
+    fn register_non_entity_buffer<T: Component>(&mut self);
 }
 
 impl RevApp for App {
@@ -56,8 +53,9 @@ impl RevApp for App {
             .rev_configure_sets(sets);
         self
     }
-    fn register_relationship_buffer<R: Relationship>(&mut self) {
-        register_relationship_buffer::<R>(self.world_mut());
+    fn register_non_entity_buffer<T: Component>(&mut self) {
+        // as there is no pub interface to check if T was already used, this is an App method
+        register_non_entity_buffer::<T>(self.world_mut());
     }
 }
 
@@ -125,6 +123,6 @@ impl Plugin for RevSystemsPlugin {
         }
         app.register_disabling_component::<DespawnAtOutOfLog>();
         app.init_resource::<UndoRedoBuffer>();
-        app.register_relationship_buffer::<ChildOf>();
+        app.register_non_entity_buffer::<ChildOf>();
     }
 }
