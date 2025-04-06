@@ -10,9 +10,7 @@ use bevy::{
         archetype::ArchetypeComponentId,
         component::{ComponentId, Tick},
         query::Access,
-        schedule::{
-            ApplyDeferred, InternedSystemSet, IntoScheduleConfigs, Schedulable, ScheduleConfigs,
-        },
+        schedule::{ApplyDeferred, InternedSystemSet, IntoScheduleConfigs},
         system::{
             IntoSystem, ReadOnlySystem, ScheduleSystem, System, SystemIn, SystemInput,
             SystemParamValidationError,
@@ -44,22 +42,11 @@ where
     let unique_set = AtomicSet::new(sys_name.clone());
 
     if system.type_id() == TypeId::of::<ApplyDeferred>() {
-        fn empty_configs<T: Schedulable<GroupMetadata: Default>>() -> ScheduleConfigs<T> {
-            ScheduleConfigs::Configs {
-                configs: Vec::new(),
-                collective_conditions: Vec::new(),
-                metadata: default(),
-            }
-        }
-
-        return RevScheduleConfigs {
-            forward_systems: ApplyDeferred.into_configs(),
-            backward_commands: empty_configs(),
-            backward_systems: ApplyDeferred.in_set(unique_set),
-            backward_commands_systems: unique_set.into_configs(),
-            conditioned: empty_configs(),
-            conditions: Vec::new(),
-        };
+        return RevScheduleConfigs::from_apply_deferred(
+            ApplyDeferred.into_configs(),
+            ApplyDeferred.in_set(unique_set),
+            unique_set,
+        );
     }
 
     let name = |string: &str| {

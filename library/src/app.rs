@@ -1,10 +1,13 @@
 use bevy::{
     app::{App, FixedUpdate, Plugin},
     ecs::{
-        component::Component, hierarchy::ChildOf, schedule::{
+        component::Component,
+        hierarchy::ChildOf,
+        schedule::{
             InternedScheduleLabel, InternedSystemSet, IntoScheduleConfigs, ScheduleLabel,
             Schedules, SystemSet,
-        }, system::ScheduleSystem
+        },
+        system::ScheduleSystem,
     },
     utils::default,
 };

@@ -293,12 +293,7 @@ impl RevWorld for World {
 #[derive(Resource, Default)]
 struct NonEntityBufferRes(HashMap<ComponentId, fn(&mut World, Entity, BufferAt)>);
 
-fn non_entity_buffer(
-    world: &mut World,
-    entity: Entity,
-    at: BufferAt,
-    components: &[ComponentId],
-) {
+fn non_entity_buffer(world: &mut World, entity: Entity, at: BufferAt, components: &[ComponentId]) {
     if !world.contains_resource::<NonEntityBufferRes>() {
         return;
     }
@@ -369,10 +364,7 @@ pub(crate) fn register_non_entity_buffer<T: Component>(world: &mut World) {
                 if at != BufferAt::Undo {
                     component = world.entity_mut(entity).take::<T>();
                 }
-                let undo_redo = NonEntityBuffer {
-                    entity,
-                    component,
-                };
+                let undo_redo = NonEntityBuffer { entity, component };
                 world.buffer_undo_redo(undo_redo);
             }
         });

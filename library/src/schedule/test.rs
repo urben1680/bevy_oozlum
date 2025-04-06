@@ -14,7 +14,7 @@ use bevy::{
         event::Event,
         observer::Trigger,
         resource::Resource,
-        schedule::IntoSystemSet,
+        schedule::{ApplyDeferred, IntoSystemSet},
         system::{Commands, IntoSystem},
         world::{DeferredWorld, World},
     },
@@ -466,11 +466,9 @@ fn test_step(
     );
 }
 
-fn a_then_b(
-    a_exclusive: bool,
-    b_exclusive: bool,
-    ignore_deferred: bool,
-) -> Vec<Box<dyn for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>> {
+type ConfigsVec = Vec<Box<dyn for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>>;
+
+fn a_then_b(a_exclusive: bool, b_exclusive: bool, ignore_deferred: bool) -> ConfigsVec {
     fn noop<const N: u8>() {}
 
     let sys_a: fn() -> RevScheduleConfigs<ScheduleSystem>;
@@ -550,7 +548,7 @@ fn a_then_b(
         set_chain = |sys| sys.rev_chain();
     }
 
-    vec![
+    let mut configs: ConfigsVec = vec![
         // #0 system after system
         Box::new(move |schedule: &mut Schedule| {
             schedule.rev_add_systems((sys_a(), sys_after(sys_b(), set_sys_a)))
@@ -825,7 +823,43 @@ fn a_then_b(
                 ))
                 .rev_configure_sets(set_chain((TestSet(1), TestSet(2)).into_rev_configs()))
         }),
-    ]
+    ];
+
+    if !ignore_deferred {
+        let manual_apply_deferred: ConfigsVec = vec![
+            // #47 system chain explicit ApplyDeferred
+            Box::new(move |schedule: &mut Schedule| {
+                schedule
+                    .rev_add_systems((sys_a(), ApplyDeferred, sys_b()).rev_chain_ignore_deferred())
+            }),
+            /*
+            // #48 set chain explicit ApplyDeferred
+            Box::new(move |schedule: &mut Schedule| {
+                schedule
+                    .rev_add_systems((
+                        sys_a().rev_in_set(TestSet(1)),
+                        ApplyDeferred.rev_in_set(TestSet(2)),
+                        sys_b().rev_in_set(TestSet(3)),
+                    ))
+                    .rev_configure_sets((TestSet(1), TestSet(2), TestSet(3).rev_chain_ignore_deferred()))
+            }),
+            // #49 set chain explicit ApplyDeferred (flipped)
+            Box::new(move |schedule: &mut Schedule| {
+                schedule
+                    .rev_add_systems((
+                        sys_b().rev_in_set(TestSet(3)),
+                        ApplyDeferred.rev_in_set(TestSet(2)),
+                        sys_a().rev_in_set(TestSet(1)),
+                    ))
+                    .rev_configure_sets((TestSet(1), TestSet(2), TestSet(3).rev_chain_ignore_deferred()))
+            }),
+            */
+        ];
+
+        configs.extend(manual_apply_deferred);
+    }
+
+    configs
 }
 
 #[test]
