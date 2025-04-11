@@ -155,12 +155,12 @@ impl RevSchedule for Schedule {
 }
 
 fn set_base_sets(schedule: &mut Schedule) {
-    fn is_forward<const TRUE: bool>(meta: Option<Res<RevMeta>>) -> bool {
-        meta.and_then(|meta| meta.get_present_direction())
-            .is_some_and(|direction| direction.is_forward() == TRUE)
+    fn is_forward<const TRUTHY: bool>(meta: Option<Res<RevMeta>>) -> bool {
+        meta.and_then(|meta| meta.get_running_direction())
+            .is_some_and(|direction| direction.is_forward() == TRUTHY)
     }
 
-    // check needs to be on a non-pub set that is also not used by the `forward_set` function
+    // check needs to be on a non-pub set
     if !schedule.graph().contains_set(ForwardSet) {
         schedule.configure_sets(
             (
@@ -398,8 +398,8 @@ impl<T: Schedulable<Metadata = GraphInfo, GroupMetadata = Chain>> RevScheduleCon
             .in_set_inner(BwdCmdSysSet(set).intern());
     }
     fn from_apply_deferred(
-        forward_systems: ScheduleConfigs<T>,
-        backward_systems: ScheduleConfigs<T>,
+        apply_deferred: ScheduleConfigs<T>,
+        apply_deferred_in_unique_set: ScheduleConfigs<T>,
         unique_set: InternedSystemSet,
     ) -> Self {
         fn empty_configs<T: Schedulable<GroupMetadata = Chain>>() -> ScheduleConfigs<T> {
@@ -410,9 +410,9 @@ impl<T: Schedulable<Metadata = GraphInfo, GroupMetadata = Chain>> RevScheduleCon
             }
         }
         RevScheduleConfigs {
-            forward_systems,
-            backward_commands: empty_configs(),
-            backward_systems,
+            forward_systems: apply_deferred,
+            backward_commands: apply_deferred_in_unique_set,
+            backward_systems: empty_configs(),
             backward_commands_systems: unique_set.into_configs(),
             conditioned: empty_configs(),
             conditions: Vec::new(),
@@ -465,22 +465,18 @@ macro_rules! impl_into_rev_schedule_configs {
                 let ($($var,)*) = ($($var.into_rev_configs().split(),)*);
 
                 let forward_systems = ($($var.0.forward_systems,)*).into_configs();
-
                 let conditioned = ($($var.0.conditioned,)*).into_configs();
-
                 let conditions = [$($var.0.conditions,)*].into_iter().flatten().collect();
 
                 // let [var0, ..., varN]
                 //  : [BackwardConfigs, ..., BackwardConfigs]
                 //  = [varN.1, ..., var0.1];
-                let mut arr = [$($var.1,)*];
-                arr.reverse();
-                let [$($var,)*] = arr;
+                let mut backward_configs = [$($var.1,)*];
+                backward_configs.reverse();
+                let [$($var,)*] = backward_configs;
 
                 let backward_commands = ($($var.backward_commands,)*).into_configs();
-
                 let backward_systems = ($($var.backward_systems,)*).into_configs();
-
                 let backward_commands_systems = ($($var.backward_commands_systems,)*).into_configs();
 
                 RevScheduleConfigs {
