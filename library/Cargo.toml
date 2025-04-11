@@ -14,6 +14,7 @@ serde = { version = "1.0", features = ["derive"], optional = true }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 crossterm = "0.28"
+bevy_mod_debugdump = { git = "https://github.com/mnmaita/bevy_mod_debugdump.git", branch = "mnmaita/bevy-0.16" } # todo: remove before release
 
 [features]
 default = ["serde"] # todo: remove line before release
