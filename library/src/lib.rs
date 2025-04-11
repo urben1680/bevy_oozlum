@@ -21,7 +21,7 @@ Enhancements:
 - #[inline]s
 - track_location and bevy_reflect feature (both are not documented?), rename feature serde -> serialize
 - schedule tests with ApplyDeferred
-- migration markdown file as a checklist what to do for each bevy release
+- schedule tests with mixed chain + chain_ignore_deferred
 - reversible commands traits of:
 -- Commands
 -- EntityCommands
@@ -30,6 +30,8 @@ Enhancements:
 -- ChildSpawnerCommands
 
 Docs
+- make fake variadics docs work
+- check with optional features off that these still show up in docs
 - documentations
 -- point out determinism aspects of methods
 -- log contract (always valid, may go further into the past)
@@ -62,4 +64,44 @@ pub mod prelude {
         unique_for_location, BuffersUndoRedo as _, RevCommands as _, RevEntityWorldMut as _,
         RevWorld as _, UndoRedoBuffer, UndoRedoDirection, UndoRedoSwap,
     };
+}
+
+#[cfg(test)]
+mod test {
+    use bevy::prelude::*;
+
+    #[derive(PartialEq, Debug)]
+    enum Entry {
+        System(usize),
+        SyncPoint(usize),
+    }
+
+    #[derive(Resource, Default)]
+    struct Log(Vec<Entry>);
+
+    fn system<const N: usize>(mut res: ResMut<Log>, mut commands: Commands) {
+        res.0.push(Entry::System(N));
+        commands.queue(|world: &mut World| world.resource_mut::<Log>().0.push(Entry::SyncPoint(N)));
+    }
+
+    fn generate_log(reinsert_build_settings: bool) -> Vec<Entry> {
+        let mut world = World::new();
+        let mut schedule = Schedule::new(Update);
+        schedule.add_systems((system::<1>, system::<2>).chain_ignore_deferred());
+        if reinsert_build_settings {
+            let settings = schedule.get_build_settings();
+            schedule.set_build_settings(settings);
+        }
+        schedule.initialize(&mut world).unwrap();
+        world.init_resource::<Log>();
+        schedule.run(&mut world);
+        world.remove_resource::<Log>().unwrap().0
+    }
+
+    #[test]
+    fn test() {
+        let log1 = generate_log(false);
+        let log2 = generate_log(true);
+        assert_eq!(log1, log2);
+    }
 }
