@@ -121,40 +121,20 @@ impl<T: ReadOnlySystem<Out = bool>> System for RevCondition<T> {
         &mut self,
         world: UnsafeWorldCell,
     ) -> Result<(), SystemParamValidationError> {
-        let direction = unsafe {
-            // SAFETY:
-            // - Registered read access to resource
-            // - T cannot have write access because T: ReadOnlySystem
-            world.get_resource_by_id(self.meta_id.unwrap())
-        }
-        .map(|ptr| {
-            // SAFETY:
-            // todo
-            ptr.deref::<RevMeta>()
-        })
-        .and_then(RevMeta::get_present_direction);
-
-        match direction {
-            None => Err(SystemParamValidationError::invalid()),
-            Some(RevDirection::NOT_LOG) => self.condition.validate_param_unsafe(world),
-            _ => Ok(()),
-        }
-    }
-    fn validate_param(&mut self, world: &World) -> Result<(), SystemParamValidationError> {
-        let direction = world
+        // SAFETY:
+        // - Registered read access to resource
+        // - T cannot have write access because T: ReadOnlySystem
+        world
             .get_resource_by_id(self.meta_id.unwrap())
-            .map(|ptr| unsafe {
-                // SAFETY:
-                // todo
-                ptr.deref::<RevMeta>()
-            })
-            .and_then(RevMeta::get_present_direction);
-
-        match direction {
-            None => Err(SystemParamValidationError::invalid()),
-            Some(RevDirection::NOT_LOG) => self.condition.validate_param(world),
-            _ => Ok(()),
-        }
+            .ok_or(SystemParamValidationError::invalid::<Self>(
+                RevMeta::EXPECT_IN_WORLD,
+            ))?
+            .deref::<RevMeta>() // SAFETY: todo
+            .get_running_direction()
+            .ok_or(SystemParamValidationError::invalid::<Self>(
+                RevMeta::EXPECT_RUNNING,
+            ))
+            .and_then(|_| self.condition.validate_param_unsafe(world))
     }
     unsafe fn run_unsafe(&mut self, input: SystemIn<'_, Self>, world: UnsafeWorldCell) -> bool {
         let meta = unsafe {
@@ -167,7 +147,7 @@ impl<T: ReadOnlySystem<Out = bool>> System for RevCondition<T> {
         // SAFETY:
         // todo
         let meta = meta.deref::<RevMeta>();
-        match meta.present_direction() {
+        match meta.running_direction() {
             RevDirection::NOT_LOG => {
                 let out = self.condition.run_unsafe(input, world);
                 self.log.push_and_pop_past(
