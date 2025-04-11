@@ -90,7 +90,7 @@ impl RevDirection {
     pub fn is_present(self, world: &World) -> bool {
         world
             .get_resource::<RevMeta>()
-            .and_then(RevMeta::get_present_direction)
+            .and_then(RevMeta::get_running_direction)
             == Some(self)
     }
 }
@@ -112,9 +112,14 @@ unsafe impl SystemParam for RevDirection {
         world
             .get_resource_by_id(component_id)
             .map(|ptr| ptr.deref::<RevMeta>()) // SAFETY: todo
-            .and_then(RevMeta::get_present_direction)
+            .ok_or(SystemParamValidationError::invalid::<RevDirection>(
+                "RevMeta does not exist",
+            ))?
+            .get_running_direction()
+            .ok_or(SystemParamValidationError::invalid::<RevDirection>(
+                "RevMeta is not in a running direction",
+            ))
             .map(|_| ())
-            .ok_or(SystemParamValidationError::invalid())
     }
     unsafe fn get_param<'world, 'state>(
         state: &'state mut Self::State,
@@ -126,7 +131,7 @@ unsafe impl SystemParam for RevDirection {
             .get_resource_by_id(*state)
             .map(|ptr| ptr.deref::<RevMeta>())
             .unwrap()
-            .present_direction()
+            .running_direction()
     }
 }
 
@@ -183,7 +188,7 @@ impl InternalDirection {
             _ => *self,
         }
     }
-    fn get_present_direction(self) -> Option<RevDirection> {
+    fn get_running_direction(self) -> Option<RevDirection> {
         match self {
             Self::RunningForward => Some(RevDirection::NOT_LOG),
             Self::RunningForwardLog { .. } => Some(RevDirection::FORWARD_LOG),
@@ -191,7 +196,7 @@ impl InternalDirection {
             _ => None,
         }
     }
-    fn get_past_direction(self) -> Option<RevDirection> {
+    fn get_ran_direction(self) -> Option<RevDirection> {
         match self {
             Self::RanForward => Some(RevDirection::NOT_LOG),
             Self::RanForwardLog { .. } => Some(RevDirection::FORWARD_LOG),
@@ -242,6 +247,8 @@ impl Default for RevMeta {
 }
 
 impl RevMeta {
+    pub(crate) const EXPECT_IN_WORLD: &'static str = "RevMeta does not exist";
+    pub(crate) const EXPECT_RUNNING: &'static str = "RevMeta is not in a running direction";
     pub const fn new(max_world_states: Option<NonZeroUsize>, now: u64, paused: bool) -> Self {
         Self {
             max_world_states,
@@ -255,14 +262,14 @@ impl RevMeta {
             queue: None,
         }
     }
-    pub fn present_direction(&self) -> RevDirection {
-        self.get_present_direction().expect("todo")
+    pub fn running_direction(&self) -> RevDirection {
+        self.get_running_direction().expect(Self::EXPECT_RUNNING)
     }
-    pub fn get_present_direction(&self) -> Option<RevDirection> {
-        self.direction.get_present_direction()
+    pub fn get_running_direction(&self) -> Option<RevDirection> {
+        self.direction.get_running_direction()
     }
-    pub fn get_past_direction(&self) -> Option<RevDirection> {
-        self.direction.get_past_direction()
+    pub fn get_ran_direction(&self) -> Option<RevDirection> {
+        self.direction.get_ran_direction()
     }
     pub fn paused(&self) -> bool {
         self.direction == InternalDirection::Pause
@@ -389,7 +396,7 @@ impl RevMeta {
                 })?;
             }
 
-            if meta.get_present_direction().is_some() {
+            if meta.get_running_direction().is_some() {
                 Err(TryRunRevUpdateError::UnexpectedInitialRunning(meta.clone()))?;
             }
 
@@ -403,7 +410,7 @@ impl RevMeta {
 
                 match result {
                     Ok(()) => {
-                        if meta.present_direction() == RevDirection::NOT_LOG {
+                        if meta.running_direction() == RevDirection::NOT_LOG {
                             out_of_log_buffers.extend(
                                 buffers
                                     .iter(world)
@@ -465,11 +472,11 @@ impl RevMeta {
     /// If this is called recursively in the closure and the closure is called because the updated direction is not paused,
     /// this will panic. The same can happen if `RevMeta` is in an invalid state, cloned from inside the closure for example.
     pub fn update<Out>(&mut self, c: impl FnOnce(&mut Self) -> Out) -> Option<Out> {
-        if self.get_present_direction().is_some() {
+        if self.get_running_direction().is_some() {
             panic!("unexpected initial direction, expected pause or ran variant, do not call this method recursively\n{self:#?}");
         }
         self.update_internal();
-        self.get_present_direction().map(|_| {
+        self.get_running_direction().map(|_| {
             let out = c(self);
             self.direction.end_running();
             out
@@ -486,7 +493,7 @@ impl RevMeta {
         match self.queue.take() {
             Some(queue) => {
                 self.direction = queue;
-                self.now = match self.get_present_direction() {
+                self.now = match self.get_running_direction() {
                     Some(RevDirection::NOT_LOG) => return self.update_forward(),
                     Some(RevDirection::FORWARD_LOG) => self.now + 1,
                     Some(RevDirection::BackwardLog) => self.now - 1,
@@ -602,7 +609,7 @@ mod test {
         assert_eq!(meta.now, 1);
 
         meta.update_internal();
-        assert_eq!(meta.get_present_direction(), None);
+        assert_eq!(meta.get_running_direction(), None);
         assert_eq!(meta.now, 1);
     }
 
@@ -627,7 +634,7 @@ mod test {
         assert_eq!(meta.now, 0);
 
         meta.update_internal();
-        assert_eq!(meta.get_present_direction(), None);
+        assert_eq!(meta.get_running_direction(), None);
         assert_eq!(meta.now, 0);
     }
 
