@@ -284,8 +284,8 @@ impl<U, const AMOUNT_BYTES: usize> EntryAmount<U, AMOUNT_BYTES> {
     /// # let mut log = library::log::DenseStatesLog::new([0], 0);
     /// # let (mut future_states, future_entry_amounts) = log.drain_future();
     /// for entry_amount in future_entry_amounts {
+    ///     let entry = entry_amount.entry;
     ///     for future_states in future_states.by_ref().take(entry_amount.amount()) {
-    ///         let entry = entry_amount.entry;
     ///         // logic
     ///     }
     /// }
