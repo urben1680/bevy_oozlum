@@ -214,7 +214,9 @@ impl<T: System, const FORWARD: bool> System for RevSystem<T, FORWARD> {
     ) -> Result<(), SystemParamValidationError> {
         // commands log needs to read RevMeta
         if self.is_exclusive && world.get_resource::<RevMeta>().is_none() {
-            return Err(SystemParamValidationError::invalid());
+            return Err(SystemParamValidationError::invalid::<Self>(
+                RevMeta::EXPECT_IN_WORLD,
+            ));
         }
         self.shared
             .inner
@@ -226,7 +228,9 @@ impl<T: System, const FORWARD: bool> System for RevSystem<T, FORWARD> {
     fn validate_param(&mut self, world: &World) -> Result<(), SystemParamValidationError> {
         // commands log needs to read RevMeta
         if self.is_exclusive && !world.contains_resource::<RevMeta>() {
-            return Err(SystemParamValidationError::invalid());
+            return Err(SystemParamValidationError::invalid::<Self>(
+                RevMeta::EXPECT_IN_WORLD,
+            ));
         }
         self.shared
             .inner
@@ -384,7 +388,9 @@ impl<T: System> System for CommandsBackward<T> {
     ) -> Result<(), SystemParamValidationError> {
         // noop if has no deferred
         if !self.has_deferred {
-            return Err(SystemParamValidationError::skipped());
+            return Err(SystemParamValidationError::skipped::<Self>(
+                "system has no deferred",
+            ));
         }
         // keep symmetry?
         self.shared
@@ -397,7 +403,9 @@ impl<T: System> System for CommandsBackward<T> {
     fn validate_param(&mut self, world: &World) -> Result<(), SystemParamValidationError> {
         // noop if has no deferred
         if !self.has_deferred {
-            return Err(SystemParamValidationError::skipped());
+            return Err(SystemParamValidationError::skipped::<Self>(
+                "system has no deferred",
+            ));
         }
         // keep symmetry?
         self.shared
@@ -450,7 +458,7 @@ unsafe impl<T: System> ReadOnlySystem for CommandsBackward<T> {
 fn initialize_inner<'a, T: System>(
     shared: &'a mut Arc<Shared<T>>,
     tick: &mut Tick,
-    name: &String,
+    name: &str,
     world: &mut World,
 ) -> MutexGuard<'a, Inner<T>> {
     world.init_resource::<UndoRedoBuffer>();
@@ -463,7 +471,7 @@ fn initialize_inner<'a, T: System>(
     shared
 }
 
-fn expect_lock<T: Debug, Out>(name: &String) -> impl FnOnce(T) -> Out + '_ {
+fn expect_lock<T: Debug, Out>(name: &str) -> impl FnOnce(T) -> Out + '_ {
     move |err| panic!("Could not access reversible system {name} because of {err:#?}")
 }
 
