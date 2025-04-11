@@ -7,7 +7,7 @@ use std::{
 };
 
 use bevy::{
-    app::FixedUpdate,
+    app::{App, FixedUpdate},
     ecs::{
         change_detection::{Res, ResMut},
         component::Component,
@@ -17,16 +17,6 @@ use bevy::{
         schedule::{ApplyDeferred, IntoSystemSet},
         system::{Commands, IntoSystem},
         world::{DeferredWorld, World},
-    },
-    log::{
-        tracing::{dispatcher::get_default, Event as TraceEvent, Subscriber},
-        tracing_subscriber::{
-            layer::{Context, SubscriberExt},
-            registry,
-            util::SubscriberInitExt,
-            Layer,
-        },
-        Level,
     },
 };
 
@@ -40,14 +30,26 @@ use super::*;
 
 /// Make `error!` and `error_once!` cause panics.
 pub(super) fn panic_on_error_events() {
+    use bevy::log::{
+        tracing::{dispatcher::get_default, Event, Subscriber},
+        tracing_subscriber::{
+            layer::{Context, SubscriberExt},
+            registry,
+            util::SubscriberInitExt,
+            Layer,
+        },
+        Level,
+    };
+
     struct PanicOnError;
     impl<S: Subscriber> Layer<S> for PanicOnError {
-        fn on_event(&self, event: &TraceEvent, _ctx: Context<S>) {
+        fn on_event(&self, event: &Event, _ctx: Context<S>) {
             if *event.metadata().level() == Level::ERROR {
                 panic!("{event:#?}")
             }
         }
     }
+
     if registry().with(PanicOnError).try_init().is_err() {
         get_default(|subscriber| {
             assert!(subscriber.downcast_ref::<PanicOnError>().is_some());
@@ -58,9 +60,10 @@ pub(super) fn panic_on_error_events() {
 #[derive(SystemSet, Copy, Clone, Debug, Hash, PartialEq, Eq)]
 struct TestSet(u8);
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 enum Test<T> {
-    Sys(T),
+    NonExclusiveSys(T),
+    ExclusiveSys(T),
 
     SysObsv(T),
     SysObsvObsv(T),
@@ -76,9 +79,10 @@ enum Test<T> {
 }
 
 impl<T> Test<T> {
-    fn map<U>(self, map: impl Fn(T) -> U) -> Test<U> {
+    fn map<U>(self, map: impl FnOnce(T) -> U) -> Test<U> {
         match self {
-            Test::Sys(value) => Test::Sys(map(value)),
+            Test::NonExclusiveSys(value) => Test::NonExclusiveSys(map(value)),
+            Test::ExclusiveSys(value) => Test::ExclusiveSys(map(value)),
 
             Test::SysObsv(value) => Test::SysObsv(map(value)),
             Test::SysObsvObsv(value) => Test::SysObsvObsv(map(value)),
@@ -110,31 +114,68 @@ impl UndoRedo for Test<u8> {
     }
 }
 
-impl Debug for Test<(u8, RevDirection)> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Sys((i, _)) => write!(f, "Sys({i})"),
-
-            Self::SysObsv((i, _)) => write!(f, "Obsv({i})"),
-            Self::SysObsvObsv((i, _)) => write!(f, "ObsvObsv({i})"),
-            Self::SysObsvCmd((i, _)) => write!(f, "ObsvCmd({i})"),
-
-            Self::SysHook((i, _)) => write!(f, "Hook({i})"),
-            Self::SysHookObsv((i, _)) => write!(f, "HookObsv({i})"),
-            Self::SysHookCmd((i, _)) => write!(f, "HookCmd({i})"),
-
-            Self::SysCmd((i, _)) => write!(f, "Cmd({i})"),
-            Self::SysCmdHook((i, _)) => write!(f, "CmdHook({i})"),
-            Self::SysCmdObsv((i, _)) => write!(f, "CmdObsv({i})"),
-        }
-    }
+#[derive(Clone, Copy, Debug)]
+enum TestBundle {
+    NonExclusiveSystem(u8),
+    ExclusiveSystem(u8),
+    NonExclusiveSyncPoint(u8),
 }
 
-#[derive(Clone, Copy)]
-enum TestBundle {
-    NonExclusive(u8),
-    NonExclusiveSyncPoint(u8),
-    Exclusive(u8),
+impl TestBundle {
+    fn from_tests(
+        tests: Vec<Test<(u8, RevDirection)>>,
+        direction: RevDirection,
+    ) -> Vec<Result<Self, Test<(u8, RevDirection)>>> {
+        let mut variants: [(_, Vec<_>); 3] = [
+            TestBundle::NonExclusiveSystem(0),
+            TestBundle::ExclusiveSystem(0),
+            TestBundle::NonExclusiveSyncPoint(0),
+        ]
+        .map(|bundle| (bundle, bundle.into_iter().collect()));
+
+        if !direction.is_forward() {
+            for expected in variants.iter_mut() {
+                expected.1.reverse();
+            }
+        }
+
+        let mut i = 0;
+
+        let mut results = Vec::with_capacity(tests.len());
+
+        'test: while i < tests.len() {
+            'variant: for (bundle, expected) in &variants {
+                let n = &mut None;
+                for (&expected, &test) in expected.iter().zip(&tests[i..]) {
+                    test.map(|(actual_n, actual_direction)| {
+                        *n = match *n {
+                            _ if direction != actual_direction => None,
+                            None => Some(actual_n),
+                            Some(expected_n) => n.filter(|_| expected_n == actual_n),
+                        }
+                    });
+                    if n.is_none_or(|n| test != expected.map(|_| (n, direction))) {
+                        continue 'variant;
+                    }
+                }
+                i += expected.len();
+                let ok = match bundle {
+                    TestBundle::NonExclusiveSystem(_) => TestBundle::NonExclusiveSystem(n.unwrap()),
+                    TestBundle::ExclusiveSystem(_) => TestBundle::ExclusiveSystem(n.unwrap()),
+                    TestBundle::NonExclusiveSyncPoint(_) => {
+                        TestBundle::NonExclusiveSyncPoint(n.unwrap())
+                    }
+                };
+                results.push(Ok(ok));
+                continue 'test;
+            }
+            let err = tests[i];
+            i += 1;
+            results.push(Err(err));
+        }
+
+        results
+    }
 }
 
 impl IntoIterator for TestBundle {
@@ -142,7 +183,16 @@ impl IntoIterator for TestBundle {
     type Item = Test<u8>;
     fn into_iter(self) -> Self::IntoIter {
         match self {
-            Self::NonExclusive(n) => vec![Test::Sys(n)],
+            Self::NonExclusiveSystem(n) => vec![Test::NonExclusiveSys(n)],
+            Self::ExclusiveSystem(n) => vec![
+                Test::ExclusiveSys(n),
+                Test::SysObsv(n),
+                Test::SysObsvObsv(n),
+                Test::SysObsvCmd(n),
+                Test::SysHook(n),
+                Test::SysHookObsv(n),
+                Test::SysHookCmd(n),
+            ],
             Self::NonExclusiveSyncPoint(n) => vec![
                 Test::SysObsv(n),
                 Test::SysObsvObsv(n),
@@ -153,15 +203,6 @@ impl IntoIterator for TestBundle {
                 Test::SysCmdHook(n),
                 Test::SysCmdObsv(n),
                 Test::SysCmd(n),
-            ],
-            Self::Exclusive(n) => vec![
-                Test::Sys(n),
-                Test::SysObsv(n),
-                Test::SysObsvObsv(n),
-                Test::SysObsvCmd(n),
-                Test::SysHook(n),
-                Test::SysHookObsv(n),
-                Test::SysHookCmd(n),
             ],
         }
         .into_iter()
@@ -189,13 +230,12 @@ struct SysObsvObsv(u8);
 #[derive(Event, Clone)]
 struct SysCmdObsv(u8);
 
-/// Will add sync point
 fn non_exclusive_system<const N: u8>(
     direction: RevDirection,
     mut log: ResMut<TestLog>,
     commands: Commands,
 ) {
-    log.0.push(Test::Sys((N, direction)));
+    log.0.push(Test::NonExclusiveSys((N, direction)));
 
     non_exclusive_system_commands_only::<N>(direction, commands);
 }
@@ -220,11 +260,11 @@ fn non_exclusive_system_commands_only<const N: u8>(
 
 /// Will not add sync point
 fn exclusive_system<const N: u8>(world: &mut World) {
-    let direction = world.resource::<RevMeta>().present_direction();
+    let direction = world.resource::<RevMeta>().running_direction();
     world
         .resource_mut::<TestLog>()
         .0
-        .push(Test::Sys((N, direction)));
+        .push(Test::ExclusiveSys((N, direction)));
     if direction != RevDirection::NOT_LOG {
         return;
     }
@@ -280,16 +320,24 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
     let mut schedule = Schedule::new(FixedUpdate);
     schedule.add_systems(RevMeta::try_run_rev_update);
     let err = schedule.initialize(&mut world).err();
-    assert!(err.is_none(), "FixedUpdate init fail: {:?}, config #{variant}, apply_final_deferred {apply_final_deferred}", err.unwrap());
+    assert!(err.is_none(), "FixedUpdate init fail: {:?}\nconfig: {variant}\napply_final_deferred: {apply_final_deferred}", err.unwrap());
     world.add_schedule(schedule);
 
     let mut schedule = Schedule::new(RevUpdate);
     config(&mut schedule);
+    /* //todo: uncomment when https://github.com/bevyengine/bevy/issues/18790 is fixed
+    let settings = schedule.get_build_settings();
+    schedule
+        .set_build_settings(ScheduleBuildSettings {
+            hierarchy_detection: bevy::ecs::schedule::LogLevel::Error,
+            ..settings
+        });
+    */
     schedule.set_apply_final_deferred(apply_final_deferred);
     let err = schedule.initialize(&mut world).err();
     assert!(
         err.is_none(),
-        "RevUpdate init fail: {:?}, config #{variant}, apply_final_deferred {apply_final_deferred}",
+        "RevUpdate init fail: {:?}\nconfig: {variant}\napply_final_deferred: {apply_final_deferred}",
         err.unwrap()
     );
     world.add_schedule(schedule);
@@ -403,6 +451,7 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
         test_step(
             &mut world,
             variant,
+            config,
             apply_final_deferred,
             step,
             expected,
@@ -418,6 +467,7 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
         test_step(
             &mut world,
             variant,
+            config,
             apply_final_deferred,
             step,
             expected,
@@ -432,6 +482,7 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
         test_step(
             &mut world,
             variant,
+            config,
             apply_final_deferred,
             step,
             expected,
@@ -440,30 +491,44 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
     }
 }
 
-fn test_step(
+fn test_step<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
     world: &mut World,
     variant: usize,
+    config: &C,
     apply_final_deferred: bool,
     step: usize,
     expected: &Vec<TestBundle>,
     direction: RevDirection,
 ) {
     world.run_schedule(FixedUpdate);
-    let actual = take(&mut world.resource_mut::<TestLog>().0);
+    let actual_tests = take(&mut world.resource_mut::<TestLog>().0);
     let iter = expected
         .iter()
         .flat_map(|bundle| bundle.into_iter())
         .map(|test| test.map(|n| (n, direction)));
+    let expected_tests: Vec<_> = if direction.is_forward() {
+        iter.collect()
+    } else {
+        iter.rev().collect()
+    };
+    if actual_tests == expected_tests {
+        // test step successful
+        return;
+    }
+    let actual = TestBundle::from_tests(actual_tests, direction);
+    let iter = expected.into_iter().map(|ok| Result::<_, ()>::Ok(ok));
     let expected: Vec<_> = if direction.is_forward() {
         iter.collect()
     } else {
         iter.rev().collect()
     };
-    assert_eq!(
-        actual,
-        expected,
-        "log mismatch! config #{variant}, apply_final_deferred {apply_final_deferred}, {direction:?}, step #{step}"
-    );
+    let mut app = App::new();
+    let mut schedule = Schedule::new(RevUpdate);
+    config(&mut schedule);
+    schedule.set_apply_final_deferred(apply_final_deferred);
+    app.add_schedule(schedule);
+    bevy_mod_debugdump::print_schedule_graph(&mut app, RevUpdate);
+    panic!("expected: {expected:?}\nactual:   {actual:?}\nconfig: {variant}\napply_final_deferred: {apply_final_deferred}\ndirection: {direction:?}\nstep: {step}")
 }
 
 type ConfigsVec = Vec<Box<dyn for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>>;
@@ -625,21 +690,45 @@ fn a_then_b(a_exclusive: bool, b_exclusive: bool, ignore_deferred: bool) -> Conf
                 .rev_add_systems((sys_b().rev_in_set(TestSet(2)), sys_a_pipe_noop()))
                 .rev_configure_sets(set_after(TestSet(2).into_rev_configs(), set_noop_a))
         }),
-        // #16 system after set
+        // #16 set after noop-system pipe by system
+        Box::new(move |schedule: &mut Schedule| {
+            schedule
+                .rev_add_systems((noop_pipe_sys_a(), sys_b().rev_in_set(TestSet(2))))
+                .rev_configure_sets(set_after(TestSet(2).into_rev_configs(), set_sys_a))
+        }),
+        // #17 set after noop-system pipe by system (flipped)
+        Box::new(move |schedule: &mut Schedule| {
+            schedule
+                .rev_add_systems((sys_b().rev_in_set(TestSet(2)), noop_pipe_sys_a()))
+                .rev_configure_sets(set_after(TestSet(2).into_rev_configs(), set_sys_a))
+        }),
+        // #18 set after noop-system pipe by noop
+        Box::new(move |schedule: &mut Schedule| {
+            schedule
+                .rev_add_systems((noop_pipe_sys_a(), sys_b().rev_in_set(TestSet(2))))
+                .rev_configure_sets(set_after(TestSet(2).into_rev_configs(), set_noop_a))
+        }),
+        // #19 set after noop-system pipe by noop (flipped)
+        Box::new(move |schedule: &mut Schedule| {
+            schedule
+                .rev_add_systems((sys_b().rev_in_set(TestSet(2)), noop_pipe_sys_a()))
+                .rev_configure_sets(set_after(TestSet(2).into_rev_configs(), set_noop_a))
+        }),
+        // #20 system after set
         Box::new(move |schedule: &mut Schedule| {
             schedule.rev_add_systems((
                 sys_a().rev_in_set(TestSet(1)),
                 sys_after(sys_b(), TestSet(1).intern()),
             ))
         }),
-        // #17 system after set (flipped)
+        // #21 system after set (flipped)
         Box::new(move |schedule: &mut Schedule| {
             schedule.rev_add_systems((
                 sys_after(sys_b(), TestSet(1).intern()),
                 sys_a().rev_in_set(TestSet(1)),
             ))
         }),
-        // #18 set after set
+        // #22 set after set
         Box::new(move |schedule: &mut Schedule| {
             schedule
                 .rev_add_systems((
@@ -651,7 +740,7 @@ fn a_then_b(a_exclusive: bool, b_exclusive: bool, ignore_deferred: bool) -> Conf
                     TestSet(1).intern(),
                 ))
         }),
-        // #19 set after set (flipped)
+        // #23 set after set (flipped)
         Box::new(move |schedule: &mut Schedule| {
             schedule
                 .rev_add_systems((
@@ -663,121 +752,121 @@ fn a_then_b(a_exclusive: bool, b_exclusive: bool, ignore_deferred: bool) -> Conf
                     TestSet(1).intern(),
                 ))
         }),
-        // #20 system before system
+        // #24 system before system
         Box::new(move |schedule: &mut Schedule| {
             schedule.rev_add_systems((sys_before(sys_a(), set_sys_b), sys_b()))
         }),
-        // #21 system before system (flipped)
+        // #25 system before system (flipped)
         Box::new(move |schedule: &mut Schedule| {
             schedule.rev_add_systems((sys_b(), sys_before(sys_a(), set_sys_b)))
         }),
-        // #22 system before system-noop pipe by system
+        // #26 system before system-noop pipe by system
         Box::new(move |schedule: &mut Schedule| {
             schedule.rev_add_systems((sys_before(sys_a(), set_sys_b), sys_b_pipe_noop()))
         }),
-        // #23 system before system-noop pipe by system (flipped)
+        // #27 system before system-noop pipe by system (flipped)
         Box::new(move |schedule: &mut Schedule| {
             schedule.rev_add_systems((sys_b_pipe_noop(), sys_before(sys_a(), set_sys_b)))
         }),
-        // #24 system before system-noop pipe by noop
+        // #28 system before system-noop pipe by noop
         Box::new(move |schedule: &mut Schedule| {
             schedule.rev_add_systems((sys_before(sys_a(), set_noop_b), sys_b_pipe_noop()))
         }),
-        // #25 system before system-noop pipe by noop (flipped)
+        // #29 system before system-noop pipe by noop (flipped)
         Box::new(move |schedule: &mut Schedule| {
             schedule.rev_add_systems((sys_b_pipe_noop(), sys_before(sys_a(), set_noop_b)))
         }),
-        // #26 system before noop-system pipe by system
+        // #30 system before noop-system pipe by system
         Box::new(move |schedule: &mut Schedule| {
             schedule.rev_add_systems((sys_before(sys_a(), set_sys_b), noop_pipe_sys_b()))
         }),
-        // #27 system before noop-system pipe by system (flipped)
+        // #31 system before noop-system pipe by system (flipped)
         Box::new(move |schedule: &mut Schedule| {
             schedule.rev_add_systems((noop_pipe_sys_b(), sys_before(sys_a(), set_sys_b)))
         }),
-        // #28 system before noop-system pipe by noop
+        // #32 system before noop-system pipe by noop
         Box::new(move |schedule: &mut Schedule| {
             schedule.rev_add_systems((sys_before(sys_a(), set_noop_b), noop_pipe_sys_b()))
         }),
-        // #29 system before noop-system pipe by noop (flipped)
+        // #33 system before noop-system pipe by noop (flipped)
         Box::new(move |schedule: &mut Schedule| {
             schedule.rev_add_systems((noop_pipe_sys_b(), sys_before(sys_a(), set_noop_b)))
         }),
-        // #30 set before system
+        // #34 set before system
         Box::new(move |schedule: &mut Schedule| {
             schedule
                 .rev_add_systems((sys_a().rev_in_set(TestSet(1)), sys_b()))
                 .rev_configure_sets(set_before(TestSet(1).into_rev_configs(), set_sys_b))
         }),
-        // #31 set before system (flipped)
+        // #35 set before system (flipped)
         Box::new(move |schedule: &mut Schedule| {
             schedule
                 .rev_add_systems((sys_b(), sys_a().rev_in_set(TestSet(1))))
                 .rev_configure_sets(set_before(TestSet(1).into_rev_configs(), set_sys_b))
         }),
-        // #32 set before system-noop pipe by system
+        // #36 set before system-noop pipe by system
         Box::new(move |schedule: &mut Schedule| {
             schedule
                 .rev_add_systems((sys_a().rev_in_set(TestSet(1)), sys_b_pipe_noop()))
                 .rev_configure_sets(set_before(TestSet(1).into_rev_configs(), set_sys_b))
         }),
-        // #33 set before system-noop pipe by system (flipped)
+        // #37 set before system-noop pipe by system (flipped)
         Box::new(move |schedule: &mut Schedule| {
             schedule
                 .rev_add_systems((sys_b_pipe_noop(), sys_a().rev_in_set(TestSet(1))))
                 .rev_configure_sets(set_before(TestSet(1).into_rev_configs(), set_sys_b))
         }),
-        // #34 set before system-noop pipe by noop
+        // #38 set before system-noop pipe by noop
         Box::new(move |schedule: &mut Schedule| {
             schedule
                 .rev_add_systems((sys_a().rev_in_set(TestSet(1)), sys_b_pipe_noop()))
                 .rev_configure_sets(set_before(TestSet(1).into_rev_configs(), set_noop_b))
         }),
-        // #35 set before system-noop pipe by noop (flipped)
+        // #39 set before system-noop pipe by noop (flipped)
         Box::new(move |schedule: &mut Schedule| {
             schedule
                 .rev_add_systems((sys_b_pipe_noop(), sys_a().rev_in_set(TestSet(1))))
                 .rev_configure_sets(set_before(TestSet(1).into_rev_configs(), set_noop_b))
         }),
-        // #36 set before noop-system pipe by system
+        // #40 set before noop-system pipe by system
         Box::new(move |schedule: &mut Schedule| {
             schedule
                 .rev_add_systems((sys_a().rev_in_set(TestSet(1)), noop_pipe_sys_b()))
                 .rev_configure_sets(set_before(TestSet(1).into_rev_configs(), set_sys_b))
         }),
-        // #37 set before noop-system pipe by system (flipped)
+        // #41 set before noop-system pipe by system (flipped)
         Box::new(move |schedule: &mut Schedule| {
             schedule
                 .rev_add_systems((noop_pipe_sys_b(), sys_a().rev_in_set(TestSet(1))))
                 .rev_configure_sets(set_before(TestSet(1).into_rev_configs(), set_sys_b))
         }),
-        // #38 set before noop-system pipe by noop
+        // #42 set before noop-system pipe by noop
         Box::new(move |schedule: &mut Schedule| {
             schedule
                 .rev_add_systems((sys_a().rev_in_set(TestSet(1)), noop_pipe_sys_b()))
                 .rev_configure_sets(set_before(TestSet(1).into_rev_configs(), set_noop_b))
         }),
-        // #39 set before noop-system pipe by noop (flipped)
+        // #43 set before noop-system pipe by noop (flipped)
         Box::new(move |schedule: &mut Schedule| {
             schedule
                 .rev_add_systems((noop_pipe_sys_b(), sys_a().rev_in_set(TestSet(1))))
                 .rev_configure_sets(set_before(TestSet(1).into_rev_configs(), set_noop_b))
         }),
-        // #40 system before set
+        // #44 system before set
         Box::new(move |schedule: &mut Schedule| {
             schedule.rev_add_systems((
                 sys_before(sys_a(), TestSet(2).intern()),
                 sys_b().rev_in_set(TestSet(2)),
             ))
         }),
-        // #41 system before set (flipped)
+        // #45 system before set (flipped)
         Box::new(move |schedule: &mut Schedule| {
             schedule.rev_add_systems((
                 sys_b().rev_in_set(TestSet(2)),
                 sys_before(sys_a(), TestSet(2).intern()),
             ))
         }),
-        // #42 set before set
+        // #46 set before set
         Box::new(move |schedule: &mut Schedule| {
             schedule
                 .rev_add_systems((
@@ -789,7 +878,7 @@ fn a_then_b(a_exclusive: bool, b_exclusive: bool, ignore_deferred: bool) -> Conf
                     TestSet(2).intern(),
                 ))
         }),
-        // #43 set before set (flipped)
+        // #47 set before set (flipped)
         Box::new(move |schedule: &mut Schedule| {
             schedule
                 .rev_add_systems((
@@ -801,11 +890,11 @@ fn a_then_b(a_exclusive: bool, b_exclusive: bool, ignore_deferred: bool) -> Conf
                     TestSet(2).intern(),
                 ))
         }),
-        // #44 system chain
+        // #48 system chain
         Box::new(move |schedule: &mut Schedule| {
             schedule.rev_add_systems(sys_chain((sys_a(), sys_b()).into_rev_configs()))
         }),
-        // #45 set chain
+        // #49 set chain
         Box::new(move |schedule: &mut Schedule| {
             schedule
                 .rev_add_systems((
@@ -814,7 +903,7 @@ fn a_then_b(a_exclusive: bool, b_exclusive: bool, ignore_deferred: bool) -> Conf
                 ))
                 .rev_configure_sets(set_chain((TestSet(1), TestSet(2)).into_rev_configs()))
         }),
-        // #46 set chain (flipped)
+        // #50 set chain (flipped)
         Box::new(move |schedule: &mut Schedule| {
             schedule
                 .rev_add_systems((
@@ -827,13 +916,220 @@ fn a_then_b(a_exclusive: bool, b_exclusive: bool, ignore_deferred: bool) -> Conf
 
     if !ignore_deferred {
         let manual_apply_deferred: ConfigsVec = vec![
-            // #47 system chain explicit ApplyDeferred
+            // #51 system after system explicit ApplyDeferred in chain
+            Box::new(move |schedule: &mut Schedule| {
+                schedule
+                    .rev_add_systems((
+                        sys_a(),
+                        (ApplyDeferred, sys_b()).rev_chain_ignore_deferred().rev_after_ignore_deferred(set_sys_a)
+                    ))
+            }),
+            // #52 system after system explicit ApplyDeferred in chain (flipped)
+            Box::new(move |schedule: &mut Schedule| {
+                schedule
+                    .rev_add_systems((
+                        (ApplyDeferred, sys_b()).rev_chain_ignore_deferred().rev_after_ignore_deferred(set_sys_a),
+                        sys_a()
+                    ))
+            }),
+            // #53 system after system-noop pipe by system explicit ApplyDeferred in chain
+            Box::new(move |schedule: &mut Schedule| {
+                schedule
+                    .rev_add_systems((
+                        sys_a_pipe_noop(),
+                        (ApplyDeferred, sys_b()).rev_chain_ignore_deferred().rev_after_ignore_deferred(set_sys_a)
+                    ))
+            }),
+            // #54 system after system-noop pipe by system explicit ApplyDeferred in chain (flipped)
+            Box::new(move |schedule: &mut Schedule| {
+                schedule
+                    .rev_add_systems((
+                        (ApplyDeferred, sys_b()).rev_chain_ignore_deferred().rev_after_ignore_deferred(set_sys_a),
+                        sys_a_pipe_noop()
+                    ))
+            }),
+            // #55 system after system-noop pipe by noop explicit ApplyDeferred in chain
+            Box::new(move |schedule: &mut Schedule| {
+                schedule
+                    .rev_add_systems((
+                        sys_a_pipe_noop(),
+                        (ApplyDeferred, sys_b()).rev_chain_ignore_deferred().rev_after_ignore_deferred(set_noop_a)
+                    ))
+            }),
+            // #56 system after system-noop pipe by noop explicit ApplyDeferred in chain (flipped)
+            Box::new(move |schedule: &mut Schedule| {
+                schedule
+                    .rev_add_systems((
+                        (ApplyDeferred, sys_b()).rev_chain_ignore_deferred().rev_after_ignore_deferred(set_noop_a),
+                        sys_a_pipe_noop()
+                    ))
+            }),
+            // #57 system after noop-system pipe by system explicit ApplyDeferred in chain
+            Box::new(move |schedule: &mut Schedule| {
+                schedule
+                    .rev_add_systems((
+                        noop_pipe_sys_a(),
+                        (ApplyDeferred, sys_b()).rev_chain_ignore_deferred().rev_after_ignore_deferred(set_sys_a)
+                    ))
+            }),
+            // #58 system after noop-system pipe by system explicit ApplyDeferred in chain (flipped)
+            Box::new(move |schedule: &mut Schedule| {
+                schedule
+                    .rev_add_systems((
+                        (ApplyDeferred, sys_b()).rev_chain_ignore_deferred().rev_after_ignore_deferred(set_sys_a),
+                        noop_pipe_sys_a()
+                    ))
+            }),
+            // #59 system after noop-system pipe by noop explicit ApplyDeferred in chain
+            Box::new(move |schedule: &mut Schedule| {
+                schedule
+                    .rev_add_systems((
+                        noop_pipe_sys_a(),
+                        (ApplyDeferred, sys_b()).rev_chain_ignore_deferred().rev_after_ignore_deferred(set_noop_a)
+                    ))
+            }),
+            // #60 system after noop-system pipe by noop explicit ApplyDeferred in chain (flipped)
+            Box::new(move |schedule: &mut Schedule| {
+                schedule
+                    .rev_add_systems((
+                        (ApplyDeferred, sys_b()).rev_chain_ignore_deferred().rev_after_ignore_deferred(set_noop_a),
+                        noop_pipe_sys_a()
+                    ))
+            }),
+            // #61 set after system explicit ApplyDeferred in chain
+            Box::new(move |schedule: &mut Schedule| {
+                schedule
+                    .rev_add_systems((sys_a(), (ApplyDeferred, sys_b()).rev_chain_ignore_deferred().rev_in_set(TestSet(2))))
+                    .rev_configure_sets(TestSet(2).rev_after_ignore_deferred(set_sys_a))
+            }),
+            // #62 set after system explicit ApplyDeferred in chain (flipped)
+            Box::new(move |schedule: &mut Schedule| {
+                schedule
+                    .rev_add_systems(((ApplyDeferred, sys_b()).rev_chain_ignore_deferred().rev_in_set(TestSet(2)), sys_a()))
+                    .rev_configure_sets(TestSet(2).rev_after_ignore_deferred(set_sys_a))
+            }),
+            // #63 set after system-noop pipe by system explicit ApplyDeferred in chain
+            Box::new(move |schedule: &mut Schedule| {
+                schedule
+                    .rev_add_systems((sys_a_pipe_noop(), (ApplyDeferred, sys_b()).rev_chain_ignore_deferred().rev_in_set(TestSet(2))))
+                    .rev_configure_sets(TestSet(2).rev_after_ignore_deferred(set_sys_a))
+            }),
+            // #64 set after system-noop pipe by system explicit ApplyDeferred in chain (flipped)
+            Box::new(move |schedule: &mut Schedule| {
+                schedule
+                    .rev_add_systems(((ApplyDeferred, sys_b()).rev_chain_ignore_deferred().rev_in_set(TestSet(2)), sys_a_pipe_noop()))
+                    .rev_configure_sets(TestSet(2).rev_after_ignore_deferred(set_sys_a))
+            }),
+            // #65 set after system-noop pipe by noop explicit ApplyDeferred in chain
+            Box::new(move |schedule: &mut Schedule| {
+                schedule
+                    .rev_add_systems((sys_a_pipe_noop(), (ApplyDeferred, sys_b()).rev_chain_ignore_deferred().rev_in_set(TestSet(2))))
+                    .rev_configure_sets(TestSet(2).rev_after_ignore_deferred(set_noop_a))
+            }),
+            // #66 set after system-noop pipe by noop explicit ApplyDeferred in chain (flipped)
+            Box::new(move |schedule: &mut Schedule| {
+                schedule
+                    .rev_add_systems(((ApplyDeferred, sys_b()).rev_chain_ignore_deferred().rev_in_set(TestSet(2)), sys_a_pipe_noop()))
+                    .rev_configure_sets(TestSet(2).rev_after_ignore_deferred(set_noop_a))
+            }),
+            // #67 set after noop_system pipe by system explicit ApplyDeferred in chain
+            Box::new(move |schedule: &mut Schedule| {
+                schedule
+                    .rev_add_systems((noop_pipe_sys_a(), (ApplyDeferred, sys_b()).rev_chain_ignore_deferred().rev_in_set(TestSet(2))))
+                    .rev_configure_sets(TestSet(2).rev_after_ignore_deferred(set_sys_a))
+            }),
+            // #68 set after noop_system pipe by system explicit ApplyDeferred in chain (flipped)
+            Box::new(move |schedule: &mut Schedule| {
+                schedule
+                    .rev_add_systems(((ApplyDeferred, sys_b()).rev_chain_ignore_deferred().rev_in_set(TestSet(2)), noop_pipe_sys_a()))
+                    .rev_configure_sets(TestSet(2).rev_after_ignore_deferred(set_sys_a))
+            }),
+            // #69 set after noop_system pipe by noop explicit ApplyDeferred in chain
+            Box::new(move |schedule: &mut Schedule| {
+                schedule
+                    .rev_add_systems((noop_pipe_sys_a(), (ApplyDeferred, sys_b()).rev_chain_ignore_deferred().rev_in_set(TestSet(2))))
+                    .rev_configure_sets(TestSet(2).rev_after_ignore_deferred(set_noop_a))
+            }),
+            // #70 set after noop_system pipe by noop explicit ApplyDeferred in chain (flipped)
+            Box::new(move |schedule: &mut Schedule| {
+                schedule
+                    .rev_add_systems(((ApplyDeferred, sys_b()).rev_chain_ignore_deferred().rev_in_set(TestSet(2)), noop_pipe_sys_a()))
+                    .rev_configure_sets(TestSet(2).rev_after_ignore_deferred(set_noop_a))
+            }),
+            // #71 system after set explicit ApplyDeferred in chain on a
+            Box::new(move |schedule: &mut Schedule| {
+                schedule.rev_add_systems((
+                    (sys_a(), ApplyDeferred).rev_chain_ignore_deferred().rev_in_set(TestSet(1)),
+                    sys_b().rev_after_ignore_deferred(TestSet(1))
+                ))
+            }),
+            // #72 system after set explicit ApplyDeferred in chain on a (flipped)
+            Box::new(move |schedule: &mut Schedule| {
+                schedule.rev_add_systems((
+                    sys_b().rev_after_ignore_deferred(TestSet(1)),
+                    (sys_a(), ApplyDeferred).rev_chain_ignore_deferred().rev_in_set(TestSet(1))
+                ))
+            }),
+            // #73 system after set explicit ApplyDeferred in chain on b
+            Box::new(move |schedule: &mut Schedule| {
+                schedule.rev_add_systems((
+                    sys_a().rev_in_set(TestSet(1)),
+                    (ApplyDeferred, sys_b()).rev_chain_ignore_deferred().rev_after_ignore_deferred(TestSet(1))
+                ))
+            }),
+            // #74 system after set explicit ApplyDeferred in chain on b (flipped)
+            Box::new(move |schedule: &mut Schedule| {
+                schedule.rev_add_systems((
+                    (ApplyDeferred, sys_b()).rev_chain_ignore_deferred().rev_after_ignore_deferred(TestSet(1)),
+                    sys_a().rev_in_set(TestSet(1))
+                ))
+            }),
+            // #75 set after set explicit ApplyDeferred in chain on a
+            Box::new(move |schedule: &mut Schedule| {
+                schedule
+                    .rev_add_systems((
+                        (sys_a(), ApplyDeferred).rev_chain_ignore_deferred().rev_in_set(TestSet(1)),
+                        sys_b().rev_in_set(TestSet(2))
+                    ))
+                    .rev_configure_sets(TestSet(2).rev_after_ignore_deferred(TestSet(1)))
+            }),
+            // #76 set after set explicit ApplyDeferred in chain on a (flipped)
+            Box::new(move |schedule: &mut Schedule| {
+                schedule
+                    .rev_add_systems((
+                        sys_b().rev_in_set(TestSet(2)),
+                        (sys_a(), ApplyDeferred).rev_chain_ignore_deferred().rev_in_set(TestSet(1))
+                    ))
+                    .rev_configure_sets(TestSet(2).rev_after_ignore_deferred(TestSet(1)))
+            }),
+            // #77 set after set explicit ApplyDeferred in chain on b
+            Box::new(move |schedule: &mut Schedule| {
+                schedule
+                    .rev_add_systems((
+                        sys_a().rev_in_set(TestSet(1)),
+                        (ApplyDeferred, sys_b()).rev_chain_ignore_deferred().rev_in_set(TestSet(2))
+                    ))
+                    .rev_configure_sets(TestSet(2).rev_after_ignore_deferred(TestSet(1)))
+            }),
+            // #78 set after set explicit ApplyDeferred in chain on b (flipped)
+            Box::new(move |schedule: &mut Schedule| {
+                schedule
+                    .rev_add_systems((
+                        (ApplyDeferred, sys_b()).rev_chain_ignore_deferred().rev_in_set(TestSet(2)),
+                        sys_a().rev_in_set(TestSet(1)),
+                    ))
+                    .rev_configure_sets(TestSet(2).rev_after_ignore_deferred(TestSet(1)))
+            }),
+
+            // todo: before variants of above
+            // todo: variants without chain but `ApplyDeferred.rev_before_ignore_deferred(a).rev_after_ignore_deferred(b)`
+
+            // #79 system chain explicit ApplyDeferred
             Box::new(move |schedule: &mut Schedule| {
                 schedule
                     .rev_add_systems((sys_a(), ApplyDeferred, sys_b()).rev_chain_ignore_deferred())
             }),
-            /*
-            // #48 set chain explicit ApplyDeferred
+            // #80 set chain explicit ApplyDeferred
             Box::new(move |schedule: &mut Schedule| {
                 schedule
                     .rev_add_systems((
@@ -843,7 +1139,7 @@ fn a_then_b(a_exclusive: bool, b_exclusive: bool, ignore_deferred: bool) -> Conf
                     ))
                     .rev_configure_sets((TestSet(1), TestSet(2), TestSet(3).rev_chain_ignore_deferred()))
             }),
-            // #49 set chain explicit ApplyDeferred (flipped)
+            // #81 set chain explicit ApplyDeferred (flipped)
             Box::new(move |schedule: &mut Schedule| {
                 schedule
                     .rev_add_systems((
@@ -853,7 +1149,6 @@ fn a_then_b(a_exclusive: bool, b_exclusive: bool, ignore_deferred: bool) -> Conf
                     ))
                     .rev_configure_sets((TestSet(1), TestSet(2), TestSet(3).rev_chain_ignore_deferred()))
             }),
-            */
         ];
 
         configs.extend(manual_apply_deferred);
@@ -870,7 +1165,7 @@ fn single_non_exclusive_system() {
     test_run(
         vec![configs],
         vec![vec![
-            TestBundle::NonExclusive(1),
+            TestBundle::NonExclusiveSystem(1),
             TestBundle::NonExclusiveSyncPoint(1),
         ]],
     );
@@ -881,7 +1176,7 @@ fn single_exclusive_system() {
     fn configs(schedule: &mut Schedule) -> &mut Schedule {
         schedule.rev_add_systems(exclusive_system::<1>)
     }
-    test_run(vec![configs], vec![vec![TestBundle::Exclusive(1)]]);
+    test_run(vec![configs], vec![vec![TestBundle::ExclusiveSystem(1)]]);
 }
 
 #[test]
@@ -889,9 +1184,9 @@ fn non_exclusive_then_non_exclusive() {
     test_run(
         a_then_b(false, false, false),
         vec![vec![
-            TestBundle::NonExclusive(1),
+            TestBundle::NonExclusiveSystem(1),
             TestBundle::NonExclusiveSyncPoint(1),
-            TestBundle::NonExclusive(2),
+            TestBundle::NonExclusiveSystem(2),
             TestBundle::NonExclusiveSyncPoint(2),
         ]],
     )
@@ -902,8 +1197,8 @@ fn exclusive_then_non_exclusive() {
     test_run(
         a_then_b(true, false, false),
         vec![vec![
-            TestBundle::Exclusive(1),
-            TestBundle::NonExclusive(2),
+            TestBundle::ExclusiveSystem(1),
+            TestBundle::NonExclusiveSystem(2),
             TestBundle::NonExclusiveSyncPoint(2),
         ]],
     )
@@ -914,9 +1209,9 @@ fn non_exclusive_then_exclusive() {
     test_run(
         a_then_b(false, true, false),
         vec![vec![
-            TestBundle::NonExclusive(1),
+            TestBundle::NonExclusiveSystem(1),
             TestBundle::NonExclusiveSyncPoint(1),
-            TestBundle::Exclusive(2),
+            TestBundle::ExclusiveSystem(2),
         ]],
     )
 }
@@ -925,7 +1220,10 @@ fn non_exclusive_then_exclusive() {
 fn exclusive_then_exclusive() {
     test_run(
         a_then_b(true, true, false),
-        vec![vec![TestBundle::Exclusive(1), TestBundle::Exclusive(2)]],
+        vec![vec![
+            TestBundle::ExclusiveSystem(1),
+            TestBundle::ExclusiveSystem(2),
+        ]],
     )
 }
 
@@ -934,8 +1232,8 @@ fn non_exclusive_then_non_exclusive_ignore_deferred() {
     test_run(
         a_then_b(false, false, true),
         vec![vec![
-            TestBundle::NonExclusive(1),
-            TestBundle::NonExclusive(2),
+            TestBundle::NonExclusiveSystem(1),
+            TestBundle::NonExclusiveSystem(2),
             TestBundle::NonExclusiveSyncPoint(1),
             TestBundle::NonExclusiveSyncPoint(2),
         ]],
@@ -947,8 +1245,8 @@ fn exclusive_then_non_exclusive_ignore_deferred() {
     test_run(
         a_then_b(true, false, true),
         vec![vec![
-            TestBundle::Exclusive(1),
-            TestBundle::NonExclusive(2),
+            TestBundle::ExclusiveSystem(1),
+            TestBundle::NonExclusiveSystem(2),
             TestBundle::NonExclusiveSyncPoint(2),
         ]],
     )
@@ -959,9 +1257,9 @@ fn non_exclusive_then_exclusive_ignore_deferred() {
     test_run(
         a_then_b(false, true, true),
         vec![vec![
-            TestBundle::NonExclusive(1),
+            TestBundle::NonExclusiveSystem(1),
             TestBundle::NonExclusiveSyncPoint(1),
-            TestBundle::Exclusive(2),
+            TestBundle::ExclusiveSystem(2),
         ]],
     )
 }
@@ -970,7 +1268,10 @@ fn non_exclusive_then_exclusive_ignore_deferred() {
 fn exclusive_then_exclusive_ignore_deferred() {
     test_run(
         a_then_b(true, true, true),
-        vec![vec![TestBundle::Exclusive(1), TestBundle::Exclusive(2)]],
+        vec![vec![
+            TestBundle::ExclusiveSystem(1),
+            TestBundle::ExclusiveSystem(2),
+        ]],
     )
 }
 
@@ -1052,7 +1353,7 @@ fn run_if() {
         vec![
             vec![], // does not run at 1
             vec![
-                TestBundle::NonExclusive(1),
+                TestBundle::NonExclusiveSystem(1),
                 TestBundle::NonExclusiveSyncPoint(1),
             ],
             vec![], // does not run at 3
