@@ -284,7 +284,7 @@ pub struct DespawnAtOutOfLog(u64);
 
 impl DespawnAtOutOfLog {
     pub(crate) fn new(meta: &RevMeta) -> Self {
-        assert_eq!(meta.get_present_direction(), Some(RevDirection::NOT_LOG));
+        assert_eq!(meta.get_running_direction(), Some(RevDirection::NOT_LOG));
         Self(meta.now())
     }
     pub(crate) fn added_at(self) -> u64 {
@@ -335,7 +335,7 @@ impl UndoRedoLog {
             })?
             .clone();
         let now = meta.now();
-        match meta.get_present_direction() {
+        match meta.get_running_direction() {
             Some(RevDirection::NOT_LOG) => {
                 let mut buffer = world.get_resource_mut::<UndoRedoBuffer>().ok_or_else(|| {
                     UndoRedoLogError::UndoRedoBufferMissing {
@@ -391,7 +391,7 @@ impl UndoRedoLog {
             })?
             .clone();
         let now = meta.now();
-        if meta.get_present_direction() != Some(RevDirection::BackwardLog) {
+        if meta.get_running_direction() != Some(RevDirection::BackwardLog) {
             return Err(UndoRedoLogError::RevDirectionMismatch {
                 now,
                 system_name: system_name.to_owned(),
