@@ -70,6 +70,9 @@ pub mod prelude {
 mod test {
     use bevy::prelude::*;
 
+    #[derive(SystemSet, Hash, PartialEq, Eq, Debug, Clone)]
+    struct MySet(usize);
+
     #[derive(PartialEq, Debug)]
     enum Entry {
         System(usize),
@@ -79,29 +82,36 @@ mod test {
     #[derive(Resource, Default)]
     struct Log(Vec<Entry>);
 
-    fn system<const N: usize>(mut res: ResMut<Log>, mut commands: Commands) {
-        res.0.push(Entry::System(N));
-        commands.queue(|world: &mut World| world.resource_mut::<Log>().0.push(Entry::SyncPoint(N)));
+    fn system_1(mut res: ResMut<Log>, mut commands: Commands) {
+        res.0.push(Entry::System(1));
+        commands.queue(|world: &mut World| world.resource_mut::<Log>().0.push(Entry::SyncPoint(1)));
     }
 
-    fn generate_log(reinsert_build_settings: bool) -> Vec<Entry> {
-        let mut world = World::new();
-        let mut schedule = Schedule::new(Update);
-        schedule.add_systems((system::<1>, system::<2>).chain_ignore_deferred());
-        if reinsert_build_settings {
-            let settings = schedule.get_build_settings();
-            schedule.set_build_settings(settings);
-        }
-        schedule.initialize(&mut world).unwrap();
-        world.init_resource::<Log>();
-        schedule.run(&mut world);
-        world.remove_resource::<Log>().unwrap().0
+    fn system_2(mut res: ResMut<Log>) {
+        res.0.push(Entry::System(2));
     }
 
     #[test]
     fn test() {
-        let log1 = generate_log(false);
-        let log2 = generate_log(true);
-        assert_eq!(log1, log2);
+        let mut app = App::new();
+        app.add_systems(
+            Update,
+            (
+                system_1.in_set(MySet(1)),
+                ApplyDeferred.in_set(MySet(2)),
+                system_2.in_set(MySet(3)),
+            ),
+        );
+        app.configure_sets(
+            Update,
+            (MySet(1), MySet(2), MySet(3)).chain_ignore_deferred(),
+        );
+        app.init_resource::<Log>();
+        app.update();
+        let log = app.world_mut().remove_resource::<Log>().unwrap().0;
+        assert_eq!(
+            log,
+            vec![Entry::System(1), Entry::SyncPoint(1), Entry::System(2)]
+        );
     }
 }

@@ -446,7 +446,7 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
     fn rev_with_child(&mut self, bundle: impl Bundle) -> &mut Self {
         let parent = self.id();
         self.world_scope(|world| {
-            world.rev_spawn((bundle, ChildOf { parent }));
+            world.rev_spawn((bundle, ChildOf(parent)));
         });
         self
     }

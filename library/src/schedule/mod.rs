@@ -1,5 +1,4 @@
 use std::{
-    any::TypeId,
     fmt::Debug,
     hash::Hash,
     sync::atomic::{AtomicU32, Ordering},
@@ -9,7 +8,7 @@ use bevy::ecs::{
     change_detection::Res,
     error::BevyError,
     schedule::{
-        graph::GraphInfo, ApplyDeferred, Chain, Condition, Fallible, Infallible, InternedSystemSet,
+        graph::GraphInfo, Chain, Condition, Fallible, Infallible, InternedSystemSet,
         IntoScheduleConfigs, IntoSystemSet, Schedulable, Schedule, ScheduleConfigTupleMarker,
         ScheduleConfigs, ScheduleLabel, SystemSet,
     },
@@ -351,22 +350,13 @@ impl<T: Schedulable<Metadata = GraphInfo, GroupMetadata = Chain>> IntoRevSchedul
 impl<S: SystemSet> IntoRevScheduleConfigs<InternedSystemSet, ()> for S {
     fn into_rev_configs(self) -> RevScheduleConfigs<InternedSystemSet> {
         let set = self.intern();
-        if set.system_type() == Some(TypeId::of::<ApplyDeferred>()) {
-            let unique_set = AtomicSet::new("bevy_ecs::apply_deferred");
-            RevScheduleConfigs::from_apply_deferred(
-                ApplyDeferred.into_system_set().into_configs(),
-                ApplyDeferred.into_system_set().in_set(unique_set),
-                unique_set,
-            )
-        } else {
-            RevScheduleConfigs {
-                forward_systems: FwdSysSet(set).in_set(set),
-                backward_commands: BwdCmdSet(set).into_configs(),
-                backward_systems: BwdSysSet(set).into_configs(),
-                backward_commands_systems: BwdCmdSysSet(set).in_set(set),
-                conditioned: set.into_configs(),
-                conditions: Vec::new(),
-            }
+        RevScheduleConfigs {
+            forward_systems: FwdSysSet(set).in_set(set),
+            backward_commands: BwdCmdSet(set).into_configs(),
+            backward_systems: BwdSysSet(set).into_configs(),
+            backward_commands_systems: BwdCmdSysSet(set).in_set(set),
+            conditioned: set.into_configs(),
+            conditions: Vec::new(),
         }
     }
 }
@@ -389,6 +379,8 @@ where
     }
 }
 
+// todo: impl for Out = Never: https://github.com/bevyengine/bevy/pull/18804
+
 impl<T: Schedulable<Metadata = GraphInfo, GroupMetadata = Chain>> RevScheduleConfigs<T> {
     fn in_set_inner(&mut self, set: InternedSystemSet) {
         self.forward_systems.in_set_inner(FwdSysSet(set).intern());
@@ -396,27 +388,6 @@ impl<T: Schedulable<Metadata = GraphInfo, GroupMetadata = Chain>> RevScheduleCon
         self.backward_systems.in_set_inner(BwdSysSet(set).intern());
         self.backward_commands_systems
             .in_set_inner(BwdCmdSysSet(set).intern());
-    }
-    fn from_apply_deferred(
-        apply_deferred: ScheduleConfigs<T>,
-        apply_deferred_in_unique_set: ScheduleConfigs<T>,
-        unique_set: InternedSystemSet,
-    ) -> Self {
-        fn empty_configs<T: Schedulable<GroupMetadata = Chain>>() -> ScheduleConfigs<T> {
-            ScheduleConfigs::Configs {
-                configs: Vec::new(),
-                collective_conditions: Vec::new(),
-                metadata: Chain::Unchained,
-            }
-        }
-        RevScheduleConfigs {
-            forward_systems: apply_deferred,
-            backward_commands: apply_deferred_in_unique_set,
-            backward_systems: empty_configs(),
-            backward_commands_systems: unique_set.into_configs(),
-            conditioned: empty_configs(),
-            conditions: Vec::new(),
-        }
     }
     fn split(self) -> (ForwardConfigs<T>, BackwardConfigs<T>) {
         (
