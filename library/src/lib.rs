@@ -20,14 +20,14 @@ Enhancements:
 - reduce todo!() and //todo and unwrap (in favor of expect)
 - #[inline]s
 - track_location and bevy_reflect feature (both are not documented?), rename feature serde -> serialize
-- schedule tests with ApplyDeferred
-- schedule tests with mixed chain + chain_ignore_deferred
 - reversible commands traits of:
 -- Commands
 -- EntityCommands
 -- RelatedSpawnerCommands
 -- EntityEntryCommands
 -- ChildSpawnerCommands
+- rename entity.rs to entity_world.rs
+- introduce entity_commands.rs
 
 Docs
 - make fake variadics docs work
@@ -61,57 +61,7 @@ pub mod prelude {
     pub use crate::meta::{RevDirection, RevMeta};
     pub use crate::schedule::{RevSchedule as _, RevSystemsSet, RevUpdate};
     pub use crate::undo_redo::{
-        unique_for_location, BuffersUndoRedo as _, RevCommands as _, RevEntityWorldMut as _,
-        RevWorld as _, UndoRedoBuffer, UndoRedoDirection, UndoRedoSwap,
+        BuffersUndoRedo as _, RevCommands as _, RevEntityWorldMut as _, RevWorld as _,
+        UndoRedoBuffer, UndoRedoDirection, UndoRedoSwap,
     };
-}
-
-#[cfg(test)]
-mod test {
-    use bevy::prelude::*;
-
-    #[derive(SystemSet, Hash, PartialEq, Eq, Debug, Clone)]
-    struct MySet(usize);
-
-    #[derive(PartialEq, Debug)]
-    enum Entry {
-        System(usize),
-        SyncPoint(usize),
-    }
-
-    #[derive(Resource, Default)]
-    struct Log(Vec<Entry>);
-
-    fn system_1(mut res: ResMut<Log>, mut commands: Commands) {
-        res.0.push(Entry::System(1));
-        commands.queue(|world: &mut World| world.resource_mut::<Log>().0.push(Entry::SyncPoint(1)));
-    }
-
-    fn system_2(mut res: ResMut<Log>) {
-        res.0.push(Entry::System(2));
-    }
-
-    #[test]
-    fn test() {
-        let mut app = App::new();
-        app.add_systems(
-            Update,
-            (
-                system_1.in_set(MySet(1)),
-                ApplyDeferred.in_set(MySet(2)),
-                system_2.in_set(MySet(3)),
-            ),
-        );
-        app.configure_sets(
-            Update,
-            (MySet(1), MySet(2), MySet(3)).chain_ignore_deferred(),
-        );
-        app.init_resource::<Log>();
-        app.update();
-        let log = app.world_mut().remove_resource::<Log>().unwrap().0;
-        assert_eq!(
-            log,
-            vec![Entry::System(1), Entry::SyncPoint(1), Entry::System(2)]
-        );
-    }
 }
