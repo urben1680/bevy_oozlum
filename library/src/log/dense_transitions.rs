@@ -1,15 +1,15 @@
 use std::{
     collections::{
-        vec_deque::{Drain, IterMut},
         TryReserveError, VecDeque,
+        vec_deque::{Drain, IterMut},
     },
     fmt::Debug,
 };
 
-use bevy::reflect::{std_traits::ReflectDefault, Reflect};
+use bevy::reflect::{Reflect, std_traits::ReflectDefault};
 
 use super::{
-    DenseTransitionLog, EntryAmount, LogMut, OutOfLog, PushedTooMany, ValueEntry, USIZE_BYTES,
+    DenseTransitionLog, EntryAmount, LogMut, OutOfLog, PushedTooMany, USIZE_BYTES, ValueEntry,
 };
 
 #[derive(Debug, Clone, Reflect)]
@@ -342,31 +342,33 @@ mod test {
             logless_with_capacity,
         } = serde_json::from_str(&serialized).unwrap();
 
-        let test =
-            |log: &DenseTransitionsLog<char, u8>, entries_len, transitions_len, with_capacity| {
-                assert_eq!(
-                    log.entries_len(),
+        let test = |log: &DenseTransitionsLog<char, u8>,
                     entries_len,
-                    "before: {original:#?}\nserialized: {serialized}\nafter: {log:#?}"
-                );
-                assert_eq!(
-                    log.transitions_len(),
                     transitions_len,
-                    "before: {original:#?}\nserialized: {serialized}\nafter: {log:#?}"
-                );
-                assert_eq!(
+                    with_capacity| {
+            assert_eq!(
+                log.entries_len(),
+                entries_len,
+                "before: {original:#?}\nserialized: {serialized}\nafter: {log:#?}"
+            );
+            assert_eq!(
+                log.transitions_len(),
+                transitions_len,
+                "before: {original:#?}\nserialized: {serialized}\nafter: {log:#?}"
+            );
+            assert_eq!(
                 log.entries_capacity() >= 100,
                 with_capacity,
                 "before: {original:#?}\nserialized: {serialized}\nafter: {log:#?}\ncapacity: {}",
                 log.entries_capacity()
             );
-                assert_eq!(
+            assert_eq!(
                 log.transitions_capacity() >= 200,
                 with_capacity,
                 "before: {original:#?}\nserialized: {serialized}\nafter: {log:#?}\ncapacity: {}",
                 log.transitions_capacity()
             );
-            };
+        };
 
         test(&full, 2, 4, false);
         test(&full_with_capacity, 2, 4, true);
