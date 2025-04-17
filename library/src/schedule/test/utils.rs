@@ -22,14 +22,14 @@ use super::*;
 /// Make `error!` and `error_once!` cause panics.
 pub(crate) fn panic_on_error_events() {
     use bevy::log::{
-        tracing::{dispatcher::get_default, Event, Subscriber},
+        Level,
+        tracing::{Event, Subscriber, dispatcher::get_default},
         tracing_subscriber::{
+            Layer,
             layer::{Context, SubscriberExt},
             registry,
             util::SubscriberInitExt,
-            Layer,
         },
-        Level,
     };
 
     struct PanicOnError;
@@ -50,7 +50,7 @@ pub(crate) fn panic_on_error_events() {
 
 pub(super) fn test_run<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
     configs: Vec<C>,
-    expected: Vec<Vec<TestBundle>>,
+    expected: Vec<Vec<Test>>,
 ) {
     panic_on_error_events();
     for (variant, config) in configs.into_iter().enumerate() {
@@ -64,7 +64,7 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
     variant: usize,
     config: &C,
     apply_final_deferred: bool,
-    expected: &Vec<Vec<TestBundle>>,
+    expected: &Vec<Vec<Test>>,
 ) {
     // set up world
     let mut world = World::new();
@@ -75,16 +75,20 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
     let mut schedule = Schedule::new(FixedUpdate);
     schedule.add_systems(RevMeta::try_run_rev_update);
     let err = schedule.initialize(&mut world).err();
-    assert!(err.is_none(), "FixedUpdate init fail: {:?}\nconfig: {variant}\napply_final_deferred: {apply_final_deferred}", err.unwrap());
+    assert!(
+        err.is_none(),
+        "FixedUpdate init fail: {:?}\nconfig: {variant}\napply_final_deferred: {apply_final_deferred}",
+        err.unwrap()
+    );
     world.add_schedule(schedule);
 
     let mut schedule = Schedule::new(RevUpdate);
     config(&mut schedule);
-    /* //todo: uncomment when https://github.com/bevyengine/bevy/issues/18790 is fixed
+    /* todo: uncomment when https://github.com/bevyengine/bevy/issues/18790 is fixed
     let settings = schedule.get_build_settings();
     schedule
         .set_build_settings(ScheduleBuildSettings {
-            hierarchy_detection: bevy::ecs::schedule::LogLevel::Error,
+            hierarchy_detection: LogLevel::Error,
             ..settings
         });
     */
@@ -104,7 +108,7 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
         world
             .resource_mut::<TestLog>()
             .0
-            .push(Test::SysObsv((n, RevDirection::NOT_LOG)));
+            .push(LogEntry::SysObsv((n, RevDirection::NOT_LOG)));
 
         // trigger observer in observer
         world.trigger(SysObsvObsv(n));
@@ -114,14 +118,14 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
             world
                 .resource_mut::<TestLog>()
                 .0
-                .push(Test::SysObsvCmd((n, RevDirection::NOT_LOG)));
+                .push(LogEntry::SysObsvCmd((n, RevDirection::NOT_LOG)));
 
-            let test = Test::SysObsvCmd(n);
+            let test = LogEntry::SysObsvCmd(n);
             world.buffer_undo_redo(test);
         });
 
         // buffer reversible observer
-        let test = Test::SysObsv(n);
+        let test = LogEntry::SysObsv(n);
         world.buffer_undo_redo(test);
     });
     world.add_observer(
@@ -129,8 +133,9 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
          mut log: ResMut<TestLog>,
          mut buffer: ResMut<UndoRedoBuffer>| {
             let n = event.0;
-            log.0.push(Test::SysHookObsv((n, RevDirection::NOT_LOG)));
-            let test = Test::SysHookObsv(n);
+            log.0
+                .push(LogEntry::SysHookObsv((n, RevDirection::NOT_LOG)));
+            let test = LogEntry::SysHookObsv(n);
             buffer.buffer_undo_redo(test);
         },
     );
@@ -139,8 +144,9 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
          mut log: ResMut<TestLog>,
          mut buffer: ResMut<UndoRedoBuffer>| {
             let n = event.0;
-            log.0.push(Test::SysObsvObsv((n, RevDirection::NOT_LOG)));
-            let test = Test::SysObsvObsv(n);
+            log.0
+                .push(LogEntry::SysObsvObsv((n, RevDirection::NOT_LOG)));
+            let test = LogEntry::SysObsvObsv(n);
             buffer.buffer_undo_redo(test);
         },
     );
@@ -149,8 +155,8 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
          mut log: ResMut<TestLog>,
          mut buffer: ResMut<UndoRedoBuffer>| {
             let n = event.0;
-            log.0.push(Test::SysCmdObsv((n, RevDirection::NOT_LOG)));
-            let test = Test::SysCmdObsv(n);
+            log.0.push(LogEntry::SysCmdObsv((n, RevDirection::NOT_LOG)));
+            let test = LogEntry::SysCmdObsv(n);
             buffer.buffer_undo_redo(test);
         },
     );
@@ -163,7 +169,7 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
             world
                 .resource_mut::<TestLog>()
                 .0
-                .push(Test::SysHook((n, RevDirection::NOT_LOG)));
+                .push(LogEntry::SysHook((n, RevDirection::NOT_LOG)));
 
             // trigger observer in hook
             world.trigger(SysHookObsv(n));
@@ -173,14 +179,14 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
                 world
                     .resource_mut::<TestLog>()
                     .0
-                    .push(Test::SysHookCmd((n, RevDirection::NOT_LOG)));
+                    .push(LogEntry::SysHookCmd((n, RevDirection::NOT_LOG)));
 
-                let test = Test::SysHookCmd(n);
+                let test = LogEntry::SysHookCmd(n);
                 world.buffer_undo_redo(test);
             });
 
             // buffer reversible hook
-            let test = Test::SysHook(n);
+            let test = LogEntry::SysHook(n);
             world.buffer_undo_redo(test);
         });
     world
@@ -194,10 +200,10 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
             world
                 .resource_mut::<TestLog>()
                 .0
-                .push(Test::SysCmdHook((n, RevDirection::NOT_LOG)));
+                .push(LogEntry::SysCmdHook((n, RevDirection::NOT_LOG)));
 
             // buffer reversible hook
-            let test = Test::SysCmdHook(n);
+            let test = LogEntry::SysCmdHook(n);
             world.buffer_undo_redo(test);
         });
 
@@ -252,7 +258,7 @@ fn test_step<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
     config: &C,
     apply_final_deferred: bool,
     step: usize,
-    expected: &Vec<TestBundle>,
+    expected: &Vec<Test>,
     direction: RevDirection,
 ) {
     world.run_schedule(FixedUpdate);
@@ -270,7 +276,7 @@ fn test_step<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
         // test step successful
         return;
     }
-    let actual = TestBundle::from_tests(actual_tests, direction);
+    let actual = Test::from_log_entries(actual_tests, direction);
     let iter = expected.into_iter().map(|ok| Result::<_, ()>::Ok(ok));
     let expected: Vec<_> = if direction.is_forward() {
         iter.collect()
@@ -283,7 +289,9 @@ fn test_step<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
     schedule.set_apply_final_deferred(apply_final_deferred);
     app.add_schedule(schedule);
     bevy_mod_debugdump::print_schedule_graph(&mut app, RevUpdate);
-    panic!("expected: {expected:?}\nactual:   {actual:?}\nconfig: {variant}\napply_final_deferred: {apply_final_deferred}\ndirection: {direction:?}\nstep: {step}")
+    panic!(
+        "expected: {expected:?}\nactual:   {actual:?}\nconfig: {variant}\napply_final_deferred: {apply_final_deferred}\ndirection: {direction:?}\nstep: {step}"
+    )
 }
 
 type ConfigsVec = Vec<Box<dyn for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>>;
@@ -1231,14 +1239,72 @@ pub(super) fn a_then_b(a_exclusive: bool, b_exclusive: bool, ignore_deferred: bo
                     ))
                     .rev_configure_sets(TestSet(1).rev_before_ignore_deferred(TestSet(2)))
             }),
-            // todo: variants without chain but `ApplyDeferred.rev_before_ignore_deferred(a).rev_after_ignore_deferred(b)`
-
-            // #107 system chain explicit ApplyDeferred
+            // #107 ApplyDeffered before/after systems
+            Box::new(move |schedule: &mut Schedule| {
+                schedule.rev_add_systems((
+                    sys_a(),
+                    ApplyDeferred
+                        .rev_after_ignore_deferred(set_sys_a)
+                        .rev_before_ignore_deferred(set_sys_b),
+                    sys_b(),
+                ))
+            }),
+            // #108 ApplyDeffered before/after systems (flipped)
+            Box::new(move |schedule: &mut Schedule| {
+                schedule.rev_add_systems((
+                    sys_b(),
+                    ApplyDeferred
+                        .rev_after_ignore_deferred(set_sys_a)
+                        .rev_before_ignore_deferred(set_sys_b),
+                    sys_a(),
+                ))
+            }),
+            // #109 ApplyDeffered before/after system-noop pipes
+            Box::new(move |schedule: &mut Schedule| {
+                schedule.rev_add_systems((
+                    sys_a_pipe_noop(),
+                    ApplyDeferred
+                        .rev_after_ignore_deferred(set_sys_a)
+                        .rev_before_ignore_deferred(set_sys_b),
+                    sys_b_pipe_noop(),
+                ))
+            }),
+            // #110 ApplyDeffered before/after system-noop pipes (flipped)
+            Box::new(move |schedule: &mut Schedule| {
+                schedule.rev_add_systems((
+                    sys_b_pipe_noop(),
+                    ApplyDeferred
+                        .rev_after_ignore_deferred(set_sys_a)
+                        .rev_before_ignore_deferred(set_sys_b),
+                    sys_a_pipe_noop(),
+                ))
+            }),
+            // #111 ApplyDeffered before/after sets
+            Box::new(move |schedule: &mut Schedule| {
+                schedule.rev_add_systems((
+                    sys_a().rev_in_set(TestSet(1)),
+                    ApplyDeferred
+                        .rev_after_ignore_deferred(TestSet(1))
+                        .rev_before_ignore_deferred(TestSet(2)),
+                    sys_b().rev_in_set(TestSet(2)),
+                ))
+            }),
+            // #112 ApplyDeffered before/after sets (flipped)
+            Box::new(move |schedule: &mut Schedule| {
+                schedule.rev_add_systems((
+                    sys_b().rev_in_set(TestSet(2)),
+                    ApplyDeferred
+                        .rev_after_ignore_deferred(TestSet(1))
+                        .rev_before_ignore_deferred(TestSet(2)),
+                    sys_a().rev_in_set(TestSet(1)),
+                ))
+            }),
+            // #113 system chain explicit ApplyDeferred
             Box::new(move |schedule: &mut Schedule| {
                 schedule
                     .rev_add_systems((sys_a(), ApplyDeferred, sys_b()).rev_chain_ignore_deferred())
             }),
-            // #108 set chain explicit ApplyDeferred
+            // #114 set chain explicit ApplyDeferred
             Box::new(move |schedule: &mut Schedule| {
                 schedule
                     .rev_add_systems((
@@ -1250,7 +1316,7 @@ pub(super) fn a_then_b(a_exclusive: bool, b_exclusive: bool, ignore_deferred: bo
                         (TestSet(1), TestSet(2), TestSet(3)).rev_chain_ignore_deferred(),
                     )
             }),
-            // #109 set chain explicit ApplyDeferred (flipped)
+            // #115 set chain explicit ApplyDeferred (flipped)
             Box::new(move |schedule: &mut Schedule| {
                 schedule
                     .rev_add_systems((
