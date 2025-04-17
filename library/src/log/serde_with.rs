@@ -1,9 +1,9 @@
 use std::{collections::VecDeque, marker::PhantomData, ops::Range};
 
 use serde::{
+    Deserialize, Deserializer, Serialize, Serializer,
     de::{SeqAccess, Visitor},
     ser::SerializeSeq,
-    Deserialize, Deserializer, Serialize, Serializer,
 };
 
 /// for state variants
