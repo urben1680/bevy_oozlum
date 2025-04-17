@@ -6,7 +6,7 @@ use bevy::{
     prelude::*,
 };
 
-use crossterm::{cursor::*, terminal::*, ExecutableCommand};
+use crossterm::{ExecutableCommand, cursor::*, terminal::*};
 
 use library::{
     log::{DenseTransitionLog, FrameTransitionLog, SparseTransitionLog},
@@ -322,7 +322,7 @@ enum Direction {
 }
 
 fn map_input(mut keys: ResMut<KeysPressed>, lost: Res<LostWaste>, mut exit: EventWriter<AppExit>) {
-    use crossterm::event::{poll, read, Event, KeyCode, KeyEvent, KeyEventKind};
+    use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, poll, read};
 
     let mut f = || -> std::io::Result<()> {
         // check if event exists to read, do not block thread to wait for one if not
@@ -340,7 +340,7 @@ fn map_input(mut keys: ResMut<KeysPressed>, lost: Res<LostWaste>, mut exit: Even
         };
         match code {
             KeyCode::Esc => {
-                exit.send(AppExit::Success);
+                exit.write(AppExit::Success);
             }
             // ignore any other inputs at game over
             _ if lost.0 >= 10 => {}
@@ -390,14 +390,14 @@ struct GlobalSettings;
 impl GlobalSettings {
     fn new() -> Self {
         use bevy::log::{
-            tracing::{dispatcher::get_default, Event, Subscriber},
+            Level,
+            tracing::{Event, Subscriber, dispatcher::get_default},
             tracing_subscriber::{
+                Layer,
                 layer::{Context, SubscriberExt},
                 registry,
                 util::SubscriberInitExt,
-                Layer,
             },
-            Level,
         };
 
         struct PanicOnError;
