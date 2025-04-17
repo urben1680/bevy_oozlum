@@ -1,13 +1,13 @@
 use core::fmt::Debug;
 use std::{
-    collections::{vec_deque::Iter, TryReserveError, VecDeque},
+    collections::{TryReserveError, VecDeque, vec_deque::Iter},
     hash::Hash,
     ops::Deref,
 };
 
 use bevy::reflect::Reflect;
 
-use super::{index_oob, OutOfLog, SparseDrain, SparseValue};
+use super::{OutOfLog, SparseDrain, SparseValue, index_oob};
 
 #[derive(Debug, Default, Clone, Reflect)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
