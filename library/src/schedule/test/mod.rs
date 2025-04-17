@@ -1,6 +1,6 @@
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc,
+    atomic::{AtomicBool, Ordering},
 };
 
 use bevy::ecs::{
@@ -24,76 +24,22 @@ pub mod utils;
 
 pub(crate) use utils::*;
 
-#[derive(Clone, Copy, PartialEq, Debug)]
-enum Test<T> {
-    NonExclusiveSys(T),
-    ExclusiveSys(T),
-
-    SysObsv(T),
-    SysObsvObsv(T),
-    SysObsvCmd(T),
-
-    SysHook(T),
-    SysHookObsv(T),
-    SysHookCmd(T),
-
-    SysCmd(T),
-    SysCmdHook(T),
-    SysCmdObsv(T),
-}
-
-impl<T> Test<T> {
-    fn map<U>(self, map: impl FnOnce(T) -> U) -> Test<U> {
-        match self {
-            Test::NonExclusiveSys(value) => Test::NonExclusiveSys(map(value)),
-            Test::ExclusiveSys(value) => Test::ExclusiveSys(map(value)),
-
-            Test::SysObsv(value) => Test::SysObsv(map(value)),
-            Test::SysObsvObsv(value) => Test::SysObsvObsv(map(value)),
-            Test::SysObsvCmd(value) => Test::SysObsvCmd(map(value)),
-
-            Test::SysHook(value) => Test::SysHook(map(value)),
-            Test::SysHookObsv(value) => Test::SysHookObsv(map(value)),
-            Test::SysHookCmd(value) => Test::SysHookCmd(map(value)),
-
-            Test::SysCmd(value) => Test::SysCmd(map(value)),
-            Test::SysCmdHook(value) => Test::SysCmdHook(map(value)),
-            Test::SysCmdObsv(value) => Test::SysCmdObsv(map(value)),
-        }
-    }
-}
-
-impl UndoRedo for Test<u8> {
-    fn undo(&mut self, world: &mut World) {
-        world
-            .resource_mut::<TestLog>()
-            .0
-            .push(self.map(|n| (n, RevDirection::BackwardLog)));
-    }
-    fn redo(&mut self, world: &mut World) {
-        world
-            .resource_mut::<TestLog>()
-            .0
-            .push(self.map(|n| (n, RevDirection::FORWARD_LOG)));
-    }
-}
-
 #[derive(Clone, Copy, Debug)]
-enum TestBundle {
+enum Test {
     NonExclusiveSystem(u8),
     ExclusiveSystem(u8),
     NonExclusiveSyncPoint(u8),
 }
 
-impl TestBundle {
-    fn from_tests(
-        tests: Vec<Test<(u8, RevDirection)>>,
+impl Test {
+    fn from_log_entries(
+        tests: Vec<LogEntry<(u8, RevDirection)>>,
         direction: RevDirection,
-    ) -> Vec<Result<Self, Test<(u8, RevDirection)>>> {
+    ) -> Vec<Result<Self, LogEntry<(u8, RevDirection)>>> {
         let mut variants: [(_, Vec<_>); 3] = [
-            TestBundle::NonExclusiveSystem(0),
-            TestBundle::ExclusiveSystem(0),
-            TestBundle::NonExclusiveSyncPoint(0),
+            Test::NonExclusiveSystem(0),
+            Test::ExclusiveSystem(0),
+            Test::NonExclusiveSyncPoint(0),
         ]
         .map(|bundle| (bundle, bundle.into_iter().collect()));
 
@@ -124,11 +70,9 @@ impl TestBundle {
                 }
                 i += expected.len();
                 let ok = match bundle {
-                    TestBundle::NonExclusiveSystem(_) => TestBundle::NonExclusiveSystem(n.unwrap()),
-                    TestBundle::ExclusiveSystem(_) => TestBundle::ExclusiveSystem(n.unwrap()),
-                    TestBundle::NonExclusiveSyncPoint(_) => {
-                        TestBundle::NonExclusiveSyncPoint(n.unwrap())
-                    }
+                    Test::NonExclusiveSystem(_) => Test::NonExclusiveSystem(n.unwrap()),
+                    Test::ExclusiveSystem(_) => Test::ExclusiveSystem(n.unwrap()),
+                    Test::NonExclusiveSyncPoint(_) => Test::NonExclusiveSyncPoint(n.unwrap()),
                 };
                 results.push(Ok(ok));
                 continue 'test;
@@ -142,31 +86,88 @@ impl TestBundle {
     }
 }
 
-impl IntoIterator for TestBundle {
-    type IntoIter = std::vec::IntoIter<Test<u8>>;
-    type Item = Test<u8>;
+#[derive(Resource, Default)]
+struct TestLog(Vec<LogEntry<(u8, RevDirection)>>);
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum LogEntry<T> {
+    NonExclusiveSys(T),
+    ExclusiveSys(T),
+
+    SysObsv(T),
+    SysObsvObsv(T),
+    SysObsvCmd(T),
+
+    SysHook(T),
+    SysHookObsv(T),
+    SysHookCmd(T),
+
+    SysCmd(T),
+    SysCmdHook(T),
+    SysCmdObsv(T),
+}
+
+impl<T> LogEntry<T> {
+    fn map<U>(self, map: impl FnOnce(T) -> U) -> LogEntry<U> {
+        match self {
+            LogEntry::NonExclusiveSys(value) => LogEntry::NonExclusiveSys(map(value)),
+            LogEntry::ExclusiveSys(value) => LogEntry::ExclusiveSys(map(value)),
+
+            LogEntry::SysObsv(value) => LogEntry::SysObsv(map(value)),
+            LogEntry::SysObsvObsv(value) => LogEntry::SysObsvObsv(map(value)),
+            LogEntry::SysObsvCmd(value) => LogEntry::SysObsvCmd(map(value)),
+
+            LogEntry::SysHook(value) => LogEntry::SysHook(map(value)),
+            LogEntry::SysHookObsv(value) => LogEntry::SysHookObsv(map(value)),
+            LogEntry::SysHookCmd(value) => LogEntry::SysHookCmd(map(value)),
+
+            LogEntry::SysCmd(value) => LogEntry::SysCmd(map(value)),
+            LogEntry::SysCmdHook(value) => LogEntry::SysCmdHook(map(value)),
+            LogEntry::SysCmdObsv(value) => LogEntry::SysCmdObsv(map(value)),
+        }
+    }
+}
+
+impl UndoRedo for LogEntry<u8> {
+    fn undo(&mut self, world: &mut World) {
+        world
+            .resource_mut::<TestLog>()
+            .0
+            .push(self.map(|n| (n, RevDirection::BackwardLog)));
+    }
+    fn redo(&mut self, world: &mut World) {
+        world
+            .resource_mut::<TestLog>()
+            .0
+            .push(self.map(|n| (n, RevDirection::FORWARD_LOG)));
+    }
+}
+
+impl IntoIterator for Test {
+    type IntoIter = std::vec::IntoIter<LogEntry<u8>>;
+    type Item = LogEntry<u8>;
     fn into_iter(self) -> Self::IntoIter {
         match self {
-            Self::NonExclusiveSystem(n) => vec![Test::NonExclusiveSys(n)],
+            Self::NonExclusiveSystem(n) => vec![LogEntry::NonExclusiveSys(n)],
             Self::ExclusiveSystem(n) => vec![
-                Test::ExclusiveSys(n),
-                Test::SysObsv(n),
-                Test::SysObsvObsv(n),
-                Test::SysObsvCmd(n),
-                Test::SysHook(n),
-                Test::SysHookObsv(n),
-                Test::SysHookCmd(n),
+                LogEntry::ExclusiveSys(n),
+                LogEntry::SysObsv(n),
+                LogEntry::SysObsvObsv(n),
+                LogEntry::SysObsvCmd(n),
+                LogEntry::SysHook(n),
+                LogEntry::SysHookObsv(n),
+                LogEntry::SysHookCmd(n),
             ],
             Self::NonExclusiveSyncPoint(n) => vec![
-                Test::SysObsv(n),
-                Test::SysObsvObsv(n),
-                Test::SysObsvCmd(n),
-                Test::SysHook(n),
-                Test::SysHookObsv(n),
-                Test::SysHookCmd(n),
-                Test::SysCmdHook(n),
-                Test::SysCmdObsv(n),
-                Test::SysCmd(n),
+                LogEntry::SysObsv(n),
+                LogEntry::SysObsvObsv(n),
+                LogEntry::SysObsvCmd(n),
+                LogEntry::SysHook(n),
+                LogEntry::SysHookObsv(n),
+                LogEntry::SysHookCmd(n),
+                LogEntry::SysCmdHook(n),
+                LogEntry::SysCmdObsv(n),
+                LogEntry::SysCmd(n),
             ],
         }
         .into_iter()
@@ -175,9 +176,6 @@ impl IntoIterator for TestBundle {
 
 #[derive(SystemSet, Copy, Clone, Debug, Hash, PartialEq, Eq)]
 struct TestSet(u8);
-
-#[derive(Resource, Default)]
-struct TestLog(Vec<Test<(u8, RevDirection)>>);
 
 #[derive(Component)]
 struct SysHook(u8);
@@ -202,7 +200,7 @@ fn non_exclusive_system<const N: u8>(
     mut log: ResMut<TestLog>,
     commands: Commands,
 ) {
-    log.0.push(Test::NonExclusiveSys((N, direction)));
+    log.0.push(LogEntry::NonExclusiveSys((N, direction)));
 
     non_exclusive_system_commands_only::<N>(direction, commands);
 }
@@ -231,7 +229,7 @@ fn exclusive_system<const N: u8>(world: &mut World) {
     world
         .resource_mut::<TestLog>()
         .0
-        .push(Test::ExclusiveSys((N, direction)));
+        .push(LogEntry::ExclusiveSys((N, direction)));
     if direction != RevDirection::NOT_LOG {
         return;
     }
@@ -254,10 +252,9 @@ fn system_command<const N: u8>(world: &mut World) {
     world
         .resource_mut::<TestLog>()
         .0
-        .push(Test::SysCmd((N, RevDirection::NOT_LOG)));
+        .push(LogEntry::SysCmd((N, RevDirection::NOT_LOG)));
 
-    let test = Test::SysCmd(N);
-    world.buffer_undo_redo(test);
+    world.buffer_undo_redo(LogEntry::SysCmd(N));
 }
 
 #[test]
@@ -268,8 +265,8 @@ fn single_non_exclusive_system() {
     test_run(
         vec![configs],
         vec![vec![
-            TestBundle::NonExclusiveSystem(1),
-            TestBundle::NonExclusiveSyncPoint(1),
+            Test::NonExclusiveSystem(1),
+            Test::NonExclusiveSyncPoint(1),
         ]],
     );
 }
@@ -279,7 +276,7 @@ fn single_exclusive_system() {
     fn configs(schedule: &mut Schedule) -> &mut Schedule {
         schedule.rev_add_systems(exclusive_system::<1>)
     }
-    test_run(vec![configs], vec![vec![TestBundle::ExclusiveSystem(1)]]);
+    test_run(vec![configs], vec![vec![Test::ExclusiveSystem(1)]]);
 }
 
 #[test]
@@ -287,10 +284,10 @@ fn non_exclusive_then_non_exclusive() {
     test_run(
         a_then_b(false, false, false),
         vec![vec![
-            TestBundle::NonExclusiveSystem(1),
-            TestBundle::NonExclusiveSyncPoint(1),
-            TestBundle::NonExclusiveSystem(2),
-            TestBundle::NonExclusiveSyncPoint(2),
+            Test::NonExclusiveSystem(1),
+            Test::NonExclusiveSyncPoint(1),
+            Test::NonExclusiveSystem(2),
+            Test::NonExclusiveSyncPoint(2),
         ]],
     )
 }
@@ -300,9 +297,9 @@ fn exclusive_then_non_exclusive() {
     test_run(
         a_then_b(true, false, false),
         vec![vec![
-            TestBundle::ExclusiveSystem(1),
-            TestBundle::NonExclusiveSystem(2),
-            TestBundle::NonExclusiveSyncPoint(2),
+            Test::ExclusiveSystem(1),
+            Test::NonExclusiveSystem(2),
+            Test::NonExclusiveSyncPoint(2),
         ]],
     )
 }
@@ -312,9 +309,9 @@ fn non_exclusive_then_exclusive() {
     test_run(
         a_then_b(false, true, false),
         vec![vec![
-            TestBundle::NonExclusiveSystem(1),
-            TestBundle::NonExclusiveSyncPoint(1),
-            TestBundle::ExclusiveSystem(2),
+            Test::NonExclusiveSystem(1),
+            Test::NonExclusiveSyncPoint(1),
+            Test::ExclusiveSystem(2),
         ]],
     )
 }
@@ -323,10 +320,7 @@ fn non_exclusive_then_exclusive() {
 fn exclusive_then_exclusive() {
     test_run(
         a_then_b(true, true, false),
-        vec![vec![
-            TestBundle::ExclusiveSystem(1),
-            TestBundle::ExclusiveSystem(2),
-        ]],
+        vec![vec![Test::ExclusiveSystem(1), Test::ExclusiveSystem(2)]],
     )
 }
 
@@ -335,10 +329,10 @@ fn non_exclusive_then_non_exclusive_ignore_deferred() {
     test_run(
         a_then_b(false, false, true),
         vec![vec![
-            TestBundle::NonExclusiveSystem(1),
-            TestBundle::NonExclusiveSystem(2),
-            TestBundle::NonExclusiveSyncPoint(1),
-            TestBundle::NonExclusiveSyncPoint(2),
+            Test::NonExclusiveSystem(1),
+            Test::NonExclusiveSystem(2),
+            Test::NonExclusiveSyncPoint(1),
+            Test::NonExclusiveSyncPoint(2),
         ]],
     )
 }
@@ -348,9 +342,9 @@ fn exclusive_then_non_exclusive_ignore_deferred() {
     test_run(
         a_then_b(true, false, true),
         vec![vec![
-            TestBundle::ExclusiveSystem(1),
-            TestBundle::NonExclusiveSystem(2),
-            TestBundle::NonExclusiveSyncPoint(2),
+            Test::ExclusiveSystem(1),
+            Test::NonExclusiveSystem(2),
+            Test::NonExclusiveSyncPoint(2),
         ]],
     )
 }
@@ -360,9 +354,9 @@ fn non_exclusive_then_exclusive_ignore_deferred() {
     test_run(
         a_then_b(false, true, true),
         vec![vec![
-            TestBundle::NonExclusiveSystem(1),
-            TestBundle::NonExclusiveSyncPoint(1),
-            TestBundle::ExclusiveSystem(2),
+            Test::NonExclusiveSystem(1),
+            Test::NonExclusiveSyncPoint(1),
+            Test::ExclusiveSystem(2),
         ]],
     )
 }
@@ -371,10 +365,7 @@ fn non_exclusive_then_exclusive_ignore_deferred() {
 fn exclusive_then_exclusive_ignore_deferred() {
     test_run(
         a_then_b(true, true, true),
-        vec![vec![
-            TestBundle::ExclusiveSystem(1),
-            TestBundle::ExclusiveSystem(2),
-        ]],
+        vec![vec![Test::ExclusiveSystem(1), Test::ExclusiveSystem(2)]],
     )
 }
 
@@ -388,8 +379,8 @@ fn pipe_commands() {
     test_run(
         vec![configs],
         vec![vec![
-            TestBundle::NonExclusiveSyncPoint(1),
-            TestBundle::NonExclusiveSyncPoint(2),
+            Test::NonExclusiveSyncPoint(1),
+            Test::NonExclusiveSyncPoint(2),
         ]],
     )
 }
@@ -455,10 +446,7 @@ fn run_if() {
         vec![config0, config1, config2, config3, config4, config5],
         vec![
             vec![], // does not run at 1
-            vec![
-                TestBundle::NonExclusiveSystem(1),
-                TestBundle::NonExclusiveSyncPoint(1),
-            ],
+            vec![Test::NonExclusiveSystem(1), Test::NonExclusiveSyncPoint(1)],
             vec![], // does not run at 3
         ],
     );
