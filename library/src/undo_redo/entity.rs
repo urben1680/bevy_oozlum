@@ -78,9 +78,6 @@ pub trait RevEntityWorldMut<'w> {
     /// Until then the entity is disabled via the [`DespawnAtOutOfLog`] component.
     fn rev_despawn(self);
 
-    /// Reversible version of [`EntityWorldMut::is_despawned`].
-    fn rev_is_despawned(&self) -> bool;
-
     /// Reversible version of [`EntityWorldMut::clone_and_spawn`].
     fn rev_clone_and_spawn(&mut self) -> Entity;
 
@@ -153,26 +150,20 @@ pub trait RevEntityWorldMut<'w> {
 
 impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
     fn rev_insert<T: Bundle>(&mut self, bundle: T) -> &mut Self {
+        let entity = self.id();
         let archetype_id = self.archetype().id();
-        self.buffer_components_cached(
-            unique_for_location!(archetype_id, PhantomData::<T>),
-            |world: &mut World| {
-                let bundle_id = world.register_bundle::<T>().id();
-                insert_maybe_overwrite(world, bundle_id, archetype_id)
-            },
-        );
+        self.world_scope(|world| {
+            pre_insert::<T>(world, entity, archetype_id, InsertMode::Replace)
+        });
         self.insert(bundle)
     }
 
     fn rev_insert_if_new<T: Bundle>(&mut self, bundle: T) -> &mut Self {
+        let entity = self.id();
         let archetype_id = self.archetype().id();
-        self.buffer_components_cached(
-            unique_for_location!(archetype_id, PhantomData::<T>),
-            |world| {
-                let bundle_id = world.register_bundle::<T>().id();
-                insert_no_overwrite(&world, bundle_id, archetype_id)
-            },
-        );
+        self.world_scope(|world| {
+            pre_insert::<T>(world, entity, archetype_id, InsertMode::Keep)
+        });
         self.insert_if_new(bundle)
     }
 
@@ -181,7 +172,10 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
         component_id: ComponentId,
         component: OwningPtr<'_>,
     ) -> &mut Self {
-        self.rev_insert_by_ids(&[component_id], [component].into_iter())
+        unsafe {
+            // SAFETY: todo
+            self.rev_insert_by_ids(&[component_id], [component].into_iter())
+        }
     }
 
     unsafe fn rev_insert_by_ids<'a, I: Iterator<Item = OwningPtr<'a>>>(
@@ -198,7 +192,10 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
             unique_for_location!(archetype_id, bundle_id),
             |world: &mut World| insert_maybe_overwrite(world, bundle_id, archetype_id),
         );
-        self.insert_by_ids(component_ids, iter_components)
+        unsafe {
+            // SAFETY: todo
+            self.insert_by_ids(component_ids, iter_components)
+        }
     }
 
     fn rev_remove<T: Bundle>(&mut self) -> &mut Self {
@@ -304,10 +301,6 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
 
     fn rev_despawn(self) {
         rev_despawn_inner(self);
-    }
-
-    fn rev_is_despawned(&self) -> bool {
-        self.contains::<DespawnAtOutOfLog>()
     }
 
     fn rev_clone_and_spawn(&mut self) -> Entity {
