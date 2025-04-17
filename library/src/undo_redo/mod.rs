@@ -1,24 +1,12 @@
 use std::{
-    any::{type_name, type_name_of_val},
-    error::Error,
-    fmt::{Debug, Display},
-    hash::Hash,
-    iter::FusedIterator,
-    sync::Arc,
+    any::{type_name, type_name_of_val}, error::Error, fmt::{Debug, Display}, hash::Hash, iter::FusedIterator, marker::PhantomData, sync::Arc
 };
 
 use bevy::{
     ecs::{
-        archetype::ArchetypeId,
-        bundle::BundleId,
-        component::{Component, ComponentId},
-        entity::{hash_set::EntityHashSet, Entity},
-        hierarchy::Children,
-        resource::Resource,
-        system::{Commands, EntityCommands},
-        world::{DeferredWorld, EntityRef, EntityWorldMut, World},
+        archetype::ArchetypeId, bundle::{Bundle, BundleId, InsertMode}, change_detection::Mut, component::{Component, ComponentCloneBehavior, ComponentId, ComponentMutability}, entity::{hash_set::EntityHashSet, Entity, EntityCloner}, hierarchy::Children, query::{Has, QueryData, QueryFilter, ReadOnlyQueryData, With, WorldQuery}, resource::Resource, system::{Commands, EntityCommands}, world::{DeferredWorld, EntityMut, EntityMutExcept, EntityRef, EntityRefExcept, EntityWorldMut, FilteredEntityMut, FilteredEntityRef, World}
     },
-    platform_support::collections::HashSet,
+    platform::collections::{HashMap, HashSet},
     utils::synccell::SyncCell,
 };
 
@@ -90,7 +78,7 @@ impl BuffersUndoRedo for World {
 impl BuffersUndoRedo for EntityWorldMut<'_> {
     fn buffer_undo_redo(&mut self, undo_redo: impl UndoRedo) -> &mut Self {
         self.get_resource_mut::<UndoRedoBuffer>()
-            .expect(EXPECT_BUFFER)
+            .expect(UndoRedoBuffer::EXPECT_IN_WORLD)
             .buffer_undo_redo(undo_redo);
         self
     }
@@ -99,7 +87,7 @@ impl BuffersUndoRedo for EntityWorldMut<'_> {
 impl BuffersUndoRedo for DeferredWorld<'_> {
     fn buffer_undo_redo(&mut self, undo_redo: impl UndoRedo) -> &mut Self {
         self.get_resource_mut::<UndoRedoBuffer>()
-            .expect(EXPECT_BUFFER)
+            .expect(UndoRedoBuffer::EXPECT_IN_WORLD)
             .buffer_undo_redo(undo_redo);
         self
     }
@@ -117,10 +105,7 @@ impl BuffersUndoRedo for UndoRedoBuffer {
     }
 }
 
-const EXPECT_BUFFER: &'static str =
-    "BuffersUndoRedo methods need the UndoRedoBuffer resource but it is missing";
-
-/// For usages in reversible observer systems.
+/// For usages in _observer_ systems. Regular reversible systems should use commands or &mut World.
 ///
 /// Commands and hooks can buffer [`UndoRedo`] implementors via [`&mut World`](World)/[`DeferredWorld`] instead.
 ///
@@ -129,6 +114,8 @@ const EXPECT_BUFFER: &'static str =
 pub struct UndoRedoBuffer(Vec<BoxedUndoRedo>);
 
 impl UndoRedoBuffer {
+    pub(crate) const EXPECT_IN_WORLD: &'static str =
+        "BuffersUndoRedo methods need the UndoRedoBuffer resource but it is missing";
     /// Returns `true` when the buffer is empty, otherwise returns `false`.
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
@@ -279,16 +266,169 @@ pub enum BufferAt {
 
 #[derive(Component, Clone, Copy, Debug, Hash, PartialOrd, Ord, PartialEq, Eq)]
 #[component(immutable)]
-#[doc(hidden)] // pub for pub RevMeta::(try_)run_rev_update system
-pub struct DespawnAtOutOfLog(u64);
+pub(crate) struct DespawnAtOutOfLog(u64);
 
 impl DespawnAtOutOfLog {
     pub(crate) fn new(meta: &RevMeta) -> Self {
         assert_eq!(meta.get_running_direction(), Some(RevDirection::NOT_LOG));
         Self(meta.now())
     }
-    pub(crate) fn added_at(self) -> u64 {
-        self.0
+}
+
+#[derive(QueryFilter)]
+pub struct WithRevDespawned {
+    _filter: With<DespawnAtOutOfLog>
+}
+
+pub struct HasRevDespawned;
+
+// SAFETY: same as Has
+unsafe impl WorldQuery for HasRevDespawned {
+    type Fetch<'a> = bool;
+    type State = ComponentId;
+
+    const IS_DENSE: bool = <Has<DespawnAtOutOfLog> as WorldQuery>::IS_DENSE;
+
+    fn shrink_fetch<'wlong: 'wshort, 'wshort>(fetch: Self::Fetch<'wlong>) -> Self::Fetch<'wshort> {
+        <Has<DespawnAtOutOfLog> as WorldQuery>::shrink_fetch(fetch)
+    }
+
+    unsafe fn init_fetch<'w>(
+            world: bevy::ecs::world::unsafe_world_cell::UnsafeWorldCell<'w>,
+            state: &Self::State,
+            last_run: bevy::ecs::component::Tick,
+            this_run: bevy::ecs::component::Tick,
+        ) -> Self::Fetch<'w> {
+            unsafe {
+                // SAFETY: same as Has
+                <Has<DespawnAtOutOfLog> as WorldQuery>::init_fetch(world, state, last_run, this_run)
+            }
+    }
+
+    unsafe fn set_archetype<'w>(
+            fetch: &mut Self::Fetch<'w>,
+            state: &Self::State,
+            archetype: &'w bevy::ecs::archetype::Archetype,
+            table: &'w bevy::ecs::storage::Table,
+        ) {
+            unsafe {
+                // SAFETY: same as Has
+            <Has<DespawnAtOutOfLog> as WorldQuery>::set_archetype(fetch, state, archetype, table)
+        }
+    }
+
+    unsafe fn set_table<'w>(fetch: &mut Self::Fetch<'w>, state: &Self::State, table: &'w bevy::ecs::storage::Table) {
+        unsafe {
+            // SAFETY: same as Has
+        <Has<DespawnAtOutOfLog> as WorldQuery>::set_table(fetch, state, table)
+    }
+    }
+
+    fn update_component_access(state: &Self::State, access: &mut bevy::ecs::query::FilteredAccess<ComponentId>) {
+        <Has<DespawnAtOutOfLog> as WorldQuery>::update_component_access(state, access)
+    }
+
+    fn init_state(world: &mut World) -> Self::State {
+        <Has<DespawnAtOutOfLog> as WorldQuery>::init_state(world)
+    }
+
+    fn get_state(components: &bevy::ecs::component::Components) -> Option<Self::State> {
+        <Has<DespawnAtOutOfLog> as WorldQuery>::get_state(components)
+    }
+
+    fn matches_component_set(
+            state: &Self::State,
+            set_contains_id: &impl Fn(ComponentId) -> bool,
+        ) -> bool {
+            <Has<DespawnAtOutOfLog> as WorldQuery>::matches_component_set(state, set_contains_id)
+    }
+
+    fn set_access(state: &mut Self::State, access: &bevy::ecs::query::FilteredAccess<ComponentId>) {
+        <Has<DespawnAtOutOfLog> as WorldQuery>::set_access(state, access);
+    }
+}
+
+// SAFETY: same as Has
+unsafe impl QueryData for HasRevDespawned {
+    type ReadOnly = Self;
+    type Item<'a> = bool;
+
+    const IS_READ_ONLY: bool = true;
+
+    fn shrink<'wlong: 'wshort, 'wshort>(item: Self::Item<'wlong>) -> Self::Item<'wshort> {
+        <Has<DespawnAtOutOfLog> as QueryData>::shrink(item)
+    }
+
+    unsafe fn fetch<'w>(
+            fetch: &mut Self::Fetch<'w>,
+            entity: Entity,
+            table_row: bevy::ecs::storage::TableRow,
+        ) -> Self::Item<'w> {
+            unsafe {
+                // SAFETY: same as Has
+            <Has<DespawnAtOutOfLog> as QueryData>::fetch(fetch, entity, table_row)
+            }
+    }
+}
+
+// SAFETY: same as Has
+unsafe impl ReadOnlyQueryData for HasRevDespawned {}
+
+#[derive(QueryData)]
+#[doc(hidden)]
+pub struct RefRevDespawned {
+    marker: &'static DespawnAtOutOfLog
+}
+
+impl RefRevDespawnedItem<'_> {
+    pub(crate) fn added_at(&self) -> u64 {
+        self.marker.0
+    }
+}
+
+pub trait RevIsDespawned {
+    fn rev_is_despawned(&self) -> bool;
+}
+
+impl RevIsDespawned for EntityRef<'_> {
+    fn rev_is_despawned(&self) -> bool {
+        self.contains::<DespawnAtOutOfLog>()
+    }
+}
+
+impl<B: Bundle> RevIsDespawned for EntityRefExcept<'_, B> {
+    fn rev_is_despawned(&self) -> bool {
+        self.contains::<DespawnAtOutOfLog>()
+    }
+}
+
+impl RevIsDespawned for FilteredEntityRef<'_> {
+    fn rev_is_despawned(&self) -> bool {
+        self.contains::<DespawnAtOutOfLog>()
+    }
+}
+
+impl RevIsDespawned for EntityMut<'_> {
+    fn rev_is_despawned(&self) -> bool {
+        self.contains::<DespawnAtOutOfLog>()
+    }
+}
+
+impl<B: Bundle> RevIsDespawned for EntityMutExcept<'_, B> {
+    fn rev_is_despawned(&self) -> bool {
+        self.contains::<DespawnAtOutOfLog>()
+    }
+}
+
+impl RevIsDespawned for FilteredEntityMut<'_> {
+    fn rev_is_despawned(&self) -> bool {
+        self.contains::<DespawnAtOutOfLog>()
+    }
+}
+
+impl RevIsDespawned for EntityWorldMut<'_> {
+    fn rev_is_despawned(&self) -> bool {
+        self.contains::<DespawnAtOutOfLog>()
     }
 }
 
@@ -436,7 +576,11 @@ impl Display for UndoRedoLogError {
                 f,
                 "RevDirection changed to an incorrect value at frame {now} before the update of the UndoRedo log of reversible system {system_name}"
             ),
-            Self::MissedFrame { frame, now, system_name } => write!(
+            Self::MissedFrame {
+                frame,
+                now,
+                system_name,
+            } => write!(
                 f,
                 "the UndoRedo log of the reversible system {system_name} ran at {now} and missed to run at {frame}"
             ),
@@ -532,6 +676,32 @@ impl UndoRedo for RevDespawnHierarchy {
     }
 }
 
+fn pre_insert<T: Bundle>(
+    world: &mut World,
+    entity: Entity,
+    archetype_id: ArchetypeId,
+    insert_mode: InsertMode,
+) {
+    match insert_mode {
+        InsertMode::Replace => world.buffer_components_cached(
+            entity,
+            unique_for_location!(archetype_id, PhantomData::<T>),
+            |world: &mut World| {
+                let bundle_id = world.register_bundle::<T>().id();
+                insert_maybe_overwrite(world, bundle_id, archetype_id)
+            },
+        ),
+        InsertMode::Keep => world.buffer_components_cached(
+            entity,
+            unique_for_location!(archetype_id, PhantomData::<T>),
+            |world| {
+                let bundle_id = world.register_bundle::<T>().id();
+                insert_no_overwrite(&world, bundle_id, archetype_id)
+            },
+        ),
+    };
+}
+
 fn rev_despawn_single(world: &mut World, entity: Entity, marker: DespawnAtOutOfLog) -> bool {
     let mut undo_redo = RevDespawnSingle { entity, marker };
     undo_redo.redo(world);
@@ -569,7 +739,7 @@ fn rev_despawn_inner(mut entity_mut: EntityWorldMut) -> bool {
         return false;
     }
 
-    let at = entity_mut.get_resource::<RevMeta>().expect("todo").now();
+    let at = entity_mut.get_resource::<RevMeta>().expect(RevMeta::EXPECT_IN_WORLD).now();
     let marker = DespawnAtOutOfLog(at);
 
     let entity = entity_mut.id();
@@ -666,6 +836,259 @@ fn insert_no_overwrite(
     (BufferAt::Undo, components)
 }
 
+#[derive(Resource, Default)]
+struct NonEntityBufferRes(HashMap<ComponentId, fn(&mut World, Entity, BufferAt)>);
+
+fn non_entity_buffer(world: &mut World, entity: Entity, at: BufferAt, components: &[ComponentId]) {
+    if !world.contains_resource::<NonEntityBufferRes>() {
+        return;
+    }
+    world.resource_scope(|world, non_entity_buffers: Mut<NonEntityBufferRes>| {
+        for component in components.iter() {
+            if let Some(c) = non_entity_buffers.0.get(component) {
+                c(world, entity, at);
+            }
+        }
+    })
+}
+
+pub(crate) fn register_non_entity_buffer<T: Component>(world: &mut World) {
+    struct NonEntityBuffer<T: Component> {
+        entity: Entity,
+        component: Option<T>,
+    }
+
+    impl<T: Component> UndoRedo for NonEntityBuffer<T> {
+        fn undo(&mut self, world: &mut World) {
+            let mut entity = world.entity_mut(self.entity);
+            if T::Mutability::MUTABLE {
+                let component = unsafe {
+                    // SAFETY: this if branch asserts the component is mutable
+                    entity.get_mut_assume_mutable::<T>()
+                };
+                match component {
+                    Some(mut c1) => match self.component.as_mut() {
+                        Some(c2) => core::mem::swap(&mut *c1, c2),
+                        None => self.component = entity.take::<T>(),
+                    },
+                    None => {
+                        if let Some(c2) = self.component.take() {
+                            entity.insert(c2);
+                        }
+                    }
+                }
+            } else {
+                match entity.take::<T>() {
+                    Some(mut c1) => match self.component.as_mut() {
+                        Some(c2) => {
+                            core::mem::swap(&mut c1, c2);
+                            entity.insert(c1);
+                        }
+                        None => self.component = Some(c1),
+                    },
+                    None => {
+                        if let Some(c2) = self.component.take() {
+                            entity.insert(c2);
+                        }
+                    }
+                }
+            }
+        }
+        fn redo(&mut self, world: &mut World) {
+            self.undo(world);
+        }
+    }
+
+    let component_id = world.register_component::<T>();
+    world.get_resource_or_init::<NonEntityBufferRes>().0.insert(
+        component_id,
+        |world, entity, at| {
+            let mut component = None;
+            if matches!(at, BufferAt::Now | BufferAt::NowAndUndo) {
+                component = world.entity_mut(entity).take::<T>();
+            }
+            let undo_redo = NonEntityBuffer { entity, component };
+            world.buffer_undo_redo(undo_redo);
+        },
+    );
+}
+
+fn buffer_bundle(
+    world: &mut World,
+    entity: Entity,
+    at: BufferAt,
+    bundle: BundleId,
+) -> Option<EntityRef> {
+    let mut buffer = BundleBuffer::new(world, entity, bundle);
+    match at {
+        BufferAt::Now => {
+            let entities = buffer.toggle_state(world);
+            let components = buffer.get_component_ids(world);
+            non_entity_buffer(world, entity, at, &components);
+            let out = buffer.move_bundle(world, entities, &components);
+            world.buffer_undo_redo(buffer);
+            Some(world.entity(out))
+        }
+        BufferAt::Undo => {
+            let components = buffer.get_component_ids(world);
+            non_entity_buffer(world, entity, at, &components);
+            world.buffer_undo_redo(buffer);
+            None
+        }
+        BufferAt::NowAndUndo => {
+            let at_undo = buffer.clone(); // no buffer entity set yet so each spawns their own
+            let entities = buffer.toggle_state(world);
+            let components = buffer.get_component_ids(world);
+            non_entity_buffer(world, entity, at, &components);
+            let out = buffer.move_bundle(world, entities, &components);
+            world.buffer_undo_redo(buffer).buffer_undo_redo(at_undo);
+            Some(world.entity(out))
+        }
+    }
+}
+
+#[derive(Clone)]
+struct BundleBuffer {
+    bundle: BundleId,
+    entity: Entity,
+    state: BufferState,
+}
+
+#[derive(Clone)]
+enum BufferState {
+    Unspawned(DespawnAtOutOfLog),
+    Empty(Entity),
+    Filled(Entity),
+}
+
+struct BundleEntities {
+    target: Entity,
+    source: Entity,
+    buffer: Entity,
+}
+
+impl BundleBuffer {
+    fn new(world: &World, entity: Entity, bundle: BundleId) -> Self {
+        let meta = world.get_resource::<RevMeta>().expect(RevMeta::EXPECT_IN_WORLD);
+        let marker = DespawnAtOutOfLog::new(meta);
+        Self {
+            bundle,
+            entity,
+            state: BufferState::Unspawned(marker),
+        }
+    }
+    fn toggle_state(&mut self, world: &mut World) -> BundleEntities {
+        match self.state {
+            BufferState::Unspawned(marker) => {
+                let buffer = world.spawn(marker).id();
+                self.state = BufferState::Filled(buffer);
+                BundleEntities {
+                    target: buffer,
+                    source: self.entity,
+                    buffer,
+                }
+            }
+            BufferState::Filled(buffer) => {
+                self.state = BufferState::Empty(buffer);
+                BundleEntities {
+                    target: self.entity,
+                    source: buffer,
+                    buffer,
+                }
+            }
+            BufferState::Empty(buffer) => {
+                self.state = BufferState::Filled(buffer);
+                BundleEntities {
+                    target: buffer,
+                    source: self.entity,
+                    buffer,
+                }
+            }
+        }
+    }
+    fn get_component_ids(&self, world: &World) -> Box<[ComponentId]> {
+        world
+            .bundles()
+            .get(self.bundle)
+            .expect("todo")
+            .explicit_components()
+            .into()
+    }
+    fn move_bundle(
+        &mut self,
+        world: &mut World,
+        entities: BundleEntities,
+        components: &[ComponentId],
+    ) -> Entity {
+        let progress_res = world.buffer_components_in_progress();
+        if !progress_res {
+            world.insert_resource(BufferComponentsInProgress);
+        }
+        EntityCloner::build(world)
+            .deny_all()
+            .move_components(true)
+            .without_required_components(|builder| {
+                builder.allow_by_ids(components.iter().copied());
+            })
+            .clone_entity(entities.source, entities.target);
+        if !progress_res {
+            world.remove_resource::<BufferComponentsInProgress>();
+        }
+        entities.buffer
+    }
+}
+
+impl UndoRedo for BundleBuffer {
+    fn undo(&mut self, world: &mut World) {
+        let entities = self.toggle_state(world);
+        let components = self.get_component_ids(world);
+        self.move_bundle(world, entities, &components);
+    }
+    fn redo(&mut self, world: &mut World) {
+        self.undo(world);
+    }
+}
+
+struct Spawn {
+    entity: Entity,
+    marker: DespawnAtOutOfLog,
+}
+
+impl UndoRedo for Spawn {
+    fn undo(&mut self, world: &mut World) {
+        world.entity_mut(self.entity).insert(self.marker);
+    }
+    fn redo(&mut self, world: &mut World) {
+        world.entity_mut(self.entity).remove::<DespawnAtOutOfLog>();
+    }
+}
+
+// todo: replace this with register_dynamic_bundle when linked issue is fixed
+fn components_to_bundle(world: &mut World, components: Vec<ComponentId>) -> BundleId {
+    #[derive(Resource, Default)]
+    struct CheckedClonable(HashSet<ComponentId>);
+
+    let mut checked = world
+        .remove_resource::<CheckedClonable>()
+        .unwrap_or_default();
+    for &component_id in &components {
+        if checked.0.insert(component_id) {
+            if let Some(component_info) = world.components().get_info(component_id) {
+                if component_info.clone_behavior() == &ComponentCloneBehavior::Ignore {
+                    bevy::log::error!(
+                        "Component {} is unclonable, it's insert, remove or overwrite will \
+                        not be reversible, see https://github.com/bevyengine/bevy/issues/18079",
+                        component_info.name()
+                    );
+                }
+            }
+        }
+    }
+    world.insert_resource(checked);
+
+    world.register_dynamic_bundle(&components).id()
+}
+
 #[macro_export]
 macro_rules! unique_for_location {
     ($($hashable: expr),*) => {
@@ -677,4 +1100,4 @@ macro_rules! unique_for_location {
     }
 }
 
-pub use unique_for_location;
+use unique_for_location;
