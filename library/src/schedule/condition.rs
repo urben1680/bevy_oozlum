@@ -6,9 +6,9 @@ use bevy::{
         component::{ComponentId, Tick},
         query::Access,
         resource::Resource,
-        schedule::{Condition, InternedSystemSet, IntoScheduleConfigs, ScheduleConfigs},
+        schedule::{BoxedCondition, Condition, InternedSystemSet},
         system::{IntoSystem, ReadOnlySystem, Res, System, SystemIn, SystemParamValidationError},
-        world::{unsafe_world_cell::UnsafeWorldCell, DeferredWorld, World},
+        world::{DeferredWorld, World, unsafe_world_cell::UnsafeWorldCell},
     },
     utils::default,
 };
@@ -19,23 +19,16 @@ use crate::{
     schedule::error_per_flag,
 };
 
-use super::AtomicSet;
-
-pub(super) fn rev_condition<Marker>(
-    condition: impl Condition<Marker>,
-) -> (InternedSystemSet, ScheduleConfigs<InternedSystemSet>) {
-    let condition = IntoSystem::into_system(condition);
-    let name = condition.name();
+pub(super) fn into_rev_condition<Marker>(condition: impl Condition<Marker>) -> BoxedCondition {
     let condition = RevCondition {
-        condition,
+        condition: IntoSystem::into_system(condition),
         meta_id: default(),
         log: default(),
         component_access: default(),
         archetype_component_access: default(),
         out_of_log_err: false,
     };
-    let set = AtomicSet::new(name);
-    (set, set.run_if(condition))
+    Box::new(condition)
 }
 
 struct RevCondition<T> {
@@ -121,20 +114,27 @@ impl<T: ReadOnlySystem<Out = bool>> System for RevCondition<T> {
         &mut self,
         world: UnsafeWorldCell,
     ) -> Result<(), SystemParamValidationError> {
-        // SAFETY:
-        // - Registered read access to resource
-        // - T cannot have write access because T: ReadOnlySystem
-        world
-            .get_resource_by_id(self.meta_id.unwrap())
-            .ok_or(SystemParamValidationError::invalid::<Self>(
-                RevMeta::EXPECT_IN_WORLD,
-            ))?
-            .deref::<RevMeta>() // SAFETY: todo
-            .get_running_direction()
-            .ok_or(SystemParamValidationError::invalid::<Self>(
-                RevMeta::EXPECT_RUNNING,
-            ))
-            .and_then(|_| self.condition.validate_param_unsafe(world))
+        let ptr = unsafe {
+            // SAFETY:
+            // - Registered read access to resource
+            // - T cannot have write access because T: ReadOnlySystem
+            world.get_resource_by_id(self.meta_id.unwrap())
+        };
+        ptr.map(|ptr| unsafe {
+            // SAFETY: todo
+            ptr.deref::<RevMeta>()
+        })
+        .ok_or(SystemParamValidationError::invalid::<Self>(
+            RevMeta::EXPECT_IN_WORLD,
+        ))?
+        .get_running_direction()
+        .ok_or(SystemParamValidationError::invalid::<Self>(
+            RevMeta::EXPECT_RUNNING,
+        ))
+        .and_then(|_| unsafe {
+            // SAFETY: todo
+            self.condition.validate_param_unsafe(world)
+        })
     }
     unsafe fn run_unsafe(&mut self, input: SystemIn<'_, Self>, world: UnsafeWorldCell) -> bool {
         let meta = unsafe {
@@ -144,37 +144,44 @@ impl<T: ReadOnlySystem<Out = bool>> System for RevCondition<T> {
             world.get_resource_by_id(self.meta_id.unwrap())
         }
         .expect("Self::validate_param ensured Some");
-        // SAFETY:
-        // todo
-        let meta = meta.deref::<RevMeta>();
+        let meta = unsafe {
+            // SAFETY: todo
+            meta.deref::<RevMeta>()
+        };
         match meta.running_direction() {
             RevDirection::NOT_LOG => {
-                let out = self.condition.run_unsafe(input, world);
-                self.log.push_and_pop_past(
-                    meta.past_len() as usize,
-                    out.then_some(())
-                );
+                let out = unsafe {
+                    // SAFETY: todo
+                    self.condition.run_unsafe(input, world)
+                };
+                self.log
+                    .push_and_pop_past(meta.past_len() as usize, out.then_some(()));
                 out
-            },
-            // todo, simplify error msg, can only be internal bug
-            RevDirection::FORWARD_LOG => {
-                match self.log.forward_log() {
-                    Ok(option) => option.is_some(),
-                    Err(OutOfLog) => error_per_flag!(&mut self.out_of_log_err, "Reversible condition {} got out of log. \
+            }
+            // todo: simplify error msg, can only be internal bug
+            // todo: upstream systems returning Result<bool, BevyError> be valid conditions
+            RevDirection::FORWARD_LOG => match self.log.forward_log() {
+                Ok(option) => option.is_some(),
+                Err(OutOfLog) => error_per_flag!(
+                    &mut self.out_of_log_err,
+                    "Reversible condition {} got out of log. \
                         Make sure the reversible schedule this condition is in is correctly called in both the forward and backward direction. \
                         It seems that one or more backward schedule calls were missed. \
-                        If this condition is in the RevUpdate schedule, this is likely a crate bug.\n{meta:?}", self.name())
-                }
+                        If this condition is in the RevUpdate schedule, this is likely a crate bug.\n{meta:?}",
+                    self.name()
+                ),
             },
-            RevDirection::BackwardLog => {
-                match self.log.backward_log() {
-                    Ok(option) => option.is_some(),
-                    Err(OutOfLog) => error_per_flag!(&mut self.out_of_log_err, "Reversible condition {} got out of log. \
+            RevDirection::BackwardLog => match self.log.backward_log() {
+                Ok(option) => option.is_some(),
+                Err(OutOfLog) => error_per_flag!(
+                    &mut self.out_of_log_err,
+                    "Reversible condition {} got out of log. \
                         Make sure the reversible schedule this condition is in is correctly called in both the forward and backward direction. \
                         It seems that one or more forward schedule calls were missed. \
-                        If this condition is in the RevUpdate schedule, this is likely a crate bug.\n{meta:?}", self.name())
-                }
-            }
+                        If this condition is in the RevUpdate schedule, this is likely a crate bug.\n{meta:?}",
+                    self.name()
+                ),
+            },
         }
     }
     fn apply_deferred(&mut self, _world: &mut World) {}
