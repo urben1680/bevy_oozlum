@@ -1,5 +1,5 @@
 use std::{
-    collections::{vec_deque::Drain, VecDeque},
+    collections::{VecDeque, vec_deque::Drain},
     error::Error,
     fmt::{Debug, Display},
     iter::FusedIterator,
@@ -43,7 +43,10 @@ pub struct OutOfLog;
 
 impl Display for OutOfLog {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "a log was traversed beyond it's bounds or it was attempted to queue RevMeta to a frame outside the log")
+        write!(
+            f,
+            "a log was traversed beyond it's bounds or it was attempted to queue RevMeta to a frame outside the log"
+        )
     }
 }
 
@@ -330,7 +333,8 @@ impl<'de, U: serde::Deserialize<'de>, const AMOUNT_BYTES: usize> serde::Deserial
 }
 
 fn index_oob() -> OutOfLog {
-    error!("self.index should always be <= the deque len, so successfully reducing \
+    error!(
+        "self.index should always be <= the deque len, so successfully reducing \
         it without underflow is expected to result in a valid index into the log which is not the case here, \
         the log is in an invalid state before calling the current method, this is a crate bug"
     );
