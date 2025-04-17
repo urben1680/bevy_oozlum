@@ -1,7 +1,7 @@
 use std::{
     collections::{
-        vec_deque::{Drain, IntoIter, Iter},
         TryReserveError, VecDeque,
+        vec_deque::{Drain, IntoIter, Iter},
     },
     fmt::Debug,
     ops::{Deref, Range},
@@ -10,8 +10,8 @@ use std::{
 use bevy::{reflect::Reflect, utils::default};
 
 use super::{
-    EntryAmount, LogMut, OutOfLog, PushedTooMany, SparseDrain, SparseStateLog, ValueEntry,
-    USIZE_BYTES,
+    EntryAmount, LogMut, OutOfLog, PushedTooMany, SparseDrain, SparseStateLog, USIZE_BYTES,
+    ValueEntry,
 };
 
 #[derive(Debug, Clone, Reflect)]
