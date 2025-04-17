@@ -1,4 +1,4 @@
-use std::{collections::VecDeque, fmt::Debug, num::NonZeroUsize};
+use std::{collections::VecDeque, num::NonZeroUsize};
 
 use library::{log::*, prelude::*};
 
@@ -8,34 +8,28 @@ fn main() {
     let len = 100;
     let modulo = 7;
     let mut meta = RevMeta::new(NonZeroUsize::new(len + 1), 0, false);
-    let mut last_frame_where_modulo_eq_zero =
-        LastFrameWhereModuloEqZero::with_capacity(0, len, modulo);
+    let mut log = LastFrameWhereModuloEqZero::with_capacity(0, len, modulo);
 
-    let plot = get_plot(&mut meta, &mut last_frame_where_modulo_eq_zero, len);
+    let plot = get_plot(&mut meta, &mut log, len);
     println!("fwd     {plot}");
 
     meta.queue_log(0).unwrap();
-    let plot = get_plot(&mut meta, &mut last_frame_where_modulo_eq_zero, len);
+    let plot = get_plot(&mut meta, &mut log, len);
     println!("bwd log {plot}");
 
     meta.queue_log(len as u64).unwrap();
-    let plot = get_plot(&mut meta, &mut last_frame_where_modulo_eq_zero, len);
+    let plot = get_plot(&mut meta, &mut log, len);
     println!("fwd log {plot}");
 }
 
-fn get_plot(
-    meta: &mut RevMeta,
-    last_frame_where_modulo_eq_zero: &mut LastFrameWhereModuloEqZero,
-    len: usize,
-) -> String {
+fn get_plot(meta: &mut RevMeta, log: &mut LastFrameWhereModuloEqZero, len: usize) -> String {
     let mut plot = VecDeque::with_capacity(len + 1);
-    let frame = last_frame_where_modulo_eq_zero.get();
-    let character = get_character(frame, meta);
-    plot.push_back(character);
+    let frame = log.get();
+    plot.push_back(get_character(frame, meta));
     for _ in 0..len {
         meta.update(|meta| {
-            let frame = last_frame_where_modulo_eq_zero.update_and_get(meta);
-            let character = get_character(frame, meta);
+            let last_frame_where_modulo_eq_zero = log.update_and_get(meta);
+            let character = get_character(last_frame_where_modulo_eq_zero, meta);
             if meta.running_direction().is_forward() {
                 plot.push_back(character);
             } else {
@@ -46,8 +40,8 @@ fn get_plot(
     plot.into_iter().collect()
 }
 
-fn get_character(frame: u64, meta: &RevMeta) -> char {
-    match frame == meta.now() {
+fn get_character(last_frame_where_modulo_eq_zero: u64, meta: &RevMeta) -> char {
+    match last_frame_where_modulo_eq_zero == meta.now() {
         true => '|',
         false => '.',
     }
@@ -107,24 +101,24 @@ impl LastFrameWhereModuloEqZero {
             RevDirection::NOT_LOG => {
                 let now = meta.now();
                 let delta: u8 = (now - self.state_for_transition_logs).try_into().unwrap();
-                let past_len = meta.past_len() as usize;
                 let update = now % modulo == 0;
+                let then_now = update.then_some(now);
+                let then_delta = update.then_some(delta);
+
+                let past_len = meta.past_len() as usize;
 
                 self.dense_state.push_and_pop_past(
                     past_len,
-                    update
-                        .then_some(now)
-                        .unwrap_or(self.state_for_transition_logs),
+                    then_now.unwrap_or(self.state_for_transition_logs),
                 );
 
                 self.dense_transition
-                    .push_and_pop_past(past_len, update.then_some(delta).unwrap_or(0));
+                    .push_and_pop_past(past_len, then_delta.unwrap_or(0));
 
-                self.sparse_state
-                    .push_and_pop_past(past_len, update.then_some(now));
+                self.sparse_state.push_and_pop_past(past_len, then_now);
 
                 self.sparse_transition
-                    .push_and_pop_past(past_len, update.then_some(delta));
+                    .push_and_pop_past(past_len, then_delta);
 
                 if update {
                     let scoped_past_len = self.frame_transition.push_and_get_past_len(&meta);
@@ -138,66 +132,67 @@ impl LastFrameWhereModuloEqZero {
                 }
             }
             RevDirection::FORWARD_LOG => {
-                let mut states = vec![];
-                let mut transitions = vec![];
+                let mut equal_states = vec![];
+                let mut equal_transitions = vec![];
 
                 self.dense_state.forward_log().unwrap();
-                states.push(*self.dense_state);
+                equal_states.push(*self.dense_state);
 
-                transitions.push(*self.dense_transition.forward_log().unwrap());
+                equal_transitions.push(*self.dense_transition.forward_log().unwrap());
 
                 let expect_forward_log = self.frame_transition.forward_log(&meta);
                 assert_eq!(expect_forward_log, meta.now() % modulo == 0);
 
                 let state_changed = self.sparse_state.forward_log().unwrap();
                 assert_eq!(state_changed, expect_forward_log);
-                states.push(*self.sparse_state);
+                equal_states.push(*self.sparse_state);
 
                 let transition = self.sparse_transition.forward_log().unwrap().copied();
                 assert_eq!(transition.is_some(), expect_forward_log);
-                transitions.push(transition.unwrap_or(0));
+                equal_transitions.push(transition.unwrap_or(0));
 
                 if expect_forward_log {
                     self.scoped_state.forward_log().unwrap();
-                    states.push(*self.scoped_state);
+                    equal_states.push(*self.scoped_state);
 
-                    transitions.push(*self.scoped_transition.forward_log().unwrap());
+                    equal_transitions.push(*self.scoped_transition.forward_log().unwrap());
                 }
 
-                let transition = assert_equality_get(transitions);
-                states.push(self.state_for_transition_logs + transition as u64);
-                self.state_for_transition_logs = assert_equality_get(states);
+                let transition = assert_equality_get(equal_transitions) as u64;
+                let state_from_transition = self.state_for_transition_logs + transition;
+                equal_states.push(state_from_transition);
+                self.state_for_transition_logs = assert_equality_get(equal_states);
             }
             RevDirection::BackwardLog => {
-                let mut states = vec![];
-                let mut transitions = vec![];
+                let mut equal_states = vec![];
+                let mut equal_transitions = vec![];
 
                 self.dense_state.backward_log().unwrap();
-                states.push(*self.dense_state);
+                equal_states.push(*self.dense_state);
 
-                transitions.push(*self.dense_transition.backward_log().unwrap());
+                equal_transitions.push(*self.dense_transition.backward_log().unwrap());
 
                 let expect_backward_log = self.frame_transition.backward_log(&meta);
                 assert_eq!(expect_backward_log, (meta.now() + 1) % modulo == 0);
 
                 let state_changed = self.sparse_state.backward_log().unwrap();
                 assert_eq!(state_changed, expect_backward_log);
-                states.push(*self.sparse_state);
+                equal_states.push(*self.sparse_state);
 
                 let transition = self.sparse_transition.backward_log().unwrap().copied();
                 assert_eq!(transition.is_some(), expect_backward_log);
-                transitions.push(transition.unwrap_or(0));
+                equal_transitions.push(transition.unwrap_or(0));
 
                 if expect_backward_log {
                     self.scoped_state.backward_log().unwrap();
-                    states.push(*self.scoped_state);
+                    equal_states.push(*self.scoped_state);
 
-                    transitions.push(*self.scoped_transition.backward_log().unwrap());
+                    equal_transitions.push(*self.scoped_transition.backward_log().unwrap());
                 }
 
-                let transition = assert_equality_get(transitions);
-                states.push(self.state_for_transition_logs - transition as u64);
-                self.state_for_transition_logs = assert_equality_get(states);
+                let transition = assert_equality_get(equal_transitions);
+                equal_states.push(self.state_for_transition_logs - transition as u64);
+                self.state_for_transition_logs = assert_equality_get(equal_states);
             }
         }
 
@@ -215,8 +210,8 @@ impl LastFrameWhereModuloEqZero {
     }
 }
 
-fn assert_equality_get<T: Ord + Debug>(mut v: Vec<T>) -> T {
-    v.sort();
-    assert_eq!(v.first(), v.last());
-    v.pop().unwrap()
+fn assert_equality_get<T: Ord>(mut equal_values: Vec<T>) -> T {
+    let value = equal_values.pop().unwrap();
+    assert!(equal_values.iter().all(|other| *other == value));
+    value
 }
