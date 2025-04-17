@@ -1,12 +1,12 @@
 use core::fmt::Debug;
 use std::collections::{
-    vec_deque::{Drain, Iter},
     TryReserveError, VecDeque,
+    vec_deque::{Drain, Iter},
 };
 
-use bevy::reflect::{std_traits::ReflectDefault, Reflect};
+use bevy::reflect::{Reflect, std_traits::ReflectDefault};
 
-use super::{index_oob, OutOfLog};
+use super::{OutOfLog, index_oob};
 
 #[derive(Debug, Clone, Reflect)]
 #[reflect(Default)]
