@@ -1,9 +1,9 @@
 use core::fmt::Debug;
-use std::collections::{vec_deque::Iter, TryReserveError, VecDeque};
+use std::collections::{TryReserveError, VecDeque, vec_deque::Iter};
 
-use bevy::reflect::{std_traits::ReflectDefault, Reflect};
+use bevy::reflect::{Reflect, std_traits::ReflectDefault};
 
-use super::{index_oob, OutOfLog, SparseDrain, SparseValue};
+use super::{OutOfLog, SparseDrain, SparseValue, index_oob};
 
 #[derive(Debug, Clone, Reflect)]
 #[reflect(Default)]
