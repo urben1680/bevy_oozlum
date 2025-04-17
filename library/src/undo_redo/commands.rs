@@ -1,376 +1,221 @@
 use bevy::{
     ecs::{
-        archetype::{Archetype, ArchetypeId},
-        bundle::{Bundle, BundleInfo, InsertMode, NoBundleEffect},
+        archetype::ArchetypeId,
+        bundle::{Bundle, DynamicBundle, InsertMode, NoBundleEffect},
         component::{Component, ComponentId},
-        entity::{Entity, EntityCloner},
-        error::Result as CommandResult,
+        entity::Entity,
+        error::{warn, ErrorContext, Result as CommandResult},
         resource::Resource,
-        system::{Command, Commands, EntityCommand},
+        system::{command::insert_batch, Command, Commands, EntityCommand, EntityCommands},
         world::{error::TryInsertBatchError, EntityWorldMut, FromWorld, World},
-    },
-    platform_support::{
-        collections::{hash_map::Entry, HashMap},
-        hash::FixedHasher,
     },
     ptr::OwningPtr,
 };
 
 use crate::meta::RevMeta;
 
-use super::{BuffersUndoRedo, DespawnAtOutOfLog, RevEntityWorldMut, RevWorld, UndoRedo};
+use super::*;
 
 pub trait RevCommands {
+    /// Reversible version of [`Commands::spawn`].
+    fn rev_spawn<T: Bundle>(&mut self, bundle: T) -> EntityCommands;
+
+    /// Reversible version of [`Commands::spawn_empty`].
+    fn rev_spawn_empty(&mut self) -> EntityCommands;
+
+    /// Reversible version of [`Commands::spawn_batch`].
+    fn rev_spawn_batch<I>(&mut self, batch: I)
+    where
+        I: IntoIterator + Send + Sync + 'static,
+        <I as IntoIterator>::Item: Bundle,
+        <<I as IntoIterator>::Item as DynamicBundle>::Effect: NoBundleEffect;
+
+    /// Reversible version of [`Commands::insert_batch`].
+    fn rev_insert_batch<I, B>(&mut self, batch: I)
+    where
+        I: IntoIterator<Item = (Entity, B)> + Send + Sync + 'static,
+        B: Bundle,
+        <B as DynamicBundle>::Effect: NoBundleEffect;
+
+    /// Reversible version of [`Commands::insert_batch_if_new`].
+    fn rev_insert_batch_if_new<I, B>(&mut self, batch: I)
+    where
+        I: IntoIterator<Item = (Entity, B)> + Send + Sync + 'static,
+        B: Bundle,
+        <B as DynamicBundle>::Effect: NoBundleEffect;
+
+    /// Reversible version of [`Commands::try_insert_batch`].
+    fn rev_try_insert_batch<I, B>(&mut self, batch: I)
+    where
+        I: IntoIterator<Item = (Entity, B)> + Send + Sync + 'static,
+        B: Bundle,
+        <B as DynamicBundle>::Effect: NoBundleEffect;
+
+    /// Reversible version of [`Commands::try_insert_batch_if_new`].
+    fn rev_try_insert_batch_if_new<I, B>(&mut self, batch: I)
+    where
+        I: IntoIterator<Item = (Entity, B)> + Send + Sync + 'static,
+        B: Bundle,
+        <B as DynamicBundle>::Effect: NoBundleEffect;
+
+    /// Reversible version of [`Commands::init_resource`].
     fn rev_init_resource<R: Resource + FromWorld>(&mut self);
+
+    /// Reversible version of [`Commands::insert_resource`].
     fn rev_insert_resource<R: Resource>(&mut self, resource: R);
+
+    /// Reversible version of [`Commands::remove_resource`].
     fn rev_remove_resource<R: Resource>(&mut self);
 }
 
 impl RevCommands for Commands<'_, '_> {
+    fn rev_spawn<T: Bundle>(&mut self, bundle: T) -> EntityCommands {
+        let mut entity_commands = self.spawn(bundle);
+        let entity = entity_commands.id();
+        entity_commands.commands_mut().queue(move |world: &mut World| {
+            let meta = world.get_resource::<RevMeta>().expect(RevMeta::EXPECT_IN_WORLD);
+            let marker = DespawnAtOutOfLog::new(meta);
+            world.buffer_undo_redo(Spawn { entity, marker });
+        });
+        entity_commands
+    }
+
+    fn rev_spawn_empty(&mut self) -> EntityCommands {
+        let mut entity_commands = self.spawn_empty();
+        let entity = entity_commands.id();
+        entity_commands.commands_mut().queue(move |world: &mut World| {
+            let meta = world.get_resource::<RevMeta>().expect(RevMeta::EXPECT_IN_WORLD);
+            let marker = DespawnAtOutOfLog::new(meta);
+            world.buffer_undo_redo(Spawn { entity, marker });
+        });
+        entity_commands
+    }
+
+    fn rev_spawn_batch<I>(&mut self, batch: I)
+    where
+        I: IntoIterator + Send + Sync + 'static,
+        <I as IntoIterator>::Item: Bundle,
+        <<I as IntoIterator>::Item as DynamicBundle>::Effect: NoBundleEffect
+    {
+        self.queue(move |world: &mut World| {
+            world.rev_spawn_batch(batch);
+        })
+    }
+
+    fn rev_insert_batch<I, B>(&mut self, batch: I)
+    where
+        I: IntoIterator<Item = (Entity, B)> + Send + Sync + 'static,
+        B: Bundle,
+        <B as DynamicBundle>::Effect: NoBundleEffect
+    {
+        self.queue(move |world: &mut World| {
+            world.rev_insert_batch(batch);
+        })
+    }
+
+    fn rev_insert_batch_if_new<I, B>(&mut self, batch: I)
+    where
+        I: IntoIterator<Item = (Entity, B)> + Send + Sync + 'static,
+        B: Bundle,
+        <B as DynamicBundle>::Effect: NoBundleEffect
+    {
+        self.queue(move |world: &mut World| {
+            world.rev_insert_batch_if_new(batch);
+        })
+    }
+
+    fn rev_try_insert_batch<I, B>(&mut self, batch: I)
+    where
+        I: IntoIterator<Item = (Entity, B)> + Send + Sync + 'static,
+        B: Bundle,
+        <B as DynamicBundle>::Effect: NoBundleEffect
+    {
+        self.queue(move |world: &mut World| {
+            if let Err(error) = rev_insert_batch(batch, InsertMode::Replace).apply(world) {
+                let name = type_name_of_val(&Commands::rev_try_insert_batch_if_new::<I, B>).into();
+                warn(error, ErrorContext::Command { name });
+            }
+        })
+    }
+
+    fn rev_try_insert_batch_if_new<I, B>(&mut self, batch: I)
+    where
+        I: IntoIterator<Item = (Entity, B)> + Send + Sync + 'static,
+        B: Bundle,
+        <B as DynamicBundle>::Effect: NoBundleEffect
+    {
+        self.queue(move |world: &mut World| {
+            if let Err(error) = rev_insert_batch(batch, InsertMode::Keep).apply(world) {
+                let name = type_name_of_val(&Commands::rev_try_insert_batch_if_new::<I, B>).into();
+                warn(error, ErrorContext::Command { name });
+            }
+        })
+    }
+
     fn rev_init_resource<R: Resource + FromWorld>(&mut self) {
         self.queue(rev_init_resource::<R>())
     }
+
     fn rev_insert_resource<R: Resource>(&mut self, resource: R) {
         self.queue(rev_insert_resource(resource))
     }
+
     fn rev_remove_resource<R: Resource>(&mut self) {
         self.queue(rev_remove_resource::<R>())
     }
 }
 
-//todo: deprecate
-#[derive(Resource)]
-struct EmptyEntity(Entity);
-
-impl FromWorld for EmptyEntity {
-    fn from_world(world: &mut World) -> Self {
-        // do not just take any existing empty entity, it likely belongs to other logic
-        Self(world.spawn_empty().id())
-    }
-}
-pub trait EmptyEntityScope {
-    /// Get a scope of the world and an entity id that is empty.
-    ///
-    /// When the closure returns, the entity is cleared from any remaining components.
-    ///
-    /// The entity may be changed, for example when components are moved into it and another
-    /// entity became empty. One should not otherwise put any assumptions on the entity
-    /// after returning as other code calling this method may change the empty entity as well.
-    fn empty_entity_scope<Out>(&mut self, c: impl FnOnce(&mut Self, &mut Entity) -> Out) -> Out;
-}
-
-impl EmptyEntityScope for World {
-    fn empty_entity_scope<Out>(&mut self, c: impl FnOnce(&mut Self, &mut Entity) -> Out) -> Out {
-        self.init_resource::<EmptyEntity>();
-        self.resource_scope::<EmptyEntity, Out>(|world, mut entity| {
-            let out = c(world, &mut entity.0);
-            world.entity_mut(entity.0).clear();
-            out
-        })
-    }
-}
-
-fn archetype_insert_keep(bundle_info: &BundleInfo, archetype: &Archetype) -> Box<[ComponentId]> {
-    bundle_info
-        .iter_contributed_components()
-        .filter(|component_id| !archetype.contains(*component_id))
-        .collect()
-}
-
-fn archetype_insert_replace(bundle_info: &BundleInfo, archetype: &Archetype) -> Box<[ComponentId]> {
-    bundle_info
-        .iter_required_components()
-        .filter(|component_id| !archetype.contains(*component_id))
-        .chain(bundle_info.iter_explicit_components())
-        .collect()
-}
-
-fn archetype_insert_replace_remove(
-    bundle_info: &BundleInfo,
-    archetype: &Archetype,
-) -> Box<[ComponentId]> {
-    bundle_info
-        .iter_explicit_components()
-        .filter(|component_id| archetype.contains(*component_id))
-        .collect()
-}
-
-fn archetype_replace_with_requires(
-    bundle_info: &BundleInfo,
-    archetype: &Archetype,
-) -> Box<[ComponentId]> {
-    bundle_info
-        .iter_contributed_components()
-        .filter(|component_id| archetype.contains(*component_id))
-        .collect()
-}
-
-#[derive(PartialEq, Eq, Hash)]
-struct ReplaceComponents<Insert = [ComponentId; 1], Backup = [ComponentId; 1]> {
-    insert: Insert,
-    backup: Backup,
-}
-
-impl<Insert, Backup> ReplaceComponents<Insert, Backup>
-where
-    for<'a> &'a Insert: IntoIterator<Item = &'a ComponentId>,
-    for<'a> &'a Backup: IntoIterator<Item = &'a ComponentId>,
-{
-    fn movers<const UNDO: bool>(&self, world: &mut World) -> (EntityCloner, EntityCloner) {
-        if UNDO {
-            (
-                move_components(world, (&self.insert).into_iter().copied(), true),
-                move_components(world, (&self.backup).into_iter().copied(), true),
-            )
-        } else {
-            (
-                move_components(world, (&self.backup).into_iter().copied(), true),
-                move_components(world, (&self.insert).into_iter().copied(), true),
-            )
-        }
-    }
-}
-
-fn move_components(
-    world: &mut World,
-    components: impl Iterator<Item = ComponentId>,
-    with_despawn_at_out_of_log: bool,
-) -> EntityCloner {
-    let mut builder = EntityCloner::build(world);
-    builder
-        .deny_all()
-        .without_required_components(move |builder| {
-            builder.allow_by_ids(components);
-            if with_despawn_at_out_of_log {
-                builder.allow::<DespawnAtOutOfLog>();
-            }
-        })
-        .move_components(true);
-    builder.finish()
-}
-
-// todo: move all components in a buffer on despawn
 /// Reversible version of [`spawn_batch`](bevy::ecs::system::command::spawn_batch).
-///
-/// If the entities are spawned with [`Disabled`], undoing this will do nothing though exiting the log when this command is undone still despawns the entities.
 #[track_caller]
 pub fn rev_spawn_batch<I>(bundles_iter: I) -> impl Command
 where
     I: IntoIterator + Send + Sync + 'static,
     I::Item: Bundle<Effect: NoBundleEffect>,
 {
-    #[derive(Clone)]
-    struct SpawnBatch {
-        entities: Box<[Entity]>,
-        marker: DespawnAtOutOfLog,
-    }
-
-    impl UndoRedo for SpawnBatch {
-        fn undo(&mut self, world: &mut World) {
-            world.insert_batch(
-                self.entities
-                    .iter()
-                    .cloned()
-                    .map(|entity| (entity, self.marker)),
-            );
-        }
-        fn redo(&mut self, world: &mut World) {
-            let mut commands = world.commands();
-            for &entity in &*self.entities {
-                commands.entity(entity).remove::<DespawnAtOutOfLog>();
-            }
-            world.flush();
-        }
-    }
-
     |world: &mut World| {
-        let marker = DespawnAtOutOfLog::new(world.resource::<RevMeta>());
-        let entities = world.spawn_batch(bundles_iter).collect();
-        world.buffer_undo_redo(SpawnBatch { entities, marker });
+        world.rev_spawn_batch(bundles_iter);
     }
 }
 
-/// Reversible version of [`insert_batch`](bevy::ecs::system::command::insert_batch).
-///
-/// Currently requires all components in `B` to be clonable.
+/// Reversible version of [`insert_batch`].
 #[track_caller]
 pub fn rev_insert_batch<I, B>(batch: I, insert_mode: InsertMode) -> impl Command<CommandResult>
 where
     I: IntoIterator<Item = (Entity, B)> + Send + Sync + 'static,
     B: Bundle<Effect: NoBundleEffect>,
 {
-    struct InsertBatchKeep {
-        entity_buffer_pairs: Box<[(Entity, Entity)]>,
-        components: Box<[ComponentId]>,
-    }
-
-    impl InsertBatchKeep {
-        fn undo_redo<const UNDO: bool>(&self, world: &mut World) {
-            let mut mover = move_components(world, self.components.iter().copied(), false);
-            for &(entity, buffer) in self.entity_buffer_pairs.iter() {
-                if UNDO {
-                    mover.clone_entity(world, entity, buffer);
-                } else {
-                    mover.clone_entity(world, buffer, entity);
-                }
-            }
-        }
-    }
-
-    impl UndoRedo for InsertBatchKeep {
-        fn undo(&mut self, world: &mut World) {
-            self.undo_redo::<true>(world);
-        }
-        fn redo(&mut self, world: &mut World) {
-            self.undo_redo::<false>(world);
-        }
-    }
-
-    struct InsertBatchReplace {
-        /// First half (rounded down) are target entities, second half (rounded up) are buffer entities.
-        ///
-        /// First buffer entity is empty, unless the state is undone, then the last buffer entity is empty.
-        ///
-        /// Undoing/Redoing this makes the empty state bubble through the buffer entities.
-        entity_buffer_pairs: Box<[(Entity, Entity)]>,
-        components: ReplaceComponents<Box<[ComponentId]>, Box<[ComponentId]>>,
-    }
-
-    impl InsertBatchReplace {
-        fn init(&self, world: &mut World) {
-            let mut mover = move_components(world, self.components.backup.iter().copied(), false);
-            for &(entity, buffer) in self.entity_buffer_pairs.iter() {
-                mover.clone_entity(world, entity, buffer);
-            }
-        }
-        fn undo_redo<const UNDO: bool>(&mut self, world: &mut World) {
-            let mut iter = self.entity_buffer_pairs.iter_mut();
-            let mut next_pair = || {
-                if UNDO {
-                    iter.next_back()
-                } else {
-                    iter.next()
-                }
-            };
-            let (mut mover1, mut mover2) = self.components.movers::<UNDO>(world);
-            world.empty_entity_scope(|world, empty_entity| {
-                while let Some((entity, buffer)) = next_pair() {
-                    mover1.clone_entity(world, *entity, *empty_entity);
-                    mover2.clone_entity(world, *buffer, *entity);
-                    std::mem::swap(buffer, empty_entity);
-                }
-            })
-        }
-    }
-
-    impl UndoRedo for InsertBatchReplace {
-        fn undo(&mut self, world: &mut World) {
-            self.undo_redo::<true>(world);
-        }
-        fn redo(&mut self, world: &mut World) {
-            self.undo_redo::<false>(world);
-        }
-    }
-
-    fn update_entry<K: std::hash::Hash>(
-        entry: Entry<K, Vec<Entity>, FixedHasher>,
-        entities: &mut Vec<Entity>,
-    ) {
-        match entry {
-            Entry::Occupied(mut occupied) => occupied.get_mut().append(entities),
-            Entry::Vacant(vacant) => {
-                vacant.insert(std::mem::take(entities));
-            }
-        }
-    }
-
-    fn buffer<B: Bundle, const KEEP: bool>(
-        world: &mut World,
-        mut entities_per_archetype: HashMap<ArchetypeId, Vec<Entity>>,
-        len: usize,
-    ) {
-        let bundle_id = world.register_bundle::<B>().id();
-        let bundle_info = world.bundles().get(bundle_id).unwrap();
-        let mut entities_per_insert_components: HashMap<Box<[ComponentId]>, Vec<Entity>> =
-            Default::default();
-        let mut entities_per_replace_components: HashMap<
-            ReplaceComponents<Box<[ComponentId]>, Box<[ComponentId]>>,
-            Vec<Entity>,
-        > = Default::default();
-        for (archetype_id, entities) in entities_per_archetype.iter_mut() {
-            let archetype = world.archetypes().get(*archetype_id).expect("todo");
-            if KEEP {
-                let mut keep = archetype_insert_keep(bundle_info, archetype);
-                keep.sort();
-                update_entry(entities_per_insert_components.entry(keep), entities);
-            } else {
-                let mut insert = archetype_insert_replace(bundle_info, archetype);
-                insert.sort();
-                let mut backup = archetype_insert_replace_remove(bundle_info, archetype);
-                if !backup.is_empty() {
-                    backup.sort();
-                    let components = ReplaceComponents { insert, backup };
-                    update_entry(entities_per_replace_components.entry(components), entities);
-                } else {
-                    update_entry(entities_per_insert_components.entry(insert), entities);
-                }
-            }
-        }
-        let marker = DespawnAtOutOfLog::new(world.resource::<RevMeta>());
-        let buffer_entities: Box<[Entity]> = world
-            .spawn_batch(std::iter::repeat(marker).take(len))
-            .collect();
-        let mut buffer_iter = buffer_entities.iter().copied();
-        let keep: Box<[InsertBatchKeep]> = entities_per_insert_components
-            .into_iter()
-            .map(|(components, entities)| InsertBatchKeep {
-                entity_buffer_pairs: entities.into_iter().zip(buffer_iter.by_ref()).collect(),
-                components,
-            })
-            .collect();
-        world.buffer_undo_redo(keep);
-        if !KEEP && !entities_per_replace_components.is_empty() {
-            world.flush(); // flush buffer entities to backup components that are to be replaced
-            let replace: Box<[InsertBatchReplace]> = entities_per_replace_components
-                .into_iter()
-                .map(|(components, entities)| InsertBatchReplace {
-                    entity_buffer_pairs: entities.into_iter().zip(buffer_iter.by_ref()).collect(),
-                    components,
-                })
-                .inspect(|replace| replace.init(world))
-                .collect();
-            world.buffer_undo_redo(replace);
-        }
-    }
-
     move |world: &mut World| {
-        let mut entities_per_archetype: HashMap<ArchetypeId, Vec<Entity>> = HashMap::default();
-        let mut invalid_entities = Vec::new();
-        let batch: Vec<_> = batch
-            .into_iter()
-            .inspect(|&(entity, _)| match world.entities().get(entity) {
-                Some(location) => entities_per_archetype
-                    .entry(location.archetype_id)
-                    .or_insert_with(|| Vec::with_capacity(1))
-                    .push(entity),
-                None => invalid_entities.push(entity),
-            })
-            .collect();
-
-        if !invalid_entities.is_empty() {
-            Err(TryInsertBatchError {
-                bundle_type: core::any::type_name::<B>(),
-                entities: invalid_entities,
-            })?;
+        let batch: Vec<_> = batch.into_iter().collect();
+        let mut entity_archetype = Vec::with_capacity(batch.len());
+        let mut iter = batch.iter().map(|&(entity, _)| entity);
+        for entity in &mut iter {
+            let archetype_id = world
+                .entities()
+                .get(entity)
+                .map(|location| location.archetype_id);
+            match archetype_id {
+                None | Some(ArchetypeId::INVALID) => {
+                    let entities = [entity]
+                        .into_iter()
+                        .chain(iter.filter(|entity| {
+                            world.entities().get(*entity).is_none_or(|location| {
+                                location.archetype_id == ArchetypeId::INVALID
+                            })
+                        }))
+                        .collect();
+                    let err = TryInsertBatchError {
+                        bundle_type: core::any::type_name::<B>(),
+                        entities,
+                    };
+                    return Err(err.into());
+                }
+                Some(archetype_id) => entity_archetype.push((entity, archetype_id)),
+            }
         }
-
-        match insert_mode {
-            InsertMode::Keep => buffer::<B, true>(world, entities_per_archetype, batch.len()),
-            InsertMode::Replace => buffer::<B, false>(world, entities_per_archetype, batch.len()),
+        for (entity, archetype_id) in entity_archetype {
+            pre_insert::<B>(world, entity, archetype_id, insert_mode);
         }
-
-        world.insert_batch(batch);
-        Ok(())
+        insert_batch(batch, insert_mode).apply(world)
     }
 }
 
@@ -421,7 +266,7 @@ pub unsafe fn rev_insert_by_id<T: Component + Send + 'static>(
         if entity.contains_id(component_id) && mode == InsertMode::Keep {
             return;
         }
-        OwningPtr::make(value, |ptr| {
+        OwningPtr::make(value, |ptr| unsafe {
             // SAFETY: user promised fulfilling the contract in this command's docs
             entity.rev_insert_by_id(component_id, ptr);
         })
