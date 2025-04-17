@@ -10,7 +10,7 @@ use bevy::reflect::Reflect;
 
 use crate::meta::RevMeta;
 
-use super::{index_oob, OutOfLog};
+use super::{OutOfLog, index_oob};
 
 // todo: mention limitations, like missing frames
 #[derive(Debug, Clone, Default, Reflect)]
