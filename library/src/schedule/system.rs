@@ -1,8 +1,12 @@
 use std::{
-    any::{type_name, TypeId},
+    any::{TypeId, type_name},
     borrow::Cow,
     fmt::Debug,
-    sync::{Arc, Mutex, MutexGuard},
+    hash::Hash,
+    sync::{
+        Arc, Mutex, MutexGuard,
+        atomic::{AtomicU32, Ordering},
+    },
 };
 
 use bevy::{
@@ -10,55 +14,45 @@ use bevy::{
         archetype::ArchetypeComponentId,
         component::{ComponentId, Tick},
         query::Access,
-        schedule::{
-            ApplyDeferred, Chain, InternedSystemSet, IntoScheduleConfigs, Schedulable,
-            ScheduleConfigs,
-        },
+        schedule::{ApplyDeferred, InternedSystemSet, IntoScheduleConfigs, SystemSet},
         system::{
             IntoSystem, ReadOnlySystem, ScheduleSystem, System, SystemIn, SystemInput,
             SystemParamValidationError,
         },
-        world::{unsafe_world_cell::UnsafeWorldCell, DeferredWorld, World},
+        world::{DeferredWorld, World, unsafe_world_cell::UnsafeWorldCell},
     },
+    log::warn,
     utils::default,
 };
 
 use crate::{
     meta::RevMeta,
     schedule::{
-        error_per_flag, BackwardSet, BwdCmdSet, BwdCmdSysSet, BwdSysSet, ForwardSet, FwdSysSet,
+        BackwardSet, BwdCmdSet, BwdCmdSysSet, BwdSysSet, ForwardSet, FwdSysSet, error_per_flag,
     },
     undo_redo::{UndoRedoBuffer, UndoRedoLog},
 };
 
-use super::{AtomicSet, RevScheduleConfigs};
+use super::RevScheduleConfigs;
 
-pub(super) fn rev_system<T, In, Out, M1, M2>(system: T) -> RevScheduleConfigs<ScheduleSystem>
+pub(super) fn into_rev_system<T, In, Out, M1, M2>(system: T) -> RevScheduleConfigs<ScheduleSystem>
 where
     T: IntoSystem<In, Out, M1>,
+    In: SystemInput,
     RevSystem<T::System, true>: IntoScheduleConfigs<ScheduleSystem, M2>,
     RevSystem<T::System, false>: IntoScheduleConfigs<ScheduleSystem, M2>,
-    In: SystemInput,
 {
     let system = IntoSystem::into_system(system);
     let sys_name = system.name();
-    let unique_set = AtomicSet::new(sys_name.clone());
+    let unified = AtomicSet::new(sys_name.clone()).intern();
 
     if system.type_id() == TypeId::of::<ApplyDeferred>() {
-        fn empty_configs<T: Schedulable<GroupMetadata = Chain>>() -> ScheduleConfigs<T> {
-            ScheduleConfigs::Configs {
-                configs: Vec::new(),
-                collective_conditions: Vec::new(),
-                metadata: Chain::Unchained,
-            }
-        }
         return RevScheduleConfigs {
             forward_systems: ApplyDeferred.into_configs(),
-            backward_commands: ApplyDeferred.in_set(unique_set),
-            backward_systems: empty_configs(),
-            backward_commands_systems: unique_set.into_configs(),
-            conditioned: empty_configs(),
-            conditions: Vec::new(),
+            backward_commands: ApplyDeferred.in_set(unified),
+            backward_systems: ApplyDeferred.in_set(unified),
+            backward_commands_systems: unified.into_configs(),
+            unified: unified.into_configs(),
         };
     }
 
@@ -84,64 +78,70 @@ where
         default_system_sets: default_system_sets.clone(),
     });
 
-    let forward_systems = RevSystem::<_, true> {
-        shared: shared.clone(),
-        name: forward_system_name,
-        tick: default(),
-        is_send: default(),
-        is_exclusive: default(),
-        has_deferred: default(),
-        commands_err: false,
-        component_access: default(),
-        archetype_component_access: default(),
-    }
-    .in_set(unique_set)
-    .in_set(FwdSysSet(unique_set))
-    .in_set(ForwardSet);
+    let forward_systems = RevSystem::<_, true>::new(shared.clone(), forward_system_name)
+        .in_set(unified)
+        .in_set(FwdSysSet(unified))
+        .in_set(ForwardSet);
 
-    let backward_commands = CommandsBackward {
-        shared: shared.clone(),
-        name: backward_commands_name,
-        tick: default(),
-        has_deferred: default(),
-        commands_err: false,
-    }
-    .in_set(unique_set)
-    .in_set(BwdCmdSet(unique_set))
-    .in_set(BwdCmdSysSet(unique_set))
-    .in_set(BackwardSet);
+    let backward_commands = CommandsBackward::new(shared.clone(), backward_commands_name)
+        .in_set(unified)
+        .in_set(BwdCmdSet(unified))
+        .in_set(BwdCmdSysSet(unified))
+        .in_set(BackwardSet);
 
-    let backward_systems = RevSystem::<_, false> {
-        shared,
-        name: backward_system_name,
-        tick: default(),
-        is_send: default(),
-        is_exclusive: default(),
-        has_deferred: default(),
-        commands_err: false,
-        component_access: default(),
-        archetype_component_access: default(),
-    }
-    .in_set(unique_set)
-    .in_set(BwdSysSet(unique_set))
-    .in_set(BwdCmdSysSet(unique_set))
-    .in_set(BackwardSet)
-    .after(BwdCmdSet(unique_set));
+    let backward_systems = RevSystem::<_, false>::new(shared, backward_system_name)
+        .in_set(unified)
+        .in_set(BwdSysSet(unified))
+        .in_set(BwdCmdSysSet(unified))
+        .in_set(BackwardSet)
+        .after(BwdCmdSet(unified));
 
     let mut configs = RevScheduleConfigs {
         forward_systems,
         backward_commands,
         backward_systems,
-        backward_commands_systems: BwdCmdSysSet(unique_set).into_configs(),
-        conditioned: unique_set.into_configs(),
-        conditions: Vec::new(),
+        backward_commands_systems: BwdCmdSysSet(unified).into_configs(),
+        unified: unified.into_configs(),
     };
 
     for set in default_system_sets {
-        configs.in_set_inner(set)
+        configs.rev_in_set_inner(set)
     }
 
     configs
+}
+
+#[derive(SystemSet, Clone, Debug, Eq)]
+struct AtomicSet {
+    id: u32,
+    #[allow(dead_code)]
+    name: Cow<'static, str>,
+}
+
+impl PartialEq for AtomicSet {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+}
+
+impl Hash for AtomicSet {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.id.hash(state)
+    }
+}
+
+impl AtomicSet {
+    fn new(name: Cow<'static, str>) -> Self {
+        static ID: AtomicU32 = AtomicU32::new(0);
+        let id = ID.fetch_add(1, Ordering::Relaxed);
+        if id == u32::MAX {
+            warn!(
+                "an internal atomic counter to create reversible systems is exhausted, \
+                creating more may lead to multiple systems sharing the same run condition"
+            );
+        }
+        Self { id, name }
+    }
 }
 
 pub(super) struct RevSystem<T, const FORWARD: bool> {
@@ -156,6 +156,22 @@ pub(super) struct RevSystem<T, const FORWARD: bool> {
     // these need to be cloned because `&'a Access` cannot be returned from owned `MutexGuard<'a, Access>`
     component_access: Access<ComponentId>,
     archetype_component_access: Access<ArchetypeComponentId>,
+}
+
+impl<T, const FORWARD: bool> RevSystem<T, FORWARD> {
+    fn new(shared: Arc<Shared<T>>, name: String) -> Self {
+        Self {
+            shared,
+            name,
+            tick: default(),
+            is_send: default(),
+            is_exclusive: default(),
+            has_deferred: default(),
+            commands_err: false,
+            component_access: default(),
+            archetype_component_access: default(),
+        }
+    }
 }
 
 struct Shared<T> {
@@ -226,17 +242,27 @@ impl<T: System, const FORWARD: bool> System for RevSystem<T, FORWARD> {
         world: UnsafeWorldCell,
     ) -> Result<(), SystemParamValidationError> {
         // commands log needs to read RevMeta
-        if self.is_exclusive && world.get_resource::<RevMeta>().is_none() {
-            return Err(SystemParamValidationError::invalid::<Self>(
-                RevMeta::EXPECT_IN_WORLD,
-            ));
+        if self.is_exclusive {
+            let meta = unsafe {
+                // SAFETY: todo
+                world.get_resource::<RevMeta>()
+            };
+            if meta.is_none() {
+                return Err(SystemParamValidationError::invalid::<Self>(
+                    RevMeta::EXPECT_IN_WORLD,
+                ));
+            }
         }
-        self.shared
+        let system = &mut self
+            .shared
             .inner
             .try_lock()
             .unwrap_or_else(expect_lock(&self.name))
-            .system
-            .validate_param_unsafe(world)
+            .system;
+        unsafe {
+            // SAFETY: todo
+            system.validate_param_unsafe(world)
+        }
     }
     fn validate_param(&mut self, world: &World) -> Result<(), SystemParamValidationError> {
         // commands log needs to read RevMeta
@@ -264,11 +290,20 @@ impl<T: System, const FORWARD: bool> System for RevSystem<T, FORWARD> {
             .unwrap_or_else(expect_lock(&self.name));
 
         if !self.is_exclusive() {
-            shared.system.run_unsafe(input, world)
+            unsafe {
+                // SAFETY: todo
+                shared.system.run_unsafe(input, world)
+            }
         } else if FORWARD {
-            let out = shared.system.run_unsafe(input, world);
-            // SAFETY: exclusive systems have full unique access to the world
-            if let Err(err) = shared.commands_log.forward(world.world_mut(), &self.name) {
+            let out = unsafe {
+                // SAFETY: todo
+                shared.system.run_unsafe(input, world)
+            };
+            let world = unsafe {
+                // SAFETY: exclusive systems have full unique access to the world
+                world.world_mut()
+            };
+            if let Err(err) = shared.commands_log.forward(world, &self.name) {
                 error_per_flag!(
                     &mut self.commands_err,
                     "Reversible commands from reversible exclusive system {} could not be done/redone: {err:#?}",
@@ -277,15 +312,23 @@ impl<T: System, const FORWARD: bool> System for RevSystem<T, FORWARD> {
             }
             out
         } else {
-            // SAFETY: exclusive systems have full unique access to the world
-            if let Err(err) = shared.commands_log.backward(world.world_mut(), &self.name) {
-                error_per_flag!(
-                    &mut self.commands_err,
-                    "Reversible commands from reversible exclusive system {} could not be undone: {err:#?}",
-                    self.name
-                )
+            {
+                let world = unsafe {
+                    // SAFETY: exclusive systems have full unique access to the world
+                    world.world_mut()
+                };
+                if let Err(err) = shared.commands_log.backward(world, &self.name) {
+                    error_per_flag!(
+                        &mut self.commands_err,
+                        "Reversible commands from reversible exclusive system {} could not be undone: {err:#?}",
+                        self.name
+                    )
+                }
             }
-            shared.system.run_unsafe(input, world)
+            unsafe {
+                // SAFETY: todo
+                shared.system.run_unsafe(input, world)
+            }
         }
     }
     fn apply_deferred(&mut self, world: &mut World) {
@@ -372,6 +415,18 @@ struct CommandsBackward<T> {
     commands_err: bool,
 }
 
+impl<T> CommandsBackward<T> {
+    fn new(shared: Arc<Shared<T>>, name: String) -> Self {
+        Self {
+            shared,
+            name,
+            tick: default(),
+            has_deferred: default(),
+            commands_err: false,
+        }
+    }
+}
+
 impl<T: System> System for CommandsBackward<T> {
     type In = ();
     type Out = ();
@@ -406,12 +461,16 @@ impl<T: System> System for CommandsBackward<T> {
             ));
         }
         // keep symmetry?
-        self.shared
+        let system = &mut self
+            .shared
             .inner
             .try_lock()
             .unwrap_or_else(expect_lock(&self.name))
-            .system
-            .validate_param_unsafe(world)
+            .system;
+        unsafe {
+            // SAFETY: todo
+            system.validate_param_unsafe(world)
+        }
     }
     fn validate_param(&mut self, world: &World) -> Result<(), SystemParamValidationError> {
         // noop if has no deferred
