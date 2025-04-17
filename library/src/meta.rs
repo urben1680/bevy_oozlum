@@ -12,10 +12,10 @@ use bevy::{
         system::{
             Local, ReadOnlySystemParam, Res, SystemMeta, SystemParam, SystemParamValidationError,
         },
-        world::{unsafe_world_cell::UnsafeWorldCell, World},
+        world::{World, unsafe_world_cell::UnsafeWorldCell},
     },
     log::info,
-    reflect::{std_traits::ReflectDefault, Reflect},
+    reflect::{Reflect, std_traits::ReflectDefault},
 };
 
 #[cfg(feature = "serde")]
@@ -24,7 +24,7 @@ use bevy::reflect::{ReflectDeserialize, ReflectSerialize};
 use crate::{
     log::OutOfLog,
     schedule::RevUpdate,
-    undo_redo::{BufferComponentsInProgress, DespawnAtOutOfLog, UndoRedoBuffer},
+    undo_redo::{BufferComponentsInProgress, RefRevDespawned, UndoRedoBuffer},
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -108,30 +108,39 @@ unsafe impl SystemParam for RevDirection {
         _system_meta: &SystemMeta,
         world: UnsafeWorldCell,
     ) -> Result<(), SystemParamValidationError> {
-        // SAFETY: Read-only access is registered in init_state for this id and ptr read access is finished before return.
-        world
-            .get_resource_by_id(component_id)
-            .map(|ptr| ptr.deref::<RevMeta>()) // SAFETY: todo
-            .ok_or(SystemParamValidationError::invalid::<RevDirection>(
-                "RevMeta does not exist",
-            ))?
-            .get_running_direction()
-            .ok_or(SystemParamValidationError::invalid::<RevDirection>(
-                "RevMeta is not in a running direction",
-            ))
-            .map(|_| ())
+        let ptr = unsafe {
+            // SAFETY: Read-only access is registered in init_state for this id and ptr read access is finished before return.
+            world.get_resource_by_id(component_id)
+        };
+        ptr.map(|ptr| unsafe {
+            // SAFETY: todo
+            ptr.deref::<RevMeta>()
+        })
+        .ok_or(SystemParamValidationError::invalid::<RevDirection>(
+            "RevMeta does not exist",
+        ))?
+        .get_running_direction()
+        .ok_or(SystemParamValidationError::invalid::<RevDirection>(
+            "RevMeta is not in a running direction",
+        ))
+        .map(|_| ())
     }
     unsafe fn get_param<'world, 'state>(
-        state: &'state mut Self::State,
+        &mut component_id: &'state mut Self::State,
         _system_meta: &SystemMeta,
         world: UnsafeWorldCell<'world>,
         _change_tick: Tick,
     ) -> Self::Item<'world, 'state> {
-        world
-            .get_resource_by_id(*state)
-            .map(|ptr| ptr.deref::<RevMeta>())
-            .unwrap()
-            .running_direction()
+        let ptr = unsafe {
+            // SAFETY: Read-only access is registered in init_state for this id and ptr read access is finished before return.
+            world.get_resource_by_id(component_id)
+        };
+        ptr.map(|ptr| unsafe {
+            // SAFETY: todo
+            ptr.deref::<RevMeta>()
+        })
+        .unwrap()
+        .running_direction()
     }
 }
 
@@ -361,7 +370,7 @@ impl RevMeta {
     /// will cause `RevMeta` to be reverted to its state it was in before the run was attempted.
     pub fn try_run_rev_update(
         world: &mut World,
-        buffers: &mut QueryState<(Entity, &DespawnAtOutOfLog)>,
+        buffers: &mut QueryState<(Entity, RefRevDespawned)>,
         mut out_of_log_buffers: Local<Vec<Entity>>,
     ) -> Result<(), BevyError> {
         /// Use a Resource instead of Local so this system can be added multiple times and keeps track globally
@@ -473,7 +482,9 @@ impl RevMeta {
     /// this will panic. The same can happen if `RevMeta` is in an invalid state, cloned from inside the closure for example.
     pub fn update<Out>(&mut self, c: impl FnOnce(&mut Self) -> Out) -> Option<Out> {
         if self.get_running_direction().is_some() {
-            panic!("unexpected initial direction, expected pause or ran variant, do not call this method recursively\n{self:#?}");
+            panic!(
+                "unexpected initial direction, expected pause or ran variant, do not call this method recursively\n{self:#?}"
+            );
         }
         self.update_internal();
         self.get_running_direction().map(|_| {
