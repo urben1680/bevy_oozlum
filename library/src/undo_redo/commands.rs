@@ -1,15 +1,11 @@
-use bevy::{
-    ecs::{
-        archetype::ArchetypeId,
-        bundle::{Bundle, DynamicBundle, InsertMode, NoBundleEffect},
-        component::{Component, ComponentId},
-        entity::Entity,
-        error::{warn, ErrorContext, Result as CommandResult},
-        resource::Resource,
-        system::{command::insert_batch, Command, Commands, EntityCommand, EntityCommands},
-        world::{error::TryInsertBatchError, EntityWorldMut, FromWorld, World},
-    },
-    ptr::OwningPtr,
+use bevy::ecs::{
+    archetype::ArchetypeId,
+    bundle::{Bundle, DynamicBundle, InsertMode, NoBundleEffect},
+    entity::Entity,
+    error::{ErrorContext, Result as CommandResult, warn},
+    resource::Resource,
+    system::{Command, Commands, EntityCommands, command::insert_batch},
+    world::{FromWorld, World, error::TryInsertBatchError},
 };
 
 use crate::meta::RevMeta;
@@ -17,18 +13,14 @@ use crate::meta::RevMeta;
 use super::*;
 
 pub trait RevCommands {
-    /// Reversible version of [`Commands::spawn`].
-    fn rev_spawn<T: Bundle>(&mut self, bundle: T) -> EntityCommands;
+    // the methods here are purposely sorted alphabetically to make it easily comparable to bevy's docs
+    // unmentioned methods are either
+    // a) unrelated to reversible structural changes OR
+    // b) deprecated in bevy OR
+    // c) missed by accident!
 
-    /// Reversible version of [`Commands::spawn_empty`].
-    fn rev_spawn_empty(&mut self) -> EntityCommands;
-
-    /// Reversible version of [`Commands::spawn_batch`].
-    fn rev_spawn_batch<I>(&mut self, batch: I)
-    where
-        I: IntoIterator + Send + Sync + 'static,
-        <I as IntoIterator>::Item: Bundle,
-        <<I as IntoIterator>::Item as DynamicBundle>::Effect: NoBundleEffect;
+    /// Reversible version of [`Commands::init_resource`].
+    fn rev_init_resource<R: Resource + FromWorld>(&mut self);
 
     /// Reversible version of [`Commands::insert_batch`].
     fn rev_insert_batch<I, B>(&mut self, batch: I)
@@ -44,6 +36,25 @@ pub trait RevCommands {
         B: Bundle,
         <B as DynamicBundle>::Effect: NoBundleEffect;
 
+    /// Reversible version of [`Commands::insert_resource`].
+    fn rev_insert_resource<R: Resource>(&mut self, resource: R);
+
+    /// Reversible version of [`Commands::remove_resource`].
+    fn rev_remove_resource<R: Resource>(&mut self);
+
+    /// Reversible version of [`Commands::spawn`].
+    fn rev_spawn<T: Bundle>(&mut self, bundle: T) -> EntityCommands;
+
+    /// Reversible version of [`Commands::spawn_batch`].
+    fn rev_spawn_batch<I>(&mut self, batch: I)
+    where
+        I: IntoIterator + Send + Sync + 'static,
+        <I as IntoIterator>::Item: Bundle,
+        <<I as IntoIterator>::Item as DynamicBundle>::Effect: NoBundleEffect;
+
+    /// Reversible version of [`Commands::spawn_empty`].
+    fn rev_spawn_empty(&mut self) -> EntityCommands;
+
     /// Reversible version of [`Commands::try_insert_batch`].
     fn rev_try_insert_batch<I, B>(&mut self, batch: I)
     where
@@ -57,37 +68,36 @@ pub trait RevCommands {
         I: IntoIterator<Item = (Entity, B)> + Send + Sync + 'static,
         B: Bundle,
         <B as DynamicBundle>::Effect: NoBundleEffect;
-
-    /// Reversible version of [`Commands::init_resource`].
-    fn rev_init_resource<R: Resource + FromWorld>(&mut self);
-
-    /// Reversible version of [`Commands::insert_resource`].
-    fn rev_insert_resource<R: Resource>(&mut self, resource: R);
-
-    /// Reversible version of [`Commands::remove_resource`].
-    fn rev_remove_resource<R: Resource>(&mut self);
 }
 
 impl RevCommands for Commands<'_, '_> {
     fn rev_spawn<T: Bundle>(&mut self, bundle: T) -> EntityCommands {
         let mut entity_commands = self.spawn(bundle);
         let entity = entity_commands.id();
-        entity_commands.commands_mut().queue(move |world: &mut World| {
-            let meta = world.get_resource::<RevMeta>().expect(RevMeta::EXPECT_IN_WORLD);
-            let marker = DespawnAtOutOfLog::new(meta);
-            world.buffer_undo_redo(Spawn { entity, marker });
-        });
+        entity_commands
+            .commands_mut()
+            .queue(move |world: &mut World| {
+                let meta = world
+                    .get_resource::<RevMeta>()
+                    .expect(RevMeta::EXPECT_IN_WORLD);
+                let marker = DespawnAtOutOfLog::new(meta);
+                world.buffer_undo_redo(Spawn { entity, marker });
+            });
         entity_commands
     }
 
     fn rev_spawn_empty(&mut self) -> EntityCommands {
         let mut entity_commands = self.spawn_empty();
         let entity = entity_commands.id();
-        entity_commands.commands_mut().queue(move |world: &mut World| {
-            let meta = world.get_resource::<RevMeta>().expect(RevMeta::EXPECT_IN_WORLD);
-            let marker = DespawnAtOutOfLog::new(meta);
-            world.buffer_undo_redo(Spawn { entity, marker });
-        });
+        entity_commands
+            .commands_mut()
+            .queue(move |world: &mut World| {
+                let meta = world
+                    .get_resource::<RevMeta>()
+                    .expect(RevMeta::EXPECT_IN_WORLD);
+                let marker = DespawnAtOutOfLog::new(meta);
+                world.buffer_undo_redo(Spawn { entity, marker });
+            });
         entity_commands
     }
 
@@ -95,7 +105,7 @@ impl RevCommands for Commands<'_, '_> {
     where
         I: IntoIterator + Send + Sync + 'static,
         <I as IntoIterator>::Item: Bundle,
-        <<I as IntoIterator>::Item as DynamicBundle>::Effect: NoBundleEffect
+        <<I as IntoIterator>::Item as DynamicBundle>::Effect: NoBundleEffect,
     {
         self.queue(move |world: &mut World| {
             world.rev_spawn_batch(batch);
@@ -106,7 +116,7 @@ impl RevCommands for Commands<'_, '_> {
     where
         I: IntoIterator<Item = (Entity, B)> + Send + Sync + 'static,
         B: Bundle,
-        <B as DynamicBundle>::Effect: NoBundleEffect
+        <B as DynamicBundle>::Effect: NoBundleEffect,
     {
         self.queue(move |world: &mut World| {
             world.rev_insert_batch(batch);
@@ -117,7 +127,7 @@ impl RevCommands for Commands<'_, '_> {
     where
         I: IntoIterator<Item = (Entity, B)> + Send + Sync + 'static,
         B: Bundle,
-        <B as DynamicBundle>::Effect: NoBundleEffect
+        <B as DynamicBundle>::Effect: NoBundleEffect,
     {
         self.queue(move |world: &mut World| {
             world.rev_insert_batch_if_new(batch);
@@ -128,7 +138,7 @@ impl RevCommands for Commands<'_, '_> {
     where
         I: IntoIterator<Item = (Entity, B)> + Send + Sync + 'static,
         B: Bundle,
-        <B as DynamicBundle>::Effect: NoBundleEffect
+        <B as DynamicBundle>::Effect: NoBundleEffect,
     {
         self.queue(move |world: &mut World| {
             if let Err(error) = rev_insert_batch(batch, InsertMode::Replace).apply(world) {
@@ -142,7 +152,7 @@ impl RevCommands for Commands<'_, '_> {
     where
         I: IntoIterator<Item = (Entity, B)> + Send + Sync + 'static,
         B: Bundle,
-        <B as DynamicBundle>::Effect: NoBundleEffect
+        <B as DynamicBundle>::Effect: NoBundleEffect,
     {
         self.queue(move |world: &mut World| {
             if let Err(error) = rev_insert_batch(batch, InsertMode::Keep).apply(world) {
@@ -238,99 +248,6 @@ pub fn rev_insert_resource<R: Resource>(resource: R) -> impl Command {
 /// Reversible version of [`remove_resource`](bevy::ecs::system::command::remove_resource).
 pub fn rev_remove_resource<R: Resource>() -> impl Command {
     |world: &mut World| world.rev_remove_resource::<R>()
-}
-
-/// Reversible version of [`insert`](bevy::ecs::system::entity_command::insert).
-#[track_caller]
-pub fn rev_insert<B: Bundle>(bundle: B, mode: InsertMode) -> impl EntityCommand {
-    move |mut entity: EntityWorldMut| {
-        match mode {
-            InsertMode::Keep => entity.rev_insert_if_new(bundle),
-            InsertMode::Replace => entity.rev_insert(bundle),
-        };
-    }
-}
-
-/// Reversible version of [`insert_by_id`](bevy::ecs::system::entity_command::insert_by_id).
-///
-/// # Safety
-///
-/// - [`ComponentId`] must be from the same world as the target entity.
-/// - `T` must have the same layout as the one passed during `component_id` creation.
-pub unsafe fn rev_insert_by_id<T: Component + Send + 'static>(
-    component_id: ComponentId,
-    value: T,
-    mode: InsertMode,
-) -> impl EntityCommand {
-    move |mut entity: EntityWorldMut| {
-        if entity.contains_id(component_id) && mode == InsertMode::Keep {
-            return;
-        }
-        OwningPtr::make(value, |ptr| unsafe {
-            // SAFETY: user promised fulfilling the contract in this command's docs
-            entity.rev_insert_by_id(component_id, ptr);
-        })
-    }
-}
-
-/// Reversible version of [`insert_from_world`](bevy::ecs::system::entity_command::insert_from_world).
-#[track_caller]
-pub fn rev_insert_from_world<T: Component + FromWorld>(mode: InsertMode) -> impl EntityCommand {
-    move |mut entity: EntityWorldMut| {
-        let value = entity.world_scope(|world| T::from_world(world));
-        match mode {
-            InsertMode::Keep => entity.insert_if_new(value),
-            InsertMode::Replace => entity.insert(value),
-        };
-    }
-}
-
-/// Reversible version of [`remove`](bevy::ecs::system::entity_command::remove).
-#[track_caller]
-pub fn rev_remove<B: Bundle>() -> impl EntityCommand {
-    |mut entity: EntityWorldMut| {
-        entity.rev_remove::<B>();
-    }
-}
-
-/// Reversible version of [`remove_with_requires`](bevy::ecs::system::entity_command::remove_with_requires).
-#[track_caller]
-pub fn rev_remove_with_requires<B: Bundle>() -> impl EntityCommand {
-    |mut entity: EntityWorldMut| {
-        entity.rev_remove_with_requires::<B>();
-    }
-}
-
-/// Reversible version of [`remove_by_id`](bevy::ecs::system::entity_command::remove_by_id).
-#[track_caller]
-pub fn rev_remove_by_id(component_id: ComponentId) -> impl EntityCommand {
-    move |mut entity: EntityWorldMut| {
-        entity.rev_remove_by_id(component_id);
-    }
-}
-
-/// Reversible version of [`clear`](bevy::ecs::system::entity_command::clear).
-#[track_caller]
-pub fn rev_clear() -> impl EntityCommand {
-    |mut entity: EntityWorldMut| {
-        entity.rev_clear();
-    }
-}
-
-/// Reversible version of [`retain`](bevy::ecs::system::entity_command::retain).
-#[track_caller]
-pub fn rev_retain<B: Bundle>() -> impl EntityCommand {
-    |mut entity: EntityWorldMut| {
-        entity.rev_retain::<B>();
-    }
-}
-
-/// Reversible version of [`despawn`](bevy::ecs::system::entity_command::despawn).
-#[track_caller]
-pub fn rev_despawn() -> impl EntityCommand {
-    |entity: EntityWorldMut| {
-        entity.rev_despawn();
-    }
 }
 
 #[cfg(test)]

@@ -1,4 +1,4 @@
-use std::{any::TypeId, marker::PhantomData};
+use std::{any::TypeId, marker::PhantomData, ops::Deref};
 
 use bevy::{
     ecs::{
@@ -9,8 +9,10 @@ use bevy::{
         },
         entity::{Entity, EntityClonerBuilder},
         hierarchy::ChildOf,
-        observer::TriggerTargets,
-        relationship::{Relationship, RelationshipTarget},
+        relationship::{
+            OrderedRelationshipSourceCollection, Relationship, RelationshipSourceCollection,
+            RelationshipTarget,
+        },
         spawn::{Spawn, SpawnIter, SpawnableList},
     },
     ptr::OwningPtr,
@@ -20,63 +22,42 @@ use variadics_please::all_tuples;
 use super::*;
 
 pub trait RevEntityWorldMut<'w> {
-    /// Reversible version of [`EntityWorldMut::insert`].
-    fn rev_insert<T: Bundle>(&mut self, bundle: T) -> &mut Self;
+    /// todo
+    fn buffer_components(&mut self, at: BufferAt, components: &[ComponentId]) -> Option<Entity>;
 
-    /// Reversible version of [`EntityWorldMut::insert_if_new`].
-    fn rev_insert_if_new<T: Bundle>(&mut self, bundle: T) -> &mut Self;
-
-    /// Reversible version of [`EntityWorldMut::insert_by_id`].
-    ///
-    /// # Safety
-    ///
-    /// - [`ComponentId`] must be from the same world as [`EntityWorldMut`]
-    /// - [`OwningPtr`] must be a valid reference to the type represented by [`ComponentId`]
-    unsafe fn rev_insert_by_id(
+    /// todo
+    fn buffer_components_cached<T: Deref<Target = [ComponentId]>>(
         &mut self,
-        component_id: ComponentId,
-        component: OwningPtr<'_>,
-    ) -> &mut Self;
+        key: impl Hash + 'static,
+        components: impl FnOnce(&mut World) -> (BufferAt, T),
+    ) -> Option<Entity>;
 
-    /// Reversible version of [`EntityWorldMut::insert_by_ids`].
-    ///
-    /// # Safety
-    ///
-    /// - Each [`ComponentId`] must be from the same world as [`EntityWorldMut`]
-    /// - Each [`OwningPtr`] must be a valid reference to the type represented by [`ComponentId`]
-    unsafe fn rev_insert_by_ids<'a, I: Iterator<Item = OwningPtr<'a>>>(
-        &mut self,
-        component_ids: &[ComponentId],
-        iter_components: I,
-    ) -> &mut Self;
+    // the methods here are purposely sorted alphabetically to make it easily comparable to bevy's docs
+    // unmentioned methods are either
+    // a) unrelated to reversible structural changes OR
+    // b) deprecated in bevy OR
+    // c) missed by accident!
 
-    /// Reversible version of [`EntityWorldMut::remove`].
-    fn rev_remove<T: Bundle>(&mut self) -> &mut Self;
+    /// Reversible version of [`EntityWorldMut::add_child`].
+    fn rev_add_child(&mut self, child: Entity) -> &mut Self {
+        self.rev_add_one_related::<ChildOf>(child)
+    }
 
-    /// Reversible version of [`EntityWorldMut::remove_with_requires`].
-    fn rev_remove_with_requires<T: Bundle>(&mut self) -> &mut Self;
+    /// Reversible version of [`EntityWorldMut::add_children`].
+    fn rev_add_children(&mut self, children: &[Entity]) -> &mut Self {
+        self.rev_add_related::<ChildOf>(children)
+    }
 
-    /// Reversible version of [`EntityWorldMut::take`].
-    fn rev_take<T: Bundle + BundleFromComponents + Clone>(&mut self) -> Option<T>;
+    /// Reversible version of [`EntityWorldMut::add_one_related`].
+    fn rev_add_one_related<R: Relationship>(&mut self, entity: Entity) -> &mut Self {
+        self.rev_add_related::<R>(&[entity])
+    }
 
-    /// Reversible version of [`EntityWorldMut::retain`].
-    fn rev_retain<T: Bundle>(&mut self) -> &mut Self;
-
-    /// Reversible version of [`EntityWorldMut::remove_by_id`].
-    fn rev_remove_by_id(&mut self, component_id: ComponentId) -> &mut Self;
-
-    /// Reversible version of [`EntityWorldMut::remove_by_ids`].
-    fn rev_remove_by_ids(&mut self, component_ids: &[ComponentId]) -> &mut Self;
+    /// Reversible version of [`EntityWorldMut::add_related`].
+    fn rev_add_related<R: Relationship>(&mut self, related: &[Entity]) -> &mut Self;
 
     /// Reversible version of [`EntityWorldMut::clear`].
     fn rev_clear(&mut self) -> &mut Self;
-
-    /// Reversible version of [`EntityWorldMut::despawn`].
-    ///
-    /// Note that this despawns the entity not now but later when this action goes out of log.
-    ///
-    /// Until then the entity is disabled via the [`DespawnAtOutOfLog`] component.
-    fn rev_despawn(self);
 
     /// Reversible version of [`EntityWorldMut::clone_and_spawn`].
     fn rev_clone_and_spawn(&mut self) -> Entity;
@@ -90,83 +71,29 @@ pub trait RevEntityWorldMut<'w> {
     /// Reversible version of [`EntityWorldMut::clone_components`].
     fn rev_clone_components<B: Bundle>(&mut self, target: Entity) -> &mut Self;
 
-    /// Reversible version of [`EntityWorldMut::move_components`].
-    fn rev_move_components<B: Bundle>(&mut self, target: Entity) -> &mut Self;
+    // rev_clone_with
+    // out of scope due complexity
 
-    /// Reversible version of [`EntityWorldMut::with_related`].
-    fn rev_with_related<R: Relationship>(
-        &mut self,
-        func: impl FnOnce(&mut RevRelatedSpawner<R>),
-    ) -> &mut Self;
-
-    /// Reversible version of [`EntityWorldMut::add_related`].
-    fn rev_add_related<R: Relationship>(&mut self, related: &[Entity]) -> &mut Self;
-
-    /// Reversible version of [`EntityWorldMut::add_one_related`].
-    fn rev_add_one_related<R: Relationship>(&mut self, entity: Entity) -> &mut Self;
+    /// Reversible version of [`EntityWorldMut::despawn`].
+    ///
+    /// Note that this despawns the entity not now but later when this action goes out of log.
+    fn rev_despawn(self);
 
     /// Reversible version of [`EntityWorldMut::despawn_related`].
     fn rev_despawn_related<S: RelationshipTarget>(&mut self) -> &mut Self;
 
-    /// Reversible version of [`EntityWorldMut::insert_recursive`].
-    fn rev_insert_recursive<S: RelationshipTarget>(
-        &mut self,
-        bundle: impl Bundle + Clone,
-    ) -> &mut Self;
-
-    /// Reversible version of [`EntityWorldMut::remove_recursive`].
-    fn rev_remove_recursive<S: RelationshipTarget, B: Bundle>(&mut self) -> &mut Self;
-
-    /// Reversible version of [`EntityWorldMut::with_children`].
-    fn rev_with_children(
-        &mut self,
-        func: impl FnOnce(&mut RevRelatedSpawner<ChildOf>),
-    ) -> &mut Self;
-
-    /// Reversible version of [`EntityWorldMut::add_children`].
-    fn rev_add_children(&mut self, children: &[Entity]) -> &mut Self;
-
-    /// Reversible version of [`EntityWorldMut::add_child`].
-    fn rev_add_child(&mut self, child: Entity) -> &mut Self;
-
-    /// Reversible version of [`EntityWorldMut::with_child`].
-    fn rev_with_child(&mut self, bundle: impl Bundle) -> &mut Self;
-
     /// Reversible version of [`EntityWorldMut::entry`].
     fn rev_entry<'a, T: Component>(&'a mut self) -> RevEntry<'w, 'a, T>;
 
-    fn buffer_components(
-        &mut self,
-        at: BufferAt,
-        components: Vec<ComponentId>,
-    ) -> Option<EntityRef>;
+    /// Reversible version of [`EntityWorldMut::insert`].
+    fn rev_insert<T: Bundle>(&mut self, bundle: T) -> &mut Self;
 
-    fn buffer_components_cached(
-        &mut self,
-        key: impl Hash + 'static,
-        components: impl FnOnce(&mut World) -> (BufferAt, Vec<ComponentId>),
-    ) -> Option<EntityRef>;
-}
-
-impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
-    fn rev_insert<T: Bundle>(&mut self, bundle: T) -> &mut Self {
-        let entity = self.id();
-        let archetype_id = self.archetype().id();
-        self.world_scope(|world| {
-            pre_insert::<T>(world, entity, archetype_id, InsertMode::Replace)
-        });
-        self.insert(bundle)
-    }
-
-    fn rev_insert_if_new<T: Bundle>(&mut self, bundle: T) -> &mut Self {
-        let entity = self.id();
-        let archetype_id = self.archetype().id();
-        self.world_scope(|world| {
-            pre_insert::<T>(world, entity, archetype_id, InsertMode::Keep)
-        });
-        self.insert_if_new(bundle)
-    }
-
+    /// Reversible version of [`EntityWorldMut::insert_by_id`].
+    ///
+    /// # Safety
+    ///
+    /// - [`ComponentId`] must be from the same world as [`EntityWorldMut`]
+    /// - [`OwningPtr`] must be a valid reference to the type represented by [`ComponentId`]
     unsafe fn rev_insert_by_id(
         &mut self,
         component_id: ComponentId,
@@ -176,6 +103,169 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
             // SAFETY: todo
             self.rev_insert_by_ids(&[component_id], [component].into_iter())
         }
+    }
+
+    /// Reversible version of [`EntityWorldMut::insert_by_ids`].
+    ///
+    /// # Safety
+    ///
+    /// - Each [`ComponentId`] must be from the same world as [`EntityWorldMut`]
+    /// - Each [`OwningPtr`] must be a valid reference to the type represented by [`ComponentId`]
+    unsafe fn rev_insert_by_ids<'a, I: Iterator<Item = OwningPtr<'a>>>(
+        &mut self,
+        component_ids: &[ComponentId],
+        iter_components: I,
+    ) -> &mut Self;
+
+    /// Reversible version of [`EntityWorldMut::insert_children`].
+    fn rev_insert_children(&mut self, index: usize, children: &[Entity]) -> &mut Self {
+        self.rev_insert_related::<ChildOf>(index, children)
+    }
+
+    /// Reversible version of [`EntityWorldMut::insert_if_new`].
+    fn rev_insert_if_new<T: Bundle>(&mut self, bundle: T) -> &mut Self;
+
+    /// Reversible version of [`EntityWorldMut::insert_recursive`].
+    fn rev_insert_recursive<S: RelationshipTarget>(
+        &mut self,
+        bundle: impl Bundle + Clone,
+    ) -> &mut Self;
+
+    // rev_insert_reflect
+    // out of scope due complexity
+
+    // rev_insert_reflect_with_registry
+    // out of scope due complexity
+
+    /// Reversible version of [`EntityWorldMut::insert_related`].
+    fn rev_insert_related<R: Relationship>(
+        &mut self,
+        index: usize,
+        related: &[Entity],
+    ) -> &mut Self
+    where
+        <R::RelationshipTarget as RelationshipTarget>::Collection:
+            OrderedRelationshipSourceCollection;
+
+    // rev_insert_with_relationship_hook_mode
+    // out of scope due complexity
+
+    // rev_is_despawned
+    // implemented via RevIsDespawned trait
+
+    /// Reversible version of [`EntityWorldMut::move_components`].
+    fn rev_move_components<B: Bundle>(&mut self, target: Entity) -> &mut Self {
+        // todo: when moving no longer requires Clone, replace this logic with non-Clone approach
+        self.rev_clone_components::<B>(target).rev_remove::<B>()
+    }
+
+    /// Reversible version of [`EntityWorldMut::remove`].
+    fn rev_remove<T: Bundle>(&mut self) -> &mut Self;
+
+    /// Reversible version of [`EntityWorldMut::remove_by_id`].
+    fn rev_remove_by_id(&mut self, component_id: ComponentId) -> &mut Self {
+        self.rev_remove_by_ids(&[component_id])
+    }
+
+    /// Reversible version of [`EntityWorldMut::remove_by_ids`].
+    fn rev_remove_by_ids(&mut self, component_ids: &[ComponentId]) -> &mut Self;
+
+    /// Reversible version of [`EntityWorldMut::remove_children`].
+    fn rev_remove_children(&mut self, children: &[Entity]) -> &mut Self {
+        self.rev_remove_related::<ChildOf>(children)
+    }
+
+    /// Reversible version of [`EntityWorldMut::remove_recursive`].
+    fn rev_remove_recursive<S: RelationshipTarget, B: Bundle>(&mut self) -> &mut Self;
+
+    // rev_remove_reflect
+    // todo: elaborate
+
+    // rev_remove_reflect_with_registry
+    // todo: elaborate
+
+    /// Reversible version of [`EntityWorldMut::remove_related`].
+    fn rev_remove_related<R: Relationship>(&mut self, related: &[Entity]) -> &mut Self;
+
+    /// Reversible version of [`EntityWorldMut::remove_with_requires`].
+    fn rev_remove_with_requires<T: Bundle>(&mut self) -> &mut Self;
+
+    // rev_replace_children
+    // out of scope due complexity
+
+    // rev_replace_children_with_difference
+    // out of scope due complexity
+
+    // rev_replace_related
+    // out of scope due complexity
+
+    // rev_replace_related_with_difference
+    // out of scope due complexity
+
+    /// Reversible version of [`EntityWorldMut::retain`].
+    fn rev_retain<T: Bundle>(&mut self) -> &mut Self;
+
+    /// Reversible version of [`EntityWorldMut::take`].
+    fn rev_take<T: Bundle + BundleFromComponents + Clone>(&mut self) -> Option<T>;
+
+    /// Reversible version of [`EntityWorldMut::with_child`].
+    fn rev_with_child(&mut self, bundle: impl Bundle) -> &mut Self {
+        self.rev_with_related::<ChildOf>(bundle)
+    }
+
+    /// Reversible version of [`EntityWorldMut::with_children`].
+    fn rev_with_children(
+        &mut self,
+        func: impl FnOnce(&mut RevRelatedSpawner<ChildOf>),
+    ) -> &mut Self {
+        self.rev_with_related_entities::<ChildOf>(func)
+    }
+
+    /// Reversible version of [`EntityWorldMut::with_related`].
+    fn rev_with_related<R: Relationship>(&mut self, bundle: impl Bundle) -> &mut Self;
+
+    /// Reversible version of [`EntityWorldMut::with_related_entities`].
+    fn rev_with_related_entities<R: Relationship>(
+        &mut self,
+        func: impl FnOnce(&mut RevRelatedSpawner<'_, R>),
+    ) -> &mut Self;
+}
+
+impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
+    fn buffer_components(&mut self, at: BufferAt, components: &[ComponentId]) -> Option<Entity> {
+        let entity = self.id();
+        if at == BufferAt::Undo {
+            unsafe {
+                // SAFETY: No components of this entity are buffered yet,
+                // only resources are mutated and a bundle is registered.
+                self.world_mut().buffer_components(entity, at, components)
+            }
+        } else {
+            self.world_scope(|world| world.buffer_components(entity, at, components))
+        }
+    }
+
+    fn buffer_components_cached<T: Deref<Target = [ComponentId]>>(
+        &mut self,
+        key: impl Hash + 'static,
+        components: impl FnOnce(&mut World) -> (BufferAt, T),
+    ) -> Option<Entity> {
+        let entity = self.id();
+        self.world_scope(|world| world.buffer_components_cached(entity, key, components))
+    }
+
+    fn rev_insert<T: Bundle>(&mut self, bundle: T) -> &mut Self {
+        let entity = self.id();
+        let archetype_id = self.archetype().id();
+        self.world_scope(|world| pre_insert::<T>(world, entity, archetype_id, InsertMode::Replace));
+        self.insert(bundle)
+    }
+
+    fn rev_insert_if_new<T: Bundle>(&mut self, bundle: T) -> &mut Self {
+        let entity = self.id();
+        let archetype_id = self.archetype().id();
+        self.world_scope(|world| pre_insert::<T>(world, entity, archetype_id, InsertMode::Keep));
+        self.insert_if_new(bundle)
     }
 
     unsafe fn rev_insert_by_ids<'a, I: Iterator<Item = OwningPtr<'a>>>(
@@ -239,6 +329,7 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
     }
 
     fn rev_take<T: Bundle + BundleFromComponents + Clone>(&mut self) -> Option<T> {
+        // todo: find better way to get clone of bundle without take but clone
         let value = self.take::<T>()?;
         self.insert(value.clone()).rev_remove::<T>();
         Some(value)
@@ -255,7 +346,7 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
                     .iter()
                     .copied()
                     .collect();
-                let components = world
+                let components: Vec<_> = world
                     .archetypes()
                     .get(archetype_id)
                     .unwrap()
@@ -268,27 +359,20 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
         self
     }
 
-    fn rev_remove_by_id(&mut self, component_id: ComponentId) -> &mut Self {
-        if !self.contains_id(component_id) {
-            return self;
-        }
-        self.buffer_components(BufferAt::Now, vec![component_id]);
-        self
-    }
-
     fn rev_remove_by_ids(&mut self, component_ids: &[ComponentId]) -> &mut Self {
-        let components = component_ids
-            .components()
+        let components: Vec<_> = component_ids
+            .iter()
+            .copied()
             .filter(|component_id| self.archetype().contains(*component_id))
             .collect();
-        self.buffer_components(BufferAt::Now, components);
+        self.buffer_components(BufferAt::Now, &components);
         self
     }
 
     fn rev_clear(&mut self) -> &mut Self {
         let archetype_id = self.archetype().id();
         self.buffer_components_cached(unique_for_location!(archetype_id), |world| {
-            let components = world
+            let components: Vec<_> = world
                 .archetypes()
                 .get(archetype_id)
                 .unwrap()
@@ -347,13 +431,10 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
         self.rev_clone_components::<B>(target).rev_remove::<B>()
     }
 
-    fn rev_with_related<R: Relationship>(
-        &mut self,
-        func: impl FnOnce(&mut RevRelatedSpawner<R>),
-    ) -> &mut Self {
+    fn rev_with_related<R: Relationship>(&mut self, bundle: impl Bundle) -> &mut Self {
         let parent = self.id();
         self.world_scope(|world| {
-            func(&mut RevRelatedSpawner::new(world, parent));
+            world.rev_spawn((bundle, R::from(parent)));
         });
         self
     }
@@ -368,8 +449,73 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
         self
     }
 
-    fn rev_add_one_related<R: Relationship>(&mut self, entity: Entity) -> &mut Self {
-        self.rev_add_related::<R>(&[entity])
+    fn rev_insert_related<R>(&mut self, index: usize, related: &[Entity]) -> &mut EntityWorldMut<'w>
+    where
+        R: Relationship,
+        <<R as Relationship>::RelationshipTarget as RelationshipTarget>::Collection:
+            OrderedRelationshipSourceCollection,
+    {
+        let id = self.id();
+        self.world_scope(|world| {
+            for (offset, &related) in related.iter().enumerate() {
+                let mut index = index + offset;
+                if world
+                    .get::<R>(related)
+                    .is_some_and(|relationship| relationship.get() == id)
+                {
+                    let mut target = world
+                        .get_mut::<R::RelationshipTarget>(id)
+                        .expect("hooks should have added relationship target");
+                    let collection = target.collection_mut_risky();
+                    index = index.min(collection.len() - 1);
+                    let old_index = collection.iter().position(|id| id == related).expect(
+                        "hooks should have added the related entity to the relationship target",
+                    );
+                    if index != old_index {
+                        collection.place(related, index);
+                        world.buffer_undo_redo(InsertExistingRelated::<R> {
+                            id,
+                            related,
+                            index,
+                            old_index,
+                            _marker: PhantomData,
+                        });
+                    }
+                } else {
+                    world.entity_mut(related).insert(R::from(id));
+                    let mut target = world
+                        .get_mut::<R::RelationshipTarget>(id)
+                        .expect("hooks should have added relationship target");
+                    let collection = target.collection_mut_risky();
+                    index = index.min(collection.len());
+                    collection.place_most_recent(index);
+                    world.buffer_undo_redo(InsertNewRelated::<R> {
+                        id,
+                        related,
+                        index,
+                        _marker: PhantomData,
+                    });
+                }
+            }
+        });
+
+        self
+    }
+
+    fn rev_remove_related<R: Relationship>(&mut self, related: &[Entity]) -> &mut Self {
+        let id = self.id();
+        self.world_scope(|world| {
+            for related in related {
+                if world
+                    .get::<R>(*related)
+                    .is_some_and(|relationship| relationship.get() == id)
+                {
+                    world.entity_mut(*related).rev_remove::<R>();
+                }
+            }
+        });
+
+        self
     }
 
     fn rev_despawn_related<S: RelationshipTarget>(&mut self) -> &mut Self {
@@ -419,31 +565,6 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
         self
     }
 
-    fn rev_with_children(
-        &mut self,
-        func: impl FnOnce(&mut RevRelatedSpawner<ChildOf>),
-    ) -> &mut Self {
-        self.rev_with_related(func);
-        self
-    }
-
-    fn rev_add_children(&mut self, children: &[Entity]) -> &mut Self {
-        self.rev_add_related::<ChildOf>(children);
-        self
-    }
-
-    fn rev_add_child(&mut self, child: Entity) -> &mut Self {
-        self.rev_add_related::<ChildOf>(&[child])
-    }
-
-    fn rev_with_child(&mut self, bundle: impl Bundle) -> &mut Self {
-        let parent = self.id();
-        self.world_scope(|world| {
-            world.rev_spawn((bundle, ChildOf(parent)));
-        });
-        self
-    }
-
     fn rev_entry<'a, T: Component>(&'a mut self) -> RevEntry<'w, 'a, T> {
         if self.contains::<T>() {
             RevEntry::Occupied(RevOccupiedEntry {
@@ -458,43 +579,19 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
         }
     }
 
-    fn buffer_components(
+    fn rev_with_related_entities<R: Relationship>(
         &mut self,
-        at: BufferAt,
-        components: Vec<ComponentId>,
-    ) -> Option<EntityRef> {
-        let entity = self.id();
-        if at == BufferAt::Undo {
-            unsafe {
-                // SAFETY: No components of this entity are buffered yet,
-                // only resources are mutated and a bundle is registered.
-                self.world_mut().buffer_components(entity, at, components)
-            }
-        } else {
-            let id = self.world_scope(|world| {
-                world
-                    .buffer_components(entity, at, components)
-                    .map(|buffer| buffer.id())
-            });
-            id.map(|id| self.world().entity(id))
-        }
-    }
-
-    fn buffer_components_cached(
-        &mut self,
-        key: impl Hash + 'static,
-        components: impl FnOnce(&mut World) -> (BufferAt, Vec<ComponentId>),
-    ) -> Option<EntityRef> {
-        let entity = self.id();
-        let id = self.world_scope(|world| {
-            world
-                .buffer_components_cached(entity, key, components)
-                .map(|buffer| buffer.id())
+        func: impl FnOnce(&mut RevRelatedSpawner<'_, R>),
+    ) -> &mut Self {
+        let parent = self.id();
+        self.world_scope(|world| {
+            func(&mut RevRelatedSpawner::new(world, parent));
         });
-        id.map(|id| self.world().entity(id))
+        self
     }
 }
 
+// todo: deprecate this + using methods after https://github.com/bevyengine/bevy/pull/18880 merge, replace with extension trait
 pub struct RevRelatedSpawner<'w, R: Relationship> {
     target: Entity,
     world: &'w mut World,
@@ -520,12 +617,10 @@ impl<'w, R: Relationship> RevRelatedSpawner<'w, R> {
     pub fn rev_spawn(&mut self, bundle: impl Bundle) -> EntityWorldMut<'_> {
         let mut entity_mut = self.world.rev_spawn((R::from(self.target), bundle));
         let entity = entity_mut.id();
-        entity_mut.world_scope(|world| {
-            world.buffer_undo_redo(InsertRelationship::<R, _> {
-                entity,
-                target: [self.target],
-                _marker: PhantomData,
-            });
+        entity_mut.buffer_undo_redo(InsertRelationship::<R, _> {
+            entity,
+            target: [self.target],
+            _marker: PhantomData,
         });
         entity_mut
     }
@@ -744,7 +839,7 @@ impl<R: Relationship, F: FnOnce(&mut RevRelatedSpawner<R>) + Send + Sync + 'stat
     RevSpawnableList<R> for RevSpawnWith<F>
 {
     fn rev_spawn(self, world: &mut World, entity: Entity) {
-        world.entity_mut(entity).rev_with_related(self.0);
+        world.entity_mut(entity).rev_with_related_entities(self.0);
     }
 }
 
@@ -827,9 +922,7 @@ unsafe impl<R: Relationship, B: Bundle> Bundle for RevSpawnOneRelated<R, B> {
 
 impl<R: Relationship, B: Bundle> BundleEffect for RevSpawnOneRelated<R, B> {
     fn apply(self, entity: &mut EntityWorldMut) {
-        entity.rev_with_related::<R>(|s| {
-            s.rev_spawn(self.bundle);
-        });
+        entity.rev_with_related::<R>(self.bundle);
     }
 }
 
@@ -881,38 +974,6 @@ impl<R: Relationship, L: RevSpawnableList<R>> DynamicBundle for RevSpawnRelatedB
         <R::RelationshipTarget as RelationshipTarget>::with_capacity(self.list.size_hint())
             .get_components(func);
         self
-    }
-}
-
-struct InsertRelationship<R, Target>
-where
-    R: Relationship,
-    Target: AsRef<[Entity]> + Send + Sync + 'static,
-{
-    entity: Entity,
-    target: Target,
-    _marker: PhantomData<R>,
-}
-
-impl<R, Target> UndoRedo for InsertRelationship<R, Target>
-where
-    R: Relationship,
-    Target: AsRef<[Entity]> + Send + Sync + 'static,
-{
-    fn undo(&mut self, world: &mut World) {
-        let component_id = world.component_id::<R>().unwrap();
-        for &target in self.target.as_ref().into_iter() {
-            world.entity_mut(target).remove_by_id(component_id);
-        }
-    }
-    fn redo(&mut self, world: &mut World) {
-        world.insert_batch(
-            self.target
-                .as_ref()
-                .into_iter()
-                .copied()
-                .map(|target| (target, R::from(self.entity))),
-        );
     }
 }
 

@@ -1,6 +1,7 @@
 use std::{
     any::TypeId,
     hash::{BuildHasher, Hash, Hasher},
+    ops::Deref,
     sync::Arc,
 };
 
@@ -10,7 +11,7 @@ use bevy::{
         component::ComponentId,
         entity::Entity,
         resource::Resource,
-        world::{EntityRef, EntityWorldMut, FromWorld, World},
+        world::{EntityWorldMut, FromWorld, World},
     },
     platform::{
         collections::HashMap,
@@ -23,6 +24,43 @@ use crate::meta::RevMeta;
 use super::*;
 
 pub trait RevWorld {
+    /// Reversible structural operations may trigger more hooks than expected as they also
+    /// react on the buffer entity changing.
+    ///
+    /// For example [`EntityWorldMut::rev_insert`] will:
+    ///
+    /// 1. Move components that would be overwritten to a buffer entity:
+    ///   - may trigger remove hook on the source entity
+    ///   - may trigger insert hook on the buffer entity 1
+    /// 2. ... and insert the given components in the source entity as expected
+    /// 3. Undoing will move the inserted components to a second buffer before bringing the
+    /// previous values back from the first:
+    ///   - may trigger remove hook on the source entity
+    ///   - may trigger insert hook on the buffer entity 2
+    ///   - may trigger insert hook on the source entity
+    ///   - may trigger remove hook on the buffer entity 1
+    /// 4. Redoing is Undoing in reverse:
+    ///   - may trigger remove hook on the source entity
+    ///   - may trigger insert hook on the buffer entity 1
+    ///   - may trigger remove hook on the buffer entity 2
+    ///   - may trigger insert hook on the source entity
+    /// 5. When the buffer entities go out of log while containing the components, remove
+    /// hooks will run too for them.
+    ///
+    /// To identify these hooks, this method can be used which will return `true` for all
+    /// hooks in the list above _except_ of 2. and 5. for which this returns `false`.
+    ///
+    /// Note though that during _all_ pure removal oparations like [`EntityWorldMut::rev_remove`]
+    /// this method returns `true` as the buffering steps fully replace the usual
+    /// [`EntityWorldMut::remove`] call.
+    ///
+    /// Additionally, the source and buffer entity can be differenced by the latter containing
+    /// the [`DespawnAtOutOfLog`] component.
+    ///
+    /// Reversible despawns will delay remove hooks to a later time as the entity is covered
+    /// by the same mechanic descibed in 5. in the list above.
+    fn buffer_components_in_progress(&self) -> bool;
+
     /// Reversible version of [`World::despawn`].
     fn rev_despawn(&mut self, entity: Entity) -> bool;
 
@@ -65,55 +103,29 @@ pub trait RevWorld {
         &mut self,
         entity: Entity,
         at: BufferAt,
-        components: Vec<ComponentId>,
-    ) -> Option<EntityRef>;
+        components: &[ComponentId],
+    ) -> Option<Entity>;
 
-    fn buffer_components_cached(
+    fn buffer_components_cached<T: Deref<Target = [ComponentId]>>(
         &mut self,
         entity: Entity,
         key: impl Hash + 'static,
-        components: impl FnOnce(&mut World) -> (BufferAt, Vec<ComponentId>),
-    ) -> Option<EntityRef>;
+        components: impl FnOnce(&mut World) -> (BufferAt, T),
+    ) -> Option<Entity>;
 
-    /// Reversible structural operations may trigger more hooks than expected as they also
-    /// react on the buffer entity changing.
-    ///
-    /// For example [`EntityWorldMut::rev_insert`] will:
-    ///
-    /// 1. Move components that would be overwritten to a buffer entity:
-    ///   - may trigger remove hook on the source entity
-    ///   - may trigger insert hook on the buffer entity 1
-    /// 2. ... and insert the given components in the source entity as expected
-    /// 3. Undoing will move the inserted components to a second buffer before bringing the
-    /// previous values back from the first:
-    ///   - may trigger remove hook on the source entity
-    ///   - may trigger insert hook on the buffer entity 2
-    ///   - may trigger insert hook on the source entity
-    ///   - may trigger remove hook on the buffer entity 1
-    /// 4. Redoing is Undoing in reverse:
-    ///   - may trigger remove hook on the source entity
-    ///   - may trigger insert hook on the buffer entity 1
-    ///   - may trigger remove hook on the buffer entity 2
-    ///   - may trigger insert hook on the source entity
-    /// 5. When the buffer entities go out of log while containing the components, remove
-    /// hooks will run too for them.
-    ///
-    /// To identify these hooks, this method can be used which will return `true` for all
-    /// hooks in the list above _except_ of 2. and 5. for which this returns `false`.
-    ///
-    /// Note though that during _all_ pure removal oparations like [`EntityWorldMut::rev_remove`]
-    /// this method returns `true` as the buffering steps fully replace the usual
-    /// [`EntityWorldMut::remove`] call.
-    ///
-    /// Additionally, the source and buffer entity can be differenced by the latter containing
-    /// the [`DespawnAtOutOfLog`] component.
-    ///
-    /// Reversible despawns will delay remove hooks to a later time as the entity is covered
-    /// by the same mechanic descibed in 5. in the list above.
-    fn buffer_components_in_progress(&self) -> bool;
+    fn buffer_bundle(
+        &mut self,
+        entity: Entity,
+        at: BufferAt,
+        bundle: BundleId,
+    ) -> Option<Entity>;
 }
 
 impl RevWorld for World {
+    fn buffer_components_in_progress(&self) -> bool {
+        self.contains_resource::<BufferComponentsInProgress>()
+    }
+
     fn rev_despawn(&mut self, entity: Entity) -> bool {
         let entity_mut = self.entity_mut(entity);
         rev_despawn_inner(entity_mut)
@@ -222,21 +234,21 @@ impl RevWorld for World {
         &mut self,
         entity: Entity,
         at: BufferAt,
-        components: Vec<ComponentId>,
-    ) -> Option<EntityRef> {
+        components: &[ComponentId],
+    ) -> Option<Entity> {
         if components.is_empty() {
             return None;
         }
         let bundle = components_to_bundle(self, components);
-        buffer_bundle(self, entity, at, bundle)
+        self.buffer_bundle(entity, at, bundle)
     }
 
-    fn buffer_components_cached(
+    fn buffer_components_cached<T: Deref<Target = [ComponentId]>>(
         &mut self,
         entity: Entity,
         key: impl Hash + 'static,
-        components: impl FnOnce(&mut World) -> (BufferAt, Vec<ComponentId>),
-    ) -> Option<EntityRef> {
+        components: impl FnOnce(&mut World) -> (BufferAt, T),
+    ) -> Option<Entity> {
         #[derive(Resource, Default)]
         pub(crate) struct CachedBundles(HashMap<u64, Option<(BufferAt, BundleId)>, PassHash>);
         fn type_id_of_var<T: 'static>(_: &T) -> TypeId {
@@ -255,17 +267,22 @@ impl RevWorld for World {
             if components.is_empty() {
                 None
             } else {
-                Some((at, components_to_bundle(self, components)))
+                Some((at, components_to_bundle(self, &components)))
             }
         });
 
         self.insert_resource(cache);
 
-        maybe_components.and_then(|(at, bundle)| buffer_bundle(self, entity, at, bundle))
+        maybe_components.and_then(|(at, bundle)| self.buffer_bundle(entity, at, bundle))
     }
 
-    fn buffer_components_in_progress(&self) -> bool {
-        self.contains_resource::<BufferComponentsInProgress>()
+    fn buffer_bundle(
+        &mut self,
+        entity: Entity,
+        at: BufferAt,
+        bundle: BundleId,
+    ) -> Option<Entity> {
+        buffer_bundle(self, entity, at, bundle)
     }
 }
 

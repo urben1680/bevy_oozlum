@@ -26,8 +26,15 @@ Enhancements:
 -- RelatedSpawnerCommands
 -- EntityEntryCommands
 -- ChildSpawnerCommands
-- rename entity.rs to entity_world.rs
-- introduce entity_commands.rs
+- ReflectCommandExt
+-- other such traits?
+- relationship api is overwhelming, try Relatinship(Target) wrapper
+-- limited use, no way to buffer UndoRedo without world access
+- complex extension traits sort methods alphabetically and list unimplementable vanilla methods
+-- RevWorld
+-- RevEntityWorld: OK
+-- RevCommands
+-- RevEntityCommands
 
 Docs
 - make fake variadics docs work
