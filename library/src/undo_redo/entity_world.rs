@@ -1,4 +1,4 @@
-use std::{any::TypeId, marker::PhantomData, ops::Deref};
+use std::{any::TypeId, marker::PhantomData};
 
 use bevy::{
     ecs::{
@@ -23,14 +23,26 @@ use super::*;
 
 pub trait RevEntityWorldMut<'w> {
     /// todo
-    fn buffer_components(&mut self, at: BufferAt, components: &[ComponentId]) -> Option<Entity>;
+    fn buffer_components(
+        &mut self,
+        at: BufferAt,
+        components: &[ComponentId],
+    ) -> Result<Option<Entity>, ()>;
 
     /// todo
-    fn buffer_components_cached<T: Deref<Target = [ComponentId]>>(
+    fn buffer_components_cached<T: AsRef<[ComponentId]>>(
         &mut self,
         key: impl Hash + 'static,
         components: impl FnOnce(&mut World) -> (BufferAt, T),
-    ) -> Option<Entity>;
+    ) -> Result<Option<Entity>, ()>;
+
+    /// todo
+    fn buffer_bundle(
+        &mut self,
+        entity: Entity,
+        at: BufferAt,
+        bundle: BundleId,
+    ) -> Result<Option<Entity>, ()>;
 
     // the methods here are purposely sorted alphabetically to make it easily comparable to bevy's docs
     // unmentioned methods are either
@@ -179,10 +191,10 @@ pub trait RevEntityWorldMut<'w> {
     fn rev_remove_recursive<S: RelationshipTarget, B: Bundle>(&mut self) -> &mut Self;
 
     // rev_remove_reflect
-    // todo: elaborate
+    // out of scope due complexity
 
     // rev_remove_reflect_with_registry
-    // todo: elaborate
+    // out of scope due complexity
 
     /// Reversible version of [`EntityWorldMut::remove_related`].
     fn rev_remove_related<R: Relationship>(&mut self, related: &[Entity]) -> &mut Self;
@@ -206,7 +218,10 @@ pub trait RevEntityWorldMut<'w> {
     fn rev_retain<T: Bundle>(&mut self) -> &mut Self;
 
     /// Reversible version of [`EntityWorldMut::take`].
-    fn rev_take<T: Bundle + BundleFromComponents + Clone>(&mut self) -> Option<T>;
+    fn rev_take<'a, T: Bundle + BundleFromComponents, Out>(
+        &'a mut self,
+        c: impl FnOnce(&T) -> Out,
+    ) -> Option<Out>;
 
     /// Reversible version of [`EntityWorldMut::with_child`].
     fn rev_with_child(&mut self, bundle: impl Bundle) -> &mut Self {
@@ -232,11 +247,15 @@ pub trait RevEntityWorldMut<'w> {
 }
 
 impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
-    fn buffer_components(&mut self, at: BufferAt, components: &[ComponentId]) -> Option<Entity> {
+    fn buffer_components(
+        &mut self,
+        at: BufferAt,
+        components: &[ComponentId],
+    ) -> Result<Option<Entity>, ()> {
         let entity = self.id();
         if at == BufferAt::Undo {
             unsafe {
-                // SAFETY: No components of this entity are buffered yet,
+                // SAFETY: No components of this entity are buffered now,
                 // only resources are mutated and a bundle is registered.
                 self.world_mut().buffer_components(entity, at, components)
             }
@@ -245,26 +264,37 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
         }
     }
 
-    fn buffer_components_cached<T: Deref<Target = [ComponentId]>>(
+    fn buffer_components_cached<T: AsRef<[ComponentId]>>(
         &mut self,
         key: impl Hash + 'static,
         components: impl FnOnce(&mut World) -> (BufferAt, T),
-    ) -> Option<Entity> {
+    ) -> Result<Option<Entity>, ()> {
         let entity = self.id();
         self.world_scope(|world| world.buffer_components_cached(entity, key, components))
     }
 
+    fn buffer_bundle(
+        &mut self,
+        entity: Entity,
+        at: BufferAt,
+        bundle: BundleId,
+    ) -> Result<Option<Entity>, ()> {
+        self.world_scope(|world| world.buffer_bundle(entity, at, bundle))
+    }
+
     fn rev_insert<T: Bundle>(&mut self, bundle: T) -> &mut Self {
         let entity = self.id();
-        let archetype_id = self.archetype().id();
-        self.world_scope(|world| pre_insert::<T>(world, entity, archetype_id, InsertMode::Replace));
+        let archetype_id = self.location().archetype_id;
+        self.world_scope(|world| pre_insert::<T>(world, entity, archetype_id, InsertMode::Replace))
+            .unwrap_or_else(rev_despawned_panic(entity));
         self.insert(bundle)
     }
 
     fn rev_insert_if_new<T: Bundle>(&mut self, bundle: T) -> &mut Self {
         let entity = self.id();
-        let archetype_id = self.archetype().id();
-        self.world_scope(|world| pre_insert::<T>(world, entity, archetype_id, InsertMode::Keep));
+        let archetype_id = self.location().archetype_id;
+        self.world_scope(|world| pre_insert::<T>(world, entity, archetype_id, InsertMode::Keep))
+            .unwrap_or_else(rev_despawned_panic(entity));
         self.insert_if_new(bundle)
     }
 
@@ -273,15 +303,17 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
         component_ids: &[ComponentId],
         iter_components: I,
     ) -> &mut Self {
-        let archetype_id = self.archetype().id();
+        let archetype_id = self.location().archetype_id;
         let bundle_id = unsafe {
             // SAFETY: registering a bundle does not change the entity's location
             self.world_mut().register_dynamic_bundle(component_ids).id()
         };
+        let entity = self.id();
         self.buffer_components_cached(
             unique_for_location!(archetype_id, bundle_id),
-            |world: &mut World| insert_maybe_overwrite(world, bundle_id, archetype_id),
-        );
+            |world: &mut World| pre_insert_maybe_overwrite(world, bundle_id, archetype_id),
+        )
+        .unwrap_or_else(rev_despawned_panic(entity));
         unsafe {
             // SAFETY: todo
             self.insert_by_ids(component_ids, iter_components)
@@ -289,7 +321,8 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
     }
 
     fn rev_remove<T: Bundle>(&mut self) -> &mut Self {
-        let archetype_id = self.archetype().id();
+        let archetype_id = self.location().archetype_id;
+        let entity = self.id();
         self.buffer_components_cached(
             unique_for_location!(archetype_id, PhantomData::<T>),
             |world| {
@@ -304,12 +337,14 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
                     .collect();
                 (BufferAt::Now, components)
             },
-        );
+        )
+        .unwrap_or_else(rev_despawned_panic(entity));
         self
     }
 
     fn rev_remove_with_requires<T: Bundle>(&mut self) -> &mut Self {
-        let archetype_id = self.archetype().id();
+        let archetype_id = self.location().archetype_id;
+        let entity = self.id();
         self.buffer_components_cached(
             unique_for_location!(archetype_id, PhantomData::<T>),
             |world| {
@@ -324,19 +359,29 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
                     .collect();
                 (BufferAt::Now, components)
             },
-        );
+        )
+        .unwrap_or_else(rev_despawned_panic(entity));
         self
     }
 
-    fn rev_take<T: Bundle + BundleFromComponents + Clone>(&mut self) -> Option<T> {
-        // todo: find better way to get clone of bundle without take but clone
-        let value = self.take::<T>()?;
-        self.insert(value.clone()).rev_remove::<T>();
-        Some(value)
+    fn rev_take<'a, T: Bundle + BundleFromComponents, Out>(
+        &'a mut self,
+        c: impl FnOnce(&T) -> Out,
+    ) -> Option<Out> {
+        self.take::<T>().map(|value| {
+            let out = c(&value);
+            let entity = self.id();
+            self.buffer_undo_redo(Take {
+                bundle: Some(value),
+                entity,
+            });
+            out
+        })
     }
 
     fn rev_retain<T: Bundle>(&mut self) -> &mut Self {
-        let archetype_id = self.archetype().id();
+        let archetype_id = self.location().archetype_id;
+        let entity = self.id();
         self.buffer_components_cached(
             unique_for_location!(archetype_id, PhantomData::<T>),
             |world| {
@@ -355,22 +400,25 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
                     .collect();
                 (BufferAt::Now, components)
             },
-        );
+        )
+        .unwrap_or_else(rev_despawned_panic(entity));
         self
     }
 
     fn rev_remove_by_ids(&mut self, component_ids: &[ComponentId]) -> &mut Self {
+        let archetype = self.archetype();
         let components: Vec<_> = component_ids
             .iter()
             .copied()
-            .filter(|component_id| self.archetype().contains(*component_id))
+            .filter(|component_id| archetype.contains(*component_id))
             .collect();
-        self.buffer_components(BufferAt::Now, &components);
+        let _ok = self.buffer_components(BufferAt::Now, &components);
         self
     }
 
     fn rev_clear(&mut self) -> &mut Self {
-        let archetype_id = self.archetype().id();
+        let archetype_id = self.location().archetype_id;
+        let entity = self.id();
         self.buffer_components_cached(unique_for_location!(archetype_id), |world| {
             let components: Vec<_> = world
                 .archetypes()
@@ -379,7 +427,8 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
                 .components()
                 .collect();
             (BufferAt::Now, components)
-        });
+        })
+        .unwrap_or_else(rev_despawned_panic(entity));
         self
     }
 
@@ -414,12 +463,12 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
             .expect("todo")
             .archetype_id;
         self.world_scope(|world| {
-            world.buffer_components_cached(
+            let _ok = world.buffer_components_cached(
                 target,
                 unique_for_location!(archetype_id, TypeId::of::<B>()),
                 |world| {
                     let bundle_id = world.register_bundle::<B>().id();
-                    insert_maybe_overwrite(&world, bundle_id, archetype_id)
+                    pre_insert_maybe_overwrite(&world, bundle_id, archetype_id)
                 },
             );
         });
@@ -591,7 +640,15 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
     }
 }
 
-// todo: deprecate this + using methods after https://github.com/bevyengine/bevy/pull/18880 merge, replace with extension trait
+fn rev_despawned_panic<Out>(entity: Entity) -> impl FnOnce(()) -> Out {
+    move |_| {
+        panic!(
+            "entity {entity} exists but is marked to be despawned and as such `rev_*` mutations are denied"
+        )
+    }
+}
+
+// todo: replace with extension trait after https://github.com/bevyengine/bevy/pull/18880 merge
 pub struct RevRelatedSpawner<'w, R: Relationship> {
     target: Entity,
     world: &'w mut World,
@@ -641,6 +698,7 @@ impl<'w, R: Relationship> RevRelatedSpawner<'w, R> {
     }
 }
 
+// todo: upstream public EntityWorldMut getter for vanilla types
 pub enum RevEntry<'w, 'a, T: Component> {
     /// An occupied entry.
     Occupied(RevOccupiedEntry<'w, 'a, T>),
@@ -748,13 +806,11 @@ impl<'w, 'a, T: Component> RevOccupiedEntry<'w, 'a, T> {
         // This shouldn't panic because if we have an OccupiedEntry the component must exist.
         self.entity_world.take().unwrap()
     }
-}
 
-impl<'w, 'a, T: Component + Clone> RevOccupiedEntry<'w, 'a, T> {
     /// Reversible version of [`OccupiedEntry::take`](bevy::ecs::world::OccupiedEntry::take).
-    pub fn rev_take(self) -> T {
+    pub fn rev_take<Out>(self, c: impl FnOnce(&T) -> Out) -> Out {
         // This shouldn't panic because if we have an OccupiedEntry the component must exist.
-        self.entity_world.rev_take().unwrap()
+        self.entity_world.rev_take::<T, Out>(c).unwrap()
     }
 }
 
