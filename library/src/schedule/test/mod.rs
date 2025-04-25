@@ -20,9 +20,9 @@ use crate::{
 
 use super::*;
 
-pub mod utils;
+mod utils;
 
-pub(crate) use utils::*;
+use utils::*;
 
 #[derive(Clone, Copy, Debug)]
 enum Test {
