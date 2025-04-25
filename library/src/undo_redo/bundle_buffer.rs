@@ -1,18 +1,21 @@
+use bevy::{ecs::reflect::AppTypeRegistry, reflect::ReflectFromPtr};
+
 use super::*;
 
+/// Fails if `entity` is `rev_is_despawned`, it must be otherwise spawned as an `archetype_id` could be provided.
 pub(super) fn pre_insert<T: Bundle>(
     world: &mut World,
     entity: Entity,
     archetype_id: ArchetypeId,
     insert_mode: InsertMode,
-) {
+) -> Result<Option<Entity>, ()> {
     match insert_mode {
         InsertMode::Replace => world.buffer_components_cached(
             entity,
             unique_for_location!(archetype_id, PhantomData::<T>),
             |world: &mut World| {
                 let bundle_id = world.register_bundle::<T>().id();
-                insert_maybe_overwrite(world, bundle_id, archetype_id)
+                pre_insert_maybe_overwrite(world, bundle_id, archetype_id)
             },
         ),
         InsertMode::Keep => world.buffer_components_cached(
@@ -20,13 +23,13 @@ pub(super) fn pre_insert<T: Bundle>(
             unique_for_location!(archetype_id, PhantomData::<T>),
             |world| {
                 let bundle_id = world.register_bundle::<T>().id();
-                insert_no_overwrite(&world, bundle_id, archetype_id)
+                pre_insert_no_overwrite(&world, bundle_id, archetype_id)
             },
         ),
-    };
+    }
 }
 
-pub(super) fn insert_maybe_overwrite(
+pub(super) fn pre_insert_maybe_overwrite(
     world: &World,
     bundle_id: BundleId,
     archetype_id: ArchetypeId,
@@ -65,7 +68,7 @@ pub(super) fn insert_maybe_overwrite(
     (at, components)
 }
 
-pub(super) fn insert_no_overwrite(
+pub(super) fn pre_insert_no_overwrite(
     world: &World,
     bundle_id: BundleId,
     archetype_id: ArchetypeId,
@@ -91,20 +94,102 @@ pub(super) fn insert_no_overwrite(
     (BufferAt::Undo, components)
 }
 
-#[derive(Resource, Default)]
-struct NonEntityBufferRes(HashMap<ComponentId, fn(&mut World, Entity, BufferAt)>);
-
-fn non_entity_buffer(world: &mut World, entity: Entity, at: BufferAt, components: &[ComponentId]) {
-    if !world.contains_resource::<NonEntityBufferRes>() {
-        return;
-    }
-    world.resource_scope(|world, non_entity_buffers: Mut<NonEntityBufferRes>| {
-        for component in components.iter() {
-            if let Some(c) = non_entity_buffers.0.get(component) {
-                c(world, entity, at);
+pub(super) fn buffer_bundle(
+    world: &mut World,
+    entity: Entity,
+    at: BufferAt,
+    bundle: BundleId,
+) -> Result<Option<Entity>, ()> {
+    #[cfg(debug_assertions)]
+    {
+        let direction = world
+            .get_resource::<RevMeta>()
+            .and_then(RevMeta::get_running_direction);
+        let expected = Some(RevDirection::NOT_LOG);
+        if direction != expected {
+            let Some(bundle_info) = world.bundles().get(bundle) else {
+                bevy::log::error!(
+                    "attempted to buffer components from {entity:?} during {direction:?} instead of {expected:?}, \
+                    this is denied and no buffering will happen, further the bundle {bundle:?} is unknown"
+                );
+                return Ok(None);
+            };
+            let components: Vec<_> = bundle_info.explicit_components().iter().copied().collect();
+            fn names<'a>(world: &'a World, components: Vec<ComponentId>) -> impl Debug + 'a {
+                components
+                    .into_iter()
+                    .map(|id| {
+                        world
+                            .components()
+                            .get_name(id)
+                            .unwrap_or_else(|| format!("no name ({id:?})").into())
+                    })
+                    .collect::<Vec<_>>()
             }
+            if at == BufferAt::Undo {
+                let names = names(world, components);
+                bevy::log::error!(
+                    "attempted to buffer components from {entity:?} during {direction:?} instead of {expected:?}, \
+                    this is denied and no buffering will happen, affected components are {names:?}"
+                );
+            } else {
+                world.entity_mut(entity).remove_by_ids(&components);
+                let names = names(world, components);
+                bevy::log::error!(
+                    "attempted to buffer components from {entity:?} during {direction:?} instead of {expected:?}, \
+                    the components will be removed but this is irreversible, affected components are {names:?}"
+                );
+            }
+            return Ok(None);
         }
-    })
+    }
+    if world
+        .get_entity(entity)
+        .ok()
+        .is_none_or(|entity| entity.rev_is_despawned())
+    {
+        return Err(());
+    }
+    let mut buffer = BundleBuffer::new(world, entity, bundle);
+    match at {
+        BufferAt::Now => {
+            let entities = buffer.toggle_state(world);
+            let components = buffer.get_component_ids(world);
+            let out = entities.buffer;
+            non_entity_buffer(world, entity, at, &components);
+            entities.move_components(world, &components, RevDirection::NOT_LOG);
+            world.buffer_undo_redo(buffer);
+            Ok(Some(out))
+        }
+        BufferAt::Undo => {
+            let components = buffer.get_component_ids(world);
+            non_entity_buffer(world, entity, at, &components);
+            world.buffer_undo_redo(buffer);
+            Ok(None)
+        }
+        BufferAt::NowAndUndo => {
+            let at_undo = buffer.clone(); // no buffer entity set yet so each spawns their own
+            let entities = buffer.toggle_state(world);
+            let components = buffer.get_component_ids(world);
+            let out = entities.buffer;
+            non_entity_buffer(world, entity, at, &components);
+            entities.move_components(world, &components, RevDirection::NOT_LOG);
+            world.buffer_undo_redo([buffer, at_undo]);
+            Ok(Some(out))
+        }
+    }
+}
+
+/// [`World::buffer_components_in_progress`] returns `Some(direction)` during the execution of the closure.
+pub(crate) fn progress_scope(
+    world: &mut World,
+    progress: BufferInProgress,
+    c: impl FnOnce(&mut World),
+) {
+    let mut swap = ResourceSwap(Some(BufferInProgressRes(progress)));
+    swap.undo(world);
+    c(world);
+    swap.redo(world);
 }
 
 pub(crate) fn register_non_entity_buffer<T: Component>(world: &mut World) {
@@ -113,44 +198,48 @@ pub(crate) fn register_non_entity_buffer<T: Component>(world: &mut World) {
         component: Option<T>,
     }
 
+    impl<T: Component> NonEntityBuffer<T> {
+        fn undo_redo(&mut self, world: &mut World, direction: RevDirection) {
+            let progress = BufferInProgress::NonEntityBuffer { direction };
+            progress_scope(world, progress, |world| {
+                let mut entity = world.entity_mut(self.entity);
+                if T::Mutability::MUTABLE {
+                    let component = unsafe {
+                        // SAFETY: this if branch asserts the component is mutable
+                        entity.get_mut_assume_mutable::<T>()
+                    };
+                    if let Some(mut c1) = component {
+                        match self.component.as_mut() {
+                            Some(c2) => core::mem::swap(&mut *c1, c2),
+                            None => self.component = entity.take::<T>(),
+                        }
+                        return;
+                    }
+                } else {
+                    if let Some(mut c1) = entity.take::<T>() {
+                        match self.component.as_mut() {
+                            Some(c2) => {
+                                core::mem::swap(&mut c1, c2);
+                                entity.insert(c1);
+                            }
+                            None => self.component = Some(c1),
+                        }
+                        return;
+                    }
+                }
+                if let Some(c2) = self.component.take() {
+                    entity.insert(c2);
+                }
+            })
+        }
+    }
+
     impl<T: Component> UndoRedo for NonEntityBuffer<T> {
         fn undo(&mut self, world: &mut World) {
-            let mut entity = world.entity_mut(self.entity);
-            if T::Mutability::MUTABLE {
-                let component = unsafe {
-                    // SAFETY: this if branch asserts the component is mutable
-                    entity.get_mut_assume_mutable::<T>()
-                };
-                match component {
-                    Some(mut c1) => match self.component.as_mut() {
-                        Some(c2) => core::mem::swap(&mut *c1, c2),
-                        None => self.component = entity.take::<T>(),
-                    },
-                    None => {
-                        if let Some(c2) = self.component.take() {
-                            entity.insert(c2);
-                        }
-                    }
-                }
-            } else {
-                match entity.take::<T>() {
-                    Some(mut c1) => match self.component.as_mut() {
-                        Some(c2) => {
-                            core::mem::swap(&mut c1, c2);
-                            entity.insert(c1);
-                        }
-                        None => self.component = Some(c1),
-                    },
-                    None => {
-                        if let Some(c2) = self.component.take() {
-                            entity.insert(c2);
-                        }
-                    }
-                }
-            }
+            self.undo_redo(world, RevDirection::BackwardLog);
         }
         fn redo(&mut self, world: &mut World) {
-            self.undo(world);
+            self.undo_redo(world, RevDirection::FORWARD_LOG);
         }
     }
 
@@ -168,39 +257,20 @@ pub(crate) fn register_non_entity_buffer<T: Component>(world: &mut World) {
     );
 }
 
-// todo: consider make this a RevWorld method
-pub(super) fn buffer_bundle(
-    world: &mut World,
-    entity: Entity,
-    at: BufferAt,
-    bundle: BundleId,
-) -> Option<Entity> {
-    let mut buffer = BundleBuffer::new(world, entity, bundle);
-    match at {
-        BufferAt::Now => {
-            let entities = buffer.toggle_state(world);
-            let components = buffer.get_component_ids(world);
-            non_entity_buffer(world, entity, at, &components);
-            let out = buffer.move_bundle(world, entities, &components);
-            world.buffer_undo_redo(buffer);
-            Some(out)
-        }
-        BufferAt::Undo => {
-            let components = buffer.get_component_ids(world);
-            non_entity_buffer(world, entity, at, &components);
-            world.buffer_undo_redo(buffer);
-            None
-        }
-        BufferAt::NowAndUndo => {
-            let at_undo = buffer.clone(); // no buffer entity set yet so each spawns their own
-            let entities = buffer.toggle_state(world);
-            let components = buffer.get_component_ids(world);
-            non_entity_buffer(world, entity, at, &components);
-            let out = buffer.move_bundle(world, entities, &components);
-            world.buffer_undo_redo(buffer).buffer_undo_redo(at_undo);
-            Some(out)
-        }
+#[derive(Resource, Default)]
+struct NonEntityBufferRes(HashMap<ComponentId, fn(&mut World, Entity, BufferAt)>);
+
+fn non_entity_buffer(world: &mut World, entity: Entity, at: BufferAt, components: &[ComponentId]) {
+    if !world.contains_resource::<NonEntityBufferRes>() {
+        return;
     }
+    world.resource_scope(|world, non_entity_buffers: Mut<NonEntityBufferRes>| {
+        for component in components.iter() {
+            if let Some(c) = non_entity_buffers.0.get(component) {
+                c(world, entity, at);
+            }
+        }
+    })
 }
 
 #[derive(Clone)]
@@ -221,6 +291,31 @@ struct BundleEntities {
     target: Entity,
     source: Entity,
     buffer: Entity,
+}
+
+impl BundleEntities {
+    fn move_components(
+        self,
+        world: &mut World,
+        components: &[ComponentId],
+        direction: RevDirection,
+    ) {
+        let progress = BufferInProgress::Buffer {
+            direction,
+            target: self.target,
+            source: self.source,
+            buffer: self.buffer,
+        };
+        progress_scope(world, progress, |world| {
+            EntityCloner::build(world)
+                .deny_all()
+                .move_components(true)
+                .without_required_components(|builder| {
+                    builder.allow_by_ids(components.iter().copied());
+                })
+                .clone_entity(self.source, self.target);
+        })
+    }
 }
 
 impl BundleBuffer {
@@ -272,43 +367,52 @@ impl BundleBuffer {
             .explicit_components()
             .into()
     }
-    fn move_bundle(
-        &mut self,
-        world: &mut World,
-        entities: BundleEntities,
-        components: &[ComponentId],
-    ) -> Entity {
-        let progress_res = world.buffer_components_in_progress();
-        if !progress_res {
-            world.insert_resource(BufferComponentsInProgress);
-        }
-        EntityCloner::build(world)
-            .deny_all()
-            .move_components(true)
-            .without_required_components(|builder| {
-                builder.allow_by_ids(components.iter().copied());
-            })
-            .clone_entity(entities.source, entities.target);
-        if !progress_res {
-            world.remove_resource::<BufferComponentsInProgress>();
-        }
-        entities.buffer
+    fn undo_redo(&mut self, world: &mut World, direction: RevDirection) {
+        let entities = self.toggle_state(world);
+        let components = self.get_component_ids(world);
+        entities.move_components(world, &components, direction);
     }
 }
 
 impl UndoRedo for BundleBuffer {
     fn undo(&mut self, world: &mut World) {
-        let entities = self.toggle_state(world);
-        let components = self.get_component_ids(world);
-        self.move_bundle(world, entities, &components);
+        self.undo_redo(world, RevDirection::BackwardLog);
     }
     fn redo(&mut self, world: &mut World) {
-        self.undo(world);
+        self.undo_redo(world, RevDirection::FORWARD_LOG);
+    }
+}
+
+#[derive(Copy, Clone)]
+pub enum BufferInProgress {
+    Buffer {
+        direction: RevDirection,
+        target: Entity,
+        source: Entity,
+        buffer: Entity,
+    },
+    NonEntityBuffer {
+        direction: RevDirection,
+    },
+    FinalDespawn,
+}
+
+impl BufferInProgress {
+    pub fn direction(self) -> RevDirection {
+        match self {
+            Self::Buffer { direction, .. } => direction,
+            Self::NonEntityBuffer { direction } => direction,
+            Self::FinalDespawn => RevDirection::NOT_LOG,
+        }
     }
 }
 
 #[derive(Resource)]
-pub(crate) struct BufferComponentsInProgress;
+struct BufferInProgressRes(BufferInProgress);
+
+pub(super) fn buffer_components_in_progress(world: &World) -> Option<BufferInProgress> {
+    world.get_resource::<BufferInProgressRes>().map(|res| res.0)
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum BufferAt {
@@ -325,7 +429,7 @@ pub enum BufferAt {
     /// The components will be buffered when this action is undone, which then removed them
     /// from the entity. Until then they remain at the entity.
     ///
-    /// When this id redone, the components are moved back into the entity from the buffer.
+    /// When this is redone, the components are moved back into the entity from the buffer.
     ///
     /// This variant is useful to make accompanied insertions of these components _without_
     /// overwrites reversible.
@@ -347,19 +451,38 @@ pub(super) fn components_to_bundle(world: &mut World, components: &[ComponentId]
     let mut checked = world
         .remove_resource::<CheckedClonable>()
         .unwrap_or_default();
+    // todo: this should be () outside reflect flag
+    let registry = world
+        .get_resource::<AppTypeRegistry>()
+        .map(|registry| registry.read());
     for &component_id in components {
         if checked.0.insert(component_id) {
             if let Some(component_info) = world.components().get_info(component_id) {
-                if component_info.clone_behavior() == &ComponentCloneBehavior::Ignore {
+                let movable = match component_info.clone_behavior() {
+                    // todo: reflect feature cfg and alternative which returns false
+                    ComponentCloneBehavior::Default => component_info
+                        .type_id()
+                        .zip(registry.as_ref())
+                        .is_some_and(|(type_id, registry)| {
+                            registry
+                                .get_type_data::<ReflectFromPtr>(type_id)
+                                .is_some_and(|registration| registration.type_id() == type_id)
+                        }),
+                    ComponentCloneBehavior::Custom(_) => true, // impls Clone
+                    ComponentCloneBehavior::Ignore => false,
+                };
+                if !movable {
                     bevy::log::error!(
-                        "Component {} is unclonable, it's insert, remove or overwrite will \
-                        not be reversible, see https://github.com/bevyengine/bevy/issues/18079",
+                        "Component {} is unclonable and unreflectable, it's insert, remove or overwrite \
+                        will not be reversible, see https://github.com/bevyengine/bevy/issues/18079",
                         component_info.name()
                     );
                 }
             }
         }
     }
+    drop(registry);
+
     world.insert_resource(checked);
 
     world.register_dynamic_bundle(components).id()
@@ -377,3 +500,96 @@ macro_rules! unique_for_location {
 }
 
 pub(super) use unique_for_location;
+
+#[cfg(test)]
+mod test {
+    use bevy::prelude::{Reflect, ReflectDefault, ReflectFromWorld};
+
+    use crate::panic_on_error_events;
+
+    use super::*;
+
+    #[test]
+    fn components_to_bundle_does_not_panic_for_clonable_or_reflectable() {
+        #[derive(Component, Clone)]
+        struct Clonable;
+
+        // following components taken from bevy's clone_entity_using_reflect_all_paths test
+
+        // `reflect_clone`-based fast path
+        #[derive(Component, Reflect)]
+        #[reflect(from_reflect = false)]
+        struct ReflectableA;
+
+        // `ReflectDefault`-based fast path
+        #[derive(Component, Reflect, Default)]
+        #[reflect(Default)]
+        #[reflect(from_reflect = false)]
+        struct ReflectableB;
+
+        // `ReflectFromReflect`-based fast path
+        #[derive(Component, Reflect)]
+        struct ReflectableC;
+
+        // `ReflectFromWorld`-based fast path
+        #[derive(Component, Reflect, Default)]
+        #[reflect(FromWorld)]
+        #[reflect(from_reflect = false)]
+        struct ReflectableD;
+
+        panic_on_error_events();
+        let mut world = World::new();
+        world.init_resource::<AppTypeRegistry>();
+        let registry = world.get_resource::<AppTypeRegistry>().unwrap();
+        registry
+            .write()
+            .register::<(ReflectableA, ReflectableB, ReflectableC, ReflectableD)>();
+        let clonable_id = world.register_component::<Clonable>();
+        let reflectable_a_id = world.register_component::<ReflectableA>();
+        let reflectable_b_id = world.register_component::<ReflectableB>();
+        let reflectable_c_id = world.register_component::<ReflectableC>();
+        let reflectable_d_id = world.register_component::<ReflectableD>();
+
+        components_to_bundle(
+            &mut world,
+            &[
+                clonable_id,
+                reflectable_a_id,
+                reflectable_b_id,
+                reflectable_c_id,
+                reflectable_d_id,
+            ],
+        );
+
+        // test if these really are movable
+        let clone = world
+            .spawn((
+                Clonable,
+                ReflectableA,
+                ReflectableB,
+                ReflectableC,
+                ReflectableD,
+            ))
+            .clone_and_spawn();
+
+        let entity = world.entity(clone);
+        assert!(entity.contains::<Clonable>());
+        assert!(entity.contains::<ReflectableA>());
+        assert!(entity.contains::<ReflectableB>());
+        assert!(entity.contains::<ReflectableC>());
+        assert!(entity.contains::<ReflectableD>());
+    }
+
+    #[test]
+    #[should_panic(expected = "MyComponent is unclonable and unreflectable")]
+    fn components_to_bundle_errors_on_non_clone_component() {
+        #[derive(Component)]
+        struct MyComponent;
+
+        panic_on_error_events();
+        let mut world = World::new();
+        world.init_resource::<AppTypeRegistry>();
+        let component_id = world.register_component::<MyComponent>();
+        components_to_bundle(&mut world, &[component_id]);
+    }
+}
