@@ -13,40 +13,12 @@ use bevy::{
 
 use crate::{
     meta::RevDirection,
+    panic_on_error_events,
     schedule::RevUpdate,
     undo_redo::{BuffersUndoRedo, UndoRedoBuffer},
 };
 
 use super::*;
-
-/// Make `error!` and `error_once!` cause panics.
-pub(crate) fn panic_on_error_events() {
-    use bevy::log::{
-        Level,
-        tracing::{Event, Subscriber, dispatcher::get_default},
-        tracing_subscriber::{
-            Layer,
-            layer::{Context, SubscriberExt},
-            registry,
-            util::SubscriberInitExt,
-        },
-    };
-
-    struct PanicOnError;
-    impl<S: Subscriber> Layer<S> for PanicOnError {
-        fn on_event(&self, event: &Event, _ctx: Context<S>) {
-            if *event.metadata().level() == Level::ERROR {
-                panic!("{event:#?}")
-            }
-        }
-    }
-
-    if registry().with(PanicOnError).try_init().is_err() {
-        get_default(|subscriber| {
-            assert!(subscriber.downcast_ref::<PanicOnError>().is_some());
-        })
-    }
-}
 
 pub(super) fn test_run<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
     configs: Vec<C>,
