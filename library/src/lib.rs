@@ -43,6 +43,7 @@ Docs
 -- point out determinism aspects of methods
 -- log contract (always valid, may go further into the past)
 -- check-logged-at should not be used as the sole shortening mechanism or else logs can grow larger than desired
+-- docs for private UndoRedo types
 
 ISSUES/DISCUSSIONS:
 - reversible change detection (copy over to new repo)
@@ -68,7 +69,38 @@ pub mod prelude {
     pub use crate::meta::{RevDirection, RevMeta};
     pub use crate::schedule::{RevSchedule as _, RevSystemsSet, RevUpdate};
     pub use crate::undo_redo::{
-        BuffersUndoRedo as _, RevCommands as _, RevEntityWorldMut as _, RevWorld as _,
+        BuffersUndoRedo as _, RevCommands as _, RevEntityWorldMut as _, RevWorld as _, UndoRedo,
         UndoRedoBuffer, UndoRedoDirection, UndoRedoSwap,
     };
+}
+
+/// Make `error!` and `error_once!` cause panics.
+#[cfg(test)]
+fn panic_on_error_events() {
+    use bevy::log::{
+        Level,
+        tracing::{Event, Subscriber, dispatcher::get_default},
+        tracing_subscriber::{
+            Layer,
+            layer::{Context, SubscriberExt},
+            registry,
+            util::SubscriberInitExt,
+        },
+    };
+
+    struct PanicOnError;
+
+    impl<S: Subscriber> Layer<S> for PanicOnError {
+        fn on_event(&self, event: &Event, _ctx: Context<S>) {
+            if *event.metadata().level() == Level::ERROR {
+                panic!("{event:#?}")
+            }
+        }
+    }
+
+    if registry().with(PanicOnError).try_init().is_err() {
+        get_default(|subscriber| {
+            assert!(subscriber.downcast_ref::<PanicOnError>().is_some());
+        })
+    }
 }
