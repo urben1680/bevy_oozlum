@@ -67,6 +67,7 @@ impl<T: ReadOnlySystem<Out = bool>> System for RevCondition<T> {
         self.condition.has_deferred()
     }
     fn initialize(&mut self, world: &mut World) {
+        // todo: try change implementation after https://github.com/bevyengine/bevy/pull/17485
         /// Not everything of the bevy API that is needed here to update archetype_component_access is public,
         /// so this is a rather complicated way to do it while trying to make it cheap after the first call.
         /// The benefit is that this is agnostic to implementation details of how impl SystemParam for Res works.
