@@ -1,7 +1,6 @@
 use std::{
     any::TypeId,
     hash::{BuildHasher, Hash, Hasher},
-    ops::Deref,
     sync::Arc,
 };
 
@@ -9,10 +8,11 @@ use bevy::{
     ecs::{
         bundle::{Bundle, BundleId, NoBundleEffect},
         component::ComponentId,
-        entity::Entity,
+        entity::{Entity, EntityLocation},
         resource::Resource,
-        world::{EntityWorldMut, FromWorld, World},
+        world::{EntityWorldMut, FromWorld, World, error::TryInsertBatchError},
     },
+    log::warn,
     platform::{
         collections::HashMap,
         hash::{FixedHasher, PassHash},
@@ -24,45 +24,52 @@ use crate::meta::RevMeta;
 use super::*;
 
 pub trait RevWorld {
-    /// Reversible structural operations may trigger more hooks than expected as they also
-    /// react on the buffer entity changing.
-    ///
-    /// For example [`EntityWorldMut::rev_insert`] will:
-    ///
-    /// 1. Move components that would be overwritten to a buffer entity:
-    ///   - may trigger remove hook on the source entity
-    ///   - may trigger insert hook on the buffer entity 1
-    /// 2. ... and insert the given components in the source entity as expected
-    /// 3. Undoing will move the inserted components to a second buffer before bringing the
-    /// previous values back from the first:
-    ///   - may trigger remove hook on the source entity
-    ///   - may trigger insert hook on the buffer entity 2
-    ///   - may trigger insert hook on the source entity
-    ///   - may trigger remove hook on the buffer entity 1
-    /// 4. Redoing is Undoing in reverse:
-    ///   - may trigger remove hook on the source entity
-    ///   - may trigger insert hook on the buffer entity 1
-    ///   - may trigger remove hook on the buffer entity 2
-    ///   - may trigger insert hook on the source entity
-    /// 5. When the buffer entities go out of log while containing the components, remove
-    /// hooks will run too for them.
-    ///
-    /// To identify these hooks, this method can be used which will return `true` for all
-    /// hooks in the list above _except_ of 2. and 5. for which this returns `false`.
-    ///
-    /// Note though that during _all_ pure removal oparations like [`EntityWorldMut::rev_remove`]
-    /// this method returns `true` as the buffering steps fully replace the usual
-    /// [`EntityWorldMut::remove`] call.
-    ///
-    /// Additionally, the source and buffer entity can be differenced by the latter containing
-    /// the [`DespawnAtOutOfLog`] component.
-    ///
-    /// Reversible despawns will delay remove hooks to a later time as the entity is covered
-    /// by the same mechanic descibed in 5. in the list above.
-    fn buffer_components_in_progress(&self) -> bool;
+    fn buffer_components_in_progress(&self) -> Option<BufferInProgress>;
+
+    fn buffer_components(
+        &mut self,
+        entity: Entity,
+        at: BufferAt,
+        components: &[ComponentId],
+    ) -> Result<Option<Entity>, ()>;
+
+    fn buffer_components_cached<T: AsRef<[ComponentId]>>(
+        &mut self,
+        entity: Entity,
+        key: impl Hash + 'static,
+        components: impl FnOnce(&mut World) -> (BufferAt, T),
+    ) -> Result<Option<Entity>, ()>;
+
+    fn buffer_bundle(
+        &mut self,
+        entity: Entity,
+        at: BufferAt,
+        bundle: BundleId,
+    ) -> Result<Option<Entity>, ()>;
+
+    // the methods here are purposely sorted alphabetically to make it easily comparable to bevy's docs
+    // unmentioned methods are either
+    // a) unrelated to reversible structural changes OR
+    // b) deprecated in bevy OR
+    // c) missed by accident!
 
     /// Reversible version of [`World::despawn`].
     fn rev_despawn(&mut self, entity: Entity) -> bool;
+
+    /// Reversible version of [`World::get_resource_or_init`].
+    fn rev_get_resource_or_init<R: Resource + FromWorld>(&mut self) -> Mut<'_, R>;
+
+    /// Reversible version of [`World::get_resource_or_insert_with`].
+    fn rev_get_resource_or_insert_with<R: Resource>(
+        &mut self,
+        func: impl FnOnce() -> R,
+    ) -> Mut<'_, R>;
+
+    // rev_init_non_send_resource
+    // out of scope due Send bound on UndoRedo
+
+    /// Reversible version of [`World::init_resource`].
+    fn rev_init_resource<R: Resource + FromWorld>(&mut self);
 
     /// Reversible version of [`World::insert_batch`].
     fn rev_insert_batch<I, B>(&mut self, batch: I)
@@ -78,6 +85,27 @@ pub trait RevWorld {
         I::IntoIter: Iterator<Item = (Entity, B)>,
         B: Bundle<Effect: NoBundleEffect>;
 
+    // rev_insert_non_send_by_id
+    // out of scope due Send bound on UndoRedo
+
+    // rev_insert_non_send_resource
+    // out of scope due Send bound on UndoRedo
+
+    /// Reversible version of [`World::insert_resource`].
+    fn rev_insert_resource<R: Resource>(&mut self, resource: R);
+
+    // rev_insert_resource_by_id
+    // blocked on https://github.com/bevyengine/bevy/pull/17485
+
+    // rev_remove_non_send_by_id
+    // out of scope due Send bound on UndoRedo
+
+    /// Reversible version of [`World::remove_resource`].
+    fn rev_remove_resource<R: Resource, Out>(&mut self, c: impl FnOnce(&R) -> Out) -> Option<Out>;
+
+    /// rev_remove_resource_by_id
+    // blocked on https://github.com/bevyengine/bevy/pull/17485
+
     /// Reversible version of [`World::spawn`].
     fn rev_spawn<B: Bundle>(&mut self, bundle: B) -> EntityWorldMut;
 
@@ -90,45 +118,33 @@ pub trait RevWorld {
     /// Reversible version of [`World::spawn_empty`].
     fn rev_spawn_empty(&mut self) -> EntityWorldMut<'_>;
 
-    /// Reversible version of [`World::init_resource`].
-    fn rev_init_resource<R: Resource + FromWorld>(&mut self);
+    /// Reversible version of [`World::try_despawn`].
+    fn rev_try_despawn(&mut self, entity: Entity) -> Result<(), RevEntityDespawnError>;
 
-    /// Reversible version of [`World::insert_resource`].
-    fn rev_insert_resource<R: Resource>(&mut self, resource: R);
+    /// Reversible version of [`World::try_insert_batch`].
+    fn rev_try_insert_batch<I, B>(&mut self, batch: I) -> Result<(), TryInsertBatchError>
+    where
+        I: IntoIterator,
+        I::IntoIter: Iterator<Item = (Entity, B)>,
+        B: Bundle<Effect: NoBundleEffect>;
 
-    /// Reversible version of [`World::remove_resource`].
-    fn rev_remove_resource<R: Resource>(&mut self);
-
-    fn buffer_components(
-        &mut self,
-        entity: Entity,
-        at: BufferAt,
-        components: &[ComponentId],
-    ) -> Option<Entity>;
-
-    fn buffer_components_cached<T: Deref<Target = [ComponentId]>>(
-        &mut self,
-        entity: Entity,
-        key: impl Hash + 'static,
-        components: impl FnOnce(&mut World) -> (BufferAt, T),
-    ) -> Option<Entity>;
-
-    fn buffer_bundle(
-        &mut self,
-        entity: Entity,
-        at: BufferAt,
-        bundle: BundleId,
-    ) -> Option<Entity>;
+    /// Reversible version of [`World::try_insert_batch_if_new`].
+    fn rev_try_insert_batch_if_new<I, B>(&mut self, batch: I) -> Result<(), TryInsertBatchError>
+    where
+        I: IntoIterator,
+        I::IntoIter: Iterator<Item = (Entity, B)>,
+        B: Bundle<Effect: NoBundleEffect>;
 }
 
 impl RevWorld for World {
-    fn buffer_components_in_progress(&self) -> bool {
-        self.contains_resource::<BufferComponentsInProgress>()
+    fn buffer_components_in_progress(&self) -> Option<BufferInProgress> {
+        buffer_components_in_progress(self)
     }
 
     fn rev_despawn(&mut self, entity: Entity) -> bool {
-        let entity_mut = self.entity_mut(entity);
-        rev_despawn_inner(entity_mut)
+        self.rev_try_despawn(entity)
+            .inspect_err(|error| warn!("{error}"))
+            .is_ok()
     }
 
     fn rev_insert_batch<I, B>(&mut self, batch: I)
@@ -140,7 +156,7 @@ impl RevWorld for World {
         let batch: Vec<_> = batch.into_iter().collect();
         for &(entity, _) in batch.iter() {
             let archetype_id = self.entities().get(entity).unwrap().archetype_id;
-            pre_insert::<B>(self, entity, archetype_id, InsertMode::Replace);
+            pre_insert::<B>(self, entity, archetype_id, InsertMode::Replace).expect("todo");
         }
         self.insert_batch(batch);
     }
@@ -157,7 +173,7 @@ impl RevWorld for World {
         self.insert_batch_if_new(batch.inspect(|(entity, _)| entities.push(*entity)));
         for entity in entities {
             let archetype_id = self.entities().get(entity).unwrap().archetype_id;
-            pre_insert::<B>(self, entity, archetype_id, InsertMode::Keep);
+            pre_insert::<B>(self, entity, archetype_id, InsertMode::Keep).expect("todo");
         }
     }
 
@@ -224,10 +240,12 @@ impl RevWorld for World {
         self.buffer_undo_redo(swap);
     }
 
-    fn rev_remove_resource<R: Resource>(&mut self) {
-        if let Some(resource) = self.remove_resource::<R>() {
+    fn rev_remove_resource<R: Resource, Out>(&mut self, c: impl FnOnce(&R) -> Out) -> Option<Out> {
+        self.remove_resource::<R>().map(|resource| {
+            let out = c(&resource);
             self.buffer_undo_redo(ResourceSwap(Some(resource)));
-        }
+            out
+        })
     }
 
     fn buffer_components(
@@ -235,20 +253,17 @@ impl RevWorld for World {
         entity: Entity,
         at: BufferAt,
         components: &[ComponentId],
-    ) -> Option<Entity> {
-        if components.is_empty() {
-            return None;
-        }
+    ) -> Result<Option<Entity>, ()> {
         let bundle = components_to_bundle(self, components);
         self.buffer_bundle(entity, at, bundle)
     }
 
-    fn buffer_components_cached<T: Deref<Target = [ComponentId]>>(
+    fn buffer_components_cached<T: AsRef<[ComponentId]>>(
         &mut self,
         entity: Entity,
         key: impl Hash + 'static,
         components: impl FnOnce(&mut World) -> (BufferAt, T),
-    ) -> Option<Entity> {
+    ) -> Result<Option<Entity>, ()> {
         #[derive(Resource, Default)]
         pub(crate) struct CachedBundles(HashMap<u64, Option<(BufferAt, BundleId)>, PassHash>);
         fn type_id_of_var<T: 'static>(_: &T) -> TypeId {
@@ -264,6 +279,7 @@ impl RevWorld for World {
 
         let maybe_components = *cache.0.entry(key).or_insert_with(|| {
             let (at, components) = components(self);
+            let components = components.as_ref();
             if components.is_empty() {
                 None
             } else {
@@ -273,7 +289,13 @@ impl RevWorld for World {
 
         self.insert_resource(cache);
 
-        maybe_components.and_then(|(at, bundle)| self.buffer_bundle(entity, at, bundle))
+        match maybe_components {
+            Some((at, bundle)) => self.buffer_bundle(entity, at, bundle),
+            None => match self.entities().get(entity) {
+                Some(_) => Ok(None),
+                None => Err(()),
+            },
+        }
     }
 
     fn buffer_bundle(
@@ -281,28 +303,420 @@ impl RevWorld for World {
         entity: Entity,
         at: BufferAt,
         bundle: BundleId,
-    ) -> Option<Entity> {
+    ) -> Result<Option<Entity>, ()> {
         buffer_bundle(self, entity, at, bundle)
+    }
+
+    fn rev_get_resource_or_init<R: Resource + FromWorld>(&mut self) -> Mut<'_, R> {
+        self.rev_init_resource::<R>();
+        self.resource_mut::<R>()
+    }
+
+    fn rev_get_resource_or_insert_with<R: Resource>(
+        &mut self,
+        func: impl FnOnce() -> R,
+    ) -> Mut<'_, R> {
+        if !self.contains_resource::<R>() {
+            self.buffer_undo_redo(ResourceSwap::<R>(None));
+        }
+        self.get_resource_or_insert_with(func)
+    }
+
+    #[track_caller]
+    fn rev_try_despawn(&mut self, entity: Entity) -> Result<(), RevEntityDespawnError> {
+        match self.get_entity_mut(entity) {
+            Ok(entity_mut) => {
+                if !rev_despawn_inner(entity_mut) {
+                    Err(RevEntityDespawnError::AlreadyMarkedForDespawn(entity))
+                } else {
+                    Ok(())
+                }
+            }
+            Err(error) => Err(RevEntityDespawnError::Other(error.into())),
+        }
+    }
+
+    fn rev_try_insert_batch<I, B>(&mut self, batch: I) -> Result<(), TryInsertBatchError>
+    where
+        I: IntoIterator,
+        I::IntoIter: Iterator<Item = (Entity, B)>,
+        B: Bundle<Effect: NoBundleEffect>,
+    {
+        try_insert_batch_inner(self, batch, InsertMode::Replace)
+    }
+
+    fn rev_try_insert_batch_if_new<I, B>(&mut self, batch: I) -> Result<(), TryInsertBatchError>
+    where
+        I: IntoIterator,
+        I::IntoIter: Iterator<Item = (Entity, B)>,
+        B: Bundle<Effect: NoBundleEffect>,
+    {
+        try_insert_batch_inner(self, batch, InsertMode::Keep)
     }
 }
 
-pub(super) struct ResourceSwap<R: Resource>(Option<R>);
+fn try_insert_batch_inner<I, B>(
+    world: &mut World,
+    batch: I,
+    insert_mode: InsertMode,
+) -> Result<(), TryInsertBatchError>
+where
+    I: IntoIterator,
+    I::IntoIter: Iterator<Item = (Entity, B)>,
+    B: Bundle<Effect: NoBundleEffect>,
+{
+    let mut invalid_entities = Vec::new();
+    let batch: Vec<_> = batch
+        .into_iter()
+        .filter(|&(entity, _)| {
+            world
+                .entities()
+                .get(entity)
+                .filter(|&EntityLocation { archetype_id, .. }| {
+                    pre_insert::<B>(world, entity, archetype_id, insert_mode).is_ok()
+                })
+                .or_else(|| {
+                    invalid_entities.push(entity);
+                    None
+                })
+                .is_some()
+        })
+        .collect();
+    match insert_mode {
+        InsertMode::Replace => world.insert_batch(batch),
+        InsertMode::Keep => world.insert_batch_if_new(batch),
+    }
 
-impl<R: Resource> UndoRedo for ResourceSwap<R> {
-    fn undo(&mut self, world: &mut World) {
-        match world.get_resource_mut::<R>() {
-            Some(mut r1) => match self.0.as_mut() {
-                Some(r2) => core::mem::swap(&mut *r1, r2),
-                None => self.0 = world.remove_resource::<R>(),
-            },
-            None => {
-                if let Some(r2) = self.0.take() {
-                    world.insert_resource(r2)
-                }
+    if invalid_entities.is_empty() {
+        Ok(())
+    } else {
+        Err(TryInsertBatchError {
+            bundle_type: core::any::type_name::<B>(),
+            entities: invalid_entities,
+        })
+    }
+}
+
+#[cfg(test)]
+mod test {
+
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use crate::panic_on_error_events;
+
+    use super::*;
+
+    #[derive(Resource, PartialEq, Debug, Default, Copy, Clone)]
+    struct TestRes(u8);
+
+    #[derive(Component, PartialEq, Debug, Default, Copy, Clone)]
+    #[require(Required1)]
+    struct Explicit1(u8);
+
+    #[derive(Component, PartialEq, Debug, Default, Copy, Clone)]
+    #[require(Required2)]
+    struct Explicit2(u8);
+
+    #[derive(Component, PartialEq, Debug, Default, Copy, Clone)]
+    struct Required1(u8);
+
+    #[derive(Component, PartialEq, Debug, Default, Copy, Clone)]
+    struct Required2(u8);
+
+    fn setup() -> World {
+        panic_on_error_events();
+        let mut world = World::new();
+        world.init_resource::<UndoRedoBuffer>();
+        world.insert_resource(RevDirection::NOT_LOG.to_meta(0, 1, 1));
+        world
+    }
+
+    mod buffer_at_now {
+        use super::*;
+
+        fn inner(c: impl FnOnce(&mut World, Entity, ComponentId) -> Result<Option<Entity>, ()>) {
+            let mut world = setup();
+            let explicit_id = world.register_component::<Explicit1>();
+            let entity = world.spawn((Explicit1(1), Required1(1))).id();
+            assert_eq!(world.get::<Explicit1>(entity), Some(&Explicit1(1)));
+            assert_eq!(world.get::<Required1>(entity), Some(&Required1(1)));
+
+            let buffer_entity = c(&mut world, entity, explicit_id)
+                .expect("should be Ok")
+                .expect("should be Some");
+            let mut buffer = world.remove_resource::<UndoRedoBuffer>().unwrap();
+
+            assert_eq!(world.get::<Explicit1>(buffer_entity), Some(&Explicit1(1)));
+            assert_eq!(world.get::<Explicit1>(entity), None);
+            assert_eq!(world.get::<Required1>(entity), Some(&Required1(1)));
+
+            buffer.undo(&mut world);
+            assert_eq!(world.get::<Explicit1>(buffer_entity), None);
+            assert_eq!(world.get::<Explicit1>(entity), Some(&Explicit1(1)));
+            assert_eq!(world.get::<Required1>(entity), Some(&Required1(1)));
+
+            buffer.redo(&mut world);
+            assert_eq!(world.get::<Explicit1>(buffer_entity), Some(&Explicit1(1)));
+            assert_eq!(world.get::<Explicit1>(entity), None);
+            assert_eq!(world.get::<Required1>(entity), Some(&Required1(1)));
+        }
+
+        #[test]
+        fn buffer_components_buffers() {
+            inner(|world, entity, component_id| {
+                world.buffer_components(entity, BufferAt::Now, &[component_id])
+            });
+        }
+
+        #[test]
+        fn buffer_components_cached_buffers() {
+            inner(|world, entity, component_id| {
+                let components = |_: &mut World| {
+                    static ASSERT_CACHED: AtomicBool = AtomicBool::new(true);
+                    assert!(ASSERT_CACHED.fetch_not(Ordering::Relaxed));
+                    (BufferAt::Now, [component_id])
+                };
+
+                let another_entity = world.spawn_empty().id();
+                world
+                    .buffer_components_cached(another_entity, (), components)
+                    .expect("should be Ok")
+                    .expect("should be Some");
+
+                world.buffer_components_cached(entity, (), components)
+            });
+        }
+
+        #[test]
+        fn buffer_bundle_buffers() {
+            inner(|world, entity, component_id| {
+                let bundle = world.register_dynamic_bundle(&[component_id]).id();
+                world.buffer_bundle(entity, BufferAt::Now, bundle)
+            })
+        }
+    }
+
+    mod buffer_at_undo {
+        use super::*;
+
+        fn inner(c: impl FnOnce(&mut World, Entity, ComponentId) -> Result<Option<Entity>, ()>) {
+            let mut world = setup();
+            let explicit_id = world.register_component::<Explicit1>();
+            let entity = world.spawn((Explicit1(1), Required1(1))).id();
+            assert_eq!(world.get::<Explicit1>(entity), Some(&Explicit1(1)));
+            assert_eq!(world.get::<Required1>(entity), Some(&Required1(1)));
+
+            let result = c(&mut world, entity, explicit_id);
+            assert_eq!(result, Ok(None));
+            let mut buffer = world.remove_resource::<UndoRedoBuffer>().unwrap();
+
+            assert_eq!(world.get::<Explicit1>(entity), Some(&Explicit1(1)));
+            assert_eq!(world.get::<Required1>(entity), Some(&Required1(1)));
+
+            buffer.undo(&mut world);
+            assert_eq!(world.get::<Explicit1>(entity), None);
+            assert_eq!(world.get::<Required1>(entity), Some(&Required1(1)));
+
+            buffer.redo(&mut world);
+            assert_eq!(world.get::<Explicit1>(entity), Some(&Explicit1(1)));
+            assert_eq!(world.get::<Required1>(entity), Some(&Required1(1)));
+        }
+
+        #[test]
+        fn buffer_components_buffers() {
+            inner(|world, entity, component_id| {
+                world.buffer_components(entity, BufferAt::Undo, &[component_id])
+            });
+        }
+
+        #[test]
+        fn buffer_components_cached_buffers() {
+            inner(|world, entity, component_id| {
+                let components = |_: &mut World| {
+                    static ASSERT_CACHED: AtomicBool = AtomicBool::new(true);
+                    assert!(ASSERT_CACHED.fetch_not(Ordering::Relaxed));
+                    (BufferAt::Undo, [component_id])
+                };
+
+                let another_entity = world.spawn_empty().id();
+                let result = world.buffer_components_cached(another_entity, (), components);
+                assert_eq!(result, Ok(None));
+
+                world.buffer_components_cached(entity, (), components)
+            });
+        }
+
+        #[test]
+        fn buffer_bundle_buffers() {
+            inner(|world, entity, component_id| {
+                let bundle = world.register_dynamic_bundle(&[component_id]).id();
+                world.buffer_bundle(entity, BufferAt::Undo, bundle)
+            })
+        }
+    }
+
+    mod buffer_at_now_and_undo {
+        use super::*;
+
+        fn inner(c: impl FnOnce(&mut World, Entity, ComponentId) -> Result<Option<Entity>, ()>) {
+            let mut world = setup();
+            let explicit_id = world.register_component::<Explicit1>();
+            let entity = world.spawn((Explicit1(1), Required1(1))).id();
+            assert_eq!(world.get::<Explicit1>(entity), Some(&Explicit1(1)));
+            assert_eq!(world.get::<Required1>(entity), Some(&Required1(1)));
+
+            let buffer_entity = c(&mut world, entity, explicit_id)
+                .expect("should be Ok")
+                .expect("should be Some");
+            let mut buffer = world.remove_resource::<UndoRedoBuffer>().unwrap();
+            world.entity_mut(entity).insert(Explicit1(2));
+
+            assert_eq!(world.get::<Explicit1>(buffer_entity), Some(&Explicit1(1)));
+            assert_eq!(world.get::<Explicit1>(entity), Some(&Explicit1(2)));
+            assert_eq!(world.get::<Required1>(entity), Some(&Required1(1)));
+
+            buffer.undo(&mut world);
+            assert_eq!(world.get::<Explicit1>(buffer_entity), None);
+            assert_eq!(world.get::<Explicit1>(entity), Some(&Explicit1(1)));
+            assert_eq!(world.get::<Required1>(entity), Some(&Required1(1)));
+
+            buffer.redo(&mut world);
+            assert_eq!(world.get::<Explicit1>(buffer_entity), Some(&Explicit1(1)));
+            assert_eq!(world.get::<Explicit1>(entity), Some(&Explicit1(2)));
+            assert_eq!(world.get::<Required1>(entity), Some(&Required1(1)));
+        }
+
+        #[test]
+        fn buffer_components_buffers() {
+            inner(|world, entity, component_id| {
+                world.buffer_components(entity, BufferAt::NowAndUndo, &[component_id])
+            });
+        }
+
+        #[test]
+        fn buffer_components_cached_buffers() {
+            inner(|world, entity, component_id| {
+                let components = |_: &mut World| {
+                    static ASSERT_CACHED: AtomicBool = AtomicBool::new(true);
+                    assert!(ASSERT_CACHED.fetch_not(Ordering::Relaxed));
+                    (BufferAt::NowAndUndo, [component_id])
+                };
+
+                let another_entity = world.spawn_empty().id();
+                world
+                    .buffer_components_cached(another_entity, (), components)
+                    .expect("should be Ok")
+                    .expect("should be Some");
+
+                world.buffer_components_cached(entity, (), components)
+            });
+        }
+
+        #[test]
+        fn buffer_bundle_buffers() {
+            inner(|world, entity, component_id| {
+                let bundle = world.register_dynamic_bundle(&[component_id]).id();
+                world.buffer_bundle(entity, BufferAt::NowAndUndo, bundle)
+            })
+        }
+    }
+
+    #[test]
+    fn buffer_fails_on_despawned_or_rev_despawned() {
+        let mut world = setup();
+        let explicit_id = world.register_component::<Explicit1>();
+        let bundle = world.register_dynamic_bundle(&[explicit_id]).id();
+        let entity_mut = world.spawn((Explicit1(1), Required1(1)));
+        let entity = entity_mut.id();
+        entity_mut.rev_despawn();
+
+        for entity in [entity, Entity::PLACEHOLDER] {
+            for at in [BufferAt::Now, BufferAt::Undo, BufferAt::NowAndUndo] {
+                let result = world.buffer_components(entity, at, &[explicit_id]);
+                assert_eq!(result, Err(()), "{entity:?}, {at:?}");
+
+                let result =
+                    world.buffer_components_cached(entity, (entity, at), |_| (at, [explicit_id]));
+                assert_eq!(result, Err(()), "{entity:?}, {at:?}");
+
+                let result = world.buffer_bundle(entity, at, bundle);
+                assert_eq!(result, Err(()), "{entity:?}, {at:?}");
             }
         }
     }
-    fn redo(&mut self, world: &mut World) {
-        self.undo(world)
+
+    #[test]
+    fn rev_init_resource_on_unexisting_inits_resource() {
+        let mut world = setup();
+
+        world.rev_init_resource::<TestRes>();
+        let mut buffer = world.remove_resource::<UndoRedoBuffer>().unwrap();
+
+        assert_eq!(world.get_resource::<TestRes>(), Some(&TestRes(0)));
+        buffer.undo(&mut world);
+        assert_eq!(world.get_resource::<TestRes>(), None);
+        buffer.redo(&mut world);
+        assert_eq!(world.get_resource::<TestRes>(), Some(&TestRes(0)));
+    }
+
+    #[test]
+    fn rev_init_resource_on_existing_noop() {
+        let mut world = setup();
+        world.init_resource::<TestRes>();
+        world.rev_init_resource::<TestRes>();
+        assert!(world.resource::<UndoRedoBuffer>().is_empty());
+    }
+
+    #[test]
+    fn rev_insert_resource_on_unexisting_inserts() {
+        let mut world = setup();
+
+        world.rev_insert_resource(TestRes(10));
+        let mut buffer = world.remove_resource::<UndoRedoBuffer>().unwrap();
+
+        assert_eq!(world.get_resource::<TestRes>(), Some(&TestRes(10)));
+        buffer.undo(&mut world);
+        assert_eq!(world.get_resource::<TestRes>(), None);
+        buffer.redo(&mut world);
+        assert_eq!(world.get_resource::<TestRes>(), Some(&TestRes(10)));
+    }
+
+    #[test]
+    fn rev_insert_resource_on_existing_overwrites() {
+        let mut world = setup();
+
+        world.insert_resource(TestRes(10));
+        world.rev_insert_resource(TestRes(20));
+        let mut buffer = world.remove_resource::<UndoRedoBuffer>().unwrap();
+
+        assert_eq!(world.get_resource::<TestRes>(), Some(&TestRes(20)));
+        buffer.undo(&mut world);
+        assert_eq!(world.get_resource::<TestRes>(), Some(&TestRes(10)));
+        buffer.redo(&mut world);
+        assert_eq!(world.get_resource::<TestRes>(), Some(&TestRes(20)));
+    }
+
+    #[test]
+    fn rev_remove_resource_on_existing_removes() {
+        let mut world = setup();
+
+        world.insert_resource(TestRes(10));
+        let out = world.rev_remove_resource::<TestRes, _>(|r| *r);
+        assert_eq!(out, Some(TestRes(10)));
+        let mut buffer = world.remove_resource::<UndoRedoBuffer>().unwrap();
+
+        assert_eq!(world.get_resource::<TestRes>(), None);
+        buffer.undo(&mut world);
+        assert_eq!(world.get_resource::<TestRes>(), Some(&TestRes(10)));
+        buffer.redo(&mut world);
+        assert_eq!(world.get_resource::<TestRes>(), None);
+    }
+
+    #[test]
+    fn rev_remove_resource_on_unexisting_noop() {
+        let mut world = setup();
+        let out = world.rev_remove_resource::<TestRes, _>(|r| *r);
+        assert_eq!(out, None);
+        assert!(world.resource::<UndoRedoBuffer>().is_empty());
     }
 }
