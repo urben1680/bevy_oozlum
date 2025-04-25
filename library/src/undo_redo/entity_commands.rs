@@ -1,5 +1,6 @@
 use bevy::{
     ecs::{
+        error::ignore,
         hierarchy::ChildOf,
         relationship::{
             OrderedRelationshipSourceCollection, RelatedSpawnerCommands, Relationship,
@@ -76,11 +77,6 @@ pub trait RevEntityCommands<'a> {
     where
         S: RelationshipTarget,
         B: Bundle;
-
-    /// Reversible version of [`EntityCommands::entry`].
-    fn rev_entry<T>(&mut self) -> EntityEntryCommands<'_, T>
-    where
-        T: Component;
 
     /// Reversible version of [`EntityCommands::insert`].
     fn rev_insert(&mut self, bundle: impl Bundle) -> &mut EntityCommands<'a>;
@@ -293,13 +289,6 @@ impl<'a> RevEntityCommands<'a> for EntityCommands<'a> {
         })
     }
 
-    fn rev_entry<T>(&mut self) -> EntityEntryCommands<'_, T>
-    where
-        T: Component,
-    {
-        todo!()
-    }
-
     fn rev_insert(&mut self, bundle: impl Bundle) -> &mut EntityCommands<'a> {
         self.queue(move |mut entity: EntityWorldMut| {
             entity.rev_insert(bundle);
@@ -310,7 +299,11 @@ impl<'a> RevEntityCommands<'a> for EntityCommands<'a> {
     where
         F: FnOnce() -> bool,
     {
-        todo!()
+        if condition() {
+            self.rev_insert(bundle)
+        } else {
+            self
+        }
     }
 
     fn rev_insert_if_new(&mut self, bundle: impl Bundle) -> &mut EntityCommands<'a> {
@@ -327,7 +320,11 @@ impl<'a> RevEntityCommands<'a> for EntityCommands<'a> {
     where
         F: FnOnce() -> bool,
     {
-        todo!()
+        if condition() {
+            self.rev_insert_if_new(bundle)
+        } else {
+            self
+        }
     }
 
     unsafe fn rev_insert_by_id<T>(
@@ -354,18 +351,35 @@ impl<'a> RevEntityCommands<'a> for EntityCommands<'a> {
     where
         T: Send + 'static,
     {
-        todo!()
+        self.queue_handled(
+            move |mut entity: EntityWorldMut| {
+                OwningPtr::make(value, |ptr| unsafe {
+                    // SAFETY: todo
+                    entity.rev_insert_by_id(component_id, ptr);
+                })
+            },
+            ignore,
+        )
     }
 
     fn rev_try_insert(&mut self, bundle: impl Bundle) -> &mut EntityCommands<'a> {
-        todo!()
+        self.queue_handled(
+            move |mut entity: EntityWorldMut| {
+                entity.rev_insert(bundle);
+            },
+            ignore,
+        )
     }
 
     fn rev_try_insert_if<F>(&mut self, bundle: impl Bundle, condition: F) -> &mut EntityCommands<'a>
     where
         F: FnOnce() -> bool,
     {
-        todo!()
+        if condition() {
+            self.rev_try_insert(bundle)
+        } else {
+            self
+        }
     }
 
     fn rev_try_insert_if_new_and<F>(
@@ -376,11 +390,20 @@ impl<'a> RevEntityCommands<'a> for EntityCommands<'a> {
     where
         F: FnOnce() -> bool,
     {
-        todo!()
+        if condition() {
+            self.rev_try_insert_if_new(bundle)
+        } else {
+            self
+        }
     }
 
     fn rev_try_insert_if_new(&mut self, bundle: impl Bundle) -> &mut EntityCommands<'a> {
-        todo!()
+        self.queue_handled(
+            move |mut entity: EntityWorldMut| {
+                entity.rev_insert_if_new(bundle);
+            },
+            ignore,
+        )
     }
 
     fn rev_remove<B>(&mut self) -> &mut EntityCommands<'a>
@@ -396,7 +419,12 @@ impl<'a> RevEntityCommands<'a> for EntityCommands<'a> {
     where
         B: Bundle,
     {
-        todo!()
+        self.queue_handled(
+            |mut entity: EntityWorldMut| {
+                entity.rev_remove::<B>();
+            },
+            ignore,
+        )
     }
 
     fn rev_remove_with_requires<B>(&mut self) -> &mut EntityCommands<'a>
@@ -427,7 +455,7 @@ impl<'a> RevEntityCommands<'a> for EntityCommands<'a> {
     }
 
     fn rev_try_despawn(&mut self) {
-        todo!()
+        self.queue_handled(rev_despawn(), ignore);
     }
 
     fn rev_retain<B>(&mut self) -> &mut EntityCommands<'a>
@@ -440,7 +468,7 @@ impl<'a> RevEntityCommands<'a> for EntityCommands<'a> {
     }
 
     fn rev_clone_and_spawn(&mut self) -> EntityCommands<'_> {
-        todo!()
+        after_spawn(self.clone_and_spawn())
     }
 
     fn rev_clone_components<B>(&mut self, target: Entity) -> &mut EntityCommands<'a>
@@ -475,10 +503,10 @@ impl<'w, R: Relationship> RevRelatedSpawnerCommands for RelatedSpawnerCommands<'
         let target = self.target_entity();
         let mut entity_commands = self.commands_mut().rev_spawn((R::from(target), bundle));
         let entity = entity_commands.id();
-        entity_commands.buffer_undo_redo(InsertRelationship::<R, _> {
+        entity_commands.buffer_undo_redo(InsertRelationship {
             entity,
             target: [target],
-            _marker: PhantomData,
+            _marker: PhantomData::<R>,
         });
         entity_commands
     }
@@ -486,6 +514,74 @@ impl<'w, R: Relationship> RevRelatedSpawnerCommands for RelatedSpawnerCommands<'
     fn rev_spawn_empty(&mut self) -> EntityCommands<'_> {
         self.rev_spawn(())
     }
+}
+
+pub trait RevEntityEntryCommands<T: Component> {
+    fn rev_or_default(&mut self) -> &mut Self
+    where
+        T: Default;
+
+    fn rev_or_from_world(&mut self) -> &mut Self
+    where
+        T: FromWorld;
+
+    fn rev_or_insert(&mut self, default: T) -> &mut Self;
+
+    fn rev_or_insert_with(&mut self, default: impl Fn() -> T) -> &mut Self;
+
+    fn rev_or_try_insert(&mut self, default: T) -> &mut Self;
+
+    fn rev_or_try_insert_with(&mut self, default: impl Fn() -> T) -> &mut Self;
+}
+
+impl<T: Component> RevEntityEntryCommands<T> for EntityEntryCommands<'_, T> {
+    fn rev_or_default(&mut self) -> &mut Self
+    where
+        T: Default,
+    {
+        self.rev_or_insert(T::default())
+    }
+
+    fn rev_or_from_world(&mut self) -> &mut Self
+    where
+        T: FromWorld,
+    {
+        self.entity()
+            .queue(rev_insert_from_world::<T>(InsertMode::Keep));
+        self
+    }
+
+    fn rev_or_insert(&mut self, default: T) -> &mut Self {
+        self.entity().rev_insert_if_new(default);
+        self
+    }
+
+    fn rev_or_insert_with(&mut self, default: impl Fn() -> T) -> &mut Self {
+        self.rev_or_insert(default())
+    }
+
+    fn rev_or_try_insert(&mut self, default: T) -> &mut Self {
+        self.entity().rev_try_insert_if_new(default);
+        self
+    }
+
+    fn rev_or_try_insert_with(&mut self, default: impl Fn() -> T) -> &mut Self {
+        self.rev_or_try_insert(default())
+    }
+}
+
+pub(super) fn after_spawn(mut entity_commands: EntityCommands) -> EntityCommands {
+    let entity = entity_commands.id();
+    entity_commands
+        .commands_mut()
+        .queue(move |world: &mut World| {
+            let meta = world
+                .get_resource::<RevMeta>()
+                .expect(RevMeta::EXPECT_IN_WORLD);
+            let marker = DespawnAtOutOfLog::new(meta);
+            world.buffer_undo_redo(Spawn { entity, marker });
+        });
+    entity_commands
 }
 
 /// Reversible version of [`insert`](bevy::ecs::system::entity_command::insert).
@@ -578,5 +674,21 @@ pub fn rev_retain<B: Bundle>() -> impl EntityCommand {
 pub fn rev_despawn() -> impl EntityCommand {
     |entity: EntityWorldMut| {
         entity.rev_despawn();
+    }
+}
+
+/// Reversible version of [`clone_components`](bevy::ecs::system::entity_command::clone_components).
+#[track_caller]
+pub fn rev_clone_components<B: Bundle>(target: Entity) -> impl EntityCommand {
+    move |mut entity: EntityWorldMut| {
+        entity.rev_clone_components::<B>(target);
+    }
+}
+
+/// Reversible version of [`move_components`](bevy::ecs::system::entity_command::move_components).
+#[track_caller]
+pub fn rev_move_components<B: Bundle>(target: Entity) -> impl EntityCommand {
+    move |mut entity: EntityWorldMut| {
+        entity.rev_move_components::<B>(target);
     }
 }
