@@ -11,7 +11,7 @@ use std::{
 use bevy::{
     ecs::{
         archetype::ArchetypeId,
-        bundle::{Bundle, BundleId, InsertMode},
+        bundle::{Bundle, BundleFromComponents, BundleId, InsertMode},
         change_detection::Mut,
         component::{Component, ComponentCloneBehavior, ComponentId, ComponentMutability},
         entity::{Entity, EntityCloner, hash_set::EntityHashSet},
@@ -25,11 +25,13 @@ use bevy::{
             FilteredEntityMut, FilteredEntityRef, World,
         },
     },
+    log::warn,
     platform::collections::{HashMap, HashSet},
     utils::synccell::SyncCell,
 };
 
 use crate::{
+    app::RevSystemsPlugin,
     log::{DenseTransitionsLog, FrameTransitionLog, FrameTransitionLogError},
     meta::{RevDirection, RevMeta},
 };
@@ -149,30 +151,19 @@ impl UndoRedoBuffer {
     pub fn type_names(&self) -> impl ExactSizeIterator<Item = &'static str> + '_ {
         self.0.iter().map(|boxed| boxed.name)
     }
+}
 
-    /// Pops the most recently pushed `UndoRedo` by a [`BuffersUndoRedo`] implementor which may be deferred.
-    ///
-    /// This will make it unobtainable for the internal log of the reversible system.
-    ///
-    /// Because of this, **this method should only be used for tests of `UndoRedo` implementors**.
-    ///
-    /// The type equality is asserted on the names returned by [`type_name`] which may be not fully accurate.
-    ///
-    /// In other cases consider to use [Self::type_names] or the `Debug` implemention to inspect which types are contained.
-    ///
-    /// Assertions on the buffer being empty can be done with [Self::is_empty] instead.
-    ///
-    /// # Panics
-    ///
-    /// This method panics if the inner collection is empty or if the popped type has a different name than `T`.
-    pub fn pop_assert_type<T: UndoRedo>(&mut self) -> Box<dyn UndoRedo> {
-        let expected = type_name::<T>();
-        let boxed = self
-            .0
-            .pop()
-            .unwrap_or_else(|| panic!("expected `Some({expected})`, found `None`"));
-        assert_eq!(boxed.name, expected);
-        SyncCell::to_inner(boxed.undo_redo)
+#[cfg(test)]
+impl UndoRedo for UndoRedoBuffer {
+    fn undo(&mut self, world: &mut World) {
+        for boxed in self.0.iter_mut().rev() {
+            boxed.undo_redo.get().undo(world)
+        }
+    }
+    fn redo(&mut self, world: &mut World) {
+        for boxed in self.0.iter_mut() {
+            boxed.undo_redo.get().redo(world)
+        }
     }
 }
 
@@ -450,7 +441,19 @@ fn rev_despawn_inner(mut entity_mut: EntityWorldMut) -> bool {
     let component_id = entity_mut
         .world()
         .component_id::<DespawnAtOutOfLog>()
-        .unwrap();
+        .unwrap_or_else(|| {
+            let world = unsafe {
+                // SAFETY: registering type causes no structural changes to the entity
+                entity_mut.world_mut()
+            };
+            warn!(
+                "Component to reversibly mark entities as despawned is not known to the world, \
+                it is registered now but likely fulfills no disabling functionality as it should, \
+                make sure to add the {} plugin to the application",
+                type_name::<RevSystemsPlugin>()
+            );
+            world.register_component::<DespawnAtOutOfLog>()
+        });
     if entity_mut.contains_id(component_id) {
         return false;
     }
@@ -675,5 +678,42 @@ where
             .expect("todo")
             .collection_mut_risky()
             .place_most_recent(self.index);
+    }
+}
+
+struct Take<B> {
+    bundle: Option<B>,
+    entity: Entity,
+}
+
+impl<B: Bundle + BundleFromComponents> UndoRedo for Take<B> {
+    fn undo(&mut self, world: &mut World) {
+        world
+            .entity_mut(self.entity)
+            .insert(self.bundle.take().expect("todo"));
+    }
+    fn redo(&mut self, world: &mut World) {
+        self.bundle = world.entity_mut(self.entity).take::<B>();
+    }
+}
+
+struct ResourceSwap<R: Resource>(Option<R>);
+
+impl<R: Resource> UndoRedo for ResourceSwap<R> {
+    fn undo(&mut self, world: &mut World) {
+        match world.get_resource_mut::<R>() {
+            Some(mut r1) => match self.0.as_mut() {
+                Some(r2) => core::mem::swap(&mut *r1, r2),
+                None => self.0 = world.remove_resource::<R>(),
+            },
+            None => {
+                if let Some(r2) = self.0.take() {
+                    world.insert_resource(r2)
+                }
+            }
+        }
+    }
+    fn redo(&mut self, world: &mut World) {
+        self.undo(world)
     }
 }
