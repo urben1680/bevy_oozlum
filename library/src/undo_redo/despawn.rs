@@ -1,3 +1,5 @@
+use bevy::ecs::world::error::EntityDespawnError;
+
 use super::*;
 
 #[derive(Component, Clone, Copy, Debug, Hash, PartialOrd, Ord, PartialEq, Eq)]
@@ -118,13 +120,12 @@ unsafe impl QueryData for HasRevDespawned {
 unsafe impl ReadOnlyQueryData for HasRevDespawned {}
 
 #[derive(QueryData)]
-#[doc(hidden)]
 pub struct RefRevDespawned {
     marker: &'static DespawnAtOutOfLog,
 }
 
 impl RefRevDespawnedItem<'_> {
-    pub(crate) fn added_at(&self) -> u64 {
+    pub fn added_at(&self) -> u64 {
         self.marker.0
     }
 }
@@ -174,3 +175,22 @@ impl RevIsDespawned for EntityWorldMut<'_> {
         self.contains::<DespawnAtOutOfLog>()
     }
 }
+
+#[derive(Debug, Clone, Copy)]
+pub enum RevEntityDespawnError {
+    AlreadyMarkedForDespawn(Entity),
+    Other(EntityDespawnError),
+}
+
+impl Display for RevEntityDespawnError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::AlreadyMarkedForDespawn(entity) => {
+                write!(f, "entity already marked for despawn: {entity}")
+            }
+            Self::Other(other) => Display::fmt(other, f),
+        }
+    }
+}
+
+impl Error for RevEntityDespawnError {}
