@@ -1,6 +1,59 @@
-use bevy::{ecs::reflect::AppTypeRegistry, reflect::ReflectFromPtr};
+use bevy::{
+    ecs::{
+        change_detection::MaybeLocation, reflect::AppTypeRegistry,
+        world::error::EntityMutableFetchError,
+    },
+    log::error,
+    reflect::ReflectFromPtr,
+};
 
 use super::*;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct BufferBundleError {
+    pub entity: Entity,
+    pub at: BufferAt,
+    pub bundle: BundleId,
+    pub variant: BufferBundleErrorVariant,
+    pub location: MaybeLocation,
+}
+
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+pub enum BufferBundleErrorVariant {
+    InvalidEntity,
+    RevDespawnedEntity,
+    RevMetaMissing,
+    NotRunningNonLogDirection(Option<RevDirection>),
+}
+
+impl From<EntityMutableFetchError> for BufferBundleErrorVariant {
+    fn from(_: EntityMutableFetchError) -> Self {
+        Self::InvalidEntity
+    }
+}
+
+impl From<DespawnAtOutOfLogErr> for BufferBundleErrorVariant {
+    fn from(value: DespawnAtOutOfLogErr) -> Self {
+        match value {
+            DespawnAtOutOfLogErr::RevMetaMissing => Self::RevMetaMissing,
+            DespawnAtOutOfLogErr::NotRunningNonLogDirection(direction) => {
+                Self::NotRunningNonLogDirection(direction)
+            }
+        }
+    }
+}
+
+impl BufferBundleError {
+    fn irreversible_operation(&self, world: &mut World) {
+        if self.at != BufferAt::Undo && self.variant != BufferBundleErrorVariant::InvalidEntity {
+            let Some(bundle) = world.bundles().get(self.bundle) else {
+                return;
+            };
+            let components: Box<[ComponentId]> = bundle.explicit_components().into();
+            world.entity_mut(self.entity).remove_by_ids(&components);
+        }
+    }
+}
 
 /// Fails if `entity` is `rev_is_despawned`, it must be otherwise spawned as an `archetype_id` could be provided.
 pub(super) fn pre_insert<T: Bundle>(
@@ -8,7 +61,7 @@ pub(super) fn pre_insert<T: Bundle>(
     entity: Entity,
     archetype_id: ArchetypeId,
     insert_mode: InsertMode,
-) -> Result<Option<Entity>, ()> {
+) -> Result<Option<Entity>, BufferBundleError> {
     match insert_mode {
         InsertMode::Replace => world.buffer_components_cached(
             entity,
@@ -99,58 +152,31 @@ pub(super) fn buffer_bundle(
     entity: Entity,
     at: BufferAt,
     bundle: BundleId,
-) -> Result<Option<Entity>, ()> {
-    #[cfg(debug_assertions)]
-    {
-        let direction = world
-            .get_resource::<RevMeta>()
-            .and_then(RevMeta::get_running_direction);
-        let expected = Some(RevDirection::NOT_LOG);
-        if direction != expected {
-            let Some(bundle_info) = world.bundles().get(bundle) else {
-                bevy::log::error!(
-                    "attempted to buffer components from {entity:?} during {direction:?} instead of {expected:?}, \
-                    this is denied and no buffering will happen, further the bundle {bundle:?} is unknown"
-                );
-                return Ok(None);
-            };
-            let components: Vec<_> = bundle_info.explicit_components().iter().copied().collect();
-            fn names<'a>(world: &'a World, components: Vec<ComponentId>) -> impl Debug + 'a {
-                components
-                    .into_iter()
-                    .map(|id| {
-                        world
-                            .components()
-                            .get_name(id)
-                            .unwrap_or_else(|| format!("no name ({id:?})").into())
-                    })
-                    .collect::<Vec<_>>()
-            }
-            if at == BufferAt::Undo {
-                let names = names(world, components);
-                bevy::log::error!(
-                    "attempted to buffer components from {entity:?} during {direction:?} instead of {expected:?}, \
-                    this is denied and no buffering will happen, affected components are {names:?}"
-                );
-            } else {
-                world.entity_mut(entity).remove_by_ids(&components);
-                let names = names(world, components);
-                bevy::log::error!(
-                    "attempted to buffer components from {entity:?} during {direction:?} instead of {expected:?}, \
-                    the components will be removed but this is irreversible, affected components are {names:?}"
-                );
-            }
-            return Ok(None);
-        }
-    }
-    if world
+    marker: DespawnAtOutOfLog,
+    location: MaybeLocation,
+) -> Result<Option<Entity>, BufferBundleError> {
+    world
         .get_entity(entity)
-        .ok()
-        .is_none_or(|entity| entity.rev_is_despawned())
-    {
-        return Err(());
-    }
-    let mut buffer = BundleBuffer::new(world, entity, bundle);
+        .map_err(|_| BufferBundleErrorVariant::InvalidEntity)
+        .and_then(|entity_ref| {
+            if entity_ref.rev_is_despawned() {
+                Err(BufferBundleErrorVariant::RevDespawnedEntity)
+            } else {
+                Ok(())
+            }
+        })
+        .map_err(|variant| BufferBundleError {
+            entity,
+            at,
+            bundle,
+            variant,
+            location,
+        })?;
+    let mut buffer = BundleBuffer {
+        bundle,
+        entity,
+        state: BufferState::Unspawned(marker),
+    };
     match at {
         BufferAt::Now => {
             let entities = buffer.toggle_state(world);
@@ -302,8 +328,6 @@ impl BundleEntities {
     ) {
         let progress = BufferInProgress::Buffer {
             direction,
-            target: self.target,
-            source: self.source,
             buffer: self.buffer,
         };
         progress_scope(world, progress, |world| {
@@ -319,17 +343,6 @@ impl BundleEntities {
 }
 
 impl BundleBuffer {
-    fn new(world: &World, entity: Entity, bundle: BundleId) -> Self {
-        let meta = world
-            .get_resource::<RevMeta>()
-            .expect(RevMeta::EXPECT_IN_WORLD);
-        let marker = DespawnAtOutOfLog::new(meta);
-        Self {
-            bundle,
-            entity,
-            state: BufferState::Unspawned(marker),
-        }
-    }
     fn toggle_state(&mut self, world: &mut World) -> BundleEntities {
         match self.state {
             BufferState::Unspawned(marker) => {
@@ -383,12 +396,10 @@ impl UndoRedo for BundleBuffer {
     }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum BufferInProgress {
     Buffer {
         direction: RevDirection,
-        target: Entity,
-        source: Entity,
         buffer: Entity,
     },
     NonEntityBuffer {
@@ -456,29 +467,31 @@ pub(super) fn components_to_bundle(world: &mut World, components: &[ComponentId]
         .get_resource::<AppTypeRegistry>()
         .map(|registry| registry.read());
     for &component_id in components {
-        if checked.0.insert(component_id) {
-            if let Some(component_info) = world.components().get_info(component_id) {
-                let movable = match component_info.clone_behavior() {
-                    // todo: reflect feature cfg and alternative which returns false
-                    ComponentCloneBehavior::Default => component_info
-                        .type_id()
-                        .zip(registry.as_ref())
-                        .is_some_and(|(type_id, registry)| {
-                            registry
-                                .get_type_data::<ReflectFromPtr>(type_id)
-                                .is_some_and(|registration| registration.type_id() == type_id)
-                        }),
-                    ComponentCloneBehavior::Custom(_) => true, // impls Clone
-                    ComponentCloneBehavior::Ignore => false,
-                };
-                if !movable {
-                    bevy::log::error!(
-                        "Component {} is unclonable and unreflectable, it's insert, remove or overwrite \
-                        will not be reversible, see https://github.com/bevyengine/bevy/issues/18079",
-                        component_info.name()
-                    );
-                }
-            }
+        if !checked.0.insert(component_id) {
+            continue;
+        }
+        let Some(component_info) = world.components().get_info(component_id) else {
+            continue;
+        };
+        let movable = match component_info.clone_behavior() {
+            // todo: reflect feature cfg and alternative which returns false
+            ComponentCloneBehavior::Default => component_info
+                .type_id()
+                .zip(registry.as_ref())
+                .is_some_and(|(type_id, registry)| {
+                    registry
+                        .get_type_data::<ReflectFromPtr>(type_id)
+                        .is_some_and(|registration| registration.type_id() == type_id)
+                }),
+            ComponentCloneBehavior::Custom(_) => true, // impls Clone or intentionally does not clone relationship
+            ComponentCloneBehavior::Ignore => false,
+        };
+        if !movable {
+            error!(
+                "Component {} is unclonable and unreflectable, it's insert, remove or overwrite \
+                will not be reversible, see https://github.com/bevyengine/bevy/issues/18079",
+                component_info.name()
+            );
         }
     }
     drop(registry);

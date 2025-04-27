@@ -1,14 +1,14 @@
-use std::{collections::VecDeque, num::NonZeroUsize};
+use std::{collections::VecDeque, num::NonZeroU64};
 
 use library::{log::*, prelude::*};
 
 use serde::{Deserialize, Serialize};
 
 fn main() {
-    let len = 100;
-    let modulo = 7;
-    let mut meta = RevMeta::new(NonZeroUsize::new(len + 1), 0, false);
-    let mut log = LastFrameWhereModuloEqZero::with_capacity(0, len, modulo);
+    let len = 50;
+    let modulo = 6;
+    let mut meta = RevMeta::new(NonZeroU64::new(len + 1), 0, false);
+    let mut log = LastFrameWhereModuloEqZero::with_capacity(0, len as usize, modulo);
 
     let plot = get_plot(&mut meta, &mut log, len);
     println!("fwd     {plot}");
@@ -22,8 +22,8 @@ fn main() {
     println!("fwd log {plot}");
 }
 
-fn get_plot(meta: &mut RevMeta, log: &mut LastFrameWhereModuloEqZero, len: usize) -> String {
-    let mut plot = VecDeque::with_capacity(len + 1);
+fn get_plot(meta: &mut RevMeta, log: &mut LastFrameWhereModuloEqZero, len: u64) -> String {
+    let mut plot = VecDeque::with_capacity((len + 1) as usize);
     let frame = log.get();
     plot.push_back(get_character(frame, meta));
     for _ in 0..len {

@@ -21,6 +21,9 @@ use variadics_please::all_tuples;
 
 use super::*;
 
+#[cfg(test)]
+mod test;
+
 pub trait RevEntityWorldMut<'w> {
     /// todo
     fn buffer_components(

@@ -12,17 +12,16 @@ use bevy::{
     ecs::{
         archetype::ArchetypeId,
         bundle::{Bundle, BundleFromComponents, BundleId, InsertMode},
-        change_detection::Mut,
+        change_detection::{MaybeLocation, Mut},
         component::{Component, ComponentCloneBehavior, ComponentId, ComponentMutability},
-        entity::{Entity, EntityCloner, hash_set::EntityHashSet},
+        entity::{hash_set::EntityHashSet, Entity, EntityCloner},
         hierarchy::{ChildOf, Children},
         query::{Has, QueryData, QueryFilter, ReadOnlyQueryData, With, WorldQuery},
         relationship::{OrderedRelationshipSourceCollection, Relationship, RelationshipTarget},
         resource::Resource,
         system::{Commands, EntityCommands},
         world::{
-            DeferredWorld, EntityMut, EntityMutExcept, EntityRef, EntityRefExcept, EntityWorldMut,
-            FilteredEntityMut, FilteredEntityRef, World,
+            error::EntityMutableFetchError, DeferredWorld, EntityMut, EntityMutExcept, EntityRef, EntityRefExcept, EntityWorldMut, FilteredEntityMut, FilteredEntityRef, World
         },
     },
     log::warn,
@@ -32,7 +31,7 @@ use bevy::{
 
 use crate::{
     app::RevSystemsPlugin,
-    log::{DenseTransitionsLog, FrameTransitionLog, FrameTransitionLogError},
+    log::{DenseTransitionsLog, FrameTransitionLog, MissedFrame},
     meta::{RevDirection, RevMeta},
 };
 
@@ -49,6 +48,74 @@ pub use despawn::*;
 pub use entity_commands::*;
 pub use entity_world::*;
 pub use world::*;
+
+/*
+error types
+
+returned by   | entity | BufferAt | BundleId | RevMetaMissing | WrongDirection | InvalidEntity | RevDespawned 
+spawn         |        |          |          | x              | x              |               |
+spawn batch   |        |          |          | x              | x              |               |
+insert        | 1      |          |          | x              | x              | x             | x
+insert batch  | N      |          |          | x              | x              | x             | x
+despawn       | 1      |          |          | x              | x              | x             | x
+buffer        | 1      | x        | x        | x              | x              | x             | x
+buffer cached | 1      | x        | x        | x              | x              | x             | x
+buffer bundle | 1      | x        | x        | x              | x              | x             | x
+
+BufferAt + BundleId probably uninteresting
+
+
+*/
+
+pub enum RevSpawnError {
+    RevMetaMissing {
+        location: MaybeLocation
+    },
+    RevDirectionMismatch {
+        direction: Option<RevDirection>,
+        location: MaybeLocation
+    },
+}
+
+pub enum RevEntityError {
+    RevMetaMissing {
+        entity: Entity,
+        location: MaybeLocation
+    },
+    RevDirectionMismatch {
+        entity: Entity,
+        direction: Option<RevDirection>,
+        location: MaybeLocation
+    },
+    InvalidEntity {
+        entity: Entity,
+        location: MaybeLocation
+    },
+    EntityRevDespawned {
+        entity: Entity,
+        location: MaybeLocation
+    }
+}
+
+pub enum RevEntitiesError {
+    RevMetaMissing {
+        entities: Vec<Entity>,
+        location: MaybeLocation
+    },
+    RevDirectionMismatch {
+        entities: Vec<Entity>,
+        direction: Option<RevDirection>,
+        location: MaybeLocation
+    },
+    InvalidEntity {
+        entities: Vec<Entity>,
+        location: MaybeLocation
+    },
+    EntityRevDespawned {
+        entities: Vec<Entity>,
+        location: MaybeLocation
+    }
+}
 
 pub trait BuffersUndoRedo {
     /// Buffers an [`UndoRedo`] implementor in a resource to be collected by the reversible system's state during sync points.
@@ -402,17 +469,11 @@ impl Error for UndoRedoLogError {}
 fn map_frame_log_err(
     now: u64,
     system_name: &str,
-) -> impl FnOnce(FrameTransitionLogError) -> UndoRedoLogError + '_ {
-    move |err| match err {
-        FrameTransitionLogError::MissedFrame(frame) => UndoRedoLogError::MissedFrame {
-            frame,
-            now,
-            system_name: system_name.to_owned(),
-        },
-        FrameTransitionLogError::OutOfLog => UndoRedoLogError::OutOfLog {
-            now,
-            system_name: system_name.to_owned(),
-        },
+) -> impl FnOnce(MissedFrame) -> UndoRedoLogError + '_ {
+    move |err| UndoRedoLogError::MissedFrame {
+        frame: err.0,
+        now,
+        system_name: system_name.to_owned(),
     }
 }
 
@@ -437,7 +498,32 @@ fn collect_children(
     }
 }
 
-fn rev_despawn_inner(mut entity_mut: EntityWorldMut) -> bool {
+#[derive(Debug)]
+pub enum RevSpawnDespawnErr {
+    InvalidEntity,
+    AlreadyMarkedForDespawn,
+    RevMetaMissing,
+    NotRunningNonLogDirection(Option<RevDirection>),
+}
+
+impl From<EntityMutableFetchError> for RevSpawnDespawnErr {
+    fn from(_: EntityMutableFetchError) -> Self {
+        Self::InvalidEntity
+    }
+}
+
+impl From<DespawnAtOutOfLogErr> for RevSpawnDespawnErr {
+    fn from(value: DespawnAtOutOfLogErr) -> Self {
+        match value {
+            DespawnAtOutOfLogErr::RevMetaMissing => Self::RevMetaMissing,
+            DespawnAtOutOfLogErr::NotRunningNonLogDirection(direction) => {
+                Self::NotRunningNonLogDirection(direction)
+            }
+        }
+    }
+}
+
+fn rev_despawn_inner(mut entity_mut: EntityWorldMut) -> Result<(), RevSpawnDespawnErr> {
     let component_id = entity_mut
         .world()
         .component_id::<DespawnAtOutOfLog>()
@@ -455,13 +541,10 @@ fn rev_despawn_inner(mut entity_mut: EntityWorldMut) -> bool {
             world.register_component::<DespawnAtOutOfLog>()
         });
     if entity_mut.contains_id(component_id) {
-        return false;
+        return Err(RevSpawnDespawnErr::AlreadyMarkedForDespawn);
     }
 
-    let meta = entity_mut
-        .get_resource::<RevMeta>()
-        .expect(RevMeta::EXPECT_IN_WORLD);
-    let marker = DespawnAtOutOfLog::new(meta);
+    let marker = DespawnAtOutOfLog::new(entity_mut.get_resource::<RevMeta>())?;
 
     let entity = entity_mut.id();
     let children = entity_mut
@@ -487,16 +570,15 @@ fn rev_despawn_inner(mut entity_mut: EntityWorldMut) -> bool {
         };
         undo_redo.redo(world);
         world.buffer_undo_redo(undo_redo);
+    });
 
-        true
-    })
+    Ok(())
 }
 
-fn rev_despawn_single(world: &mut World, entity: Entity, marker: DespawnAtOutOfLog) -> bool {
+fn rev_despawn_single(world: &mut World, entity: Entity, marker: DespawnAtOutOfLog) {
     let mut undo_redo = RevDespawnSingle { entity, marker };
     undo_redo.redo(world);
     world.buffer_undo_redo(undo_redo);
-    true
 }
 
 struct RevDespawnSingle {

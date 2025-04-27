@@ -31,7 +31,7 @@ pub use dense_transition::DenseTransitionLog;
 pub use dense_transitions::DenseTransitionsLog;
 
 pub use frame_transition::FrameTransitionLog;
-pub use frame_transition::FrameTransitionLogError;
+pub use frame_transition::MissedFrame;
 
 pub use sparse_state::SparseStateLog;
 pub use sparse_states::SparseStatesLog;

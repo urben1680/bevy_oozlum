@@ -10,7 +10,7 @@ use bevy::reflect::Reflect;
 
 use crate::meta::RevMeta;
 
-use super::{OutOfLog, index_oob};
+use super::index_oob;
 
 // todo: mention limitations, like missing frames
 #[derive(Debug, Clone, Default, Reflect)]
@@ -21,27 +21,15 @@ pub struct FrameTransitionLog {
 }
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
-pub enum FrameTransitionLogError {
-    MissedFrame(u64),
-    OutOfLog,
-}
+pub struct MissedFrame(pub u64);
 
-impl From<OutOfLog> for FrameTransitionLogError {
-    fn from(_: OutOfLog) -> Self {
-        Self::OutOfLog
-    }
-}
-
-impl Display for FrameTransitionLogError {
+impl Display for MissedFrame {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::MissedFrame(frame) => write!(f, "the expected frame {frame} was missed"),
-            Self::OutOfLog => write!(f, "no more frames are expected at this log direction"),
-        }
+        write!(f, "the expected frame {} was missed", self.0)
     }
 }
 
-impl Error for FrameTransitionLogError {}
+impl Error for MissedFrame {}
 
 #[cfg(feature = "serde")]
 mod serde_with {
@@ -128,31 +116,38 @@ impl FrameTransitionLog {
         self.frames.clear();
         self.index = 0;
     }
-    pub fn try_backward_log(&mut self, meta: &RevMeta) -> Result<bool, FrameTransitionLogError> {
-        let index = self.index.checked_sub(1).ok_or(OutOfLog)?;
-        let frame = *self.frames.get(index).ok_or_else(index_oob)?;
+    pub fn try_backward_log(&mut self, meta: &RevMeta) -> Result<bool, MissedFrame> {
+        let Some(index) = self.index.checked_sub(1) else {
+            return Ok(false);
+        };
+        let Some(&frame) = self.frames.get(index) else {
+            index_oob();
+            return Ok(false);
+        };
         match frame.cmp(&(meta.now() + 1)) {
             Ordering::Less => Ok(false),
             Ordering::Equal => {
                 self.index = index;
                 Ok(true)
             }
-            Ordering::Greater => Err(FrameTransitionLogError::MissedFrame(frame)),
+            Ordering::Greater => Err(MissedFrame(frame)),
         }
     }
     pub fn backward_log(&mut self, meta: &RevMeta) -> bool {
         self.try_backward_log(meta)
             .unwrap_or_else(|err| panic!("{err}"))
     }
-    pub fn try_forward_log(&mut self, meta: &RevMeta) -> Result<bool, FrameTransitionLogError> {
-        let frame = *self.frames.get(self.index).ok_or(OutOfLog)?;
+    pub fn try_forward_log(&mut self, meta: &RevMeta) -> Result<bool, MissedFrame> {
+        let Some(&frame) = self.frames.get(self.index) else {
+            return Ok(false);
+        };
         match frame.cmp(&meta.now()) {
             Ordering::Greater => Ok(false),
             Ordering::Equal => {
                 self.index += 1;
                 Ok(true)
             }
-            Ordering::Less => Err(FrameTransitionLogError::MissedFrame(frame)),
+            Ordering::Less => Err(MissedFrame(frame)),
         }
     }
     pub fn forward_log(&mut self, meta: &RevMeta) -> bool {
@@ -210,11 +205,9 @@ mod test {
                         );
                     }
                     let before = self.log.clone();
-                    assert!(
-                        matches!(
-                            self.log.try_backward_log(meta),
-                            Ok(false) | Err(FrameTransitionLogError::OutOfLog)
-                        ),
+                    assert_eq!(
+                        self.log.backward_log(meta),
+                        false,
                         "\nbefore: {before:#?}\nafter: {:#?}\nmeta: {meta:?}",
                         self.log
                     );
@@ -236,11 +229,9 @@ mod test {
                         );
                     }
                     let before = self.log.clone();
-                    assert!(
-                        matches!(
-                            self.log.try_backward_log(meta),
-                            Ok(false) | Err(FrameTransitionLogError::OutOfLog)
-                        ),
+                    assert_eq!(
+                        self.log.backward_log(meta),
+                        false,
                         "\nbefore: {before:#?}\nafter: {:#?}\nmeta: {meta:?}",
                         self.log
                     );

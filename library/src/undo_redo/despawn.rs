@@ -1,4 +1,4 @@
-use bevy::ecs::world::error::EntityDespawnError;
+use std::borrow::Borrow;
 
 use super::*;
 
@@ -7,10 +7,23 @@ use super::*;
 pub(crate) struct DespawnAtOutOfLog(u64);
 
 impl DespawnAtOutOfLog {
-    pub(crate) fn new(meta: &RevMeta) -> Self {
-        assert_eq!(meta.get_running_direction(), Some(RevDirection::NOT_LOG));
-        Self(meta.now())
+    pub(crate) fn new(meta: Option<impl Borrow<RevMeta>>) -> Result<Self, DespawnAtOutOfLogErr> {
+        let meta = meta.ok_or(DespawnAtOutOfLogErr::RevMetaMissing)?;
+        let meta = meta.borrow();
+        let running_direction = meta.get_running_direction();
+        if running_direction == Some(RevDirection::NOT_LOG) {
+            return Err(DespawnAtOutOfLogErr::NotRunningNonLogDirection(
+                running_direction,
+            ));
+        }
+        Ok(Self(meta.now()))
     }
+}
+
+#[derive(Debug, Clone, Copy, Hash)] //todo: Error
+pub enum DespawnAtOutOfLogErr {
+    RevMetaMissing,
+    NotRunningNonLogDirection(Option<RevDirection>),
 }
 
 #[derive(QueryFilter)]
@@ -175,22 +188,3 @@ impl RevIsDespawned for EntityWorldMut<'_> {
         self.contains::<DespawnAtOutOfLog>()
     }
 }
-
-#[derive(Debug, Clone, Copy)]
-pub enum RevEntityDespawnError {
-    AlreadyMarkedForDespawn(Entity),
-    Other(EntityDespawnError),
-}
-
-impl Display for RevEntityDespawnError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::AlreadyMarkedForDespawn(entity) => {
-                write!(f, "entity already marked for despawn: {entity}")
-            }
-            Self::Other(other) => Display::fmt(other, f),
-        }
-    }
-}
-
-impl Error for RevEntityDespawnError {}

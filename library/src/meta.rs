@@ -1,4 +1,4 @@
-use core::num::NonZeroUsize;
+use core::num::NonZeroU64;
 use std::{error::Error, fmt::Display};
 
 use bevy::{
@@ -24,7 +24,7 @@ use bevy::reflect::{ReflectDeserialize, ReflectSerialize};
 use crate::{
     log::OutOfLog,
     schedule::RevUpdate,
-    undo_redo::{BufferComponentsInProgress, RefRevDespawned, UndoRedoBuffer},
+    undo_redo::{BufferInProgress, RefRevDespawned, UndoRedoBuffer, progress_scope},
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -66,7 +66,7 @@ impl Display for TryRunRevUpdateError {
 
 impl Error for TryRunRevUpdateError {}
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Reflect)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Reflect, Hash)]
 #[reflect(PartialEq)]
 #[cfg_attr(
     feature = "serde",
@@ -92,6 +92,32 @@ impl RevDirection {
             .get_resource::<RevMeta>()
             .and_then(RevMeta::get_running_direction)
             == Some(self)
+    }
+    #[cfg(test)]
+    pub fn to_meta(self, past_end: u64, now: u64, future_end: u64) -> RevMeta {
+        if self.is_forward() {
+            assert!(past_end < now);
+            assert!(now <= future_end);
+        } else {
+            assert!(past_end <= now);
+            assert!(now < future_end);
+        }
+        RevMeta {
+            max_world_states: None,
+            past_end,
+            now,
+            future_end,
+            queue: Some(InternalDirection::Pause),
+            direction: match self {
+                Self::NOT_LOG => InternalDirection::RunningForward,
+                Self::FORWARD_LOG => InternalDirection::RunningForwardLog {
+                    updates_until_pause: NonZeroU64::MIN,
+                },
+                Self::BackwardLog => InternalDirection::RunningBackwardLog {
+                    updates_until_pause: NonZeroU64::MIN,
+                },
+            },
+        }
     }
 }
 
@@ -156,11 +182,11 @@ unsafe impl ReadOnlySystemParam for RevDirection {}
 )]
 enum InternalDirection {
     RunningForward,
-    RunningForwardLog { updates_until_pause: NonZeroUsize },
-    RunningBackwardLog { updates_until_pause: NonZeroUsize },
+    RunningForwardLog { updates_until_pause: NonZeroU64 },
+    RunningBackwardLog { updates_until_pause: NonZeroU64 },
     RanForward,
-    RanForwardLog { updates_until_pause: NonZeroUsize },
-    RanBackwardLog { updates_until_pause: NonZeroUsize },
+    RanForwardLog { updates_until_pause: NonZeroU64 },
+    RanBackwardLog { updates_until_pause: NonZeroU64 },
     Pause,
 }
 
@@ -240,7 +266,7 @@ pub struct RevMeta {
     /// Changing this value is always possible but only comes into effect when updating the world during [`RevDirection::NotLog`].
     ///
     /// **Note** that there is a hard limit of [`Self::MAX_WORLD_STATES`] this value is clamped to when read internally.
-    pub max_world_states: Option<NonZeroUsize>,
+    pub max_world_states: Option<NonZeroU64>,
     past_end: u64,
     now: u64,
     future_end: u64,
@@ -251,14 +277,14 @@ pub struct RevMeta {
 
 impl Default for RevMeta {
     fn default() -> Self {
-        Self::new(Some(NonZeroUsize::MIN), 0, false)
+        Self::new(Some(NonZeroU64::MIN), 0, false)
     }
 }
 
 impl RevMeta {
     pub(crate) const EXPECT_IN_WORLD: &'static str = "RevMeta does not exist";
     pub(crate) const EXPECT_RUNNING: &'static str = "RevMeta is not in a running direction";
-    pub const fn new(max_world_states: Option<NonZeroUsize>, now: u64, paused: bool) -> Self {
+    pub const fn new(max_world_states: Option<NonZeroU64>, now: u64, paused: bool) -> Self {
         Self {
             max_world_states,
             now,
@@ -325,7 +351,7 @@ impl RevMeta {
         let to_future = to.wrapping_sub(self.now);
 
         if to_past <= self.past_len() {
-            self.queue = Some(match NonZeroUsize::new(to_past as usize) {
+            self.queue = Some(match NonZeroU64::new(to_past) {
                 Some(updates_until_pause) => InternalDirection::RunningBackwardLog {
                     updates_until_pause,
                 },
@@ -333,7 +359,7 @@ impl RevMeta {
             });
             Ok(to_past)
         } else if to_future <= self.future_len() {
-            self.queue = Some(match NonZeroUsize::new(to_future as usize) {
+            self.queue = Some(match NonZeroU64::new(to_future) {
                 Some(updates_until_pause) => InternalDirection::RunningForwardLog {
                     updates_until_pause,
                 },
@@ -426,11 +452,11 @@ impl RevMeta {
                                     .filter(|(_, marker)| !meta.contains(marker.added_at()))
                                     .map(|(entity, _)| entity),
                             );
-                            world.insert_resource(BufferComponentsInProgress);
-                            for entity in out_of_log_buffers.drain(..) {
-                                world.despawn(entity);
-                            }
-                            world.remove_resource::<BufferComponentsInProgress>();
+                            progress_scope(world, BufferInProgress::FinalDespawn, |world| {
+                                for entity in out_of_log_buffers.drain(..) {
+                                    world.despawn(entity);
+                                }
+                            });
                         }
                         Ok(frame)
                     }
@@ -495,8 +521,8 @@ impl RevMeta {
     }
     fn update_internal(&mut self) {
         /// Reduces `updates_until_pause` by one and returns `true` wether that was successful without reaching zero.
-        fn reduction_successful(updates_until_pause: &mut NonZeroUsize) -> bool {
-            NonZeroUsize::new(updates_until_pause.get() - 1)
+        fn reduction_successful(updates_until_pause: &mut NonZeroU64) -> bool {
+            NonZeroU64::new(updates_until_pause.get() - 1)
                 .map(|reduced| *updates_until_pause = reduced)
                 .is_some()
         }
@@ -535,7 +561,7 @@ impl RevMeta {
     fn update_forward(&mut self) {
         self.now += 1;
         self.future_end = self.now;
-        if let Some(max_world_states) = self.max_world_states.map(NonZeroUsize::get) {
+        if let Some(max_world_states) = self.max_world_states.map(NonZeroU64::get) {
             let max_world_states = max_world_states as u64;
             // past states equal to max states is too many as the present state has to be added to the comparision
             if self.past_len() >= max_world_states {
@@ -551,13 +577,13 @@ mod test {
 
     use super::*;
 
-    const ONE: NonZeroUsize = NonZeroUsize::MIN;
-    const TWO: NonZeroUsize = unsafe { NonZeroUsize::new_unchecked(2) };
-    const THREE: NonZeroUsize = unsafe { NonZeroUsize::new_unchecked(3) };
+    const ONE: NonZeroU64 = NonZeroU64::MIN;
+    const TWO: NonZeroU64 = unsafe { NonZeroU64::new_unchecked(2) };
+    const THREE: NonZeroU64 = unsafe { NonZeroU64::new_unchecked(3) };
 
     /// Constructs [`RevMeta`] and asserts the values are valid
     fn arrange(
-        max_len: Option<NonZeroUsize>,
+        max_len: Option<NonZeroU64>,
         present: u64,
         range: RangeInclusive<u64>,
         direction: InternalDirection,
@@ -685,7 +711,7 @@ mod test {
             2,
             1..=3,
             InternalDirection::RunningForwardLog {
-                updates_until_pause: NonZeroUsize::new(2).unwrap(),
+                updates_until_pause: NonZeroU64::new(2).unwrap(),
             },
         );
         assert_eq!(meta.queue_log(2), Ok(0));
