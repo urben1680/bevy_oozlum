@@ -14,14 +14,15 @@ use bevy::{
         bundle::{Bundle, BundleFromComponents, BundleId, InsertMode},
         change_detection::{MaybeLocation, Mut},
         component::{Component, ComponentCloneBehavior, ComponentId, ComponentMutability},
-        entity::{hash_set::EntityHashSet, Entity, EntityCloner},
+        entity::{Entity, EntityCloner, EntityDoesNotExistError, hash_set::EntityHashSet},
         hierarchy::{ChildOf, Children},
         query::{Has, QueryData, QueryFilter, ReadOnlyQueryData, With, WorldQuery},
         relationship::{OrderedRelationshipSourceCollection, Relationship, RelationshipTarget},
         resource::Resource,
         system::{Commands, EntityCommands},
         world::{
-            error::EntityMutableFetchError, DeferredWorld, EntityMut, EntityMutExcept, EntityRef, EntityRefExcept, EntityWorldMut, FilteredEntityMut, FilteredEntityRef, World
+            DeferredWorld, EntityMut, EntityMutExcept, EntityRef, EntityRefExcept, EntityWorldMut,
+            FilteredEntityMut, FilteredEntityRef, World, error::EntityMutableFetchError,
         },
     },
     log::warn,
@@ -49,73 +50,115 @@ pub use entity_commands::*;
 pub use entity_world::*;
 pub use world::*;
 
-/*
-error types
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 
-returned by   | entity | BufferAt | BundleId | RevMetaMissing | WrongDirection | InvalidEntity | RevDespawned 
-spawn         |        |          |          | x              | x              |               |
-spawn batch   |        |          |          | x              | x              |               |
-insert        | 1      |          |          | x              | x              | x             | x
-insert batch  | N      |          |          | x              | x              | x             | x
-despawn       | 1      |          |          | x              | x              | x             | x
-buffer        | 1      | x        | x        | x              | x              | x             | x
-buffer cached | 1      | x        | x        | x              | x              | x             | x
-buffer bundle | 1      | x        | x        | x              | x              | x             | x
-
-BufferAt + BundleId probably uninteresting
-
-
-*/
-
-pub enum RevSpawnError {
-    RevMetaMissing {
-        location: MaybeLocation
-    },
-    RevDirectionMismatch {
-        direction: Option<RevDirection>,
-        location: MaybeLocation
-    },
+pub enum RevMetaNotLogError {
+    RevMetaMissing,
+    RevDirectionMismatch { actual: Option<RevDirection> },
 }
 
+impl Display for RevMetaNotLogError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::RevMetaMissing => write!(f, "{}", RevMeta::EXPECT_IN_WORLD),
+            Self::RevDirectionMismatch { actual } => write!(
+                f,
+                "expected RevMeta in the `Some(RevDirection::NOT_LOG)` running direction but was in `{actual:?}`"
+            ),
+        }
+    }
+}
+
+impl Error for RevMetaNotLogError {}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum RevEntityError {
-    RevMetaMissing {
-        entity: Entity,
-        location: MaybeLocation
-    },
-    RevDirectionMismatch {
-        entity: Entity,
-        direction: Option<RevDirection>,
-        location: MaybeLocation
-    },
-    InvalidEntity {
-        entity: Entity,
-        location: MaybeLocation
-    },
-    EntityRevDespawned {
-        entity: Entity,
-        location: MaybeLocation
+    RevMetaNotLogError(RevMetaNotLogError),
+    EntityDoesNotExistError(EntityDoesNotExistError),
+    EntityRevDespawnedError(EntityRevDespawnedError),
+}
+
+impl From<RevMetaNotLogError> for RevEntityError {
+    fn from(value: RevMetaNotLogError) -> Self {
+        Self::RevMetaNotLogError(value)
     }
 }
 
-pub enum RevEntitiesError {
-    RevMetaMissing {
-        entities: Vec<Entity>,
-        location: MaybeLocation
-    },
-    RevDirectionMismatch {
-        entities: Vec<Entity>,
-        direction: Option<RevDirection>,
-        location: MaybeLocation
-    },
-    InvalidEntity {
-        entities: Vec<Entity>,
-        location: MaybeLocation
-    },
-    EntityRevDespawned {
-        entities: Vec<Entity>,
-        location: MaybeLocation
+impl From<EntityDoesNotExistError> for RevEntityError {
+    fn from(value: EntityDoesNotExistError) -> Self {
+        Self::EntityDoesNotExistError(value)
     }
 }
+
+impl From<EntityRevDespawnedError> for RevEntityError {
+    fn from(value: EntityRevDespawnedError) -> Self {
+        Self::EntityRevDespawnedError(value)
+    }
+}
+
+impl Display for RevEntityError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::RevMetaNotLogError(inner) => write!(f, "{inner}"),
+            Self::EntityDoesNotExistError(inner) => write!(f, "{inner}"),
+            Self::EntityRevDespawnedError(inner) => write!(f, "{inner}"),
+        }
+    }
+}
+
+impl Error for RevEntityError {}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RevEntitiesError {
+    RevMetaNotLogError(RevMetaNotLogError),
+    BadEntities {
+        invalid: Vec<EntityDoesNotExistError>,
+        rev_despawned: Vec<EntityRevDespawnedError>,
+    },
+}
+
+impl From<RevMetaNotLogError> for RevEntitiesError {
+    fn from(value: RevMetaNotLogError) -> Self {
+        Self::RevMetaNotLogError(value)
+    }
+}
+
+impl Display for RevEntitiesError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::RevMetaNotLogError(inner) => write!(f, "{inner}"),
+            Self::BadEntities {
+                invalid,
+                rev_despawned,
+            } => {
+                if size_of::<MaybeLocation<u8>>() == 0 {
+                    if !invalid.is_empty() {
+                        write!(f, "non-existing entities: ")?;
+                        for entity in invalid.iter() {
+                            write!(f, "{}, ", entity.entity)?;
+                        }
+                    }
+                    if !rev_despawned.is_empty() {
+                        write!(f, "reversibly despawned entities: ")?;
+                        for entity in rev_despawned.iter() {
+                            write!(f, "{}, ", entity.entity)?;
+                        }
+                    }
+                    write!(f, "(enable `track_location` feature for more details)")?;
+                } else {
+                    let invalid = invalid.iter().map(|err| err.entity);
+                    let rev_despawned = rev_despawned.iter().map(|err| err.entity);
+                    for entity in invalid.chain(rev_despawned) {
+                        write!(f, "{entity}, ")?;
+                    }
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
+impl Error for RevEntitiesError {}
 
 pub trait BuffersUndoRedo {
     /// Buffers an [`UndoRedo`] implementor in a resource to be collected by the reversible system's state during sync points.
@@ -498,54 +541,22 @@ fn collect_children(
     }
 }
 
-#[derive(Debug)]
-pub enum RevSpawnDespawnErr {
-    InvalidEntity,
-    AlreadyMarkedForDespawn,
-    RevMetaMissing,
-    NotRunningNonLogDirection(Option<RevDirection>),
-}
-
-impl From<EntityMutableFetchError> for RevSpawnDespawnErr {
-    fn from(_: EntityMutableFetchError) -> Self {
-        Self::InvalidEntity
+#[track_caller]
+fn rev_despawn_inner(mut entity_mut: EntityWorldMut) -> Result<(), RevEntityError> {
+    let entity = entity_mut.id();
+    if entity_mut.is_despawned() {
+        return match entity_mut.world().get_entity(entity) {
+            Err(err) => Err(RevEntityError::EntityDoesNotExistError(err)),
+            Ok(_) => unreachable!(),
+        };
     }
-}
-
-impl From<DespawnAtOutOfLogErr> for RevSpawnDespawnErr {
-    fn from(value: DespawnAtOutOfLogErr) -> Self {
-        match value {
-            DespawnAtOutOfLogErr::RevMetaMissing => Self::RevMetaMissing,
-            DespawnAtOutOfLogErr::NotRunningNonLogDirection(direction) => {
-                Self::NotRunningNonLogDirection(direction)
-            }
-        }
-    }
-}
-
-fn rev_despawn_inner(mut entity_mut: EntityWorldMut) -> Result<(), RevSpawnDespawnErr> {
-    let component_id = entity_mut
-        .world()
-        .component_id::<DespawnAtOutOfLog>()
-        .unwrap_or_else(|| {
-            let world = unsafe {
-                // SAFETY: registering type causes no structural changes to the entity
-                entity_mut.world_mut()
-            };
-            warn!(
-                "Component to reversibly mark entities as despawned is not known to the world, \
-                it is registered now but likely fulfills no disabling functionality as it should, \
-                make sure to add the {} plugin to the application",
-                type_name::<RevSystemsPlugin>()
-            );
-            world.register_component::<DespawnAtOutOfLog>()
-        });
-    if entity_mut.contains_id(component_id) {
-        return Err(RevSpawnDespawnErr::AlreadyMarkedForDespawn);
+    if let Some(marker) = entity_mut.get::<DespawnAtOutOfLog>() {
+        return Err(RevEntityError::EntityRevDespawnedError(
+            EntityRevDespawnedError::new(entity, *marker),
+        ));
     }
 
-    let marker = DespawnAtOutOfLog::new(entity_mut.get_resource::<RevMeta>())?;
-
+    let marker = DespawnAtOutOfLog::for_spawn_despawn(entity_mut.get_resource::<RevMeta>())?;
     let entity = entity_mut.id();
     let children = entity_mut
         .get::<Children>()
@@ -553,6 +564,17 @@ fn rev_despawn_inner(mut entity_mut: EntityWorldMut) -> Result<(), RevSpawnDespa
         .filter(|children| !children.is_empty());
 
     entity_mut.world_scope(|world| {
+        let component_id = world
+            .component_id::<DespawnAtOutOfLog>()
+            .unwrap_or_else(|| {
+                warn!(
+                    "the Component to reversibly mark entities as despawned is not known to the world, \
+                    it is registered now but fulfills no disabling functionality as it should, \
+                    make sure to add the {} plugin to the application",
+                    type_name::<RevSystemsPlugin>()
+                );
+                world.register_component::<DespawnAtOutOfLog>()
+            });
         let Some(children) = children else {
             return rev_despawn_single(world, entity, marker);
         };
