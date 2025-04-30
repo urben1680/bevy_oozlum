@@ -1,59 +1,16 @@
+use std::{
+    any::TypeId,
+    hash::{BuildHasher, Hasher},
+};
+
 use bevy::{
-    ecs::{
-        change_detection::MaybeLocation, reflect::AppTypeRegistry,
-        world::error::EntityMutableFetchError,
-    },
+    ecs::reflect::AppTypeRegistry,
     log::error,
+    platform::hash::{FixedHasher, PassHash},
     reflect::ReflectFromPtr,
 };
 
 use super::*;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct BufferBundleError {
-    pub entity: Entity,
-    pub at: BufferAt,
-    pub bundle: BundleId,
-    pub variant: BufferBundleErrorVariant,
-    pub location: MaybeLocation,
-}
-
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
-pub enum BufferBundleErrorVariant {
-    InvalidEntity,
-    RevDespawnedEntity,
-    RevMetaMissing,
-    NotRunningNonLogDirection(Option<RevDirection>),
-}
-
-impl From<EntityMutableFetchError> for BufferBundleErrorVariant {
-    fn from(_: EntityMutableFetchError) -> Self {
-        Self::InvalidEntity
-    }
-}
-
-impl From<DespawnAtOutOfLogErr> for BufferBundleErrorVariant {
-    fn from(value: DespawnAtOutOfLogErr) -> Self {
-        match value {
-            DespawnAtOutOfLogErr::RevMetaMissing => Self::RevMetaMissing,
-            DespawnAtOutOfLogErr::NotRunningNonLogDirection(direction) => {
-                Self::NotRunningNonLogDirection(direction)
-            }
-        }
-    }
-}
-
-impl BufferBundleError {
-    fn irreversible_operation(&self, world: &mut World) {
-        if self.at != BufferAt::Undo && self.variant != BufferBundleErrorVariant::InvalidEntity {
-            let Some(bundle) = world.bundles().get(self.bundle) else {
-                return;
-            };
-            let components: Box<[ComponentId]> = bundle.explicit_components().into();
-            world.entity_mut(self.entity).remove_by_ids(&components);
-        }
-    }
-}
 
 /// Fails if `entity` is `rev_is_despawned`, it must be otherwise spawned as an `archetype_id` could be provided.
 pub(super) fn pre_insert<T: Bundle>(
@@ -61,23 +18,28 @@ pub(super) fn pre_insert<T: Bundle>(
     entity: Entity,
     archetype_id: ArchetypeId,
     insert_mode: InsertMode,
-) -> Result<Option<Entity>, BufferBundleError> {
+    marker: DespawnAtOutOfLog,
+) -> Result<Option<Entity>, RevEntityError> {
     match insert_mode {
-        InsertMode::Replace => world.buffer_components_cached(
+        InsertMode::Replace => buffer_components_cached(
+            world,
             entity,
             unique_for_location!(archetype_id, PhantomData::<T>),
             |world: &mut World| {
                 let bundle_id = world.register_bundle::<T>().id();
                 pre_insert_maybe_overwrite(world, bundle_id, archetype_id)
             },
+            marker,
         ),
-        InsertMode::Keep => world.buffer_components_cached(
+        InsertMode::Keep => buffer_components_cached(
+            world,
             entity,
             unique_for_location!(archetype_id, PhantomData::<T>),
             |world| {
                 let bundle_id = world.register_bundle::<T>().id();
                 pre_insert_no_overwrite(&world, bundle_id, archetype_id)
             },
+            marker,
         ),
     }
 }
@@ -147,31 +109,47 @@ pub(super) fn pre_insert_no_overwrite(
     (BufferAt::Undo, components)
 }
 
+pub(super) fn buffer_components_cached<T: AsRef<[ComponentId]>>(
+    world: &mut World,
+    entity: Entity,
+    key: impl Hash + 'static,
+    components: impl FnOnce(&mut World) -> (BufferAt, T),
+    marker: DespawnAtOutOfLog,
+) -> Result<Option<Entity>, RevEntityError> {
+    #[derive(Resource, Default)]
+    pub(crate) struct CachedBundles(HashMap<u64, (BufferAt, BundleId), PassHash>);
+
+    fn type_id_of_var<T: 'static>(_: &T) -> TypeId {
+        TypeId::of::<T>()
+    }
+
+    let mut hasher = FixedHasher::default().build_hasher();
+    type_id_of_var(&key).hash(&mut hasher);
+    key.hash(&mut hasher);
+    let key = hasher.finish();
+
+    let mut cache = world.remove_resource::<CachedBundles>().unwrap_or_default();
+    let (at, bundle) = *cache.0.entry(key).or_insert_with(|| {
+        let (at, components) = components(world);
+        let components = components.as_ref();
+        (at, components_to_bundle(world, &components))
+    });
+    world.insert_resource(cache);
+    buffer_bundle(world, entity, at, bundle, marker)
+}
+
 pub(super) fn buffer_bundle(
     world: &mut World,
     entity: Entity,
     at: BufferAt,
     bundle: BundleId,
     marker: DespawnAtOutOfLog,
-    location: MaybeLocation,
-) -> Result<Option<Entity>, BufferBundleError> {
-    world
-        .get_entity(entity)
-        .map_err(|_| BufferBundleErrorVariant::InvalidEntity)
-        .and_then(|entity_ref| {
-            if entity_ref.rev_is_despawned() {
-                Err(BufferBundleErrorVariant::RevDespawnedEntity)
-            } else {
-                Ok(())
-            }
-        })
-        .map_err(|variant| BufferBundleError {
-            entity,
-            at,
-            bundle,
-            variant,
-            location,
-        })?;
+) -> Result<Option<Entity>, RevEntityError> {
+    if world.get_entity(entity)?.rev_is_despawned() {
+        return Err(RevEntityError::EntityRevDespawnedError(
+            EntityRevDespawnedError::new(entity, marker),
+        ));
+    }
     let mut buffer = BundleBuffer {
         bundle,
         entity,
