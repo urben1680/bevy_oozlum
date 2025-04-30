@@ -10,7 +10,7 @@ use std::{
 
 use bevy::reflect::Reflect;
 
-use super::{OutOfLog, index_oob};
+use super::{INDEX_OOB, OutOfLog};
 
 #[derive(Debug, Default, Clone, Reflect)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -233,7 +233,7 @@ impl<T> DenseStateLog<T> {
         //  index:   1
 
         let index = self.index.checked_sub(1).ok_or(OutOfLog)?;
-        let now_future = self.states.get_mut(index).ok_or_else(index_oob)?;
+        let now_future = self.states.get_mut(index).expect(INDEX_OOB);
         self.index = index;
         core::mem::swap(&mut self.present, now_future);
         Ok(())
