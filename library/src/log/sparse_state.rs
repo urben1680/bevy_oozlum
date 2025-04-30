@@ -7,7 +7,7 @@ use std::{
 
 use bevy::reflect::Reflect;
 
-use super::{OutOfLog, SparseDrain, SparseValue, index_oob};
+use super::{INDEX_OOB, OutOfLog, SparseDrain, SparseValue};
 
 #[derive(Debug, Default, Clone, Reflect)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -278,7 +278,7 @@ impl<T> SparseStateLog<T> {
         }
         let index = self.index.checked_sub(1).ok_or(OutOfLog)?;
         if !self.swap_state_and_skips_max(index) {
-            return Err(index_oob());
+            panic!("{INDEX_OOB}");
         }
         self.index = index;
         self.skips = self.skips_max;
