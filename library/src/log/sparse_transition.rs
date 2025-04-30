@@ -3,7 +3,7 @@ use std::collections::{TryReserveError, VecDeque, vec_deque::Iter};
 
 use bevy::reflect::{Reflect, std_traits::ReflectDefault};
 
-use super::{OutOfLog, SparseDrain, SparseValue, index_oob};
+use super::{INDEX_OOB, OutOfLog, SparseDrain, SparseValue};
 
 #[derive(Debug, Clone, Reflect)]
 #[reflect(Default)]
@@ -225,9 +225,7 @@ impl<T> SparseTransitionLog<T> {
             Ok(None)
         } else {
             let index = self.index.checked_sub(1).ok_or(OutOfLog)?;
-            let Some(entry) = self.transitions.get_mut(index) else {
-                return Err(index_oob());
-            };
+            let entry = self.transitions.get_mut(index).expect(INDEX_OOB);
             self.index = index;
             self.skips = entry.skips();
             self.past_len -= 1;
