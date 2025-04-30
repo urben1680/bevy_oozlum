@@ -40,7 +40,9 @@ fn rev_despawned_entity_clear_buffer(world: &mut World) -> Entity {
 mod buffer_at_now {
     use super::*;
 
-    fn inner(c: impl FnOnce(&mut World, Entity, ComponentId) -> Result<Option<Entity>, ()>) {
+    fn inner(
+        c: impl FnOnce(&mut World, Entity, ComponentId) -> Result<Option<Entity>, RevEntityError>,
+    ) {
         let mut world = setup();
         let explicit_id = world.register_component::<Explicit1>();
         let entity = world.spawn((Explicit1(1), Required1(1))).id();
@@ -105,7 +107,9 @@ mod buffer_at_now {
 mod buffer_at_undo {
     use super::*;
 
-    fn inner(c: impl FnOnce(&mut World, Entity, ComponentId) -> Result<Option<Entity>, ()>) {
+    fn inner(
+        c: impl FnOnce(&mut World, Entity, ComponentId) -> Result<Option<Entity>, RevEntityError>,
+    ) {
         let mut world = setup();
         let explicit_id = world.register_component::<Explicit1>();
         let entity = world.spawn((Explicit1(1), Required1(1))).id();
@@ -164,7 +168,9 @@ mod buffer_at_undo {
 mod buffer_at_now_and_undo {
     use super::*;
 
-    fn inner(c: impl FnOnce(&mut World, Entity, ComponentId) -> Result<Option<Entity>, ()>) {
+    fn inner(
+        c: impl FnOnce(&mut World, Entity, ComponentId) -> Result<Option<Entity>, RevEntityError>,
+    ) {
         let mut world = setup();
         let explicit_id = world.register_component::<Explicit1>();
         let entity = world.spawn((Explicit1(1), Required1(1))).id();
@@ -228,24 +234,41 @@ mod buffer_at_now_and_undo {
 }
 
 #[test]
-fn buffer_fails_on_despawned_or_rev_despawned() {
+fn buffer_fails_on_invalid() {
+    let mut world = setup();
+    let explicit_id = world.register_component::<Explicit1>();
+    let bundle = world.register_dynamic_bundle(&[explicit_id]).id();
+
+    for at in [BufferAt::Now, BufferAt::Undo, BufferAt::NowAndUndo] {
+        let assertion = |result| {
+            if !matches!(result, Err(RevEntityError::EntityDoesNotExistError(_))) {
+                panic!("at: {at:?}, result: {result:?}");
+            }
+        };
+
+        assertion(world.buffer_components(Entity::PLACEHOLDER, at, &[explicit_id]));
+        assertion(world.buffer_components_cached(Entity::PLACEHOLDER, at, |_| (at, [explicit_id])));
+        assertion(world.buffer_bundle(Entity::PLACEHOLDER, at, bundle));
+    }
+}
+
+#[test]
+fn buffer_fails_on_rev_despawned() {
     let mut world = setup();
     let explicit_id = world.register_component::<Explicit1>();
     let bundle = world.register_dynamic_bundle(&[explicit_id]).id();
     let entity = rev_despawned_entity_clear_buffer(&mut world);
 
-    for entity in [entity, Entity::PLACEHOLDER] {
-        for at in [BufferAt::Now, BufferAt::Undo, BufferAt::NowAndUndo] {
-            let result = world.buffer_components(entity, at, &[explicit_id]);
-            assert_eq!(result, Err(()), "{entity:?}, {at:?}");
+    for at in [BufferAt::Now, BufferAt::Undo, BufferAt::NowAndUndo] {
+        let assertion = |result| {
+            if !matches!(result, Err(RevEntityError::EntityRevDespawnedError(_))) {
+                panic!("at: {at:?}, result: {result:?}");
+            }
+        };
 
-            let result =
-                world.buffer_components_cached(entity, (entity, at), |_| (at, [explicit_id]));
-            assert_eq!(result, Err(()), "{entity:?}, {at:?}");
-
-            let result = world.buffer_bundle(entity, at, bundle);
-            assert_eq!(result, Err(()), "{entity:?}, {at:?}");
-        }
+        assertion(world.buffer_components(entity, at, &[explicit_id]));
+        assertion(world.buffer_components_cached(entity, at, |_| (at, [explicit_id])));
+        assertion(world.buffer_bundle(entity, at, bundle));
     }
 }
 
@@ -272,7 +295,7 @@ fn rev_try_despawn_fails_at_invalid() {
     let result = world.rev_try_despawn(Entity::PLACEHOLDER);
 
     assert!(
-        matches!(result, Err(RevEntityDespawnError::Other(_))),
+        matches!(result, Err(RevEntityError::EntityDoesNotExistError(_))),
         "{result:?}"
     );
     assert!(world.resource::<UndoRedoBuffer>().is_empty());
@@ -285,10 +308,7 @@ fn rev_try_despawn_fails_at_rev_despawned() {
     let result = world.rev_try_despawn(entity);
 
     assert!(
-        matches!(
-            result,
-            Err(RevEntityDespawnError::AlreadyMarkedForDespawn(_))
-        ),
+        matches!(result, Err(RevEntityError::EntityRevDespawnedError(_))),
         "{result:?}"
     );
     assert!(world.resource::<UndoRedoBuffer>().is_empty());
@@ -359,10 +379,17 @@ fn rev_try_insert_batch_fails_partially_with_invalid_and_rev_despawned_entity() 
     ]);
     let mut buffer = world.remove_resource::<UndoRedoBuffer>().unwrap();
 
-    let Err(err) = result else {
+    let Err(RevEntitiesError::BadEntities {
+        invalid,
+        rev_despawned,
+    }) = result
+    else {
         panic!("{result:?}");
     };
-    assert_eq!(err.entities, [entity2, Entity::PLACEHOLDER]);
+    let invalid: Vec<Entity> = invalid.into_iter().map(|err| err.entity).collect();
+    let rev_despawned: Vec<Entity> = rev_despawned.into_iter().map(|err| err.entity).collect();
+    assert_eq!(invalid, [Entity::PLACEHOLDER]);
+    assert_eq!(rev_despawned, [entity2]);
     let [ref1, ref2] = world.entity([entity1, entity2]);
 
     assert_eq!(ref1.get(), Some(&Explicit1(30)));
@@ -467,10 +494,17 @@ fn rev_try_insert_batch_if_new_fails_partially_with_invalid_and_rev_despawned_en
     ]);
     let mut buffer = world.remove_resource::<UndoRedoBuffer>().unwrap();
 
-    let Err(err) = result else {
+    let Err(RevEntitiesError::BadEntities {
+        invalid,
+        rev_despawned,
+    }) = result
+    else {
         panic!("{result:?}");
     };
-    assert_eq!(err.entities, [entity2, Entity::PLACEHOLDER]);
+    let invalid: Vec<Entity> = invalid.into_iter().map(|err| err.entity).collect();
+    let rev_despawned: Vec<Entity> = rev_despawned.into_iter().map(|err| err.entity).collect();
+    assert_eq!(invalid, [Entity::PLACEHOLDER]);
+    assert_eq!(rev_despawned, [entity2]);
     let [ref1, ref2] = world.entity([entity1, entity2]);
 
     assert_eq!(ref1.get(), Some(&Explicit1(10)));
