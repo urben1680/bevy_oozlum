@@ -1,29 +1,86 @@
-use std::borrow::Borrow;
+use std::panic::Location;
 
 use super::*;
 
-#[derive(Component, Clone, Copy, Debug, Hash, PartialOrd, Ord, PartialEq, Eq)]
+#[derive(Component, Clone, Copy, Debug, Eq, Ord)]
 #[component(immutable)]
-pub(crate) struct DespawnAtOutOfLog(u64);
+pub(crate) struct DespawnAtOutOfLog {
+    added_frame: u64,
+    added_location: MaybeLocation<Option<&'static Location<'static>>>,
+}
 
-impl DespawnAtOutOfLog {
-    pub(crate) fn new(meta: Option<impl Borrow<RevMeta>>) -> Result<Self, DespawnAtOutOfLogErr> {
-        let meta = meta.ok_or(DespawnAtOutOfLogErr::RevMetaMissing)?;
-        let meta = meta.borrow();
-        let running_direction = meta.get_running_direction();
-        if running_direction == Some(RevDirection::NOT_LOG) {
-            return Err(DespawnAtOutOfLogErr::NotRunningNonLogDirection(
-                running_direction,
-            ));
-        }
-        Ok(Self(meta.now()))
+impl PartialEq for DespawnAtOutOfLog {
+    fn eq(&self, other: &Self) -> bool {
+        self.added_frame.eq(&other.added_frame)
     }
 }
 
-#[derive(Debug, Clone, Copy, Hash)] //todo: Error
-pub enum DespawnAtOutOfLogErr {
-    RevMetaMissing,
-    NotRunningNonLogDirection(Option<RevDirection>),
+impl PartialOrd for DespawnAtOutOfLog {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        self.added_frame.partial_cmp(&other.added_frame)
+    }
+}
+
+impl DespawnAtOutOfLog {
+    pub(crate) fn for_buffer(meta: Option<&RevMeta>) -> Result<Self, RevMetaNotLogError> {
+        let added_frame = added_frame(meta)?;
+        Ok(Self {
+            added_frame,
+            added_location: MaybeLocation::new(None),
+        })
+    }
+    #[track_caller]
+    pub(crate) fn for_spawn_despawn(meta: Option<&RevMeta>) -> Result<Self, RevMetaNotLogError> {
+        let added_frame = added_frame(meta)?;
+        Ok(Self {
+            added_frame,
+            added_location: MaybeLocation::new_with(|| Some(Location::caller())),
+        })
+    }
+}
+
+fn added_frame(meta: Option<&RevMeta>) -> Result<u64, RevMetaNotLogError> {
+    let meta = meta.ok_or(RevMetaNotLogError::RevMetaMissing)?;
+    match meta.get_running_direction() {
+        Some(RevDirection::NOT_LOG) => Ok(meta.now()),
+        actual => Err(RevMetaNotLogError::RevDirectionMismatch { actual }),
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct EntityRevDespawnedError {
+    pub entity: Entity,
+    marker: DespawnAtOutOfLog,
+}
+
+impl Display for EntityRevDespawnedError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.marker.added_location.into_option() {
+            None => write!(
+                f,
+                "entity {} is marked as reversibly despawned (enable `track_location` feature for more details)",
+                self.entity
+            ),
+            Some(Some(location)) => write!(
+                f,
+                "entity {} is marked as reversibly despawned by {location}",
+                self.entity
+            ),
+            Some(None) => write!(
+                f,
+                "entity {} is a bundle buffer which is not intended to be manually modified",
+                self.entity
+            ),
+        }
+    }
+}
+
+impl Error for EntityRevDespawnedError {}
+
+impl EntityRevDespawnedError {
+    pub(super) fn new(entity: Entity, marker: DespawnAtOutOfLog) -> Self {
+        EntityRevDespawnedError { entity, marker }
+    }
 }
 
 #[derive(QueryFilter)]
@@ -138,8 +195,8 @@ pub struct RefRevDespawned {
 }
 
 impl RefRevDespawnedItem<'_> {
-    pub fn added_at(&self) -> u64 {
-        self.marker.0
+    pub fn added_frame(&self) -> u64 {
+        self.marker.added_frame
     }
 }
 
