@@ -5,7 +5,7 @@ use std::{
     iter::FusedIterator,
 };
 
-use bevy::{log::error, reflect::Reflect};
+use bevy::reflect::Reflect;
 
 #[cfg(feature = "serde")]
 mod serde_with;
@@ -144,12 +144,6 @@ struct SparseValue<T> {
     /// If `T` is a state, then these are the skips _after_ the state.
     ///
     /// If `T` is a transiton, then these are the skips _before_ the transition.
-    ///
-    /// This is not a `PackedRevFrame` because skips may be sub-frames and sum up to larger values.
-    /// Instead, this is usize's native byte representation to reduce the alignment of this field.
-    ///
-    /// This value never gets reduced by `pop`/`drain_past_by_len` to be consistent with the behavior
-    /// of `pop`/`drain_past_by_logged_at` which cannot interpret these skips as frames as pointed out.
     skips_ne: [u8; USIZE_BYTES],
 }
 
@@ -275,16 +269,16 @@ impl<U, const AMOUNT_BYTES: usize> EntryAmount<U, AMOUNT_BYTES> {
     /// # Examples
     ///
     /// With `log` being [`&mut DenseStatesLog`](DenseStatesLog) and [`DenseStatesLog::drain_future`] returning the
-    /// draining iterators, do this to slice them by updates:
+    /// draining iterators, do this to chunk them by updates:
     ///
     /// ```
-    /// # let mut log = library::log::DenseStatesLog::new([0], 0);
+    /// # let mut log = library::log::DenseStatesLog::<i32, (), 1>::new([0], ());
     /// let (mut future_states, future_entry_amounts) = log.drain_future();
     /// ```
     ///
     /// Now iterate...
     /// ```
-    /// # let mut log = library::log::DenseStatesLog::new([0], 0);
+    /// # let mut log = library::log::DenseStatesLog::<i32, (), 1>::new([0], ());
     /// # let (mut future_states, future_entry_amounts) = log.drain_future();
     /// for entry_amount in future_entry_amounts {
     ///     let entry = entry_amount.entry;
@@ -296,7 +290,7 @@ impl<U, const AMOUNT_BYTES: usize> EntryAmount<U, AMOUNT_BYTES> {
     ///
     /// ...or collect them:
     /// ```
-    /// # let mut log = library::log::DenseStatesLog::new([0], 0);
+    /// # let mut log = library::log::DenseStatesLog::<i32, (), 1>::new([0], ());
     /// # let (mut future_states, future_entry_amounts) = log.drain_future();
     /// let updates: Vec<(Vec<_>, _)> = future_entry_amounts.map(|entry_amount| (
     ///     future_states.by_ref().take(entry_amount.amount()).collect(),
@@ -332,14 +326,10 @@ impl<'de, U: serde::Deserialize<'de>, const AMOUNT_BYTES: usize> serde::Deserial
     }
 }
 
-fn index_oob() -> OutOfLog {
-    error!(
-        "self.index should always be <= the deque len, so successfully reducing \
-        it without underflow is expected to result in a valid index into the log which is not the case here, \
-        the log is in an invalid state before calling the current method, this is a crate bug"
-    );
-    OutOfLog
-}
+const INDEX_OOB: &'static str = "self.index should always be <= the deque len, so successfully reducing \
+    it without underflow is expected to result in a valid index into the log but this is not the case here, \
+    the log was in an invalid state before calling the current method, this is a crate bug or the log was \
+    deserialized with invalid data";
 
 #[cfg(test)]
 mod test {
