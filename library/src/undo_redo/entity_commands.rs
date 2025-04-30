@@ -575,10 +575,8 @@ pub(super) fn after_spawn(mut entity_commands: EntityCommands) -> EntityCommands
     entity_commands
         .commands_mut()
         .queue(move |world: &mut World| {
-            let meta = world
-                .get_resource::<RevMeta>()
-                .expect(RevMeta::EXPECT_IN_WORLD);
-            let marker = DespawnAtOutOfLog::new(meta);
+            let marker = DespawnAtOutOfLog::for_spawn_despawn(world.get_resource::<RevMeta>())
+                .unwrap_or_else(|err| panic!("{err}"));
             world.buffer_undo_redo(Spawn { entity, marker });
         });
     entity_commands
