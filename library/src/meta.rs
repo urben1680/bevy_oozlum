@@ -449,7 +449,7 @@ impl RevMeta {
                             out_of_log_buffers.extend(
                                 buffers
                                     .iter(world)
-                                    .filter(|(_, marker)| !meta.contains(marker.added_at()))
+                                    .filter(|(_, marker)| !meta.contains(marker.added_frame()))
                                     .map(|(entity, _)| entity),
                             );
                             progress_scope(world, BufferInProgress::FinalDespawn, |world| {
