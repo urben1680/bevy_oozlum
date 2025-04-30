@@ -205,12 +205,14 @@ mod test {
         deque.extend(chars);
 
         let ser1 = WithCapacityWrapper(&deque);
+        let json1 = serde_json::to_string(&ser1).unwrap();
+
+        deque.push_back('d'); // WithRange should not contain this due it's limit
+
         let ser2 = WithCapacityWrapper(WithRange {
             deque: &deque,
             range: 0..3,
         });
-
-        let json1 = serde_json::to_string(&ser1).unwrap();
         let json2 = serde_json::to_string(&ser2).unwrap();
 
         let json_expected = format!("[{},\"a\",\"b\",\"c\"]", deque.capacity());
