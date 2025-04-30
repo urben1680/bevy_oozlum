@@ -25,27 +25,28 @@ use super::*;
 mod test;
 
 pub trait RevEntityWorldMut<'w> {
-    /// todo
+    // buffer methods
+
+    fn buffer_components_in_progress(&self) -> Option<BufferInProgress>;
+
     fn buffer_components(
         &mut self,
         at: BufferAt,
         components: &[ComponentId],
-    ) -> Result<Option<Entity>, ()>;
+    ) -> Result<Option<Entity>, RevEntityError>;
 
-    /// todo
     fn buffer_components_cached<T: AsRef<[ComponentId]>>(
         &mut self,
         key: impl Hash + 'static,
         components: impl FnOnce(&mut World) -> (BufferAt, T),
-    ) -> Result<Option<Entity>, ()>;
+    ) -> Result<Option<Entity>, RevEntityError>;
 
-    /// todo
     fn buffer_bundle(
         &mut self,
         entity: Entity,
         at: BufferAt,
         bundle: BundleId,
-    ) -> Result<Option<Entity>, ()>;
+    ) -> Result<Option<Entity>, RevEntityError>;
 
     // the methods here are purposely sorted alphabetically to make it easily comparable to bevy's docs
     // unmentioned methods are either
@@ -250,11 +251,15 @@ pub trait RevEntityWorldMut<'w> {
 }
 
 impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
+    fn buffer_components_in_progress(&self) -> Option<BufferInProgress> {
+        self.world().buffer_components_in_progress()
+    }
+
     fn buffer_components(
         &mut self,
         at: BufferAt,
         components: &[ComponentId],
-    ) -> Result<Option<Entity>, ()> {
+    ) -> Result<Option<Entity>, RevEntityError> {
         let entity = self.id();
         if at == BufferAt::Undo {
             unsafe {
@@ -271,7 +276,7 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
         &mut self,
         key: impl Hash + 'static,
         components: impl FnOnce(&mut World) -> (BufferAt, T),
-    ) -> Result<Option<Entity>, ()> {
+    ) -> Result<Option<Entity>, RevEntityError> {
         let entity = self.id();
         self.world_scope(|world| world.buffer_components_cached(entity, key, components))
     }
@@ -281,24 +286,16 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
         entity: Entity,
         at: BufferAt,
         bundle: BundleId,
-    ) -> Result<Option<Entity>, ()> {
+    ) -> Result<Option<Entity>, RevEntityError> {
         self.world_scope(|world| world.buffer_bundle(entity, at, bundle))
     }
 
     fn rev_insert<T: Bundle>(&mut self, bundle: T) -> &mut Self {
-        let entity = self.id();
-        let archetype_id = self.location().archetype_id;
-        self.world_scope(|world| pre_insert::<T>(world, entity, archetype_id, InsertMode::Replace))
-            .unwrap_or_else(rev_despawned_panic(entity));
-        self.insert(bundle)
+        insert_inner(self, bundle, InsertMode::Replace)
     }
 
     fn rev_insert_if_new<T: Bundle>(&mut self, bundle: T) -> &mut Self {
-        let entity = self.id();
-        let archetype_id = self.location().archetype_id;
-        self.world_scope(|world| pre_insert::<T>(world, entity, archetype_id, InsertMode::Keep))
-            .unwrap_or_else(rev_despawned_panic(entity));
-        self.insert_if_new(bundle)
+        insert_inner(self, bundle, InsertMode::Keep)
     }
 
     unsafe fn rev_insert_by_ids<'a, I: Iterator<Item = OwningPtr<'a>>>(
@@ -436,12 +433,15 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
     }
 
     fn rev_despawn(self) {
-        rev_despawn_inner(self);
+        let entity = self.id();
+        rev_despawn_inner(self).unwrap_or_else(|err| {
+            panic!("entity {entity} could not be reversibly despawned: {err}")
+        });
     }
 
     fn rev_clone_and_spawn(&mut self) -> Entity {
-        let meta = self.get_resource::<RevMeta>().expect("todo");
-        let marker = DespawnAtOutOfLog::new(meta);
+        let marker = DespawnAtOutOfLog::for_spawn_despawn(self.get_resource::<RevMeta>())
+            .unwrap_or_else(|err| panic!("{err}"));
         let entity = self.clone_and_spawn();
         self.buffer_undo_redo(UndoRedoSwap(RevDespawnSingle { entity, marker }));
         entity
@@ -451,8 +451,8 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
         &mut self,
         config: impl FnOnce(&mut EntityClonerBuilder) + Send + Sync + 'static,
     ) -> Entity {
-        let meta = self.get_resource::<RevMeta>().expect("todo");
-        let marker = DespawnAtOutOfLog::new(meta);
+        let marker = DespawnAtOutOfLog::for_spawn_despawn(self.get_resource::<RevMeta>())
+            .unwrap_or_else(|err| panic!("{err}"));
         let entity = self.clone_and_spawn_with(config);
         self.buffer_undo_redo(UndoRedoSwap(RevDespawnSingle { entity, marker }));
         entity
@@ -643,12 +643,28 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
     }
 }
 
-fn rev_despawned_panic<Out>(entity: Entity) -> impl FnOnce(()) -> Out {
-    move |_| {
-        panic!(
-            "entity {entity} exists but is marked to be despawned and as such `rev_*` mutations are denied"
-        )
+fn insert_inner<'a, 'w, T: Bundle>(
+    entity_mut: &'a mut EntityWorldMut<'w>,
+    bundle: T,
+    insert_mode: InsertMode,
+) -> &'a mut EntityWorldMut<'w> {
+    let entity = entity_mut.id();
+    let archetype_id = entity_mut.location().archetype_id;
+    let marker = DespawnAtOutOfLog::for_buffer(entity_mut.get_resource::<RevMeta>())
+        .unwrap_or_else(|err| panic!("{err}"));
+    entity_mut
+        .world_scope(|world| {
+            pre_insert::<T>(world, entity, archetype_id, InsertMode::Replace, marker)
+        })
+        .unwrap_or_else(rev_despawned_panic(entity));
+    match insert_mode {
+        InsertMode::Replace => entity_mut.insert(bundle),
+        InsertMode::Keep => entity_mut.insert_if_new(bundle),
     }
+}
+
+fn rev_despawned_panic<Err: Error, Out>(entity: Entity) -> impl FnOnce(Err) -> Out {
+    move |err| panic!("entity {entity} could not be mutated: {err}")
 }
 
 // todo: replace with extension trait after https://github.com/bevyengine/bevy/pull/18880 merge
