@@ -5,8 +5,8 @@ use library::{log::*, prelude::*};
 use serde::{Deserialize, Serialize};
 
 fn main() {
-    let len = 50;
-    let modulo = 6;
+    let len = 55;
+    let modulo = 7;
     let mut meta = RevMeta::new(NonZeroU64::new(len + 1), 0, false);
     let mut log = LastFrameWhereModuloEqZero::with_capacity(0, len as usize, modulo);
 
