@@ -10,7 +10,7 @@ use bevy::reflect::Reflect;
 
 use crate::meta::RevMeta;
 
-use super::index_oob;
+use super::INDEX_OOB;
 
 // todo: mention limitations, like missing frames
 #[derive(Debug, Clone, Default, Reflect)]
@@ -120,10 +120,7 @@ impl FrameTransitionLog {
         let Some(index) = self.index.checked_sub(1) else {
             return Ok(false);
         };
-        let Some(&frame) = self.frames.get(index) else {
-            index_oob();
-            return Ok(false);
-        };
+        let frame = *self.frames.get(index).expect(INDEX_OOB);
         match frame.cmp(&(meta.now() + 1)) {
             Ordering::Less => Ok(false),
             Ordering::Equal => {
