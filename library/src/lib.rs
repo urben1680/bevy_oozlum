@@ -22,19 +22,16 @@ Enhancements:
 - track_location and bevy_reflect feature (both are not documented?), rename feature serde -> serialize
 - reversible commands traits of:
 -- Commands
+--- DONE
 -- EntityCommands
--- RelatedSpawnerCommands
+--- DONE
 -- EntityEntryCommands
--- ChildSpawnerCommands
-- ReflectCommandExt
--- other such traits?
-- relationship api is overwhelming, try Relatinship(Target) wrapper
--- limited use, no way to buffer UndoRedo without world access
-- complex extension traits sort methods alphabetically and list unimplementable vanilla methods
--- RevWorld
--- RevEntityWorld: OK
--- RevCommands
--- RevEntityCommands
+--- DONE
+-- ChildSpawnerCommands + RelatedSpawnerCommands
+--- DONE
+-- ReflectCommandExt
+--- out of scope
+- delete unused typed
 
 Docs
 - make fake variadics docs work
@@ -44,6 +41,7 @@ Docs
 -- log contract (always valid, may go further into the past)
 -- check-logged-at should not be used as the sole shortening mechanism or else logs can grow larger than desired
 -- docs for private UndoRedo types
+-- point out additional conditions to not panic/return err and how some are only needed in observers/hooks
 
 ISSUES/DISCUSSIONS:
 - reversible change detection (copy over to new repo)
