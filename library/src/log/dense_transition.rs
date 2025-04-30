@@ -6,7 +6,7 @@ use std::collections::{
 
 use bevy::reflect::{Reflect, std_traits::ReflectDefault};
 
-use super::{OutOfLog, index_oob};
+use super::{INDEX_OOB, OutOfLog};
 
 #[derive(Debug, Clone, Reflect)]
 #[reflect(Default)]
@@ -146,7 +146,7 @@ impl<T> DenseTransitionLog<T> {
     }
     pub fn backward_log(&mut self) -> Result<&mut T, OutOfLog> {
         let index = self.index.checked_sub(1).ok_or(OutOfLog)?;
-        let transition = self.transitions.get_mut(index).ok_or_else(index_oob)?;
+        let transition = self.transitions.get_mut(index).expect(INDEX_OOB);
         self.index = index;
         Ok(transition)
     }
