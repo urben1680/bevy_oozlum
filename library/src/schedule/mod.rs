@@ -29,19 +29,19 @@ pub struct RevUpdate;
 
 /// Contains a forward and a backward set that run depending on the current [`RevDirection`] in [`RevMeta`].
 #[derive(SystemSet, Debug, Copy, Clone, Hash, PartialEq, Eq)]
-pub struct RevSystemsSet;
+pub struct RevSystems;
 
 /// Subset of [`RevSystemsSet`].
 ///
 /// Contains [`FwdArcSet`]s.
 #[derive(SystemSet, Debug, Copy, Clone, Hash, PartialEq, Eq)]
-struct ForwardSet;
+struct ForwardSystems;
 
 /// Subset of [`RevSystemsSet`].
 ///
 /// Contains [`BwdCmdArcSet`]s in reverse order.
 #[derive(SystemSet, Debug, Copy, Clone, Hash, PartialEq, Eq)]
-struct BackwardSet;
+struct BackwardSystems;
 
 /// Subsets of [`ForwardSet`].
 ///
@@ -117,14 +117,14 @@ fn set_base_sets(schedule: &mut Schedule) {
     }
 
     // check needs to be on a non-pub set
-    if !schedule.graph().contains_set(ForwardSet) {
+    if !schedule.graph().contains_set(ForwardSystems) {
         schedule.configure_sets(
             (
-                ForwardSet.run_if(is_forward::<true>),
-                BackwardSet.run_if(is_forward::<false>),
+                ForwardSystems.run_if(is_forward::<true>),
+                BackwardSystems.run_if(is_forward::<false>),
             )
                 .chain() // todo: remove chain to reduce sync points
-                .in_set(RevSystemsSet),
+                .in_set(RevSystems),
         );
     }
 }

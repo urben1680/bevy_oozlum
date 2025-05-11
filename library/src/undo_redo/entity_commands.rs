@@ -16,23 +16,42 @@ use super::*;
 
 pub trait RevEntityCommands<'a> {
     /// Reversible version of [`EntityCommands::add_children`].
-    fn rev_add_children(&mut self, children: &[Entity]) -> &mut EntityCommands<'a>;
+    fn rev_add_children(&mut self, children: &[Entity]) -> &mut EntityCommands<'a> {
+        self.rev_add_related::<ChildOf>(children)
+    }
 
-    /// Reversible version of [`EntityCommands::insert_children`].
-    fn rev_insert_children(&mut self, index: usize, children: &[Entity])
-    -> &mut EntityCommands<'a>;
+    /// Reversible version of [`EntityCommands::insert_children`]
+    fn rev_insert_children(
+        &mut self,
+        index: usize,
+        children: &[Entity],
+    ) -> &mut EntityCommands<'a> {
+        self.rev_insert_related::<ChildOf>(index, children)
+    }
 
     /// Reversible version of [`EntityCommands::add_child`].
-    fn rev_add_child(&mut self, child: Entity) -> &mut EntityCommands<'a>;
+    fn rev_add_child(&mut self, child: Entity) -> &mut EntityCommands<'a> {
+        self.rev_add_one_related::<ChildOf>(child)
+    }
 
     /// Reversible version of [`EntityCommands::remove_children`].
-    fn rev_remove_children(&mut self, children: &[Entity]) -> &mut EntityCommands<'a>;
+    fn rev_remove_children(&mut self, children: &[Entity]) -> &mut EntityCommands<'a> {
+        self.rev_remove_related::<ChildOf>(children)
+    }
 
     /// Reversible version of [`EntityCommands::with_child`].
-    fn rev_with_child(&mut self, bundle: impl Bundle) -> &mut EntityCommands<'a>;
+    fn rev_with_child(
+        &mut self,
+        bundle: impl Bundle,
+    ) -> &mut EntityCommands<'a> {
+        self.rev_with_related::<ChildOf>(bundle)
+    }
 
     /// Reversible version of [`EntityCommands::with_related`].
-    fn rev_with_related<R>(&mut self, bundle: impl Bundle) -> &mut EntityCommands<'a>
+    fn rev_with_related<R>(
+        &mut self,
+        bundle: impl Bundle,
+    ) -> &mut EntityCommands<'a>
     where
         R: Relationship;
 
@@ -68,7 +87,10 @@ pub trait RevEntityCommands<'a> {
         S: RelationshipTarget;
 
     /// Reversible version of [`EntityCommands::insert_recursive`].
-    fn rev_insert_recursive<S>(&mut self, bundle: impl Bundle + Clone) -> &mut EntityCommands<'a>
+    fn rev_insert_recursive<S>(
+        &mut self,
+        bundle: impl Bundle + Clone,
+    ) -> &mut EntityCommands<'a>
     where
         S: RelationshipTarget;
 
@@ -82,12 +104,19 @@ pub trait RevEntityCommands<'a> {
     fn rev_insert(&mut self, bundle: impl Bundle) -> &mut EntityCommands<'a>;
 
     /// Reversible version of [`EntityCommands::insert_if`].
-    fn rev_insert_if<F>(&mut self, bundle: impl Bundle, condition: F) -> &mut EntityCommands<'a>
+    fn rev_insert_if<F>(
+        &mut self,
+        bundle: impl Bundle,
+        condition: F,
+    ) -> &mut EntityCommands<'a>
     where
         F: FnOnce() -> bool;
 
     /// Reversible version of [`EntityCommands::insert_if_new`].
-    fn rev_insert_if_new(&mut self, bundle: impl Bundle) -> &mut EntityCommands<'a>;
+    fn rev_insert_if_new(
+        &mut self,
+        bundle: impl Bundle,
+    ) -> &mut EntityCommands<'a>;
 
     /// Reversible version of [`EntityCommands::insert_if_new_and`].
     fn rev_insert_if_new_and<F>(
@@ -117,7 +146,8 @@ pub trait RevEntityCommands<'a> {
         T: Send + 'static;
 
     /// Reversible version of [`EntityCommands::try_insert`].
-    fn rev_try_insert(&mut self, bundle: impl Bundle) -> &mut EntityCommands<'a>;
+    fn rev_try_insert(&mut self, bundle: impl Bundle)
+    -> &mut EntityCommands<'a>;
 
     /// Reversible version of [`EntityCommands::try_insert_if`].
     fn rev_try_insert_if<F>(
@@ -138,7 +168,10 @@ pub trait RevEntityCommands<'a> {
         F: FnOnce() -> bool;
 
     /// Reversible version of [`EntityCommands::try_insert_if_new`].
-    fn rev_try_insert_if_new(&mut self, bundle: impl Bundle) -> &mut EntityCommands<'a>;
+    fn rev_try_insert_if_new(
+        &mut self,
+        bundle: impl Bundle,
+    ) -> &mut EntityCommands<'a>;
 
     /// Reversible version of [`EntityCommands::remove`].
     fn rev_remove<B>(&mut self) -> &mut EntityCommands<'a>
@@ -187,31 +220,10 @@ pub trait RevEntityCommands<'a> {
 }
 
 impl<'a> RevEntityCommands<'a> for EntityCommands<'a> {
-    fn rev_add_children(&mut self, children: &[Entity]) -> &mut EntityCommands<'a> {
-        self.rev_add_related::<ChildOf>(children)
-    }
-
-    fn rev_insert_children(
+    fn rev_with_related<R>(
         &mut self,
-        index: usize,
-        children: &[Entity],
-    ) -> &mut EntityCommands<'a> {
-        self.rev_insert_related::<ChildOf>(index, children)
-    }
-
-    fn rev_add_child(&mut self, child: Entity) -> &mut EntityCommands<'a> {
-        self.rev_add_one_related::<ChildOf>(child)
-    }
-
-    fn rev_remove_children(&mut self, children: &[Entity]) -> &mut EntityCommands<'a> {
-        self.rev_remove_related::<ChildOf>(children)
-    }
-
-    fn rev_with_child(&mut self, bundle: impl Bundle) -> &mut EntityCommands<'a> {
-        self.rev_with_related::<ChildOf>(bundle)
-    }
-
-    fn rev_with_related<R>(&mut self, bundle: impl Bundle) -> &mut EntityCommands<'a>
+        bundle: impl Bundle,
+    ) -> &mut EntityCommands<'a>
     where
         R: Relationship,
     {
@@ -270,7 +282,10 @@ impl<'a> RevEntityCommands<'a> for EntityCommands<'a> {
         })
     }
 
-    fn rev_insert_recursive<S>(&mut self, bundle: impl Bundle + Clone) -> &mut EntityCommands<'a>
+    fn rev_insert_recursive<S>(
+        &mut self,
+        bundle: impl Bundle + Clone,
+    ) -> &mut EntityCommands<'a>
     where
         S: RelationshipTarget,
     {
@@ -295,7 +310,11 @@ impl<'a> RevEntityCommands<'a> for EntityCommands<'a> {
         })
     }
 
-    fn rev_insert_if<F>(&mut self, bundle: impl Bundle, condition: F) -> &mut EntityCommands<'a>
+    fn rev_insert_if<F>(
+        &mut self,
+        bundle: impl Bundle,
+        condition: F,
+    ) -> &mut EntityCommands<'a>
     where
         F: FnOnce() -> bool,
     {
@@ -306,7 +325,10 @@ impl<'a> RevEntityCommands<'a> for EntityCommands<'a> {
         }
     }
 
-    fn rev_insert_if_new(&mut self, bundle: impl Bundle) -> &mut EntityCommands<'a> {
+    fn rev_insert_if_new(
+        &mut self,
+        bundle: impl Bundle,
+    ) -> &mut EntityCommands<'a> {
         self.queue(move |mut entity: EntityWorldMut| {
             entity.rev_insert_if_new(bundle);
         })
@@ -362,7 +384,10 @@ impl<'a> RevEntityCommands<'a> for EntityCommands<'a> {
         )
     }
 
-    fn rev_try_insert(&mut self, bundle: impl Bundle) -> &mut EntityCommands<'a> {
+    fn rev_try_insert(
+        &mut self,
+        bundle: impl Bundle,
+    ) -> &mut EntityCommands<'a> {
         self.queue_handled(
             move |mut entity: EntityWorldMut| {
                 entity.rev_insert(bundle);
@@ -371,7 +396,11 @@ impl<'a> RevEntityCommands<'a> for EntityCommands<'a> {
         )
     }
 
-    fn rev_try_insert_if<F>(&mut self, bundle: impl Bundle, condition: F) -> &mut EntityCommands<'a>
+    fn rev_try_insert_if<F>(
+        &mut self,
+        bundle: impl Bundle,
+        condition: F,
+    ) -> &mut EntityCommands<'a>
     where
         F: FnOnce() -> bool,
     {
@@ -397,7 +426,10 @@ impl<'a> RevEntityCommands<'a> for EntityCommands<'a> {
         }
     }
 
-    fn rev_try_insert_if_new(&mut self, bundle: impl Bundle) -> &mut EntityCommands<'a> {
+    fn rev_try_insert_if_new(
+        &mut self,
+        bundle: impl Bundle,
+    ) -> &mut EntityCommands<'a> {
         self.queue_handled(
             move |mut entity: EntityWorldMut| {
                 entity.rev_insert_if_new(bundle);
@@ -575,9 +607,12 @@ pub(super) fn after_spawn(mut entity_commands: EntityCommands) -> EntityCommands
     entity_commands
         .commands_mut()
         .queue(move |world: &mut World| {
-            let marker = DespawnAtOutOfLog::for_spawn_despawn(world.get_resource::<RevMeta>())
+            let marker = DisabledToDespawn::for_spawn_despawn(world.get_resource::<RevMeta>())
                 .unwrap_or_else(|err| panic!("{err}"));
-            world.buffer_undo_redo(Spawn { entity, marker });
+            world.buffer_undo_redo(Spawn {
+                spawned: [entity],
+                marker,
+            });
         });
     entity_commands
 }

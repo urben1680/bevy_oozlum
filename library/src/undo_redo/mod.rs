@@ -11,12 +11,14 @@ use std::{
 use bevy::{
     ecs::{
         archetype::ArchetypeId,
-        bundle::{Bundle, BundleFromComponents, BundleId, InsertMode},
+        bundle::{Bundle, BundleEffect, BundleFromComponents, BundleId, DynamicBundle, InsertMode},
         change_detection::{MaybeLocation, Mut},
-        component::{Component, ComponentCloneBehavior, ComponentId, ComponentMutability},
+        component::{
+            Component, ComponentCloneBehavior, ComponentId, ComponentMutability, Components,
+            ComponentsRegistrator, RequiredComponents, StorageType,
+        },
         entity::{Entity, EntityCloner, EntityDoesNotExistError, hash_set::EntityHashSet},
         hierarchy::{ChildOf, Children},
-        query::{Has, QueryData, QueryFilter, ReadOnlyQueryData, With, WorldQuery},
         relationship::{OrderedRelationshipSourceCollection, Relationship, RelationshipTarget},
         resource::Resource,
         system::{Commands, EntityCommands},
@@ -25,8 +27,9 @@ use bevy::{
             FilteredEntityMut, FilteredEntityRef, World, error::EntityMutableFetchError,
         },
     },
-    log::warn,
+    log::{error, warn},
     platform::collections::{HashMap, HashSet},
+    ptr::OwningPtr,
     utils::synccell::SyncCell,
 };
 
@@ -37,35 +40,103 @@ use crate::{
 };
 
 mod bundle_buffer;
-mod commands;
-mod despawn;
-mod entity_commands;
+//mod commands;
+mod spawn_despawn;
+//mod entity_commands;
 mod entity_world;
 mod world;
 
 pub use bundle_buffer::*;
-pub use commands::*;
-pub use despawn::*;
-pub use entity_commands::*;
+//pub use commands::*;
+pub use spawn_despawn::*;
+//pub use entity_commands::*;
 pub use entity_world::*;
 pub use world::*;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+pub struct RevMetaMissing;
 
+impl Display for RevMetaMissing {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", RevMeta::EXPECT_IN_WORLD)
+    }
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+pub struct RevDirectionMismatch {
+    pub actual: Option<RevDirection>,
+}
+
+impl Display for RevDirectionMismatch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "expected RevMeta in the `Some(RevDirection::NOT_LOG)` running direction but was in `{:?}`",
+            self.actual
+        )
+    }
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum RevMetaNotLogError {
-    RevMetaMissing,
-    RevDirectionMismatch { actual: Option<RevDirection> },
+    RevMetaMissing(RevMetaMissing),
+    RevDirectionMismatch(RevDirectionMismatch),
+}
+
+impl From<RevMetaMissing> for RevMetaNotLogError {
+    fn from(value: RevMetaMissing) -> Self {
+        Self::RevMetaMissing(value)
+    }
+}
+
+impl From<RevDirectionMismatch> for RevMetaNotLogError {
+    fn from(value: RevDirectionMismatch) -> Self {
+        Self::RevDirectionMismatch(value)
+    }
 }
 
 impl Display for RevMetaNotLogError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::RevMetaMissing => write!(f, "{}", RevMeta::EXPECT_IN_WORLD),
-            Self::RevDirectionMismatch { actual } => write!(
+            Self::RevMetaMissing(inner) => write!(f, "{inner}"),
+            Self::RevDirectionMismatch(inner) => write!(f, "{inner}"),
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct EntityRevDespawnedError {
+    pub entity: Entity,
+    pub marker: DisabledToDespawn,
+}
+
+impl Display for EntityRevDespawnedError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.marker.added_location().into_option() {
+            None => write!(
                 f,
-                "expected RevMeta in the `Some(RevDirection::NOT_LOG)` running direction but was in `{actual:?}`"
+                "entity {} is marked as reversibly despawned (enable `track_location` feature for more details)",
+                self.entity
+            ),
+            Some(Some(location)) => write!(
+                f,
+                "entity {} is marked as reversibly despawned by {location}",
+                self.entity
+            ),
+            Some(None) => write!(
+                f,
+                "entity {} is a bundle buffer which is not intended to be manually modified",
+                self.entity
             ),
         }
+    }
+}
+
+impl Error for EntityRevDespawnedError {}
+
+impl EntityRevDespawnedError {
+    pub(super) fn new(entity: Entity, marker: DisabledToDespawn) -> Self {
+        EntityRevDespawnedError { entity, marker }
     }
 }
 
@@ -73,15 +144,8 @@ impl Error for RevMetaNotLogError {}
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum RevEntityError {
-    RevMetaNotLogError(RevMetaNotLogError),
     EntityDoesNotExistError(EntityDoesNotExistError),
     EntityRevDespawnedError(EntityRevDespawnedError),
-}
-
-impl From<RevMetaNotLogError> for RevEntityError {
-    fn from(value: RevMetaNotLogError) -> Self {
-        Self::RevMetaNotLogError(value)
-    }
 }
 
 impl From<EntityDoesNotExistError> for RevEntityError {
@@ -99,7 +163,6 @@ impl From<EntityRevDespawnedError> for RevEntityError {
 impl Display for RevEntityError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::RevMetaNotLogError(inner) => write!(f, "{inner}"),
             Self::EntityDoesNotExistError(inner) => write!(f, "{inner}"),
             Self::EntityRevDespawnedError(inner) => write!(f, "{inner}"),
         }
@@ -108,57 +171,122 @@ impl Display for RevEntityError {
 
 impl Error for RevEntityError {}
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RevEntitiesError {
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum RevMetaOrEntityError {
     RevMetaNotLogError(RevMetaNotLogError),
-    BadEntities {
-        invalid: Vec<EntityDoesNotExistError>,
-        rev_despawned: Vec<EntityRevDespawnedError>,
-    },
+    RevEntityError(RevEntityError),
 }
 
-impl From<RevMetaNotLogError> for RevEntitiesError {
+impl From<RevMetaMissing> for RevMetaOrEntityError {
+    fn from(value: RevMetaMissing) -> Self {
+        Self::RevMetaNotLogError(value.into())
+    }
+}
+
+impl From<RevDirectionMismatch> for RevMetaOrEntityError {
+    fn from(value: RevDirectionMismatch) -> Self {
+        Self::RevMetaNotLogError(value.into())
+    }
+}
+
+impl From<RevMetaNotLogError> for RevMetaOrEntityError {
     fn from(value: RevMetaNotLogError) -> Self {
         Self::RevMetaNotLogError(value)
     }
 }
 
-impl Display for RevEntitiesError {
+impl From<EntityDoesNotExistError> for RevMetaOrEntityError {
+    fn from(value: EntityDoesNotExistError) -> Self {
+        Self::RevEntityError(value.into())
+    }
+}
+
+impl From<EntityRevDespawnedError> for RevMetaOrEntityError {
+    fn from(value: EntityRevDespawnedError) -> Self {
+        Self::RevEntityError(value.into())
+    }
+}
+
+impl Display for RevMetaOrEntityError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::RevMetaNotLogError(inner) => write!(f, "{inner}"),
-            Self::BadEntities {
-                invalid,
-                rev_despawned,
-            } => {
-                if size_of::<MaybeLocation<u8>>() == 0 {
-                    if !invalid.is_empty() {
-                        write!(f, "non-existing entities: ")?;
-                        for entity in invalid.iter() {
-                            write!(f, "{}, ", entity.entity)?;
-                        }
-                    }
-                    if !rev_despawned.is_empty() {
-                        write!(f, "reversibly despawned entities: ")?;
-                        for entity in rev_despawned.iter() {
-                            write!(f, "{}, ", entity.entity)?;
-                        }
-                    }
-                    write!(f, "(enable `track_location` feature for more details)")?;
-                } else {
-                    let invalid = invalid.iter().map(|err| err.entity);
-                    let rev_despawned = rev_despawned.iter().map(|err| err.entity);
-                    for entity in invalid.chain(rev_despawned) {
-                        write!(f, "{entity}, ")?;
-                    }
-                }
-                Ok(())
-            }
+            Self::RevEntityError(inner) => write!(f, "{inner}"),
         }
     }
 }
 
+impl Error for RevMetaOrEntityError {}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RevEntitiesError {
+    pub invalid: Vec<EntityDoesNotExistError>,
+    pub rev_despawned: Vec<EntityRevDespawnedError>,
+}
+
+impl Display for RevEntitiesError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if size_of::<MaybeLocation<u8>>() == 0 {
+            if !self.invalid.is_empty() {
+                write!(f, "non-existing entities: ")?;
+                for entity in self.invalid.iter() {
+                    write!(f, "{}, ", entity.entity)?;
+                }
+            }
+            if !self.rev_despawned.is_empty() {
+                write!(f, "reversibly despawned entities: ")?;
+                for entity in self.rev_despawned.iter() {
+                    write!(f, "{}, ", entity.entity)?;
+                }
+            }
+            write!(f, "(enable `track_location` feature for more details)")?;
+        } else {
+            let invalid = self.invalid.iter().map(|err| err.entity);
+            let rev_despawned = self.rev_despawned.iter().map(|err| err.entity);
+            for entity in invalid.chain(rev_despawned) {
+                write!(f, "{entity}, ")?;
+            }
+        }
+        Ok(())
+    }
+}
+
 impl Error for RevEntitiesError {}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RevMetaOrEntitiesError {
+    RevMetaNotLogError(RevMetaNotLogError),
+    RevEntitiesError(RevEntitiesError),
+}
+
+impl From<RevMetaMissing> for RevMetaOrEntitiesError {
+    fn from(value: RevMetaMissing) -> Self {
+        Self::RevMetaNotLogError(value.into())
+    }
+}
+
+impl From<RevDirectionMismatch> for RevMetaOrEntitiesError {
+    fn from(value: RevDirectionMismatch) -> Self {
+        Self::RevMetaNotLogError(value.into())
+    }
+}
+
+impl From<RevMetaNotLogError> for RevMetaOrEntitiesError {
+    fn from(value: RevMetaNotLogError) -> Self {
+        Self::RevMetaNotLogError(value)
+    }
+}
+
+impl Display for RevMetaOrEntitiesError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::RevMetaNotLogError(inner) => write!(f, "{inner}"),
+            Self::RevEntitiesError(inner) => write!(f, "{inner}"),
+        }
+    }
+}
+
+impl Error for RevMetaOrEntitiesError {}
 
 pub trait BuffersUndoRedo {
     /// Buffers an [`UndoRedo`] implementor in a resource to be collected by the reversible system's state during sync points.
@@ -186,6 +314,9 @@ pub trait BuffersUndoRedo {
     /// | [`EntityCommands`] | ❌ | ✅ |
     fn buffer_undo_redo(&mut self, undo_redo: impl UndoRedo) -> &mut Self;
 }
+
+// todo: replace all following with Rev* wrappers OR integrate in wrapper impls
+// how to support DeferredWorld in hooks/observers?
 
 impl BuffersUndoRedo for Commands<'_, '_> {
     fn buffer_undo_redo(&mut self, undo_redo: impl UndoRedo) -> &mut Self {
@@ -520,154 +651,6 @@ fn map_frame_log_err(
     }
 }
 
-fn collect_children(
-    world: &World,
-    entity: Entity,
-    component_id: ComponentId,
-    entities: &mut EntityHashSet,
-) {
-    let entity_mut = world.entity(entity);
-    if entity_mut.contains_id(component_id) {
-        return;
-    }
-    if !entities.insert(entity) {
-        return;
-    }
-    let Some(children) = entity_mut.get::<Children>() else {
-        return;
-    };
-    for &child in children {
-        collect_children(world, child, component_id, entities);
-    }
-}
-
-#[track_caller]
-fn rev_despawn_inner(mut entity_mut: EntityWorldMut) -> Result<(), RevEntityError> {
-    let entity = entity_mut.id();
-    if entity_mut.is_despawned() {
-        return match entity_mut.world().get_entity(entity) {
-            Err(err) => Err(RevEntityError::EntityDoesNotExistError(err)),
-            Ok(_) => unreachable!(),
-        };
-    }
-    if let Some(marker) = entity_mut.get::<DespawnAtOutOfLog>() {
-        return Err(RevEntityError::EntityRevDespawnedError(
-            EntityRevDespawnedError::new(entity, *marker),
-        ));
-    }
-
-    let marker = DespawnAtOutOfLog::for_spawn_despawn(entity_mut.get_resource::<RevMeta>())?;
-    let entity = entity_mut.id();
-    let children = entity_mut
-        .get::<Children>()
-        .map(|children| RelationshipTarget::iter(children).collect::<Vec<Entity>>())
-        .filter(|children| !children.is_empty());
-
-    entity_mut.world_scope(|world| {
-        let component_id = world
-            .component_id::<DespawnAtOutOfLog>()
-            .unwrap_or_else(|| {
-                warn!(
-                    "the Component to reversibly mark entities as despawned is not known to the world, \
-                    it is registered now but fulfills no disabling functionality as it should, \
-                    make sure to add the {} plugin to the application",
-                    type_name::<RevSystemsPlugin>()
-                );
-                world.register_component::<DespawnAtOutOfLog>()
-            });
-        let Some(children) = children else {
-            return rev_despawn_single(world, entity, marker);
-        };
-        let mut entities = [entity].into_iter().collect();
-        for child in children {
-            collect_children(world, child, component_id, &mut entities);
-        }
-        if entities.len() < 2 {
-            return rev_despawn_single(world, entity, marker);
-        }
-
-        let mut undo_redo = RevDespawnHierarchy {
-            entities: entities.into_iter().collect(),
-            marker,
-        };
-        undo_redo.redo(world);
-        world.buffer_undo_redo(undo_redo);
-    });
-
-    Ok(())
-}
-
-fn rev_despawn_single(world: &mut World, entity: Entity, marker: DespawnAtOutOfLog) {
-    let mut undo_redo = RevDespawnSingle { entity, marker };
-    undo_redo.redo(world);
-    world.buffer_undo_redo(undo_redo);
-}
-
-struct RevDespawnSingle {
-    entity: Entity,
-    marker: DespawnAtOutOfLog,
-}
-
-impl UndoRedo for RevDespawnSingle {
-    fn undo(&mut self, world: &mut World) {
-        world.entity_mut(self.entity).remove::<DespawnAtOutOfLog>();
-    }
-    fn redo(&mut self, world: &mut World) {
-        world.entity_mut(self.entity).insert(self.marker);
-    }
-}
-
-struct RevDespawnHierarchy {
-    entities: Arc<[Entity]>,
-    marker: DespawnAtOutOfLog,
-}
-
-impl UndoRedo for RevDespawnHierarchy {
-    fn undo(&mut self, world: &mut World) {
-        let component_id = world.component_id::<DespawnAtOutOfLog>().expect("todo");
-        let mut commands = world.commands();
-        for &entity in self.entities.iter().rev() {
-            commands.entity(entity).remove_by_id(component_id);
-        }
-        world.flush();
-    }
-    fn redo(&mut self, world: &mut World) {
-        struct Iter {
-            entities: Arc<[Entity]>,
-            index: usize,
-            marker: DespawnAtOutOfLog,
-        }
-
-        impl Iterator for Iter {
-            type Item = (Entity, DespawnAtOutOfLog);
-            fn next(&mut self) -> Option<Self::Item> {
-                self.entities.get(self.index).map(|entity| {
-                    self.index += 1;
-                    (*entity, self.marker)
-                })
-            }
-            fn size_hint(&self) -> (usize, Option<usize>) {
-                let len = self.len();
-                (len, Some(len))
-            }
-        }
-
-        impl ExactSizeIterator for Iter {
-            fn len(&self) -> usize {
-                self.entities.len() - self.index
-            }
-        }
-
-        impl FusedIterator for Iter {}
-
-        world.insert_batch(Iter {
-            entities: self.entities.clone(),
-            index: 0,
-            marker: self.marker,
-        })
-    }
-}
-
 pub struct UndoRedoSwap<T: UndoRedo>(pub T);
 
 impl<T: UndoRedo> UndoRedo for UndoRedoSwap<T> {
@@ -676,20 +659,6 @@ impl<T: UndoRedo> UndoRedo for UndoRedoSwap<T> {
     }
     fn redo(&mut self, world: &mut World) {
         self.0.undo(world);
-    }
-}
-
-struct Spawn {
-    entity: Entity,
-    marker: DespawnAtOutOfLog,
-}
-
-impl UndoRedo for Spawn {
-    fn undo(&mut self, world: &mut World) {
-        world.entity_mut(self.entity).insert(self.marker);
-    }
-    fn redo(&mut self, world: &mut World) {
-        world.entity_mut(self.entity).remove::<DespawnAtOutOfLog>();
     }
 }
 

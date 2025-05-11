@@ -18,7 +18,7 @@ pub(super) fn pre_insert<T: Bundle>(
     entity: Entity,
     archetype_id: ArchetypeId,
     insert_mode: InsertMode,
-    marker: DespawnAtOutOfLog,
+    marker: DisabledToDespawn,
 ) -> Result<Option<Entity>, RevEntityError> {
     match insert_mode {
         InsertMode::Replace => buffer_components_cached(
@@ -114,7 +114,7 @@ pub(super) fn buffer_components_cached<T: AsRef<[ComponentId]>>(
     entity: Entity,
     key: impl Hash + 'static,
     components: impl FnOnce(&mut World) -> (BufferAt, T),
-    marker: DespawnAtOutOfLog,
+    marker: DisabledToDespawn,
 ) -> Result<Option<Entity>, RevEntityError> {
     #[derive(Resource, Default)]
     pub(crate) struct CachedBundles(HashMap<u64, (BufferAt, BundleId), PassHash>);
@@ -143,7 +143,7 @@ pub(super) fn buffer_bundle(
     entity: Entity,
     at: BufferAt,
     bundle: BundleId,
-    marker: DespawnAtOutOfLog,
+    marker: DisabledToDespawn,
 ) -> Result<Option<Entity>, RevEntityError> {
     if world.get_entity(entity)?.rev_is_despawned() {
         return Err(RevEntityError::EntityRevDespawnedError(
@@ -196,6 +196,7 @@ pub(crate) fn progress_scope(
     swap.redo(world);
 }
 
+// todo: how to handle required components of T?
 pub(crate) fn register_non_entity_buffer<T: Component>(world: &mut World) {
     struct NonEntityBuffer<T: Component> {
         entity: Entity,
@@ -286,7 +287,7 @@ struct BundleBuffer {
 
 #[derive(Clone)]
 enum BufferState {
-    Unspawned(DespawnAtOutOfLog),
+    Unspawned(DisabledToDespawn),
     Empty(Entity),
     Filled(Entity),
 }
@@ -387,6 +388,9 @@ pub enum BufferInProgress {
 }
 
 impl BufferInProgress {
+    pub fn check(world: &World) -> Option<Self> {
+        world.get_resource::<BufferInProgressRes>().map(|res| res.0)
+    }
     pub fn direction(self) -> RevDirection {
         match self {
             Self::Buffer { direction, .. } => direction,
@@ -398,10 +402,6 @@ impl BufferInProgress {
 
 #[derive(Resource)]
 struct BufferInProgressRes(BufferInProgress);
-
-pub(super) fn buffer_components_in_progress(world: &World) -> Option<BufferInProgress> {
-    world.get_resource::<BufferInProgressRes>().map(|res| res.0)
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum BufferAt {

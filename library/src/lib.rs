@@ -20,18 +20,16 @@ Enhancements:
 - reduce todo!() and //todo and unwrap (in favor of expect)
 - #[inline]s
 - track_location and bevy_reflect feature (both are not documented?), rename feature serde -> serialize
-- reversible commands traits of:
--- Commands
---- DONE
--- EntityCommands
---- DONE
--- EntityEntryCommands
---- DONE
--- ChildSpawnerCommands + RelatedSpawnerCommands
---- DONE
--- ReflectCommandExt
---- out of scope
-- delete unused typed
+- delete unused types
+- integrate BuffersUndoRedo in new Rev wrappers, find good way to support DeferredWorld
+- missing apis:
+-- World::entities_and_commands with RevCommands return
+-- RelatedSpawner
+--- EntityWorldMut::with_children
+--- EntityWorldMut::with_related_entities
+-- EntityWorldMut::clone_with (out of scope!)
+-- EntityWorldMut::clone_and_spawn_with (out of scope!)
+-- ... (check Commands + friends)
 
 Docs
 - make fake variadics docs work
@@ -42,6 +40,7 @@ Docs
 -- check-logged-at should not be used as the sole shortening mechanism or else logs can grow larger than desired
 -- docs for private UndoRedo types
 -- point out additional conditions to not panic/return err and how some are only needed in observers/hooks
+-- remind in Apis with HasEffect bound to use App::register_non_entity_buffer
 
 ISSUES/DISCUSSIONS:
 - reversible change detection (copy over to new repo)
@@ -65,10 +64,9 @@ pub mod undo_redo;
 pub mod prelude {
     pub use crate::app::{RevApp as _, RevSystemsPlugin};
     pub use crate::meta::{RevDirection, RevMeta};
-    pub use crate::schedule::{RevSchedule as _, RevSystemsSet, RevUpdate};
+    pub use crate::schedule::{RevSchedule as _, RevSystems, RevUpdate};
     pub use crate::undo_redo::{
-        BuffersUndoRedo as _, RevCommands as _, RevEntityWorldMut as _, RevWorld as _, UndoRedo,
-        UndoRedoBuffer, UndoRedoDirection, UndoRedoSwap,
+        BuffersUndoRedo as _, UndoRedo, UndoRedoBuffer, UndoRedoDirection, UndoRedoSwap,
     };
 }
 

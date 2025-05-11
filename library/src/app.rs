@@ -16,7 +16,7 @@ use crate::{
     meta::RevMeta,
     prelude::UndoRedoBuffer,
     schedule::{IntoRevScheduleConfigs, RevSchedule},
-    undo_redo::{DespawnAtOutOfLog, register_non_entity_buffer},
+    undo_redo::{DisabledToDespawn, register_non_entity_buffer},
 };
 
 pub trait RevApp {
@@ -124,7 +124,7 @@ impl Plugin for RevSystemsPlugin {
             }
             Self::AddMeta(..) => {}
         }
-        app.register_disabling_component::<DespawnAtOutOfLog>();
+        app.register_disabling_component::<DisabledToDespawn>();
         app.init_resource::<UndoRedoBuffer>();
         app.register_non_entity_buffer::<ChildOf>(); // include Children?
     }

@@ -28,7 +28,8 @@ use bevy::{
 use crate::{
     meta::RevMeta,
     schedule::{
-        BackwardSet, BwdCmdSet, BwdCmdSysSet, BwdSysSet, ForwardSet, FwdSysSet, error_per_flag,
+        BackwardSystems, BwdCmdSet, BwdCmdSysSet, BwdSysSet, ForwardSystems, FwdSysSet,
+        error_per_flag,
     },
     undo_redo::{UndoRedoBuffer, UndoRedoLog},
 };
@@ -81,19 +82,19 @@ where
     let forward_systems = RevSystem::<_, true>::new(shared.clone(), forward_system_name)
         .in_set(unified)
         .in_set(FwdSysSet(unified))
-        .in_set(ForwardSet);
+        .in_set(ForwardSystems);
 
     let backward_commands = CommandsBackward::new(shared.clone(), backward_commands_name)
         .in_set(unified)
         .in_set(BwdCmdSet(unified))
         .in_set(BwdCmdSysSet(unified))
-        .in_set(BackwardSet);
+        .in_set(BackwardSystems);
 
     let backward_systems = RevSystem::<_, false>::new(shared, backward_system_name)
         .in_set(unified)
         .in_set(BwdSysSet(unified))
         .in_set(BwdCmdSysSet(unified))
-        .in_set(BackwardSet)
+        .in_set(BackwardSystems)
         .after(BwdCmdSet(unified));
 
     let mut configs = RevScheduleConfigs {
@@ -614,7 +615,7 @@ mod test {
             Update,
         ))
         // non-reversible systems should leak undo_redo into the next reversible system
-        .add_systems(RevUpdate, system.before(RevSystemsSet))
+        .add_systems(RevUpdate, system.before(RevSystems))
         .rev_add_systems(RevUpdate, system)
         .add_observer(observer)
         .add_observer(empty_observer)

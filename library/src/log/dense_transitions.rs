@@ -161,9 +161,9 @@ impl<T, U, const AMOUNT_BYTES: usize> DenseTransitionsLog<T, U, AMOUNT_BYTES> {
         self.transitions.shrink_to_fit()
     }
     pub fn push<Out: Into<U>>(&mut self, c: impl FnOnce(LogMut<T>) -> Out) {
-        self.checked_push(c).unwrap_or_else(|err| panic!("{err}"))
+        self.try_push(c).unwrap_or_else(|err| panic!("{err}"))
     }
-    pub fn checked_push<Out: Into<U>>(
+    pub fn try_push<Out: Into<U>>(
         &mut self,
         c: impl FnOnce(LogMut<T>) -> Out,
     ) -> Result<(), PushedTooMany<Drain<T>, U, AMOUNT_BYTES>> {

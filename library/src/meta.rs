@@ -24,7 +24,7 @@ use bevy::reflect::{ReflectDeserialize, ReflectSerialize};
 use crate::{
     log::OutOfLog,
     schedule::RevUpdate,
-    undo_redo::{BufferInProgress, RefRevDespawned, UndoRedoBuffer, progress_scope},
+    undo_redo::{BufferInProgress, DisabledToDespawn, UndoRedoBuffer, progress_scope},
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -396,7 +396,7 @@ impl RevMeta {
     /// will cause `RevMeta` to be reverted to its state it was in before the run was attempted.
     pub fn try_run_rev_update(
         world: &mut World,
-        buffers: &mut QueryState<(Entity, RefRevDespawned)>,
+        buffers: &mut QueryState<(Entity, &DisabledToDespawn)>,
         mut out_of_log_buffers: Local<Vec<Entity>>,
     ) -> Result<(), BevyError> {
         /// Use a Resource instead of Local so this system can be added multiple times and keeps track globally

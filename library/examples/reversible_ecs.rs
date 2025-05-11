@@ -21,6 +21,8 @@ const FIXED_TIMESTEP: Duration = Duration::from_millis(100);
 
 // todo: entirely work with entity disabling instead of removing/readding components
 
+fn main() {}
+/*
 fn main() {
     let _crossterm = GlobalSettings::new();
     let meta = RevMeta::new(NonZeroUsize::new(MAX_LOG_LEN), 0, false);
@@ -508,3 +510,4 @@ fn render(
     let _ = stdout().execute(MoveTo(0, 0));
     let _ = stdout().execute(EndSynchronizedUpdate);
 }
+    */
