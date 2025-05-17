@@ -27,7 +27,7 @@ use bevy::{
             FilteredEntityMut, FilteredEntityRef, World, error::EntityMutableFetchError,
         },
     },
-    log::{error, warn},
+    log::warn,
     platform::collections::{HashMap, HashSet},
     ptr::OwningPtr,
     utils::synccell::SyncCell,
@@ -36,7 +36,7 @@ use bevy::{
 use crate::{
     app::RevSystemsPlugin,
     log::{DenseTransitionsLog, FrameTransitionLog, MissedFrame},
-    meta::{RevDirection, RevMeta},
+    meta::{NonLogNow, RevDirection, RevMeta},
 };
 
 mod bundle_buffer;
@@ -254,39 +254,39 @@ impl Display for RevEntitiesError {
 impl Error for RevEntitiesError {}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RevMetaOrEntitiesError {
+pub enum UndoRedoBufferError {
     RevMetaNotLogError(RevMetaNotLogError),
-    RevEntitiesError(RevEntitiesError),
+    UndoRedoBufferMissing,
 }
 
-impl From<RevMetaMissing> for RevMetaOrEntitiesError {
-    fn from(value: RevMetaMissing) -> Self {
-        Self::RevMetaNotLogError(value.into())
-    }
-}
-
-impl From<RevDirectionMismatch> for RevMetaOrEntitiesError {
-    fn from(value: RevDirectionMismatch) -> Self {
-        Self::RevMetaNotLogError(value.into())
-    }
-}
-
-impl From<RevMetaNotLogError> for RevMetaOrEntitiesError {
+impl From<RevMetaNotLogError> for UndoRedoBufferError {
     fn from(value: RevMetaNotLogError) -> Self {
         Self::RevMetaNotLogError(value)
     }
 }
 
-impl Display for RevMetaOrEntitiesError {
+impl From<RevMetaMissing> for UndoRedoBufferError {
+    fn from(value: RevMetaMissing) -> Self {
+        Self::RevMetaNotLogError(value.into())
+    }
+}
+
+impl From<RevDirectionMismatch> for UndoRedoBufferError {
+    fn from(value: RevDirectionMismatch) -> Self {
+        Self::RevMetaNotLogError(value.into())
+    }
+}
+
+impl Display for UndoRedoBufferError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::RevMetaNotLogError(inner) => write!(f, "{inner}"),
-            Self::RevEntitiesError(inner) => write!(f, "{inner}"),
+            Self::UndoRedoBufferMissing => write!(f, "UndoRedoBuffer is missing"),
         }
     }
 }
 
-impl Error for RevMetaOrEntitiesError {}
+impl Error for UndoRedoBufferError {}
 
 pub trait BuffersUndoRedo {
     /// Buffers an [`UndoRedo`] implementor in a resource to be collected by the reversible system's state during sync points.
@@ -312,39 +312,43 @@ pub trait BuffersUndoRedo {
     /// | [`UndoRedoBuffer`] | ✅ | ❌ |
     /// | [`Commands`] | ❌ | ✅ |
     /// | [`EntityCommands`] | ❌ | ✅ |
-    fn buffer_undo_redo(&mut self, undo_redo: impl UndoRedo) -> &mut Self;
+    fn buffer_undo_redo(&mut self, now: NonLogNow, undo_redo: impl UndoRedo) -> &mut Self;
 }
 
 // todo: replace all following with Rev* wrappers OR integrate in wrapper impls
 // how to support DeferredWorld in hooks/observers?
 
 impl BuffersUndoRedo for Commands<'_, '_> {
-    fn buffer_undo_redo(&mut self, undo_redo: impl UndoRedo) -> &mut Self {
+    fn buffer_undo_redo(&mut self, now: NonLogNow, undo_redo: impl UndoRedo) -> &mut Self {
         self.queue(move |world: &mut World| {
-            world.buffer_undo_redo(undo_redo);
+            world.buffer_undo_redo(now, undo_redo);
         });
         self
     }
 }
 
 impl BuffersUndoRedo for EntityCommands<'_> {
-    fn buffer_undo_redo(&mut self, undo_redo: impl UndoRedo) -> &mut Self {
+    fn buffer_undo_redo(&mut self, now: NonLogNow, undo_redo: impl UndoRedo) -> &mut Self {
         self.queue(move |mut world: EntityWorldMut| {
-            world.buffer_undo_redo(undo_redo);
+            world.buffer_undo_redo(now, undo_redo);
         });
         self
     }
 }
 
 impl BuffersUndoRedo for World {
-    fn buffer_undo_redo(&mut self, undo_redo: impl UndoRedo) -> &mut Self {
-        DeferredWorld::buffer_undo_redo(&mut self.into(), undo_redo);
+    fn buffer_undo_redo(&mut self, now: NonLogNow, undo_redo: impl UndoRedo) -> &mut Self {
+        DeferredWorld::buffer_undo_redo(&mut self.into(), now, undo_redo);
         self
     }
 }
 
 impl BuffersUndoRedo for EntityWorldMut<'_> {
-    fn buffer_undo_redo(&mut self, undo_redo: impl UndoRedo) -> &mut Self {
+    fn buffer_undo_redo(&mut self, now: NonLogNow, undo_redo: impl UndoRedo) -> &mut Self {
+        debug_assert_eq!(
+            self.get_resource::<RevMeta>().map(RevMeta::non_log_now),
+            Some(Some(now))
+        );
         self.get_resource_mut::<UndoRedoBuffer>()
             .expect(UndoRedoBuffer::EXPECT_IN_WORLD)
             .buffer_undo_redo(undo_redo);
@@ -353,22 +357,14 @@ impl BuffersUndoRedo for EntityWorldMut<'_> {
 }
 
 impl BuffersUndoRedo for DeferredWorld<'_> {
-    fn buffer_undo_redo(&mut self, undo_redo: impl UndoRedo) -> &mut Self {
+    fn buffer_undo_redo(&mut self, now: NonLogNow, undo_redo: impl UndoRedo) -> &mut Self {
+        debug_assert_eq!(
+            self.get_resource::<RevMeta>().map(RevMeta::non_log_now),
+            Some(Some(now))
+        );
         self.get_resource_mut::<UndoRedoBuffer>()
             .expect(UndoRedoBuffer::EXPECT_IN_WORLD)
             .buffer_undo_redo(undo_redo);
-        self
-    }
-}
-
-impl BuffersUndoRedo for UndoRedoBuffer {
-    fn buffer_undo_redo(&mut self, undo_redo: impl UndoRedo) -> &mut Self {
-        let name = type_name_of_val(&undo_redo);
-        let boxed = BoxedUndoRedo {
-            undo_redo: SyncCell::new(Box::new(undo_redo)),
-            name,
-        };
-        self.0.push(boxed);
         self
     }
 }
@@ -378,7 +374,7 @@ impl BuffersUndoRedo for UndoRedoBuffer {
 /// Commands and hooks can buffer [`UndoRedo`] implementors via [`&mut World`](World)/[`DeferredWorld`] instead.
 ///
 /// Do not remove or overwrite this resource.
-#[derive(Resource, Default, Debug)]
+#[derive(Resource, Default, Debug)] // todo: wrap in private resource
 pub struct UndoRedoBuffer(Vec<BoxedUndoRedo>);
 
 impl UndoRedoBuffer {
@@ -391,6 +387,42 @@ impl UndoRedoBuffer {
 
     pub fn type_names(&self) -> impl ExactSizeIterator<Item = &'static str> + '_ {
         self.0.iter().map(|boxed| boxed.name)
+    }
+
+    pub fn get(world: &World) -> Result<&Self, UndoRedoBufferError> {
+        let actual = world
+            .get_resource::<RevMeta>()
+            .ok_or(RevMetaMissing)?
+            .get_running_direction();
+        if actual != Some(RevDirection::NOT_LOG) {
+            return Err(RevDirectionMismatch { actual }.into());
+        }
+        world
+            .get_resource::<Self>()
+            .ok_or(UndoRedoBufferError::UndoRedoBufferMissing)
+    }
+
+    pub fn get_mut<'a>(world: &'a mut DeferredWorld, _: NonLogNow) -> Result<&'a mut Self, UndoRedoBufferError> {
+        let actual = world
+            .get_resource::<RevMeta>()
+            .ok_or(RevMetaMissing)?
+            .get_running_direction();
+        if actual != Some(RevDirection::NOT_LOG) {
+            return Err(RevDirectionMismatch { actual }.into());
+        }
+        world
+            .get_resource_mut::<Self>()
+            .map(|ref_mut| ref_mut.into_inner())
+            .ok_or(UndoRedoBufferError::UndoRedoBufferMissing)
+    }
+
+    pub fn buffer_undo_redo(&mut self, undo_redo: impl UndoRedo) {
+        let name = type_name_of_val(&undo_redo);
+        let boxed = BoxedUndoRedo {
+            undo_redo: SyncCell::new(Box::new(undo_redo)),
+            name,
+        };
+        self.0.push(boxed);
     }
 }
 
@@ -662,6 +694,7 @@ impl<T: UndoRedo> UndoRedo for UndoRedoSwap<T> {
     }
 }
 
+#[expect(dead_code)] // https://github.com/bevyengine/bevy/pull/18880
 struct InsertRelationship<R, Target>
 where
     R: Relationship,

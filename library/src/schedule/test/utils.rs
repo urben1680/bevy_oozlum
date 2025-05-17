@@ -85,6 +85,8 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
         // trigger observer in observer
         world.trigger(SysObsvObsv(n));
 
+        let now = world.resource::<RevMeta>().non_log_now().unwrap();
+
         // trigger command in observer
         world.commands().queue(move |world: &mut World| {
             world
@@ -93,12 +95,12 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
                 .push(LogEntry::SysObsvCmd((n, RevDirection::NOT_LOG)));
 
             let test = LogEntry::SysObsvCmd(n);
-            world.buffer_undo_redo(test);
+            world.buffer_undo_redo(now, test);
         });
 
         // buffer reversible observer
         let test = LogEntry::SysObsv(n);
-        world.buffer_undo_redo(test);
+        world.buffer_undo_redo(now, test);
     });
     world.add_observer(
         |event: Trigger<SysHookObsv>,
@@ -146,6 +148,8 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
             // trigger observer in hook
             world.trigger(SysHookObsv(n));
 
+            let now = world.resource::<RevMeta>().non_log_now().unwrap();
+
             // trigger command in hook
             world.commands().queue(move |world: &mut World| {
                 world
@@ -154,12 +158,12 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
                     .push(LogEntry::SysHookCmd((n, RevDirection::NOT_LOG)));
 
                 let test = LogEntry::SysHookCmd(n);
-                world.buffer_undo_redo(test);
+                world.buffer_undo_redo(now, test);
             });
 
             // buffer reversible hook
             let test = LogEntry::SysHook(n);
-            world.buffer_undo_redo(test);
+            world.buffer_undo_redo(now, test);
         });
     world
         .register_component_hooks::<SysCmdHook>()
@@ -175,8 +179,9 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
                 .push(LogEntry::SysCmdHook((n, RevDirection::NOT_LOG)));
 
             // buffer reversible hook
+            let now = world.resource::<RevMeta>().non_log_now().unwrap();
             let test = LogEntry::SysCmdHook(n);
-            world.buffer_undo_redo(test);
+            world.buffer_undo_redo(now, test);
         });
 
     // run tests forward

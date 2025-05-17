@@ -1,4 +1,6 @@
-use std::{borrow::BorrowMut, panic::Location};
+use std::panic::Location;
+
+use crate::meta::NonLogNow;
 
 use super::*;
 
@@ -40,16 +42,6 @@ impl DisabledToDespawn {
     }
     pub fn added_location(self) -> MaybeLocation<Option<&'static Location<'static>>> {
         self.added_location
-    }
-}
-
-pub(crate) fn non_log_frame(meta: Option<&RevMeta>) -> Result<u64, RevMetaNotLogError> {
-    let meta = meta.ok_or(RevMetaNotLogError::RevMetaMissing(RevMetaMissing))?;
-    match meta.get_running_direction() {
-        Some(RevDirection::NOT_LOG) => Ok(meta.now()),
-        actual => Err(RevMetaNotLogError::RevDirectionMismatch(
-            RevDirectionMismatch { actual },
-        )),
     }
 }
 
@@ -100,26 +92,19 @@ impl RevIsDespawned for EntityWorldMut<'_> {
 }
 
 /// todo
-pub struct DespawnAtUndo;
+pub struct DespawnAtUndo(NonLogNow);
 
 impl BundleEffect for DespawnAtUndo {
     fn apply(self, entity: &mut EntityWorldMut) {
         let id = entity.id();
-        match non_log_frame(entity.get_resource()) {
-            Ok(frame) => {
-                let marker = DisabledToDespawn::for_spawn_despawn(frame);
-                entity.buffer_undo_redo(Spawn {
-                    spawned: [id],
-                    marker,
-                });
-            }
-            Err(err) => match entity.spawned_by().into_option() {
-                Some(location) => error!(
-                    "Cannot apply DespawnAtUndo for entity {id} spawned at {location:?}: {err}"
-                ),
-                None => error!("Cannot apply DespawnAtUndo for entity {id}: {err}"),
+        let marker = DisabledToDespawn::for_spawn_despawn(self.0.0);
+        entity.buffer_undo_redo(
+            self.0,
+            Spawn {
+                spawned: [id],
+                marker,
             },
-        }
+        );
     }
 }
 
@@ -176,9 +161,11 @@ where
 }
 
 #[track_caller]
-pub(super) fn rev_despawn_inner<'w, E: BorrowMut<EntityWorldMut<'w>>>(mut entity_mut: RevEntityWorldMut<'w, E>) -> Result<(), RevEntityError> {
+pub(super) fn rev_despawn_inner<'w>(
+    mut entity_mut: EntityWorldMut<'w>,
+    now: NonLogNow,
+) -> Result<(), RevEntityError> {
     let entity = entity_mut.id();
-    let frame = entity_mut.frame;
     if entity_mut.is_despawned() {
         return match entity_mut.world().get_entity(entity) {
             Err(err) => Err(RevEntityError::EntityDoesNotExistError(err)),
@@ -191,7 +178,7 @@ pub(super) fn rev_despawn_inner<'w, E: BorrowMut<EntityWorldMut<'w>>>(mut entity
         ));
     }
 
-    let marker = DisabledToDespawn::for_spawn_despawn(frame);
+    let marker = DisabledToDespawn::for_spawn_despawn(now.0);
     let entity = entity_mut.id();
     let children = entity_mut
         .get::<Children>()
@@ -211,14 +198,14 @@ pub(super) fn rev_despawn_inner<'w, E: BorrowMut<EntityWorldMut<'w>>>(mut entity
                 world.register_component::<DisabledToDespawn>()
             });
         let Some(children) = children else {
-            return rev_despawn_single(world, entity, marker);
+            return rev_despawn_single(world, now, entity, marker);
         };
         let mut entities = [entity].into_iter().collect();
         for child in children {
             collect_children(world, child, component_id, &mut entities);
         }
         if entities.len() < 2 {
-            return rev_despawn_single(world, entity, marker);
+            return rev_despawn_single(world, now, entity, marker);
         }
 
         let mut undo_redo = RevDespawnHierarchy {
@@ -226,7 +213,7 @@ pub(super) fn rev_despawn_inner<'w, E: BorrowMut<EntityWorldMut<'w>>>(mut entity
             marker,
         };
         undo_redo.redo(world);
-        world.buffer_undo_redo(undo_redo);
+        world.buffer_undo_redo(now, undo_redo);
     });
 
     Ok(())
@@ -253,10 +240,15 @@ fn collect_children(
     }
 }
 
-fn rev_despawn_single(world: &mut World, entity: Entity, marker: DisabledToDespawn) {
+fn rev_despawn_single(
+    world: &mut World,
+    now: NonLogNow,
+    entity: Entity,
+    marker: DisabledToDespawn,
+) {
     let mut undo_redo = RevDespawnSingle { entity, marker };
     undo_redo.redo(world);
-    world.buffer_undo_redo(undo_redo);
+    world.buffer_undo_redo(now, undo_redo);
 }
 
 pub(super) struct RevDespawnSingle {

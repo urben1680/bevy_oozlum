@@ -241,6 +241,10 @@ impl InternalDirection {
     }
 }
 
+/// todo
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct NonLogNow(pub(crate) u64);
+
 /// RevMeta is used to control the processing of reversible systems.
 ///
 /// It keepts track what the current frame is and to which frame one can go forward and backward in time.
@@ -314,6 +318,12 @@ impl RevMeta {
     }
     pub const fn now(&self) -> u64 {
         self.now
+    }
+    pub fn non_log_now(&self) -> Option<NonLogNow> {
+        match self.direction {
+            InternalDirection::RunningForward => Some(NonLogNow(self.now)),
+            _ => None,
+        }
     }
     pub fn past_end(&self) -> u64 {
         self.past_end

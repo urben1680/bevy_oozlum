@@ -254,7 +254,8 @@ fn system_command<const N: u8>(world: &mut World) {
         .0
         .push(LogEntry::SysCmd((N, RevDirection::NOT_LOG)));
 
-    world.buffer_undo_redo(LogEntry::SysCmd(N));
+    let now = world.resource::<RevMeta>().non_log_now().unwrap();
+    world.buffer_undo_redo(now, LogEntry::SysCmd(N));
 }
 
 #[test]

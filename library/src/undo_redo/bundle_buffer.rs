@@ -15,6 +15,7 @@ use super::*;
 /// Fails if `entity` is `rev_is_despawned`, it must be otherwise spawned as an `archetype_id` could be provided.
 pub(super) fn pre_insert<T: Bundle>(
     world: &mut World,
+    now: NonLogNow,
     entity: Entity,
     archetype_id: ArchetypeId,
     insert_mode: InsertMode,
@@ -23,6 +24,7 @@ pub(super) fn pre_insert<T: Bundle>(
     match insert_mode {
         InsertMode::Replace => buffer_components_cached(
             world,
+            now,
             entity,
             unique_for_location!(archetype_id, PhantomData::<T>),
             |world: &mut World| {
@@ -33,6 +35,7 @@ pub(super) fn pre_insert<T: Bundle>(
         ),
         InsertMode::Keep => buffer_components_cached(
             world,
+            now,
             entity,
             unique_for_location!(archetype_id, PhantomData::<T>),
             |world| {
@@ -111,6 +114,7 @@ pub(super) fn pre_insert_no_overwrite(
 
 pub(super) fn buffer_components_cached<T: AsRef<[ComponentId]>>(
     world: &mut World,
+    now: NonLogNow,
     entity: Entity,
     key: impl Hash + 'static,
     components: impl FnOnce(&mut World) -> (BufferAt, T),
@@ -135,11 +139,12 @@ pub(super) fn buffer_components_cached<T: AsRef<[ComponentId]>>(
         (at, components_to_bundle(world, &components))
     });
     world.insert_resource(cache);
-    buffer_bundle(world, entity, at, bundle, marker)
+    buffer_bundle(world, now, entity, at, bundle, marker)
 }
 
 pub(super) fn buffer_bundle(
     world: &mut World,
+    now: NonLogNow,
     entity: Entity,
     at: BufferAt,
     bundle: BundleId,
@@ -162,13 +167,13 @@ pub(super) fn buffer_bundle(
             let out = entities.buffer;
             non_entity_buffer(world, entity, at, &components);
             entities.move_components(world, &components, RevDirection::NOT_LOG);
-            world.buffer_undo_redo(buffer);
+            world.buffer_undo_redo(now, buffer);
             Ok(Some(out))
         }
         BufferAt::Undo => {
             let components = buffer.get_component_ids(world);
             non_entity_buffer(world, entity, at, &components);
-            world.buffer_undo_redo(buffer);
+            world.buffer_undo_redo(now, buffer);
             Ok(None)
         }
         BufferAt::NowAndUndo => {
@@ -178,7 +183,7 @@ pub(super) fn buffer_bundle(
             let out = entities.buffer;
             non_entity_buffer(world, entity, at, &components);
             entities.move_components(world, &components, RevDirection::NOT_LOG);
-            world.buffer_undo_redo([buffer, at_undo]);
+            world.buffer_undo_redo(now, [buffer, at_undo]);
             Ok(Some(out))
         }
     }
@@ -257,7 +262,7 @@ pub(crate) fn register_non_entity_buffer<T: Component>(world: &mut World) {
                 component = world.entity_mut(entity).take::<T>();
             }
             let undo_redo = NonEntityBuffer { entity, component };
-            world.buffer_undo_redo(undo_redo);
+            world.buffer_undo_redo(NonLogNow(0), undo_redo); // todo, pass now via parameter
         },
     );
 }
@@ -439,7 +444,13 @@ pub(super) fn components_to_bundle(world: &mut World, components: &[ComponentId]
 
     let mut checked = world
         .remove_resource::<CheckedClonable>()
-        .unwrap_or_default();
+        .unwrap_or_else(|| match world.get_resource::<NonEntityBufferRes>() {
+            Some(non_entity_buffers) => {
+                // moving into UndoRedo instead of entities can bypass these checks
+                CheckedClonable(non_entity_buffers.0.keys().into_iter().copied().collect())
+            }
+            None => CheckedClonable::default(),
+        });
     // todo: this should be () outside reflect flag
     let registry = world
         .get_resource::<AppTypeRegistry>()
