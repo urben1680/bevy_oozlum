@@ -29,15 +29,10 @@ use crate::{
 
 #[derive(Clone, Debug, PartialEq)]
 enum TryRunRevUpdateError {
-    RevMetaRemovedInSchedule {
-        frame: u64,
-    },
+    RevMetaRemovedInSchedule { frame: u64 },
     UnexpectedInitialRunning(RevMeta),
     RevUpdateMissing(RevMeta),
-    UndoRedoBufferNotEmptyBeforeUpdate {
-        meta: RevMeta,
-        buffer_types: Vec<&'static str>,
-    },
+    UndoRedoBufferNotEmptyBeforeUpdate { meta: RevMeta, buffer_types: String },
 }
 
 impl Display for TryRunRevUpdateError {
@@ -320,10 +315,7 @@ impl RevMeta {
         self.now
     }
     pub fn non_log_now(&self) -> Option<NonLogNow> {
-        match self.direction {
-            InternalDirection::RunningForward => Some(NonLogNow(self.now)),
-            _ => None,
-        }
+        matches!(self.direction, InternalDirection::RunningForward).then_some(NonLogNow(self.now))
     }
     pub fn past_end(&self) -> u64 {
         self.past_end
@@ -437,7 +429,7 @@ impl RevMeta {
             if !buffer.is_empty() {
                 Err(TryRunRevUpdateError::UndoRedoBufferNotEmptyBeforeUpdate {
                     meta: meta.clone(),
-                    buffer_types: buffer.type_names().collect(),
+                    buffer_types: format!("{buffer:?}"),
                 })?;
             }
 

@@ -5,7 +5,7 @@ use bevy::{
     ecs::{
         change_detection::ResMut,
         observer::Trigger,
-        schedule::{ApplyDeferred, IntoSystemSet},
+        schedule::{ApplyDeferred, IntoSystemSet, LogLevel, ScheduleBuildSettings},
         system::IntoSystem,
         world::{DeferredWorld, World},
     },
@@ -55,15 +55,12 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
     world.add_schedule(schedule);
 
     let mut schedule = Schedule::new(RevUpdate);
-    config(&mut schedule);
-    /* todo: uncomment when https://github.com/bevyengine/bevy/issues/18790 is fixed
     let settings = schedule.get_build_settings();
-    schedule
-        .set_build_settings(ScheduleBuildSettings {
-            hierarchy_detection: LogLevel::Error,
-            ..settings
-        });
-    */
+    schedule.set_build_settings(ScheduleBuildSettings {
+        hierarchy_detection: LogLevel::Error,
+        ..settings
+    });
+    config(&mut schedule);
     schedule.set_apply_final_deferred(apply_final_deferred);
     let err = schedule.initialize(&mut world).err();
     assert!(
@@ -105,33 +102,39 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
     world.add_observer(
         |event: Trigger<SysHookObsv>,
          mut log: ResMut<TestLog>,
+         meta: Res<RevMeta>,
          mut buffer: ResMut<UndoRedoBuffer>| {
             let n = event.0;
             log.0
                 .push(LogEntry::SysHookObsv((n, RevDirection::NOT_LOG)));
             let test = LogEntry::SysHookObsv(n);
-            buffer.buffer_undo_redo(test);
+            let now = meta.non_log_now().unwrap();
+            buffer.buffer_undo_redo(now, test);
         },
     );
     world.add_observer(
         |event: Trigger<SysObsvObsv>,
          mut log: ResMut<TestLog>,
+         meta: Res<RevMeta>,
          mut buffer: ResMut<UndoRedoBuffer>| {
             let n = event.0;
             log.0
                 .push(LogEntry::SysObsvObsv((n, RevDirection::NOT_LOG)));
             let test = LogEntry::SysObsvObsv(n);
-            buffer.buffer_undo_redo(test);
+            let now = meta.non_log_now().unwrap();
+            buffer.buffer_undo_redo(now, test);
         },
     );
     world.add_observer(
         |event: Trigger<SysCmdObsv>,
          mut log: ResMut<TestLog>,
+         meta: Res<RevMeta>,
          mut buffer: ResMut<UndoRedoBuffer>| {
             let n = event.0;
             log.0.push(LogEntry::SysCmdObsv((n, RevDirection::NOT_LOG)));
             let test = LogEntry::SysCmdObsv(n);
-            buffer.buffer_undo_redo(test);
+            let now = meta.non_log_now().unwrap();
+            buffer.buffer_undo_redo(now, test);
         },
     );
 

@@ -633,7 +633,7 @@ mod test {
         assert_system_drains_all_undo_redo(
             |mut buffer: ResMut<UndoRedoBuffer>, meta: Res<RevMeta>, mut commands: Commands| {
                 let now = meta.non_log_now().unwrap();
-                buffer.buffer_undo_redo(blank_undo_redo);
+                buffer.buffer_undo_redo(now, blank_undo_redo);
                 commands.buffer_undo_redo(now, blank_undo_redo);
                 commands.queue(|world: &mut World| {
                     world.trigger(Observer);

@@ -1,4 +1,3 @@
-/*
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::panic_on_error_events;
@@ -31,9 +30,10 @@ fn setup() -> World {
 }
 
 fn rev_despawned_entity_clear_buffer(world: &mut World) -> Entity {
+    let now = world.resource::<RevMeta>().non_log_now().unwrap();
     let entity_mut = world.spawn_empty();
     let entity = entity_mut.id();
-    entity_mut.rev_despawn();
+    entity_mut.rev_despawn(now);
     world.insert_resource(UndoRedoBuffer::default());
     entity
 }
@@ -42,7 +42,7 @@ mod buffer_at_now {
     use super::*;
 
     fn inner(
-        c: impl FnOnce(&mut World, Entity, ComponentId) -> Result<Option<Entity>, RevMetaOrEntityError>,
+        c: impl FnOnce(&mut World, Entity, ComponentId) -> Result<Option<Entity>, RevEntityError>,
     ) {
         let mut world = setup();
         let explicit_id = world.register_component::<Explicit1>();
@@ -73,7 +73,8 @@ mod buffer_at_now {
     #[test]
     fn buffer_components_buffers() {
         inner(|world, entity, component_id| {
-            world.buffer_components(entity, BufferAt::Now, &[component_id])
+            let now = world.resource::<RevMeta>().non_log_now().unwrap();
+            world.buffer_components(now, entity, BufferAt::Now, &[component_id])
         });
     }
 
@@ -86,21 +87,23 @@ mod buffer_at_now {
                 (BufferAt::Now, [component_id])
             };
 
+            let now = world.resource::<RevMeta>().non_log_now().unwrap();
             let another_entity = world.spawn_empty().id();
             world
-                .buffer_components_cached(another_entity, (), components)
+                .buffer_components_cached(now, another_entity, (), components)
                 .expect("should be Ok")
                 .expect("should be Some");
 
-            world.buffer_components_cached(entity, (), components)
+            world.buffer_components_cached(now, entity, (), components)
         });
     }
 
     #[test]
     fn buffer_bundle_buffers() {
         inner(|world, entity, component_id| {
+            let now = world.resource::<RevMeta>().non_log_now().unwrap();
             let bundle = world.register_dynamic_bundle(&[component_id]).id();
-            world.buffer_bundle(entity, BufferAt::Now, bundle)
+            world.buffer_bundle(now, entity, BufferAt::Now, bundle)
         })
     }
 }
@@ -109,7 +112,7 @@ mod buffer_at_undo {
     use super::*;
 
     fn inner(
-        c: impl FnOnce(&mut World, Entity, ComponentId) -> Result<Option<Entity>, RevMetaOrEntityError>,
+        c: impl FnOnce(&mut World, Entity, ComponentId) -> Result<Option<Entity>, RevEntityError>,
     ) {
         let mut world = setup();
         let explicit_id = world.register_component::<Explicit1>();
@@ -136,7 +139,8 @@ mod buffer_at_undo {
     #[test]
     fn buffer_components_buffers() {
         inner(|world, entity, component_id| {
-            world.buffer_components(entity, BufferAt::Undo, &[component_id])
+            let now = world.resource::<RevMeta>().non_log_now().unwrap();
+            world.buffer_components(now, entity, BufferAt::Undo, &[component_id])
         });
     }
 
@@ -149,19 +153,21 @@ mod buffer_at_undo {
                 (BufferAt::Undo, [component_id])
             };
 
+            let now = world.resource::<RevMeta>().non_log_now().unwrap();
             let another_entity = world.spawn_empty().id();
-            let result = world.buffer_components_cached(another_entity, (), components);
+            let result = world.buffer_components_cached(now, another_entity, (), components);
             assert_eq!(result, Ok(None));
 
-            world.buffer_components_cached(entity, (), components)
+            world.buffer_components_cached(now, entity, (), components)
         });
     }
 
     #[test]
     fn buffer_bundle_buffers() {
         inner(|world, entity, component_id| {
+            let now = world.resource::<RevMeta>().non_log_now().unwrap();
             let bundle = world.register_dynamic_bundle(&[component_id]).id();
-            world.buffer_bundle(entity, BufferAt::Undo, bundle)
+            world.buffer_bundle(now, entity, BufferAt::Undo, bundle)
         })
     }
 }
@@ -170,7 +176,7 @@ mod buffer_at_now_and_undo {
     use super::*;
 
     fn inner(
-        c: impl FnOnce(&mut World, Entity, ComponentId) -> Result<Option<Entity>, RevMetaOrEntityError>,
+        c: impl FnOnce(&mut World, Entity, ComponentId) -> Result<Option<Entity>, RevEntityError>,
     ) {
         let mut world = setup();
         let explicit_id = world.register_component::<Explicit1>();
@@ -202,7 +208,8 @@ mod buffer_at_now_and_undo {
     #[test]
     fn buffer_components_buffers() {
         inner(|world, entity, component_id| {
-            world.buffer_components(entity, BufferAt::NowAndUndo, &[component_id])
+            let now = world.resource::<RevMeta>().non_log_now().unwrap();
+            world.buffer_components(now, entity, BufferAt::NowAndUndo, &[component_id])
         });
     }
 
@@ -215,21 +222,23 @@ mod buffer_at_now_and_undo {
                 (BufferAt::NowAndUndo, [component_id])
             };
 
+            let now = world.resource::<RevMeta>().non_log_now().unwrap();
             let another_entity = world.spawn_empty().id();
             world
-                .buffer_components_cached(another_entity, (), components)
+                .buffer_components_cached(now, another_entity, (), components)
                 .expect("should be Ok")
                 .expect("should be Some");
 
-            world.buffer_components_cached(entity, (), components)
+            world.buffer_components_cached(now, entity, (), components)
         });
     }
 
     #[test]
     fn buffer_bundle_buffers() {
         inner(|world, entity, component_id| {
+            let now = world.resource::<RevMeta>().non_log_now().unwrap();
             let bundle = world.register_dynamic_bundle(&[component_id]).id();
-            world.buffer_bundle(entity, BufferAt::NowAndUndo, bundle)
+            world.buffer_bundle(now, entity, BufferAt::NowAndUndo, bundle)
         })
     }
 }
@@ -242,14 +251,17 @@ fn buffer_fails_on_invalid() {
 
     for at in [BufferAt::Now, BufferAt::Undo, BufferAt::NowAndUndo] {
         let assertion = |result| {
-            if !matches!(result, Err(RevMetaOrEntityError::EntityDoesNotExistError(_))) {
+            if !matches!(result, Err(RevEntityError::EntityDoesNotExistError(_))) {
                 panic!("at: {at:?}, result: {result:?}");
             }
         };
 
-        assertion(world.buffer_components(Entity::PLACEHOLDER, at, &[explicit_id]));
-        assertion(world.buffer_components_cached(Entity::PLACEHOLDER, at, |_| (at, [explicit_id])));
-        assertion(world.buffer_bundle(Entity::PLACEHOLDER, at, bundle));
+        let now = world.resource::<RevMeta>().non_log_now().unwrap();
+        assertion(world.buffer_components(now, Entity::PLACEHOLDER, at, &[explicit_id]));
+        assertion(
+            world.buffer_components_cached(now, Entity::PLACEHOLDER, at, |_| (at, [explicit_id])),
+        );
+        assertion(world.buffer_bundle(now, Entity::PLACEHOLDER, at, bundle));
     }
 }
 
@@ -262,22 +274,24 @@ fn buffer_fails_on_rev_despawned() {
 
     for at in [BufferAt::Now, BufferAt::Undo, BufferAt::NowAndUndo] {
         let assertion = |result| {
-            if !matches!(result, Err(RevMetaOrEntityError::EntityRevDespawnedError(_))) {
+            if !matches!(result, Err(RevEntityError::EntityRevDespawnedError(_))) {
                 panic!("at: {at:?}, result: {result:?}");
             }
         };
 
-        assertion(world.buffer_components(entity, at, &[explicit_id]));
-        assertion(world.buffer_components_cached(entity, at, |_| (at, [explicit_id])));
-        assertion(world.buffer_bundle(entity, at, bundle));
+        let now = world.resource::<RevMeta>().non_log_now().unwrap();
+        assertion(world.buffer_components(now, entity, at, &[explicit_id]));
+        assertion(world.buffer_components_cached(now, entity, at, |_| (at, [explicit_id])));
+        assertion(world.buffer_bundle(now, entity, at, bundle));
     }
 }
 
 #[test]
 fn rev_try_despawn_despawns() {
     let mut world = setup();
+    let now = world.resource::<RevMeta>().non_log_now().unwrap();
     let entity = world.spawn_empty().id();
-    let result = world.rev_try_despawn(entity);
+    let result = world.rev_try_despawn(now, entity);
     let mut buffer = world.remove_resource::<UndoRedoBuffer>().unwrap();
 
     assert!(matches!(result, Ok(())), "{result:?}");
@@ -293,10 +307,11 @@ fn rev_try_despawn_despawns() {
 #[test]
 fn rev_try_despawn_fails_at_invalid() {
     let mut world = setup();
-    let result = world.rev_try_despawn(Entity::PLACEHOLDER);
+    let now = world.resource::<RevMeta>().non_log_now().unwrap();
+    let result = world.rev_try_despawn(now, Entity::PLACEHOLDER);
 
     assert!(
-        matches!(result, Err(RevMetaOrEntityError::EntityDoesNotExistError(_))),
+        matches!(result, Err(RevEntityError::EntityDoesNotExistError(_))),
         "{result:?}"
     );
     assert!(world.resource::<UndoRedoBuffer>().is_empty());
@@ -305,11 +320,12 @@ fn rev_try_despawn_fails_at_invalid() {
 #[test]
 fn rev_try_despawn_fails_at_rev_despawned() {
     let mut world = setup();
+    let now = world.resource::<RevMeta>().non_log_now().unwrap();
     let entity = rev_despawned_entity_clear_buffer(&mut world);
-    let result = world.rev_try_despawn(entity);
+    let result = world.rev_try_despawn(now, entity);
 
     assert!(
-        matches!(result, Err(RevMetaOrEntityError::EntityRevDespawnedError(_))),
+        matches!(result, Err(RevEntityError::EntityRevDespawnedError(_))),
         "{result:?}"
     );
     assert!(world.resource::<UndoRedoBuffer>().is_empty());
@@ -318,13 +334,17 @@ fn rev_try_despawn_fails_at_rev_despawned() {
 #[test]
 fn rev_try_insert_batch_inserts() {
     let mut world = setup();
+    let now = world.resource::<RevMeta>().non_log_now().unwrap();
     let entity1 = world.spawn((Explicit1(10), Required1(10))).id();
     let entity2 = world.spawn((Explicit2(20), Required2(20))).id();
 
-    let result = world.rev_try_insert_batch([
-        (entity1, (Explicit1(30), Explicit2(30))),
-        (entity2, (Explicit1(40), Explicit2(40))),
-    ]);
+    let result = world.rev_try_insert_batch(
+        now,
+        [
+            (entity1, (Explicit1(30), Explicit2(30))),
+            (entity2, (Explicit1(40), Explicit2(40))),
+        ],
+    );
     let mut buffer = world.remove_resource::<UndoRedoBuffer>().unwrap();
 
     assert!(matches!(result, Ok(())), "{result:?}");
@@ -370,19 +390,24 @@ fn rev_try_insert_batch_inserts() {
 #[test]
 fn rev_try_insert_batch_fails_partially_with_invalid_and_rev_despawned_entity() {
     let mut world = setup();
+    let now = world.resource::<RevMeta>().non_log_now().unwrap();
     let entity1 = world.spawn((Explicit1(10), Required1(10))).id();
     let entity2 = rev_despawned_entity_clear_buffer(&mut world);
 
-    let result = world.rev_try_insert_batch([
-        (entity1, (Explicit1(30), Explicit2(30))),
-        (entity2, (Explicit1(40), Explicit2(40))),
-        (Entity::PLACEHOLDER, (Explicit1(50), Explicit2(50))),
-    ]);
+    let result = world.rev_try_insert_batch(
+        now,
+        [
+            (entity1, (Explicit1(30), Explicit2(30))),
+            (entity2, (Explicit1(40), Explicit2(40))),
+            (Entity::PLACEHOLDER, (Explicit1(50), Explicit2(50))),
+        ],
+    );
     let mut buffer = world.remove_resource::<UndoRedoBuffer>().unwrap();
 
-    let Err(RevMetaOrEntitiesError::RevEntitiesError {
+    let Err(RevEntitiesError {
         invalid,
         rev_despawned,
+        ..
     }) = result
     else {
         panic!("{result:?}");
@@ -433,13 +458,17 @@ fn rev_try_insert_batch_fails_partially_with_invalid_and_rev_despawned_entity() 
 #[test]
 fn rev_try_insert_batch_if_new_inserts() {
     let mut world = setup();
+    let now = world.resource::<RevMeta>().non_log_now().unwrap();
     let entity1 = world.spawn((Explicit1(10), Required1(10))).id();
     let entity2 = world.spawn((Explicit2(20), Required2(20))).id();
 
-    let result = world.rev_try_insert_batch_if_new([
-        (entity1, (Explicit1(30), Explicit2(30))),
-        (entity2, (Explicit1(40), Explicit2(40))),
-    ]);
+    let result = world.rev_try_insert_batch_if_new(
+        now,
+        [
+            (entity1, (Explicit1(30), Explicit2(30))),
+            (entity2, (Explicit1(40), Explicit2(40))),
+        ],
+    );
     let mut buffer = world.remove_resource::<UndoRedoBuffer>().unwrap();
 
     assert!(matches!(result, Ok(())), "{result:?}");
@@ -485,19 +514,24 @@ fn rev_try_insert_batch_if_new_inserts() {
 #[test]
 fn rev_try_insert_batch_if_new_fails_partially_with_invalid_and_rev_despawned_entity() {
     let mut world = setup();
+    let now = world.resource::<RevMeta>().non_log_now().unwrap();
     let entity1 = world.spawn((Explicit1(10), Required1(10))).id();
     let entity2 = rev_despawned_entity_clear_buffer(&mut world);
 
-    let result = world.rev_try_insert_batch_if_new([
-        (entity1, (Explicit1(30), Explicit2(30))),
-        (entity2, (Explicit1(40), Explicit2(40))),
-        (Entity::PLACEHOLDER, (Explicit1(50), Explicit2(50))),
-    ]);
+    let result = world.rev_try_insert_batch_if_new(
+        now,
+        [
+            (entity1, (Explicit1(30), Explicit2(30))),
+            (entity2, (Explicit1(40), Explicit2(40))),
+            (Entity::PLACEHOLDER, (Explicit1(50), Explicit2(50))),
+        ],
+    );
     let mut buffer = world.remove_resource::<UndoRedoBuffer>().unwrap();
 
-    let Err(RevMetaOrEntitiesError::RevEntitiesError {
+    let Err(RevEntitiesError {
         invalid,
         rev_despawned,
+        ..
     }) = result
     else {
         panic!("{result:?}");
@@ -548,7 +582,8 @@ fn rev_try_insert_batch_if_new_fails_partially_with_invalid_and_rev_despawned_en
 #[test]
 fn rev_spawn_batch_spawns() {
     let mut world = setup();
-    let entities = world.rev_spawn_batch([Explicit1(10), Explicit1(20)]);
+    let now = world.resource::<RevMeta>().non_log_now().unwrap();
+    let entities = world.rev_spawn_batch(now, [Explicit1(10), Explicit1(20)]);
     assert_eq!(entities.len(), 2);
     let entity1 = entities[0];
     let entity2 = entities[1];
@@ -577,10 +612,27 @@ fn rev_spawn_batch_spawns() {
 }
 
 #[test]
+fn rev_spawn_empty_spawns() {
+    let mut world = setup();
+    let now = world.resource::<RevMeta>().non_log_now().unwrap();
+    let entity = world.rev_spawn_empty(now).id();
+    let mut buffer = world.remove_resource::<UndoRedoBuffer>().unwrap();
+
+    assert_eq!(world.entity(entity).rev_is_despawned(), false);
+
+    buffer.undo(&mut world);
+    assert_eq!(world.entity(entity).rev_is_despawned(), true);
+
+    buffer.redo(&mut world);
+    assert_eq!(world.entity(entity).rev_is_despawned(), false);
+}
+
+#[test]
 fn rev_init_resource_on_unexisting_inits_resource() {
     let mut world = setup();
+    let now = world.resource::<RevMeta>().non_log_now().unwrap();
 
-    world.rev_init_resource::<TestRes>();
+    world.rev_init_resource::<TestRes>(now);
     let mut buffer = world.remove_resource::<UndoRedoBuffer>().unwrap();
 
     assert_eq!(world.get_resource(), Some(&TestRes(0)));
@@ -593,16 +645,18 @@ fn rev_init_resource_on_unexisting_inits_resource() {
 #[test]
 fn rev_init_resource_on_existing_noop() {
     let mut world = setup();
+    let now = world.resource::<RevMeta>().non_log_now().unwrap();
     world.init_resource::<TestRes>();
-    world.rev_init_resource::<TestRes>();
+    world.rev_init_resource::<TestRes>(now);
     assert!(world.resource::<UndoRedoBuffer>().is_empty());
 }
 
 #[test]
 fn rev_insert_resource_on_unexisting_inserts() {
     let mut world = setup();
+    let now = world.resource::<RevMeta>().non_log_now().unwrap();
 
-    world.rev_insert_resource(TestRes(10));
+    world.rev_insert_resource(now, TestRes(10));
     let mut buffer = world.remove_resource::<UndoRedoBuffer>().unwrap();
 
     assert_eq!(world.get_resource(), Some(&TestRes(10)));
@@ -615,9 +669,10 @@ fn rev_insert_resource_on_unexisting_inserts() {
 #[test]
 fn rev_insert_resource_on_existing_overwrites() {
     let mut world = setup();
+    let now = world.resource::<RevMeta>().non_log_now().unwrap();
 
     world.insert_resource(TestRes(10));
-    world.rev_insert_resource(TestRes(20));
+    world.rev_insert_resource(now, TestRes(20));
     let mut buffer = world.remove_resource::<UndoRedoBuffer>().unwrap();
 
     assert_eq!(world.get_resource(), Some(&TestRes(20)));
@@ -630,9 +685,10 @@ fn rev_insert_resource_on_existing_overwrites() {
 #[test]
 fn rev_remove_resource_on_existing_removes() {
     let mut world = setup();
+    let now = world.resource::<RevMeta>().non_log_now().unwrap();
 
     world.insert_resource(TestRes(10));
-    let out = world.rev_remove_resource::<TestRes, _>(|r| *r);
+    let out = world.rev_remove_resource::<TestRes, _>(now, |r| *r);
     assert_eq!(out, Some(TestRes(10)));
     let mut buffer = world.remove_resource::<UndoRedoBuffer>().unwrap();
 
@@ -646,8 +702,8 @@ fn rev_remove_resource_on_existing_removes() {
 #[test]
 fn rev_remove_resource_on_unexisting_noop() {
     let mut world = setup();
-    let out = world.rev_remove_resource::<TestRes, _>(|r| *r);
+    let now = world.resource::<RevMeta>().non_log_now().unwrap();
+    let out = world.rev_remove_resource::<TestRes, _>(now, |r| *r);
     assert_eq!(out, None);
     assert!(world.resource::<UndoRedoBuffer>().is_empty());
 }
-*/

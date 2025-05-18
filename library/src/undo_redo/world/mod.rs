@@ -331,6 +331,7 @@ where
     let marker = DisabledToDespawn::for_buffer(now.0);
     let mut invalid = Vec::new();
     let mut rev_despawned = Vec::new();
+    let mut rev_despawned_buffers = MaybeLocation::new_with(|| Vec::new());
     let batch: Vec<_> = batch
         .into_iter()
         .filter(|&(entity, _)| {
@@ -338,10 +339,21 @@ where
                 .get_entity(entity)
                 .map_err(|err| invalid.push(err))
                 .map(|entity| entity.location().archetype_id)
-                .is_ok_and(|archetype_id| pre_insert::<B>(world, now, entity, archetype_id, insert_mode, marker)
+                .is_ok_and(|archetype_id| buffer_pre_insert::<B>(world, now, entity, archetype_id, insert_mode, marker)
                     .map_err(|err| match err {
-                        RevEntityError::EntityRevDespawnedError(err) => rev_despawned.push(err),
-                        _ => unreachable!("EntityDoesNotExistError collected earlier, no other errors returned by pre_insert"),
+                        RevEntityError::EntityRevDespawnedError(err) => {
+                            match rev_despawned_buffers.as_mut().into_option() {
+                                Some(rev_despawned_buffers) => {
+                                    if err.marker.added_location().into_option().flatten().is_some() {
+                                        rev_despawned.push(err)
+                                    } else {
+                                        rev_despawned_buffers.push(err)
+                                    }
+                                },
+                                None => rev_despawned.push(err)
+                            }
+                        },
+                        RevEntityError::EntityDoesNotExistError(_) => unreachable!("collected earlier"),
                     })
                     .is_ok())
         })
@@ -357,6 +369,7 @@ where
         Err(RevEntitiesError {
             invalid,
             rev_despawned,
+            rev_despawned_buffers,
         })
     }
 }

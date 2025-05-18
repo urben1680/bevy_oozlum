@@ -406,7 +406,17 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
     }
 
     fn rev_entry<'a, T: Component>(&'a mut self) -> RevEntry<'w, 'a, T> {
-        todo!()
+        if self.contains::<T>() {
+            RevEntry::Occupied(RevOccupiedEntry {
+                entity_world_mut: self,
+                _marker: PhantomData,
+            })
+        } else {
+            RevEntry::Vacant(RevVacantEntry {
+                entity_world_mut: self,
+                _marker: PhantomData,
+            })
+        }
     }
 
     fn rev_insert<T: Bundle>(&mut self, now: NonLogNow, bundle: T) -> &mut Self {
@@ -421,6 +431,7 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
         component_id: ComponentId,
         component: OwningPtr<'_>,
     ) -> &mut Self {
+        // todo: custom impl like insert_by_id?
         unsafe {
             // SAFETY: todo
             self.rev_insert_by_ids(now, &[component_id], [component].into_iter())
@@ -580,6 +591,7 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
     }
 
     fn rev_remove_by_id(&mut self, now: NonLogNow, component_id: ComponentId) -> &mut Self {
+        // todo: custom impl like remove_by_id?
         self.rev_remove_by_ids(now, &[component_id])
     }
 
@@ -1332,7 +1344,7 @@ fn insert_inner<'a, 'w, T: Bundle>(
     let archetype_id = entity_world_mut.location().archetype_id;
     let marker = DisabledToDespawn::for_buffer(now.0);
     entity_world_mut.world_scope(|world| {
-        pre_insert::<T>(
+        buffer_pre_insert::<T>(
             world,
             now,
             entity,

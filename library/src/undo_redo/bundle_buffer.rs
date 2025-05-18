@@ -13,7 +13,7 @@ use bevy::{
 use super::*;
 
 /// Fails if `entity` is `rev_is_despawned`, it must be otherwise spawned as an `archetype_id` could be provided.
-pub(super) fn pre_insert<T: Bundle>(
+pub(super) fn buffer_pre_insert<T: Bundle>(
     world: &mut World,
     now: NonLogNow,
     entity: Entity,
