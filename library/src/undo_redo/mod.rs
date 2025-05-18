@@ -136,8 +136,10 @@ impl Display for RevEntitiesError {
             }
             if !self.rev_despawned.is_empty() {
                 write!(f, "reversibly despawned entities: ")?;
-                for entity in self.rev_despawned.iter() {
-                    write!(f, "{}, ", entity.entity)?;
+                for err in self.rev_despawned.iter() {
+                    let entity = err.entity;
+                    let at = err.marker.added_frame();
+                    write!(f, "{entity} at {at}, ")?;
                 }
             }
             write!(f, "(enable `track_location` feature for more details)")?;
@@ -159,7 +161,7 @@ impl Display for RevEntitiesError {
                         .into_option()
                         .flatten()
                         .expect("non-buffer entity should have a despawn location");
-                    write!(f, "The entity with ID {entity} {by} at {at}, ")?;
+                    write!(f, "{entity} {by} at {at}, ")?;
                 }
             }
             let rev_despawned_buffers = self.rev_despawned_buffers.as_ref().into_option().unwrap();
@@ -168,7 +170,7 @@ impl Display for RevEntitiesError {
                 for err in rev_despawned_buffers.iter() {
                     let entity = err.entity;
                     let at = err.marker.added_frame();
-                    write!(f, "The entity with ID {entity} at {at}, ")?;
+                    write!(f, "{entity} at {at}, ")?;
                 }
             }
         }
