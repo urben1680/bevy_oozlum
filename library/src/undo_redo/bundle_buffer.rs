@@ -50,7 +50,7 @@ pub(super) fn buffer_pre_insert<T: Bundle>(
 pub(super) fn pre_insert_maybe_overwrite(
     world: &World,
     bundle_id: BundleId,
-    archetype_id: ArchetypeId,
+    archetype_id: ArchetypeId, // todo: remove after https://github.com/bevyengine/bevy/pull/19326
 ) -> (BufferAt, Vec<ComponentId>) {
     // Bundle explicit:  A(2), B(2), C(2)
     // Bundle required:                    D(2), E(2)
@@ -89,7 +89,7 @@ pub(super) fn pre_insert_maybe_overwrite(
 pub(super) fn pre_insert_no_overwrite(
     world: &World,
     bundle_id: BundleId,
-    archetype_id: ArchetypeId,
+    archetype_id: ArchetypeId, // todo: 
 ) -> (BufferAt, Vec<ComponentId>) {
     // Bundle explicit:  A(2), B(2), C(2)
     // Bundle required:                    D(2), E(2)
@@ -165,25 +165,31 @@ pub(super) fn buffer_bundle(
             let entities = buffer.toggle_state(world);
             let components = buffer.get_component_ids(world);
             let out = entities.buffer;
-            non_entity_buffer(world, entity, at, &components);
+            non_entity_buffer(world, now, entity, at, &components);
             entities.move_components(world, &components, RevDirection::NOT_LOG);
             world.buffer_undo_redo(now, buffer);
             Ok(Some(out))
         }
         BufferAt::Undo => {
             let components = buffer.get_component_ids(world);
-            non_entity_buffer(world, entity, at, &components);
             world.buffer_undo_redo(now, buffer);
+            // needs to come after buffer_undo_redo so at undo, at reverse order, this gets to grap relevant components
+            non_entity_buffer(world, now, entity, at, &components);
             Ok(None)
         }
         BufferAt::NowAndUndo => {
+            // todo: different double buffer, not two, make use of same EntityCloner
             let at_undo = buffer.clone(); // no buffer entity set yet so each spawns their own
             let entities = buffer.toggle_state(world);
             let components = buffer.get_component_ids(world);
             let out = entities.buffer;
-            non_entity_buffer(world, entity, at, &components);
+            let has_non_entity_buffer = non_entity_buffer(world, now, entity, BufferAt::Now, &components);
             entities.move_components(world, &components, RevDirection::NOT_LOG);
             world.buffer_undo_redo(now, [buffer, at_undo]);
+            if has_non_entity_buffer {
+                // needs to come after buffer_undo_redo so at undo, at reverse order, this gets to grap relevant components
+                non_entity_buffer(world, now, entity, BufferAt::Undo, &components);
+            }
             Ok(Some(out))
         }
     }
@@ -256,31 +262,35 @@ pub(crate) fn register_non_entity_buffer<T: Component>(world: &mut World) {
     let component_id = world.register_component::<T>();
     world.get_resource_or_init::<NonEntityBufferRes>().0.insert(
         component_id,
-        |world, entity, at| {
+        |world, now, entity, at| {
             let mut component = None;
             if matches!(at, BufferAt::Now | BufferAt::NowAndUndo) {
                 component = world.entity_mut(entity).take::<T>();
             }
             let undo_redo = NonEntityBuffer { entity, component };
-            world.buffer_undo_redo(NonLogNow(0), undo_redo); // todo, pass now via parameter
+            world.buffer_undo_redo(now, undo_redo);
         },
     );
 }
 
+// todo: buffer field with BundleId key
 #[derive(Resource, Default)]
-struct NonEntityBufferRes(HashMap<ComponentId, fn(&mut World, Entity, BufferAt)>);
+struct NonEntityBufferRes(HashMap<ComponentId, fn(&mut World, NonLogNow, Entity, BufferAt)>);
 
-fn non_entity_buffer(world: &mut World, entity: Entity, at: BufferAt, components: &[ComponentId]) {
+pub(crate) fn non_entity_buffer(world: &mut World, now: NonLogNow, entity: Entity, at: BufferAt, components: &[ComponentId]) -> bool {
     if !world.contains_resource::<NonEntityBufferRes>() {
-        return;
+        return false;
     }
+    let mut has_non_entity_buffer = false;
     world.resource_scope(|world, non_entity_buffers: Mut<NonEntityBufferRes>| {
         for component in components.iter() {
             if let Some(c) = non_entity_buffers.0.get(component) {
-                c(world, entity, at);
+                c(world, now, entity, at);
+                has_non_entity_buffer = true;
             }
         }
-    })
+    });
+    has_non_entity_buffer
 }
 
 #[derive(Clone)]
@@ -290,7 +300,7 @@ struct BundleBuffer {
     state: BufferState,
 }
 
-#[derive(Clone)]
+#[derive(Copy, Clone)]
 enum BufferState {
     Unspawned(DisabledToDespawn),
     Empty(Entity),
@@ -321,7 +331,7 @@ impl BundleEntities {
                 .without_required_components(|builder| {
                     builder.allow_by_ids(components.iter().copied());
                 })
-                .clone_entity(self.source, self.target);
+                .clone_entity(self.source, self.target); // todo: return for 2nd step after overwrite
         })
     }
 }
