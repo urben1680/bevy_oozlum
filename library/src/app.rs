@@ -2,7 +2,7 @@ use bevy::{
     app::{App, FixedUpdate, Plugin},
     ecs::{
         component::Component,
-        hierarchy::ChildOf,
+        hierarchy::{ChildOf, Children},
         schedule::{
             InternedScheduleLabel, InternedSystemSet, IntoScheduleConfigs, ScheduleLabel,
             Schedules, SystemSet,
@@ -126,6 +126,7 @@ impl Plugin for RevSystemsPlugin {
         }
         app.register_disabling_component::<DisabledToDespawn>();
         app.init_resource::<UndoRedoBuffer>();
-        app.register_non_entity_buffer::<ChildOf>(); // include Children?
+        app.register_non_entity_buffer::<ChildOf>();
+        app.register_non_entity_buffer::<Children>();
     }
 }
