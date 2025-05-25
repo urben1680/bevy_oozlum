@@ -339,23 +339,33 @@ where
                 .get_entity(entity)
                 .map_err(|err| invalid.push(err))
                 .map(|entity| entity.location().archetype_id)
-                .is_ok_and(|archetype_id| buffer_pre_insert::<B>(world, now, entity, archetype_id, insert_mode, marker)
-                    .map_err(|err| match err {
-                        RevEntityError::EntityRevDespawnedError(err) => {
-                            match rev_despawned_buffers.as_mut().into_option() {
-                                Some(rev_despawned_buffers) => {
-                                    if err.marker.added_location().into_option().flatten().is_some() {
-                                        rev_despawned.push(err)
-                                    } else {
-                                        rev_despawned_buffers.push(err)
+                .is_ok_and(|archetype_id| {
+                    buffer_pre_insert::<B>(world, now, entity, archetype_id, insert_mode, marker)
+                        .map_err(|err| match err {
+                            RevEntityError::EntityRevDespawnedError(err) => {
+                                match rev_despawned_buffers.as_mut().into_option() {
+                                    Some(rev_despawned_buffers) => {
+                                        if err
+                                            .marker
+                                            .added_location()
+                                            .into_option()
+                                            .flatten()
+                                            .is_some()
+                                        {
+                                            rev_despawned.push(err)
+                                        } else {
+                                            rev_despawned_buffers.push(err)
+                                        }
                                     }
-                                },
-                                None => rev_despawned.push(err)
+                                    None => rev_despawned.push(err),
+                                }
                             }
-                        },
-                        RevEntityError::EntityDoesNotExistError(_) => unreachable!("collected earlier"),
-                    })
-                    .is_ok())
+                            RevEntityError::EntityDoesNotExistError(_) => {
+                                unreachable!("collected earlier")
+                            }
+                        })
+                        .is_ok()
+                })
         })
         .collect();
     match insert_mode {

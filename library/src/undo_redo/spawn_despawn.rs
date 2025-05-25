@@ -107,9 +107,7 @@ impl BundleEffect for DespawnAtUndo {
             },
         );
         let components = entity.archetype().components().collect::<Vec<_>>();
-        // SAFETY: buffer at undo causes no location changes
-        let world = unsafe { entity.world_mut() };
-        non_entity_buffer(world, self.0, id, BufferAt::Undo, &components);
+        non_entity_buffer(entity, self.0, BufferAt::Undo, &components);
     }
 }
 

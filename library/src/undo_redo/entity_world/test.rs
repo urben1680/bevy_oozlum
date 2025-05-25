@@ -12,8 +12,7 @@ struct Required<const N: u8>(u8);
 fn setup() -> World {
     panic_on_error_events();
     let mut world = World::new();
-    register_non_entity_buffer::<ChildOf>(&mut world);
-    register_non_entity_buffer::<Children>(&mut world);
+    register_rev_relationship::<ChildOf>(&mut world);
     world.init_resource::<UndoRedoBuffer>();
     world.insert_resource(RevDirection::NOT_LOG.to_meta(0, 1, 1));
     world
@@ -30,17 +29,28 @@ fn add_related_with_no_prior_relationship() {
     let mut buffer = world.remove_resource::<UndoRedoBuffer>().unwrap();
     let [child_ref, parent_ref] = world.entity([child, parent]);
     assert_eq!(child_ref.get(), Some(&ChildOf(parent)));
-    assert_eq!(parent_ref.get(), Some(&Children::from_collection_risky(vec![child])));
+    assert_eq!(
+        parent_ref.get(),
+        Some(&Children::from_collection_risky(vec![child]))
+    );
 
     buffer.undo(&mut world);
     let [child_ref, parent_ref] = world.entity([child, parent]);
     assert_eq!(child_ref.get::<ChildOf>(), None);
-    assert_eq!(parent_ref.get::<Children>().and_then(|children| children.first()), None);
+    assert_eq!(
+        parent_ref
+            .get::<Children>()
+            .and_then(|children| children.first()),
+        None
+    );
 
     buffer.redo(&mut world);
     let [child_ref, parent_ref] = world.entity([child, parent]);
     assert_eq!(child_ref.get(), Some(&ChildOf(parent)));
-    assert_eq!(parent_ref.get(), Some(&Children::from_collection_risky(vec![child])));
+    assert_eq!(
+        parent_ref.get(),
+        Some(&Children::from_collection_risky(vec![child]))
+    );
 }
 
 #[test]
@@ -57,19 +67,28 @@ fn add_related_with_prior_relationship() {
     let [child1_ref, child2_ref, parent_ref] = world.entity([child1, child2, parent]);
     assert_eq!(child1_ref.get(), Some(&ChildOf(parent)));
     assert_eq!(child2_ref.get(), Some(&ChildOf(parent)));
-    assert_eq!(parent_ref.get(), Some(&Children::from_collection_risky(vec![child1, child2])));
+    assert_eq!(
+        parent_ref.get(),
+        Some(&Children::from_collection_risky(vec![child1, child2]))
+    );
 
     buffer.undo(&mut world);
     let [child1_ref, child2_ref, parent_ref] = world.entity([child1, child2, parent]);
     assert_eq!(child1_ref.get(), Some(&ChildOf(parent)));
     assert_eq!(child2_ref.get::<ChildOf>(), None);
-    assert_eq!(parent_ref.get(), Some(&Children::from_collection_risky(vec![child1])));
+    assert_eq!(
+        parent_ref.get(),
+        Some(&Children::from_collection_risky(vec![child1]))
+    );
 
     buffer.redo(&mut world);
     let [child1_ref, child2_ref, parent_ref] = world.entity([child1, child2, parent]);
     assert_eq!(child1_ref.get(), Some(&ChildOf(parent)));
     assert_eq!(child2_ref.get(), Some(&ChildOf(parent)));
-    assert_eq!(parent_ref.get(), Some(&Children::from_collection_risky(vec![child1, child2])));
+    assert_eq!(
+        parent_ref.get(),
+        Some(&Children::from_collection_risky(vec![child1, child2]))
+    );
 }
 
 #[test]
@@ -83,12 +102,12 @@ fn rev_clear_without_relationship() {
     let entity_ref = world.entity(entity);
     assert_eq!(entity_ref.get::<Explicit::<1>>(), None);
     assert_eq!(entity_ref.get::<Required::<1>>(), None);
-    
+
     buffer.undo(&mut world);
     let entity_ref = world.entity(entity);
     assert_eq!(entity_ref.get(), Some(&Explicit::<1>(1)));
     assert_eq!(entity_ref.get(), Some(&Required::<1>(0)));
-    
+
     buffer.redo(&mut world);
     let entity_ref = world.entity(entity);
     assert_eq!(entity_ref.get::<Explicit::<1>>(), None);
@@ -107,12 +126,15 @@ fn rev_clear_with_relationship() {
     let [child_ref, parent_ref] = world.entity([child, parent]);
     assert_eq!(child_ref.get::<ChildOf>(), None);
     assert_eq!(parent_ref.get::<Children>(), None);
-    
+
     buffer.undo(&mut world);
     let [child_ref, parent_ref] = world.entity([child, parent]);
     assert_eq!(child_ref.get(), Some(&ChildOf(parent)));
-    assert_eq!(parent_ref.get(), Some(&Children::from_collection_risky(vec![child])));
-    
+    assert_eq!(
+        parent_ref.get(),
+        Some(&Children::from_collection_risky(vec![child]))
+    );
+
     buffer.redo(&mut world);
     let [child_ref, parent_ref] = world.entity([child, parent]);
     assert_eq!(child_ref.get::<ChildOf>(), None);
@@ -137,7 +159,10 @@ fn rev_clone_and_spawn_works() {
     assert_eq!(child_ref.get(), Some(&ChildOf(parent)));
     assert_eq!(child_ref.get(), Some(&Explicit::<1>(1)));
     assert_eq!(child_ref.get(), Some(&Required::<1>(0)));
-    assert_eq!(parent_ref.get(), Some(&Children::from_collection_risky(vec![child, clone])));
+    assert_eq!(
+        parent_ref.get(),
+        Some(&Children::from_collection_risky(vec![child, clone]))
+    );
 
     buffer.undo(&mut world);
     let [clone_ref, child_ref, parent_ref] = world.entity([clone, child, parent]);
@@ -145,7 +170,10 @@ fn rev_clone_and_spawn_works() {
     assert_eq!(child_ref.get(), Some(&ChildOf(parent)));
     assert_eq!(child_ref.get(), Some(&Explicit::<1>(1)));
     assert_eq!(child_ref.get(), Some(&Required::<1>(0)));
-    assert_eq!(parent_ref.get(), Some(&Children::from_collection_risky(vec![child])));
+    assert_eq!(
+        parent_ref.get(),
+        Some(&Children::from_collection_risky(vec![child]))
+    );
 
     buffer.redo(&mut world);
     let [clone_ref, child_ref, parent_ref] = world.entity([clone, child, parent]);
@@ -156,7 +184,10 @@ fn rev_clone_and_spawn_works() {
     assert_eq!(child_ref.get(), Some(&ChildOf(parent)));
     assert_eq!(child_ref.get(), Some(&Explicit::<1>(1)));
     assert_eq!(child_ref.get(), Some(&Required::<1>(0)));
-    assert_eq!(parent_ref.get(), Some(&Children::from_collection_risky(vec![child, clone])));
+    assert_eq!(
+        parent_ref.get(),
+        Some(&Children::from_collection_risky(vec![child, clone]))
+    );
 }
 
 #[test]
@@ -166,10 +197,15 @@ fn rev_clone_components_without_relationship() {
     let now = world.resource::<RevMeta>().non_log_now().unwrap();
     let target = world.spawn((Explicit::<2>(20), Required::<2>(20))).id();
     let mut source_mut = world.spawn((
-        Explicit::<1>(1), Required::<1>(1), Explicit::<2>(2), Required::<2>(2), Explicit::<3>(3), Required::<3>(3)
+        Explicit::<1>(1),
+        Required::<1>(1),
+        Explicit::<2>(2),
+        Required::<2>(2),
+        Explicit::<3>(3),
+        Required::<3>(3),
     ));
 
-    source_mut.rev_clone_components::<(Explicit::<1>, Explicit::<2>)>(now, target);
+    source_mut.rev_clone_components::<(Explicit<1>, Explicit<2>)>(now, target);
     let mut buffer = world.remove_resource::<UndoRedoBuffer>().unwrap();
     let target_ref = world.entity(target);
     assert_eq!(target_ref.get(), Some(&Explicit::<1>(1)));
@@ -178,7 +214,7 @@ fn rev_clone_components_without_relationship() {
     assert_eq!(target_ref.get(), Some(&Required::<2>(2)));
     assert_eq!(target_ref.get::<Explicit<3>>(), None);
     assert_eq!(target_ref.get::<Required<3>>(), None);
-    
+
     buffer.undo(&mut world);
     let target_ref = world.entity(target);
     assert_eq!(target_ref.get::<Explicit<1>>(), None);
@@ -187,7 +223,7 @@ fn rev_clone_components_without_relationship() {
     assert_eq!(target_ref.get(), Some(&Required::<2>(20)));
     assert_eq!(target_ref.get::<Explicit<3>>(), None);
     assert_eq!(target_ref.get::<Required<3>>(), None);
-    
+
     buffer.redo(&mut world);
     let target_ref = world.entity(target);
     assert_eq!(target_ref.get(), Some(&Explicit::<1>(1)));
@@ -198,10 +234,49 @@ fn rev_clone_components_without_relationship() {
     assert_eq!(target_ref.get::<Required<3>>(), None);
 }
 
+// todo rev_clone_components_with_relationship
+
+#[test]
+fn rev_despawn_with_relationship() {
+    let mut world = setup();
+    let now = world.resource::<RevMeta>().non_log_now().unwrap();
+    let parent = world.spawn_empty().id();
+    let child_mut = world.spawn(ChildOf(parent));
+    let child = child_mut.id();
+    child_mut.rev_despawn(now);
+
+    let mut buffer = world.remove_resource::<UndoRedoBuffer>().unwrap();
+    let [child_ref, parent_ref] = world.entity([child, parent]);
+    assert_eq!(child_ref.rev_is_despawned(), true);
+    assert!(
+        parent_ref
+            .get::<Children>()
+            .is_none_or(|children| children.is_empty())
+    );
+
+    buffer.undo(&mut world);
+    let [child_ref, parent_ref] = world.entity([child, parent]);
+    assert_eq!(child_ref.rev_is_despawned(), false);
+    assert_eq!(child_ref.get(), Some(&ChildOf(parent)));
+    assert_eq!(
+        parent_ref.get(),
+        Some(&Children::from_collection_risky(vec![child]))
+    );
+
+    buffer.redo(&mut world);
+    let [child_ref, parent_ref] = world.entity([child, parent]);
+    assert_eq!(child_ref.rev_is_despawned(), true);
+    assert!(
+        parent_ref
+            .get::<Children>()
+            .is_none_or(|children| children.is_empty())
+    );
+}
+
 /*
 to test:
 
-- rev_clone_components
+
 - rev_despawn
 - rev_despawn_related
 - rev_insert

@@ -52,6 +52,7 @@ ISSUES/DISCUSSIONS:
 - not supported:
 -- EntityWorldMut::clone_with because EntityClonerBuilder is not offering reads on which components are cloned
 --- could be supported with RevEntityClonerBuilder
+- investigate EntityClonerBuilder::linked_cloning
 */
 
 pub mod app;

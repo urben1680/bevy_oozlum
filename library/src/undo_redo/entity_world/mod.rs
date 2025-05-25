@@ -67,7 +67,7 @@ pub trait RevEntityWorldMut<'w> {
     fn rev_clear(&mut self, now: NonLogNow) -> &mut Self;
 
     /// Reversible version of [`EntityWorldMut::clone_and_spawn`].
-    /// 
+    ///
     /// Note that if `self` is in relationship with another entity, these relationship types need to be
     /// registered with [`RevApp::register_non_entity_buffer`](crate::app::RevApp::register_non_entity_buffer).
     /// Otherwise, at undo, the spawned entity will still be in relationship with the common
@@ -75,7 +75,7 @@ pub trait RevEntityWorldMut<'w> {
     fn rev_clone_and_spawn(&mut self, now: NonLogNow) -> Entity;
 
     /// Reversible version of [`EntityWorldMut::clone_and_spawn_with`].
-    /// 
+    ///
     /// Note that if `self` is in relationship with another entity, these relationship types need to be
     /// registered with [`RevApp::register_non_entity_buffer`](crate::app::RevApp::register_non_entity_buffer).
     /// Otherwise, at undo, the spawned entity will still be in relationship with the common
@@ -366,11 +366,20 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
     ) -> Entity {
         let marker = DisabledToDespawn::for_spawn_despawn(now.0);
         let entity = self.clone_and_spawn_with(config);
-        self.buffer_undo_redo(now, Spawn { spawned: [entity], marker });
-        let components = self.world().entity(entity).archetype().components().collect::<Vec<_>>();
-        // SAFETY: buffer at undo causes no location changes
-        let world = unsafe { self.world_mut() };
-        non_entity_buffer(world, now, entity, BufferAt::Undo, &components);
+        self.buffer_undo_redo(
+            now,
+            Spawn {
+                spawned: [entity],
+                marker,
+            },
+        );
+        let components = self
+            .world()
+            .entity(entity)
+            .archetype()
+            .components()
+            .collect::<Vec<_>>();
+        non_entity_buffer(self, now, BufferAt::Undo, &components);
         entity
     }
 
@@ -397,7 +406,7 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
     #[track_caller]
     fn rev_despawn(self, now: NonLogNow) {
         let entity = self.id();
-        rev_despawn_inner(self, now).unwrap_or_else(|err| {
+        recursive_rev_despawn(self, now).unwrap_or_else(|err| {
             panic!("entity {entity} could not be reversibly despawned: {err}")
         });
     }

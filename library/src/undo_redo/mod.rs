@@ -44,6 +44,7 @@ mod bundle_buffer;
 mod spawn_despawn;
 //mod entity_commands;
 mod entity_world;
+mod relationship;
 mod world;
 
 pub use bundle_buffer::*;
