@@ -126,6 +126,35 @@ pub struct RevEntitiesError {
     pub rev_despawned_buffers: MaybeLocation<Vec<EntityRevDespawnedError>>,
 }
 
+impl RevEntitiesError {
+    pub fn push(&mut self, error: impl Into<RevEntityError>) {
+        match error.into() {
+            RevEntityError::EntityDoesNotExistError(error) => self.invalid.push(error),
+            RevEntityError::EntityRevDespawnedError(error) => match self
+                .rev_despawned_buffers
+                .as_mut()
+                .zip(error.marker.added_location())
+                .into_option()
+            {
+                Some((rev_despawned_buffers, location)) if location.is_none() => {
+                    rev_despawned_buffers.push(error)
+                }
+                _ => self.rev_despawned.push(error),
+            },
+        }
+    }
+    pub fn is_empty(&self) -> bool {
+        self.invalid.is_empty()
+            && self.rev_despawned.is_empty()
+            && self
+                .rev_despawned_buffers
+                .as_ref()
+                .map(|rev_despawned_buffers| rev_despawned_buffers.is_empty())
+                .into_option()
+                .unwrap_or(true)
+    }
+}
+
 impl Display for RevEntitiesError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if size_of::<MaybeLocation<u8>>() == 0 {
