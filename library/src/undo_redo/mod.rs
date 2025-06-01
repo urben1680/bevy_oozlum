@@ -126,8 +126,35 @@ pub struct RevEntitiesError {
     pub rev_despawned_buffers: MaybeLocation<Vec<EntityRevDespawnedError>>,
 }
 
+impl From<EntityRevDespawnedError> for RevEntitiesError {
+    fn from(error: EntityRevDespawnedError) -> Self {
+        RevEntityError::from(error).into()
+    }
+}
+
+impl From<EntityDoesNotExistError> for RevEntitiesError {
+    fn from(error: EntityDoesNotExistError) -> Self {
+        RevEntityError::from(error).into()
+    }
+}
+
+impl From<RevEntityError> for RevEntitiesError {
+    fn from(error: RevEntityError) -> Self {
+        let mut this = Self::empty();
+        this.push(error);
+        this
+    }
+}
+
 impl RevEntitiesError {
-    pub fn push(&mut self, error: impl Into<RevEntityError>) {
+    fn empty() -> Self {
+        Self {
+            invalid: Vec::new(),
+            rev_despawned: Vec::new(),
+            rev_despawned_buffers: MaybeLocation::new_with(|| Vec::new()),
+        }
+    }
+    fn push(&mut self, error: impl Into<RevEntityError>) {
         match error.into() {
             RevEntityError::EntityDoesNotExistError(error) => self.invalid.push(error),
             RevEntityError::EntityRevDespawnedError(error) => match self
@@ -143,7 +170,7 @@ impl RevEntitiesError {
             },
         }
     }
-    pub fn is_empty(&self) -> bool {
+    fn is_empty(&self) -> bool {
         self.invalid.is_empty()
             && self.rev_despawned.is_empty()
             && self
