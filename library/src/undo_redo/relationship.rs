@@ -7,15 +7,9 @@ use std::{
 
 use bevy::{
     ecs::{
-        change_detection::MaybeLocation,
-        component::{Component, ComponentId},
-        entity::{Entity, EntityHashMap, EntityHashSet},
-        hierarchy::ChildOf,
-        relationship::{Relationship, RelationshipSourceCollection, RelationshipTarget},
-        resource::Resource,
-        world::{
-            EntityRef, EntityWorldMut, Entry as EntityEntry, World, error::EntityMutableFetchError,
-        },
+        bundle::BundleId, change_detection::MaybeLocation, component::{Component, ComponentId}, entity::{Entity, EntityHashMap, EntityHashSet}, hierarchy::ChildOf, relationship::{Relationship, RelationshipSourceCollection, RelationshipTarget}, resource::Resource, world::{
+            error::EntityMutableFetchError, EntityRef, EntityWorldMut, Entry as EntityEntry, World
+        }
     },
     platform::collections::{hash_map::Entry as MapEntry, hash_set::Entry as SetEntry},
 };
@@ -32,7 +26,7 @@ struct RelationshipBuffer<
     T: Send + 'static,
     Values: ExtendDrain<T>,
     const BOTH_EXTRA: bool, // is `true` if both relationship components have extra fields not relevant to relationships
-    const ONE_TO_ONE: bool, // is `true` if T is part of a 1-to-1 relationship
+    const ONE_TO_ONE: bool, // is `true` if T is part of a 1-to-1 relationship, has no effect if `BOTH_EXTRA` is false
 > {
     values: Values,
     entities: Values::Entities,
@@ -171,7 +165,7 @@ impl<T: RelationshipTarget, Values: ExtendDrain<T>, Other: UndoRedo> UndoRedo
             replace(value, replacement)
         });
         self.1.values.extend_values(iter);
-        self.0.redo(world);
+        self.0.redo(world); // todo: correct order? add comment explaining this 
     }
 }
 
@@ -197,38 +191,98 @@ braucht es eine EntityHashSet?
 #[derive(Default, Clone, Resource)]
 pub(crate) struct RevRelationship {
     fns: Arc<RevRelationshipInner>,
+    registered: Vec<TypeId>,
 }
 
 #[derive(Default)]
 struct RevRelationshipInner {
-    linked: Vec<DespawnFns<DespawnLinked>>,
-    not_linked: Vec<DespawnFns<DespawnNotLinked>>,
+    linked: Vec<LinkedFns>,
+    not_linked: Vec<NotLinkedFns>,
 }
 
-struct DespawnFns<T> {
-    pre_insert: PreInsert,
-    despawn_top: DespawnTop,
-    despawn_by_linked: T,
+struct LinkedFns {
+    backup: BackupFn,
+    collect_despawn: CollectDespawnFn,
+    buffer_top: BufferTopFn,
 }
 
-type PreInsert = fn(&mut EntityWorldMut, NonLogNow, BufferAt);
-type DespawnLinked = fn(&RevRelationship, EntityRef, &World, &mut DespawnResults);
-type DespawnTop = fn(&mut EntityWorldMut, NonLogNow, &DespawnResults);
-type DespawnNotLinked = fn(&mut World, NonLogNow, &DespawnResults, &mut EntityHashSet);
-type DespawnResults = EntityHashMap<Result<(), RevEntityError>>;
+struct NotLinkedFns {
+    backup: BackupFn,
+    buffer_top: BufferTopFn,
+    buffer_bottom: BufferBottomFn,
+}
+
+type BackupFn = fn(&mut EntityWorldMut, BundleId, NonLogNow, BufferAt);
+type CollectDespawnFn = fn(&RevRelationship, EntityRef, &World, &mut DespawnResultsFn);
+type BufferTopFn = fn(&mut EntityWorldMut, NonLogNow, &DespawnResultsFn);
+type BufferBottomFn = fn(&mut World, Entity, NonLogNow, &DespawnResultsFn, &mut EntityHashSet);
+type DespawnResultsFn = EntityHashMap<Result<(), RevEntityError>>;
 
 impl RevRelationship {
     pub(crate) fn register<T: Relationship>(&mut self) {
-        todo!()
+        let id = TypeId::of::<T>();
+        if TypeId::of::<ChildOf>() == id || self.registered.contains(&id) {
+            return;
+        }
+
+        let fns_mut = Arc::get_mut(&mut self.fns).expect("todo");
+        self.registered.push(id);
+
+        let relationship_extra = size_of::<T>() > size_of::<Entity>();
+        let relationship_target_extra = size_of::<T::RelationshipTarget>()
+            > size_of::<<T::RelationshipTarget as RelationshipTarget>::Collection>();
+        let one_to_one = TypeId::of::<Entity>()
+            == TypeId::of::<<T::RelationshipTarget as RelationshipTarget>::Collection>();
+
+        let backup: BackupFn;
+        let buffer_top: BufferTopFn;
+        let buffer_bottom: BufferBottomFn;
+
+        match (relationship_extra, relationship_target_extra, one_to_one) {
+            (_, false, _) => {
+                backup = backup_relationship_extra::<T>;
+                buffer_top = buffer_top_relationship_extra::<T>;
+                buffer_bottom = buffer_bottom_relationship_extra::<T>;
+            }
+            (false, true, _) => {
+                backup = backup_relationship_target_extra::<T>;
+                buffer_top = buffer_top_relationship_target_extra::<T>;
+                buffer_bottom = buffer_bottom_relationship_target_extra::<T>;
+            }
+            (true, true, false) => {
+                backup = backup_both_extra::<T, false>;
+                buffer_top = buffer_top_both_extra::<T, false>;
+                buffer_bottom = buffer_bottom_both_extra::<T, false>;
+            }
+            (true, true, true) => {
+                backup = backup_both_extra::<T, true>;
+                buffer_top = buffer_top_both_extra::<T, true>;
+                buffer_bottom = buffer_bottom_both_extra::<T, true>;
+            }
+        }
+
+        if <T::RelationshipTarget as RelationshipTarget>::LINKED_SPAWN {
+            fns_mut.linked.push(LinkedFns {
+                backup,
+                collect_despawn: Self::collect_despawn::<T>,
+                buffer_top,
+            });
+        } else {
+            fns_mut.not_linked.push(NotLinkedFns {
+                backup,
+                buffer_top,
+                buffer_bottom,
+            })
+        }
     }
     /// backup these component ids if they are relevant to relationships
-    pub(crate) fn pre_insert(&self, entity: &mut EntityWorldMut, now: NonLogNow, at: BufferAt) {
-        pre_insert_relationship_extra::<ChildOf>(entity, now, at);
+    pub(crate) fn backup(&self, entity: &mut EntityWorldMut, bundle: BundleId, now: NonLogNow, at: BufferAt) {
+        backup_relationship_extra::<ChildOf>(entity, bundle, now, at);
         for f in self.fns.linked.iter() {
-            (f.pre_insert)(entity, now, at)
+            (f.backup)(entity, bundle, now, at)
         }
         for f in self.fns.not_linked.iter() {
-            (f.pre_insert)(entity, now, at)
+            (f.backup)(entity, bundle, now, at)
         }
     }
     #[track_caller]
@@ -239,15 +293,20 @@ impl RevRelationship {
     ) -> Result<(), RevEntitiesError> {
         #[derive(Default, Resource)]
         struct Cache {
-            results: DespawnResults,
+            results: DespawnResultsFn,
             visited: EntityHashSet,
             errors: Vec<RevEntityError>,
         }
 
         let entity = entity_mut.id();
 
+        if entity_mut.is_despawned() {
+            let error = entity_mut.world().get_entity(entity).err().unwrap();
+            return Err(error.into());
+        }
         if let Some(&marker) = entity_mut.get::<DisabledToDespawn>() {
-            return Err(EntityRevDespawnedError { entity, marker }.into());
+            let error = EntityRevDespawnedError { entity, marker };
+            return Err(error.into());
         }
 
         let mut cache = entity_mut
@@ -255,21 +314,22 @@ impl RevRelationship {
             .map(|cache| take(cache.into_inner()))
             .unwrap_or_default();
 
-        cache.results.insert(entity, Ok(())); // todo: is this correct regarding both despawns? add entity to visited?
+        cache.results.insert(entity, Ok(()));
 
         // collect entities that should be despawned and errors of entities that are already (reversibly) despawned
-        let entity_ref = (&*entity_mut).into();
-        self.for_each_despawn_linked(|f| {
-            f(self, entity_ref, entity_mut.world(), &mut cache.results)
-        });
+        self.recursive_collect_despawn(
+            (&*entity_mut).into(),
+            entity_mut.world(),
+            &mut cache.results,
+        );
 
         // buffer relationship components of entity and it's non-despawning parents
-        despawn_top::<ChildOf>(entity_mut, now, &cache.results);
+        buffer_top_relationship_extra::<ChildOf>(entity_mut, now, &cache.results);
         for f in self.fns.linked.iter() {
-            (f.despawn_top)(entity_mut, now, &cache.results);
+            (f.buffer_top)(entity_mut, now, &cache.results);
         }
         for f in self.fns.not_linked.iter() {
-            (f.despawn_top)(entity_mut, now, &cache.results);
+            (f.buffer_top)(entity_mut, now, &cache.results);
         }
 
         entity_mut.world_scope(|world| {
@@ -281,12 +341,11 @@ impl RevRelationship {
 
             // buffer relationship components of entities and their non-despawning children
             for f in self.fns.not_linked.iter() {
-                (f.despawn_by_linked)(world, now, &results, visited);
+                (f.buffer_bottom)(world, entity, now, &results, visited);
                 visited.clear();
             }
 
             // add DisabledToDespawn to despawning entities
-            // rev_try_insert_batch_if_new is not needed as rev_try_insert_batch already skips entities that contain DisabledToDespawn
             let marker = DisabledToDespawn::for_spawn_despawn(now.0);
             let mut result = world.rev_try_insert_batch(
                 now,
@@ -313,20 +372,23 @@ impl RevRelationship {
             result
         })
     }
-    // todo: pass in arguments, not closure
-    fn for_each_despawn_linked(&self, mut for_each: impl FnMut(DespawnLinked)) {
-        for_each(Self::despawn_by_linked::<ChildOf>);
-        self.fns
-            .linked
-            .iter()
-            .map(|fns| fns.despawn_by_linked)
-            .for_each(for_each);
-    }
-    fn despawn_by_linked<T: Relationship>(
+    fn recursive_collect_despawn(
         &self,
         entity_ref: EntityRef,
         world: &World,
-        results: &mut DespawnResults,
+        results: &mut DespawnResultsFn,
+    ) {
+        self.collect_despawn::<ChildOf>(entity_ref, world, results);
+        self.fns
+            .linked
+            .iter()
+            .for_each(|fns| (fns.collect_despawn)(self, entity_ref, world, results));
+    }
+    fn collect_despawn<T: Relationship>(
+        &self,
+        entity_ref: EntityRef,
+        world: &World,
+        results: &mut DespawnResultsFn,
     ) {
         let Some(children) = entity_ref.get::<T::RelationshipTarget>() else {
             return;
@@ -339,14 +401,14 @@ impl RevRelationship {
                 Ok(entity_ref) => match entity_ref.get::<DisabledToDespawn>() {
                     None => {
                         vacant.insert(Ok(()));
-                        self.for_each_despawn_linked(|f| f(self, entity_ref, world, results));
+                        self.recursive_collect_despawn(entity_ref, world, results);
                     }
                     Some(&marker) => {
-                        vacant.insert(Err(EntityRevDespawnedError {
+                        let error = EntityRevDespawnedError {
                             entity: child,
                             marker,
-                        }
-                        .into()));
+                        };
+                        vacant.insert(Err(error.into()));
                     }
                 },
                 Err(err) => {
@@ -357,34 +419,85 @@ impl RevRelationship {
     }
 }
 
-fn pre_insert_relationship_extra<T: Relationship>(
+fn backup_relationship_extra<T: Relationship>(
     entity_mut: &mut EntityWorldMut,
+    bundle: BundleId,
     now: NonLogNow,
     at: BufferAt,
 ) {
     todo!()
 }
 
-fn pre_insert_relationship_target_extra<T: Relationship>(
+fn backup_relationship_target_extra<T: Relationship>(
     entity_mut: &mut EntityWorldMut,
+    bundle: BundleId,
     now: NonLogNow,
     at: BufferAt,
 ) {
     todo!()
 }
 
-fn pre_insert_both_extra<T: Relationship, const ONE_TO_ONE: bool>(
+fn backup_both_extra<T: Relationship, const ONE_TO_ONE: bool>(
     entity_mut: &mut EntityWorldMut,
+    bundle: BundleId,
     now: NonLogNow,
     at: BufferAt,
 ) {
     todo!()
 }
 
-fn despawn_top<T: Relationship>(
+// todo: buffer top does not need to check if parents are (reversibly) despawned if relationship is linked
+
+fn buffer_top_relationship_extra<T: Relationship>(
     entity: &mut EntityWorldMut,
     now: NonLogNow,
-    results: &DespawnResults,
+    results: &DespawnResultsFn,
+) {
+    todo!()
+}
+
+fn buffer_top_relationship_target_extra<T: Relationship>(
+    entity: &mut EntityWorldMut,
+    now: NonLogNow,
+    results: &DespawnResultsFn,
+) {
+    todo!()
+}
+
+fn buffer_top_both_extra<T: Relationship, const ONE_TO_ONE: bool>(
+    entity: &mut EntityWorldMut,
+    now: NonLogNow,
+    results: &DespawnResultsFn,
+) {
+    todo!()
+}
+
+fn buffer_bottom_relationship_extra<T: Relationship>(
+    world: &mut World,
+    top: Entity,
+    now: NonLogNow,
+    results: &DespawnResultsFn,
+    visited: &mut EntityHashSet,
+) {
+    todo!()
+}
+
+fn buffer_bottom_relationship_target_extra<T: Relationship>(
+    world: &mut World,
+    top: Entity,
+    now: NonLogNow,
+    results: &DespawnResultsFn,
+    visited: &mut EntityHashSet,
+) {
+    todo!()
+}
+
+fn buffer_bottom_both_extra<T: Relationship, const ONE_TO_ONE: bool>(
+    world: &mut World,
+    top: Entity,
+    now: NonLogNow,
+    results: &DespawnResultsFn,
+    visited: &mut EntityHashSet,
 ) {
     todo!()
 }
@@ -406,22 +519,22 @@ impl RevRelationship {
             .then_some(Self::despawn_entities_linked::<T> as DespawnEntities);
         let fns = match (relationship_extra, relationship_target_extra, one_to_one) {
             (_, false, _) => RelationshipFns {
-                pre_insert: pre_insert_relationship_extra::<T>,
+                backup: backup_relationship_extra::<T>,
                 despawn_entities,
                 despawn_buffers: despawn_relationship_extra::<T>,
             },
             (false, true, _) => RelationshipFns {
-                pre_insert: pre_insert_relationship_target_extra::<T>,
+                backup: backup_relationship_target_extra::<T>,
                 despawn_entities,
                 despawn_buffers: despawn_relationship_target_extra::<T>,
             },
             (true, true, false) => RelationshipFns {
-                pre_insert: pre_insert_both_extra::<T, false>,
+                backup: backup_both_extra::<T, false>,
                 despawn_entities,
                 despawn_buffers: despawn_both_extra::<T, false>,
             },
             (true, true, true) => RelationshipFns {
-                pre_insert: pre_insert_both_extra::<T, true>,
+                backup: backup_both_extra::<T, true>,
                 despawn_entities,
                 despawn_buffers: despawn_both_extra::<T, true>,
             },
@@ -435,9 +548,9 @@ impl RevRelationship {
         self.fns.iter().filter_map(|fns| fns.despawn_entities)
     }
     /// backup these component ids if they are relevant to relationships
-    pub(crate) fn pre_insert(&self, entity: &mut EntityWorldMut, now: NonLogNow, at: BufferAt) {
+    pub(crate) fn backup(&self, entity: &mut EntityWorldMut, now: NonLogNow, at: BufferAt) {
         for f in self.fns.iter() {
-            (f.pre_insert)(entity, now, at)
+            (f.backup)(entity, now, at)
         }
     }
     #[track_caller]
@@ -554,19 +667,19 @@ impl RevRelationship {
     }
 }
 
-type PreInsert = fn(&mut EntityWorldMut, NonLogNow, BufferAt);
+type Backup = fn(&mut EntityWorldMut, NonLogNow, BufferAt);
 type DespawnResults = EntityHashMap<Result<bool, RevEntityError>>;
 type DespawnEntities = fn(&RevRelationship, EntityRef, &World, &mut DespawnResults);
 type DespawnBuffers = fn(&mut World, NonLogNow, &DespawnResults, &mut EntityHashSet);
 
 #[derive(PartialEq)]
 struct RelationshipFns {
-    pre_insert: PreInsert,
+    backup: Backup,
     despawn_entities: Option<DespawnEntities>,
     despawn_buffers: DespawnBuffers,
 }
 
-fn pre_insert_relationship_extra<T: Relationship>(
+fn backup_relationship_extra<T: Relationship>(
     entity_mut: &mut EntityWorldMut,
     now: NonLogNow,
     at: BufferAt,
@@ -574,7 +687,7 @@ fn pre_insert_relationship_extra<T: Relationship>(
     todo!()
 }
 
-fn pre_insert_relationship_target_extra<T: Relationship>(
+fn backup_relationship_target_extra<T: Relationship>(
     entity_mut: &mut EntityWorldMut,
     now: NonLogNow,
     at: BufferAt,
@@ -582,7 +695,7 @@ fn pre_insert_relationship_target_extra<T: Relationship>(
     todo!()
 }
 
-fn pre_insert_both_extra<T: Relationship, const ONE_TO_ONE: bool>(
+fn backup_both_extra<T: Relationship, const ONE_TO_ONE: bool>(
     entity_mut: &mut EntityWorldMut,
     now: NonLogNow,
     at: BufferAt,
