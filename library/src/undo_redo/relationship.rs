@@ -7,9 +7,16 @@ use std::{
 
 use bevy::{
     ecs::{
-        bundle::BundleId, change_detection::MaybeLocation, component::{Component, ComponentId}, entity::{Entity, EntityHashMap, EntityHashSet}, hierarchy::ChildOf, relationship::{Relationship, RelationshipSourceCollection, RelationshipTarget}, resource::Resource, world::{
-            error::EntityMutableFetchError, EntityRef, EntityWorldMut, Entry as EntityEntry, World
-        }
+        bundle::BundleId,
+        change_detection::MaybeLocation,
+        component::{Component, ComponentId},
+        entity::{Entity, EntityHashMap, EntityHashSet},
+        hierarchy::ChildOf,
+        relationship::{Relationship, RelationshipSourceCollection, RelationshipTarget},
+        resource::Resource,
+        world::{
+            EntityRef, EntityWorldMut, Entry as EntityEntry, World, error::EntityMutableFetchError,
+        },
     },
     platform::collections::{hash_map::Entry as MapEntry, hash_set::Entry as SetEntry},
 };
@@ -78,12 +85,29 @@ impl<T: Component, Values: ExtendDrain<T>, const BOTH_EXTRA: bool, const ONE_TO_
 }
 
 impl<T: Component, const BOTH_EXTRA: bool, const ONE_TO_ONE: bool>
+    RelationshipBuffer<T, Option<T>, BOTH_EXTRA, ONE_TO_ONE>
+where
+    Self: UndoRedo,
+{
+    #[inline]
+    fn construct_apply_store_one(world: &mut World, now: NonLogNow, entity: Entity) {
+        let mut buffer = Self {
+            values: None,
+            entities: entity,
+            _p: PhantomData,
+        };
+        buffer.redo(world);
+        world.buffer_undo_redo(now, buffer);
+    }
+}
+
+impl<T: Component, const BOTH_EXTRA: bool, const ONE_TO_ONE: bool>
     RelationshipBuffer<T, Vec<T>, BOTH_EXTRA, ONE_TO_ONE>
 where
     Self: UndoRedo,
 {
     #[inline]
-    fn construct_apply_store(world: &mut World, now: NonLogNow, entities: Vec<Entity>) {
+    fn construct_apply_store_many(world: &mut World, now: NonLogNow, entities: Vec<Entity>) {
         if entities.is_empty() {
             return;
         }
@@ -212,6 +236,12 @@ struct NotLinkedFns {
     buffer_bottom: BufferBottomFn,
 }
 
+struct Fns {
+    backup: BackupFn,
+    collect_despawn: Option<CollectDespawnFn>,
+    buffer_despawn: BufferBottomFn,
+}
+
 type BackupFn = fn(&mut EntityWorldMut, BundleId, NonLogNow, BufferAt);
 type CollectDespawnFn = fn(&RevRelationship, EntityRef, &World, &mut DespawnResultsFn);
 type BufferTopFn = fn(&mut EntityWorldMut, NonLogNow, &DespawnResultsFn);
@@ -276,7 +306,13 @@ impl RevRelationship {
         }
     }
     /// backup these component ids if they are relevant to relationships
-    pub(crate) fn backup(&self, entity: &mut EntityWorldMut, bundle: BundleId, now: NonLogNow, at: BufferAt) {
+    pub(crate) fn backup(
+        &self,
+        entity: &mut EntityWorldMut,
+        bundle: BundleId,
+        now: NonLogNow,
+        at: BufferAt,
+    ) {
         backup_relationship_extra::<ChildOf>(entity, bundle, now, at);
         for f in self.fns.linked.iter() {
             (f.backup)(entity, bundle, now, at)
@@ -448,8 +484,11 @@ fn backup_both_extra<T: Relationship, const ONE_TO_ONE: bool>(
 
 // todo: buffer top does not need to check if parents are (reversibly) despawned if relationship is linked
 
+// problem: not only top entity can have non-despawned parent
+// unify buffer top/bottom again
+
 fn buffer_top_relationship_extra<T: Relationship>(
-    entity: &mut EntityWorldMut,
+    entity_mut: &mut EntityWorldMut,
     now: NonLogNow,
     results: &DespawnResultsFn,
 ) {
@@ -457,7 +496,7 @@ fn buffer_top_relationship_extra<T: Relationship>(
 }
 
 fn buffer_top_relationship_target_extra<T: Relationship>(
-    entity: &mut EntityWorldMut,
+    entity_mut: &mut EntityWorldMut,
     now: NonLogNow,
     results: &DespawnResultsFn,
 ) {
@@ -465,7 +504,7 @@ fn buffer_top_relationship_target_extra<T: Relationship>(
 }
 
 fn buffer_top_both_extra<T: Relationship, const ONE_TO_ONE: bool>(
-    entity: &mut EntityWorldMut,
+    entity_mut: &mut EntityWorldMut,
     now: NonLogNow,
     results: &DespawnResultsFn,
 ) {
