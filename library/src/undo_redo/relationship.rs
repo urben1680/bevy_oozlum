@@ -24,8 +24,8 @@ use bevy::{
 
 use crate::{
     meta::NonLogNow,
-    prelude::UndoRedo,
-    undo_redo::{BuffersUndoRedo, DisabledToDespawn, EntityRevDespawnedError},
+    prelude::{UndoRedo, UndoRedoSwap},
+    undo_redo::{BuffersUndoRedo, DeferredUndoRedo, DisabledToDespawn, EntityRevDespawnedError},
 };
 
 use super::{BufferAt, RevEntitiesError, RevEntityError, RevIsDespawned, RevWorld};
@@ -36,15 +36,18 @@ struct BufferOneForManyEntities<T: Component> {
 }
 
 impl<T: Component> BufferOneForManyEntities<T> {
-    fn new(entities: Vec<Entity>) -> Option<Self> {
+    pub fn new(entities: Vec<Entity>) -> Self {
+        let entities = entities.into_boxed_slice();
+        Self {
+            values: Vec::with_capacity(entities.len()),
+            entities,
+        }
+    }
+    fn new_filter_empty(entities: Vec<Entity>) -> Option<Self> {
         if entities.is_empty() {
             None
         } else {
-            let entities = entities.into_boxed_slice();
-            Some(Self {
-                values: Vec::with_capacity(entities.len()),
-                entities,
-            })
+            Some(Self::new(entities))
         }
     }
     #[inline]
@@ -395,47 +398,76 @@ fn backup_relationship_extra<T: Relationship>(
     now: NonLogNow,
     at: BufferAt,
 ) {
-    let mut buffer_relationship = None;
-    let mut buffer_relationship_target = None;
+    let entity = entity_mut.id();
 
-    if at == BufferAt::Undo {
-        if components.contains(&ids.relationship)
-    } else {
-        if components.contains(&ids.relationship) && entity_mut.contains_id(ids.relationship) {
-            buffer_relationship = Some(BufferOneForSingleEntity::<T>::new(entity_mut.id()));
-        }
-        if components.contains(&ids.relationship_target) {
-            if let Some(children) = entity_mut.get::<T::RelationshipTarget>() {
-                let children = children.iter().collect::<Vec<_>>();
-                buffer_relationship_target = BufferOneForManyEntities::<T>::new(children);
+    match at {
+        BufferAt::Now => {
+            let mut buffer_relationship = None;
+            if components.contains(&ids.relationship) && entity_mut.contains_id(ids.relationship) {
+                buffer_relationship = Some(BufferOneForSingleEntity::<T>::new(entity_mut.id()));
             }
-        }
-    }
 
-    match (buffer_relationship, buffer_relationship_target, at) {
-        (None, None, _) => {}
-        (Some(buffer), None, BufferAt::Undo) => {
-            world.buffer_undo_redo(now, buffer);
-        }
-        (Some(buffer), None, _) => {
-            world.redo_and_buffer(now, buffer);
+            let mut buffer_relationship_target = None;
+            if components.contains(&ids.relationship_target) {
+                if let Some(children) = entity_mut.get::<T::RelationshipTarget>() {
+                    let children = children.iter().collect::<Vec<_>>();
+                    buffer_relationship_target =
+                        BufferOneForManyEntities::<T>::new_filter_empty(children);
+                }
+            }
+
+            // SAFETY: will call update_locations if components are taken here
+            let world = unsafe { entity_mut.world_mut() };
+
+            match (buffer_relationship, buffer_relationship_target) {
+                (None, None) => return,
+                (Some(buffer), None) => world.redo_and_buffer(now, buffer),
+                (None, Some(buffer)) => world.redo_and_buffer(now, buffer),
+                (Some(relationship), Some(relationship_target)) => {
+                    world.redo_and_buffer(now, relationship);
+                    world.redo_and_buffer(now, relationship_target);
+                }
+            }
+
             entity_mut.update_location();
         }
-        (None, Some(buffer), BufferAt::Undo) => {
-            world.buffer_undo_redo(now, buffer);
-        }
-        (None, Some(buffer), _) => {
-            world.redo_and_buffer(now, buffer);
+        BufferAt::Undo => {
+            let mut buffer_relationship = None;
+            if components.contains(&ids.relationship) {
+                buffer_relationship = Some(BufferOneForSingleEntity::<T>::new(entity_mut.id()));
+            }
+
+            let mut buffer_relationship_target = None;
+            if components.contains(&ids.relationship_target) {
+                buffer_relationship_target = Some(DeferredUndoRedo::new(move |world| {
+                    let children = world
+                        .get::<T::RelationshipTarget>(entity)
+                        .into_iter()
+                        .flat_map(RelationshipTarget::iter)
+                        .collect();
+                    let mut buffer = UndoRedoSwap(BufferOneForManyEntities::<T>::new(children));
+                    buffer.undo(world);
+                    buffer
+                }))
+            }
+
+            // SAFETY: will call update_locations if components are taken here
+            let world = unsafe { entity_mut.world_mut() };
+
+            match (buffer_relationship, buffer_relationship_target) {
+                (None, None) => return,
+                (Some(buffer), None) => world.redo_and_buffer(now, buffer),
+                (None, Some(buffer)) => world.redo_and_buffer(now, buffer),
+                (Some(relationship), Some(relationship_target)) => {
+                    world.redo_and_buffer(now, relationship);
+                    world.redo_and_buffer(now, relationship_target);
+                }
+            }
+
             entity_mut.update_location();
         }
-        (Some(relationship), Some(relationship_target), BufferAt::Undo) => {
-            world.buffer_undo_redo(now, relationship);
-            world.buffer_undo_redo(now, relationship_target);
-        }
-        (Some(relationship), Some(relationship_target), _) => {
-            world.redo_and_buffer(now, relationship);
-            world.redo_and_buffer(now, relationship_target);
-            entity_mut.update_location();
+        BufferAt::NowAndUndo => {
+            todo!()
         }
     }
 }
@@ -447,26 +479,7 @@ fn backup_relationship_target_extra<T: Relationship>(
     now: NonLogNow,
     at: BufferAt,
 ) {
-    let mut buffer_relationship = None;
-    if components.contains(&ids.relationship) {
-        if let Some(parent) = entity_mut.get::<T>() {
-            // If at == Undo, then it would be not reliable to interpret if RelationshipTarget will become empty or not
-            // as there might be multiple of this UndoRedo being buffered with the same parent.
-            // However when this is Undo then only because the caller confirmed that no overwrite will happen _now_ which
-            // means that the current state of the relationship is not important.
-            // Therefore an parent is only expected to exist while at != Undo.
-            assert_ne!(at, BufferAt::Undo) // todo: panic in following match arm instead
-        }
-        buffer_relationship = Some(BufferOneForSingleEntity::<T>::new(entity_mut.id()));
-    }
-
-    let mut buffer_relationship_target = None;
-    if components.contains(&ids.relationship_target) {
-        if let Some(children) = entity_mut.get::<T::RelationshipTarget>() {
-            let children = children.iter().collect::<Vec<_>>();
-            buffer_relationship_target = BufferOneForManyEntities::<T>::new(children);
-        }
-    }
+    todo!()
 }
 
 fn backup_both_extra<T: Relationship, const ONE_TO_ONE: bool>(
@@ -514,7 +527,7 @@ fn buffer_despawn_relationship_extra<T: Relationship>(
             relationship_entities.push(entity);
         }
     }
-    if let Some(buffer) = BufferOneForManyEntities::<T>::new(relationship_entities) {
+    if let Some(buffer) = BufferOneForManyEntities::<T>::new_filter_empty(relationship_entities) {
         world.redo_and_buffer(now, buffer);
     }
 }
@@ -571,12 +584,12 @@ fn buffer_despawn_relationship_target_extra<T: Relationship>(
             relationship_target_entities.push(parent);
         }
     }
-    if let Some(buffer) = BufferOneForManyEntities::<T>::new(relationship_entities) {
+    if let Some(buffer) = BufferOneForManyEntities::<T>::new_filter_empty(relationship_entities) {
         world.redo_and_buffer(now, buffer);
     }
-    if let Some(buffer) =
-        BufferOneForManyEntities::<T::RelationshipTarget>::new(relationship_target_entities)
-    {
+    if let Some(buffer) = BufferOneForManyEntities::<T::RelationshipTarget>::new_filter_empty(
+        relationship_target_entities,
+    ) {
         world.redo_and_buffer(now, buffer);
     }
 }
@@ -643,8 +656,10 @@ fn buffer_despawn_both_extra<T: Relationship, const ONE_TO_ONE: bool>(
     }
 
     match (
-        BufferOneForManyEntities::<T>::new(relationship_entities),
-        BufferOneForManyEntities::<T::RelationshipTarget>::new(relationship_target_entities),
+        BufferOneForManyEntities::<T>::new_filter_empty(relationship_entities),
+        BufferOneForManyEntities::<T::RelationshipTarget>::new_filter_empty(
+            relationship_target_entities,
+        ),
     ) {
         (None, None) => return,
         (Some(buffer), None) => world.redo_and_buffer(now, buffer),
