@@ -237,6 +237,7 @@ impl Display for RevEntitiesError {
 
 impl Error for RevEntitiesError {}
 
+// todo: split trait for _deferred variant? try to trigger bugs by using trait as-is in wrong contexts
 pub trait BuffersUndoRedo {
     /// Buffers an [`UndoRedo`] implementor in a resource to be collected by the reversible system's state during sync points.
     ///
@@ -261,45 +262,41 @@ pub trait BuffersUndoRedo {
     /// | [`UndoRedoBuffer`] | ✅ | ❌ |
     /// | [`Commands`] | ❌ | ✅ |
     /// | [`EntityCommands`] | ❌ | ✅ |
-    fn buffer_undo_redo(&mut self, now: NonLogNow, undo_redo: impl UndoRedo) -> &mut Self;
+    fn buffer_undo_redo(&mut self, now: NonLogNow, undo_redo: impl UndoRedo);
 }
 
 impl BuffersUndoRedo for Commands<'_, '_> {
-    fn buffer_undo_redo(&mut self, now: NonLogNow, undo_redo: impl UndoRedo) -> &mut Self {
+    fn buffer_undo_redo(&mut self, now: NonLogNow, undo_redo: impl UndoRedo) {
         self.queue(move |world: &mut World| {
             world.buffer_undo_redo(now, undo_redo);
         });
-        self
     }
 }
 
 impl BuffersUndoRedo for EntityCommands<'_> {
-    fn buffer_undo_redo(&mut self, now: NonLogNow, undo_redo: impl UndoRedo) -> &mut Self {
+    fn buffer_undo_redo(&mut self, now: NonLogNow, undo_redo: impl UndoRedo) {
         self.queue(move |mut world: EntityWorldMut| {
             world.buffer_undo_redo(now, undo_redo);
         });
-        self
     }
 }
 
 impl BuffersUndoRedo for World {
-    fn buffer_undo_redo(&mut self, now: NonLogNow, undo_redo: impl UndoRedo) -> &mut Self {
+    fn buffer_undo_redo(&mut self, now: NonLogNow, undo_redo: impl UndoRedo) {
         DeferredWorld::buffer_undo_redo(&mut self.into(), now, undo_redo);
-        self
     }
 }
 
 impl BuffersUndoRedo for EntityWorldMut<'_> {
-    fn buffer_undo_redo(&mut self, now: NonLogNow, undo_redo: impl UndoRedo) -> &mut Self {
+    fn buffer_undo_redo(&mut self, now: NonLogNow, undo_redo: impl UndoRedo) {
         // SAFETY: Only resources are accessed, entity location remains unchanged
         let world = unsafe { self.world_mut() };
         world.buffer_undo_redo(now, undo_redo);
-        self
     }
 }
 
 impl BuffersUndoRedo for DeferredWorld<'_> {
-    fn buffer_undo_redo(&mut self, now: NonLogNow, undo_redo: impl UndoRedo) -> &mut Self {
+    fn buffer_undo_redo(&mut self, now: NonLogNow, undo_redo: impl UndoRedo) {
         debug_assert_eq!(
             self.get_resource::<RevMeta>().map(RevMeta::non_log_now),
             Some(Some(now))
@@ -307,19 +304,17 @@ impl BuffersUndoRedo for DeferredWorld<'_> {
         self.get_resource_mut::<UndoRedoBuffer>()
             .expect(UndoRedoBuffer::EXPECT_IN_WORLD)
             .buffer_undo_redo(now, undo_redo);
-        self
     }
 }
 
 impl BuffersUndoRedo for UndoRedoBuffer {
-    fn buffer_undo_redo(&mut self, _: NonLogNow, undo_redo: impl UndoRedo) -> &mut Self {
+    fn buffer_undo_redo(&mut self, _: NonLogNow, undo_redo: impl UndoRedo) {
         let name = type_name_of_val(&undo_redo);
         let boxed = BoxedUndoRedo {
             undo_redo: SyncCell::new(Box::new(undo_redo)),
             name,
         };
         self.0.push(boxed);
-        self
     }
 }
 
