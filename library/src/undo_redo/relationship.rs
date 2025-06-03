@@ -11,14 +11,15 @@ use bevy::{
         change_detection::MaybeLocation,
         component::{Component, ComponentId},
         entity::{Entity, EntityHashMap, EntityHashSet},
-        hierarchy::ChildOf,
+        hierarchy::{ChildOf, Children},
         relationship::{Relationship, RelationshipSourceCollection, RelationshipTarget},
         resource::Resource,
         world::{
-            EntityRef, EntityWorldMut, Entry as EntityEntry, World, error::EntityMutableFetchError,
+            EntityRef, EntityWorldMut, Entry as EntityEntry, FromWorld, World,
+            error::EntityMutableFetchError,
         },
     },
-    platform::collections::{hash_map::Entry as MapEntry, hash_set::Entry as SetEntry},
+    platform::collections::{HashSet, hash_map::Entry as MapEntry, hash_set::Entry as SetEntry},
 };
 
 use crate::{
@@ -29,296 +30,231 @@ use crate::{
 
 use super::{BufferAt, RevEntitiesError, RevEntityError, RevIsDespawned, RevWorld};
 
-struct RelationshipBuffer<
-    T: Send + 'static,
-    Values: ExtendDrain<T>,
-    const BOTH_EXTRA: bool, // is `true` if both relationship components have extra fields not relevant to relationships
-    const ONE_TO_ONE: bool, // is `true` if T is part of a 1-to-1 relationship, has no effect if `BOTH_EXTRA` is false
-> {
-    values: Values,
-    entities: Values::Entities,
-    _p: PhantomData<T>,
+struct BufferOneForManyEntities<T: Component> {
+    values: Vec<T>,
+    entities: Box<[Entity]>,
 }
 
-trait ExtendDrain<T: 'static>: Send + 'static {
-    type Entities: Send + 'static;
-    fn extend_values(&mut self, values: impl IntoIterator<Item = T>);
-    fn drain_values(&mut self) -> impl Iterator<Item = T>;
-    fn iter_entities(entities: &Self::Entities) -> impl Iterator<Item = Entity>;
-}
-
-impl<T: Send + 'static> ExtendDrain<T> for Option<T> {
-    type Entities = Entity;
-    fn extend_values(&mut self, values: impl IntoIterator<Item = T>) {
-        let mut values = values.into_iter();
-        *self = values.next();
-        debug_assert!(values.next().is_none())
+impl<T: Component> BufferOneForManyEntities<T> {
+    fn new(entities: Vec<Entity>) -> Option<Self> {
+        if entities.is_empty() {
+            None
+        } else {
+            let entities = entities.into_boxed_slice();
+            Some(Self {
+                values: Vec::with_capacity(entities.len()),
+                entities,
+            })
+        }
     }
-    fn drain_values(&mut self) -> impl Iterator<Item = T> {
-        self.take().into_iter()
-    }
-    fn iter_entities(entity: &Self::Entities) -> impl Iterator<Item = Entity> {
-        [*entity].into_iter()
-    }
-}
-
-impl<T: Send + 'static> ExtendDrain<T> for Vec<T> {
-    type Entities = Box<[Entity]>;
-    fn extend_values(&mut self, values: impl IntoIterator<Item = T>) {
-        self.extend(values)
-    }
-    fn drain_values(&mut self) -> impl Iterator<Item = T> {
-        self.drain(..)
-    }
-    fn iter_entities(entities: &Self::Entities) -> impl Iterator<Item = Entity> {
-        entities.iter().copied()
-    }
-}
-
-impl<T: Component, Values: ExtendDrain<T>, const BOTH_EXTRA: bool, const ONE_TO_ONE: bool>
-    RelationshipBuffer<T, Values, BOTH_EXTRA, ONE_TO_ONE>
-{
     #[inline]
     fn common_undo(&mut self, world: &mut World) {
-        world.insert_batch(Values::iter_entities(&self.entities).zip(self.values.drain_values()));
+        world.insert_batch(self.entities.iter().copied().zip(self.values.drain(..)));
     }
 }
 
-impl<T: Component, const BOTH_EXTRA: bool, const ONE_TO_ONE: bool>
-    RelationshipBuffer<T, Option<T>, BOTH_EXTRA, ONE_TO_ONE>
-where
-    Self: UndoRedo,
-{
-    #[inline]
-    fn construct_apply_store_one(world: &mut World, now: NonLogNow, entity: Entity) {
-        let mut buffer = Self {
-            values: None,
-            entities: entity,
-            _p: PhantomData,
-        };
-        buffer.redo(world);
-        world.buffer_undo_redo(now, buffer);
-    }
-}
-
-impl<T: Component, const BOTH_EXTRA: bool, const ONE_TO_ONE: bool>
-    RelationshipBuffer<T, Vec<T>, BOTH_EXTRA, ONE_TO_ONE>
-where
-    Self: UndoRedo,
-{
-    #[inline]
-    fn construct_apply_store_many(world: &mut World, now: NonLogNow, entities: Vec<Entity>) {
-        if entities.is_empty() {
-            return;
-        }
-        let entities = entities.into_boxed_slice();
-        let mut buffer = Self {
-            values: Vec::with_capacity(entities.len()),
-            entities,
-            _p: PhantomData,
-        };
-        buffer.redo(world);
-        world.buffer_undo_redo(now, buffer);
-    }
-}
-
-impl<T: Component, Values: ExtendDrain<T>, const ONE_TO_ONE: bool> UndoRedo
-    for RelationshipBuffer<T, Values, false, ONE_TO_ONE>
-{
+impl<T: Component> UndoRedo for BufferOneForManyEntities<T> {
     fn undo(&mut self, world: &mut World) {
         self.common_undo(world);
     }
     fn redo(&mut self, world: &mut World) {
-        let values = Values::iter_entities(&self.entities).map(|entity| {
-            let mut entity = world.entity_mut(entity);
-            entity.take::<T>().expect("todo")
-        });
-        self.values.extend_values(values);
+        let values = self
+            .entities
+            .iter()
+            .map(|entity| world.entity_mut(*entity).take::<T>().expect("todo"));
+        self.values.extend(values);
     }
 }
 
-impl<T: RelationshipTarget, Values: ExtendDrain<T>, Other: UndoRedo> UndoRedo
-    for (Other, RelationshipBuffer<T, Values, true, false>)
+struct BufferBothForManyEntities<T: Relationship, const ONE_TO_ONE: bool> {
+    relationship: BufferOneForManyEntities<T>,
+    relationship_target: BufferOneForManyEntities<T::RelationshipTarget>,
+}
+
+impl<T: Relationship, const ONE_TO_ONE: bool> UndoRedo
+    for BufferBothForManyEntities<T, ONE_TO_ONE>
 {
     fn undo(&mut self, world: &mut World) {
-        self.1.common_undo(world);
-        self.0.undo(world);
+        self.relationship_target.undo(world);
+        self.relationship.undo(world);
     }
     fn redo(&mut self, world: &mut World) {
-        for entity in Values::iter_entities(&self.1.entities) {
-            world
-                .get_mut::<T>(entity)
-                .expect("todo")
-                .collection_mut_risky()
-                .add(Entity::PLACEHOLDER);
+        if ONE_TO_ONE {
+            let iter = self.relationship_target.entities.iter().map(|entity| {
+                // T::Collection is Entity
+                let value = &mut *world
+                    .get_mut::<T::RelationshipTarget>(*entity)
+                    .expect("todo");
+                let mut replacement =
+                    <T::RelationshipTarget as RelationshipTarget>::Collection::new();
+                replacement.add(value.collection().iter().next().expect("todo"));
+                let replacement = T::RelationshipTarget::from_collection_risky(replacement);
+                replace(value, replacement)
+            });
+            self.relationship_target.values.extend(iter);
+            self.relationship.redo(world);
+        } else {
+            for entity in self.relationship_target.entities.iter() {
+                world
+                    .get_mut::<T::RelationshipTarget>(*entity)
+                    .expect("todo")
+                    .collection_mut_risky()
+                    .add(Entity::PLACEHOLDER);
+            }
+
+            // buffering T::Relationship will now not remove T because with Entity::PLACEHOLDER it is not empty
+            self.relationship.redo(world);
+
+            let values = self.relationship_target.entities.iter().map(|entity| {
+                let mut entity = world.entity_mut(*entity);
+                let EntityEntry::Occupied(mut value) = entity.entry::<T::RelationshipTarget>()
+                else {
+                    panic!("todo");
+                };
+                // remove Entity::PLACEHOLDER before taking to make this trickery unnoticable by T's hooks
+                value
+                    .get_mut()
+                    .collection_mut_risky()
+                    .remove(Entity::PLACEHOLDER);
+                value.take()
+            });
+            self.relationship_target.values.extend(values);
         }
-
-        // buffering T::Relationship will now not remove T because with Entity::PLACEHOLDER it is not empty
-        self.0.redo(world);
-
-        let values = Values::iter_entities(&self.1.entities).map(|entity| {
-            let mut entity = world.entity_mut(entity);
-            let EntityEntry::Occupied(mut value) = entity.entry::<T>() else {
-                panic!("todo");
-            };
-            // remove Entity::PLACEHOLDER before taking to make this trickery unnoticable by T's hooks
-            value
-                .get_mut()
-                .collection_mut_risky()
-                .remove(Entity::PLACEHOLDER);
-            value.take()
-        });
-        self.1.values.extend_values(values);
     }
 }
 
-impl<T: RelationshipTarget, Values: ExtendDrain<T>, Other: UndoRedo> UndoRedo
-    for (Other, RelationshipBuffer<T, Values, true, true>)
-{
+struct BufferOneForSingleEntity<T: Component> {
+    value: Option<T>,
+    entity: Entity,
+}
+
+impl<T: Component> BufferOneForSingleEntity<T> {
+    fn new(entity: Entity) -> Self {
+        Self {
+            value: None,
+            entity,
+        }
+    }
+}
+
+impl<T: Component> UndoRedo for BufferOneForSingleEntity<T> {
     fn undo(&mut self, world: &mut World) {
-        self.1.common_undo(world);
-        self.0.undo(world);
+        world
+            .entity_mut(self.entity)
+            .insert(self.value.take().unwrap());
     }
     fn redo(&mut self, world: &mut World) {
-        let iter = Values::iter_entities(&self.1.entities).map(|entity| {
-            // T::Collection is Entity
-            let value = &mut *world.get_mut::<T>(entity).expect("todo");
-            let mut replacement = T::Collection::new();
-            replacement.add(value.collection().iter().next().expect("todo"));
-            let replacement = T::from_collection_risky(replacement);
-            replace(value, replacement)
-        });
-        self.1.values.extend_values(iter);
-        self.0.redo(world); // todo: correct order? add comment explaining this 
+        self.value = world.entity_mut(self.entity).take::<T>();
     }
 }
 
-/*
-- sammle rekursiv die entities die DisabledToDespawn erhalten sollen
-- alle relationship types checken ob dieses entity hier einen parent hat und in dem fall buffert T
-  und/oder, wenn es keine geschwister hat und target gespeichert werden muss, auch RelationshipTarget vom parent
-- für LINKED_SPAWN wird nichts weiter unternommen da es keine Kinder gibt die nicht despawnen sollen
-- für nicht LINKED_SPAWN werden nicht zu despawnenden kindern aller despawned entities das T und/oder von diesem
-  zu despawnenden entity das RelationshipTarget gebuffert
+#[derive(Clone, Resource)]
+pub(crate) struct RevRelationship(Arc<Inner>);
 
-- fn für pre-insert
-- Option(fn) für linked despawn-entities
-- fn für despawn-buffer (top)
-- Option(fn) für non-linked despawn-buffer (bottoms)
-
-ChildOf bekommt extra logik außerhalb Fns sodass diese nicht registriert werden muss und performanter ist
-
-braucht es eine EntityHashSet?
-
- */
-
-#[derive(Default, Clone, Resource)]
-pub(crate) struct RevRelationship {
-    fns: Arc<RevRelationshipInner>,
+struct Inner {
+    child_of: Ids,
+    fns: Vec<Fns>,
     registered: Vec<TypeId>,
 }
 
-#[derive(Default)]
-struct RevRelationshipInner {
-    linked: Vec<LinkedFns>,
-    not_linked: Vec<NotLinkedFns>,
-}
-
-struct LinkedFns {
-    backup: BackupFn,
-    collect_despawn: CollectDespawnFn,
-    buffer_top: BufferTopFn,
-}
-
-struct NotLinkedFns {
-    backup: BackupFn,
-    buffer_top: BufferTopFn,
-    buffer_bottom: BufferBottomFn,
-}
-
 struct Fns {
+    ids: Ids,
     backup: BackupFn,
     collect_despawn: Option<CollectDespawnFn>,
-    buffer_despawn: BufferBottomFn,
+    buffer_despawn: BufferDespawn,
 }
 
-type BackupFn = fn(&mut EntityWorldMut, BundleId, NonLogNow, BufferAt);
+#[derive(Clone, Copy)]
+struct Ids {
+    relationship: ComponentId,
+    relationship_target: ComponentId,
+}
+
+impl FromWorld for RevRelationship {
+    fn from_world(world: &mut World) -> Self {
+        let relationship = world.register_component::<ChildOf>();
+        let relationship_target = world.register_component::<Children>();
+        Self(Arc::new(Inner {
+            child_of: Ids {
+                relationship,
+                relationship_target,
+            },
+            fns: Vec::new(),
+            registered: Vec::new(),
+        }))
+    }
+}
+
+type BackupFn = fn(&mut EntityWorldMut, Ids, &HashSet<ComponentId>, NonLogNow, BufferAt);
 type CollectDespawnFn = fn(&RevRelationship, EntityRef, &World, &mut DespawnResultsFn);
-type BufferTopFn = fn(&mut EntityWorldMut, NonLogNow, &DespawnResultsFn);
-type BufferBottomFn = fn(&mut World, Entity, NonLogNow, &DespawnResultsFn, &mut EntityHashSet);
+type BufferDespawn = fn(&mut World, NonLogNow, &DespawnResultsFn, &mut EntityHashSet);
 type DespawnResultsFn = EntityHashMap<Result<(), RevEntityError>>;
 
 impl RevRelationship {
-    pub(crate) fn register<T: Relationship>(&mut self) {
+    pub(crate) fn register<T: Relationship>(
+        &mut self,
+        relationship: ComponentId,
+        relationship_target: ComponentId,
+    ) {
         let id = TypeId::of::<T>();
-        if TypeId::of::<ChildOf>() == id || self.registered.contains(&id) {
+        if TypeId::of::<ChildOf>() == id || self.0.registered.contains(&id) {
             return;
         }
-
-        let fns_mut = Arc::get_mut(&mut self.fns).expect("todo");
-        self.registered.push(id);
 
         let relationship_extra = size_of::<T>() > size_of::<Entity>();
         let relationship_target_extra = size_of::<T::RelationshipTarget>()
             > size_of::<<T::RelationshipTarget as RelationshipTarget>::Collection>();
         let one_to_one = TypeId::of::<Entity>()
             == TypeId::of::<<T::RelationshipTarget as RelationshipTarget>::Collection>();
+        let ids = Ids {
+            relationship,
+            relationship_target,
+        };
+        let collect_despawn = <T::RelationshipTarget as RelationshipTarget>::LINKED_SPAWN
+            .then_some(Self::collect_despawn::<T> as CollectDespawnFn);
 
-        let backup: BackupFn;
-        let buffer_top: BufferTopFn;
-        let buffer_bottom: BufferBottomFn;
+        let fns = match (relationship_extra, relationship_target_extra, one_to_one) {
+            (_, false, _) => Fns {
+                ids,
+                backup: backup_relationship_extra::<T>,
+                collect_despawn,
+                buffer_despawn: buffer_despawn_relationship_extra::<T>,
+            },
+            (false, true, _) => Fns {
+                ids,
+                backup: backup_relationship_target_extra::<T>,
+                collect_despawn,
+                buffer_despawn: buffer_despawn_relationship_target_extra::<T>,
+            },
+            (true, true, false) => Fns {
+                ids,
+                backup: backup_both_extra::<T, false>,
+                collect_despawn,
+                buffer_despawn: buffer_despawn_both_extra::<T, false>,
+            },
+            (true, true, true) => Fns {
+                ids,
+                backup: backup_both_extra::<T, true>,
+                collect_despawn,
+                buffer_despawn: buffer_despawn_both_extra::<T, true>,
+            },
+        };
 
-        match (relationship_extra, relationship_target_extra, one_to_one) {
-            (_, false, _) => {
-                backup = backup_relationship_extra::<T>;
-                buffer_top = buffer_top_relationship_extra::<T>;
-                buffer_bottom = buffer_bottom_relationship_extra::<T>;
-            }
-            (false, true, _) => {
-                backup = backup_relationship_target_extra::<T>;
-                buffer_top = buffer_top_relationship_target_extra::<T>;
-                buffer_bottom = buffer_bottom_relationship_target_extra::<T>;
-            }
-            (true, true, false) => {
-                backup = backup_both_extra::<T, false>;
-                buffer_top = buffer_top_both_extra::<T, false>;
-                buffer_bottom = buffer_bottom_both_extra::<T, false>;
-            }
-            (true, true, true) => {
-                backup = backup_both_extra::<T, true>;
-                buffer_top = buffer_top_both_extra::<T, true>;
-                buffer_bottom = buffer_bottom_both_extra::<T, true>;
-            }
-        }
-
-        if <T::RelationshipTarget as RelationshipTarget>::LINKED_SPAWN {
-            fns_mut.linked.push(LinkedFns {
-                backup,
-                collect_despawn: Self::collect_despawn::<T>,
-                buffer_top,
-            });
-        } else {
-            fns_mut.not_linked.push(NotLinkedFns {
-                backup,
-                buffer_top,
-                buffer_bottom,
-            })
-        }
+        let inner = Arc::get_mut(&mut self.0).expect("todo");
+        inner.fns.push(fns);
+        inner.registered.push(id);
     }
     /// backup these component ids if they are relevant to relationships
     pub(crate) fn backup(
         &self,
         entity: &mut EntityWorldMut,
-        bundle: BundleId,
+        components: &HashSet<ComponentId>,
         now: NonLogNow,
         at: BufferAt,
     ) {
-        backup_relationship_extra::<ChildOf>(entity, bundle, now, at);
-        for f in self.fns.linked.iter() {
-            (f.backup)(entity, bundle, now, at)
-        }
-        for f in self.fns.not_linked.iter() {
-            (f.backup)(entity, bundle, now, at)
+        backup_relationship_extra::<ChildOf>(entity, self.0.child_of, components, now, at);
+        for f in self.0.fns.iter() {
+            (f.backup)(entity, f.ids, components, now, at)
         }
     }
     #[track_caller]
@@ -359,15 +295,6 @@ impl RevRelationship {
             &mut cache.results,
         );
 
-        // buffer relationship components of entity and it's non-despawning parents
-        buffer_top_relationship_extra::<ChildOf>(entity_mut, now, &cache.results);
-        for f in self.fns.linked.iter() {
-            (f.buffer_top)(entity_mut, now, &cache.results);
-        }
-        for f in self.fns.not_linked.iter() {
-            (f.buffer_top)(entity_mut, now, &cache.results);
-        }
-
         entity_mut.world_scope(|world| {
             let Cache {
                 results,
@@ -375,9 +302,9 @@ impl RevRelationship {
                 errors,
             } = &mut cache;
 
-            // buffer relationship components of entities and their non-despawning children
-            for f in self.fns.not_linked.iter() {
-                (f.buffer_bottom)(world, entity, now, &results, visited);
+            // buffer relationship components of entities and their non-despawning parents/children if needed
+            for f in self.0.fns.iter() {
+                (f.buffer_despawn)(world, now, &results, visited);
                 visited.clear();
             }
 
@@ -415,10 +342,11 @@ impl RevRelationship {
         results: &mut DespawnResultsFn,
     ) {
         self.collect_despawn::<ChildOf>(entity_ref, world, results);
-        self.fns
-            .linked
+        self.0
+            .fns
             .iter()
-            .for_each(|fns| (fns.collect_despawn)(self, entity_ref, world, results));
+            .flat_map(|fns| fns.collect_despawn)
+            .for_each(|collect_despawn| collect_despawn(self, entity_ref, world, results));
     }
     fn collect_despawn<T: Relationship>(
         &self,
@@ -455,31 +383,280 @@ impl RevRelationship {
     }
 }
 
+// backup implementierung falsch!
+// bei at != Undo: wie bisher umsetzen
+// bei at == Undo: anhand von `components` festlegen ob ein uninitalisierter buffer gespeichert werden soll
+// es benötigt beide für NowAndUndo, vielleicht als swap?
+
 fn backup_relationship_extra<T: Relationship>(
     entity_mut: &mut EntityWorldMut,
-    bundle: BundleId,
+    ids: Ids,
+    components: &HashSet<ComponentId>,
     now: NonLogNow,
     at: BufferAt,
 ) {
-    todo!()
+    let mut buffer_relationship = None;
+    let mut buffer_relationship_target = None;
+
+    if at == BufferAt::Undo {
+        if components.contains(&ids.relationship)
+    } else {
+        if components.contains(&ids.relationship) && entity_mut.contains_id(ids.relationship) {
+            buffer_relationship = Some(BufferOneForSingleEntity::<T>::new(entity_mut.id()));
+        }
+        if components.contains(&ids.relationship_target) {
+            if let Some(children) = entity_mut.get::<T::RelationshipTarget>() {
+                let children = children.iter().collect::<Vec<_>>();
+                buffer_relationship_target = BufferOneForManyEntities::<T>::new(children);
+            }
+        }
+    }
+
+    match (buffer_relationship, buffer_relationship_target, at) {
+        (None, None, _) => {}
+        (Some(buffer), None, BufferAt::Undo) => {
+            world.buffer_undo_redo(now, buffer);
+        }
+        (Some(buffer), None, _) => {
+            world.redo_and_buffer(now, buffer);
+            entity_mut.update_location();
+        }
+        (None, Some(buffer), BufferAt::Undo) => {
+            world.buffer_undo_redo(now, buffer);
+        }
+        (None, Some(buffer), _) => {
+            world.redo_and_buffer(now, buffer);
+            entity_mut.update_location();
+        }
+        (Some(relationship), Some(relationship_target), BufferAt::Undo) => {
+            world.buffer_undo_redo(now, relationship);
+            world.buffer_undo_redo(now, relationship_target);
+        }
+        (Some(relationship), Some(relationship_target), _) => {
+            world.redo_and_buffer(now, relationship);
+            world.redo_and_buffer(now, relationship_target);
+            entity_mut.update_location();
+        }
+    }
 }
 
 fn backup_relationship_target_extra<T: Relationship>(
     entity_mut: &mut EntityWorldMut,
-    bundle: BundleId,
+    ids: Ids,
+    components: &HashSet<ComponentId>,
+    now: NonLogNow,
+    at: BufferAt,
+) {
+    let mut buffer_relationship = None;
+    if components.contains(&ids.relationship) {
+        if let Some(parent) = entity_mut.get::<T>() {
+            // If at == Undo, then it would be not reliable to interpret if RelationshipTarget will become empty or not
+            // as there might be multiple of this UndoRedo being buffered with the same parent.
+            // However when this is Undo then only because the caller confirmed that no overwrite will happen _now_ which
+            // means that the current state of the relationship is not important.
+            // Therefore an parent is only expected to exist while at != Undo.
+            assert_ne!(at, BufferAt::Undo) // todo: panic in following match arm instead
+        }
+        buffer_relationship = Some(BufferOneForSingleEntity::<T>::new(entity_mut.id()));
+    }
+
+    let mut buffer_relationship_target = None;
+    if components.contains(&ids.relationship_target) {
+        if let Some(children) = entity_mut.get::<T::RelationshipTarget>() {
+            let children = children.iter().collect::<Vec<_>>();
+            buffer_relationship_target = BufferOneForManyEntities::<T>::new(children);
+        }
+    }
+}
+
+fn backup_both_extra<T: Relationship, const ONE_TO_ONE: bool>(
+    entity_mut: &mut EntityWorldMut,
+    ids: Ids,
+    components: &HashSet<ComponentId>,
     now: NonLogNow,
     at: BufferAt,
 ) {
     todo!()
 }
 
-fn backup_both_extra<T: Relationship, const ONE_TO_ONE: bool>(
-    entity_mut: &mut EntityWorldMut,
-    bundle: BundleId,
+fn buffer_despawn_relationship_extra<T: Relationship>(
+    world: &mut World,
     now: NonLogNow,
-    at: BufferAt,
+    results: &DespawnResultsFn,
+    visited: &mut EntityHashSet,
 ) {
-    todo!()
+    let mut relationship_entities = Vec::new();
+    let entities = results
+        .iter()
+        .filter_map(|(entity, result)| result.is_ok().then_some(*entity));
+    for entity in entities {
+        if !visited.insert(entity) {
+            continue;
+        }
+        let Ok(entity_ref) = world.get_entity(entity) else {
+            continue;
+        };
+
+        if !<T::RelationshipTarget as RelationshipTarget>::LINKED_SPAWN {
+            if let Some(children) = entity_ref.get::<T::RelationshipTarget>() {
+                let children = children
+                    .iter()
+                    .filter(|child| !results.contains_key(child) && visited.insert(*child));
+                relationship_entities.extend(children);
+            }
+        }
+
+        if entity_ref
+            .get::<T>()
+            .map(T::get)
+            .is_some_and(|parent| !results.contains_key(&parent))
+        {
+            relationship_entities.push(entity);
+        }
+    }
+    if let Some(buffer) = BufferOneForManyEntities::<T>::new(relationship_entities) {
+        world.redo_and_buffer(now, buffer);
+    }
+}
+
+fn buffer_despawn_relationship_target_extra<T: Relationship>(
+    world: &mut World,
+    now: NonLogNow,
+    results: &DespawnResultsFn,
+    visited: &mut EntityHashSet,
+) {
+    let mut relationship_entities = Vec::new();
+    let mut relationship_target_entities = Vec::new();
+    let entities = results
+        .iter()
+        .filter_map(|(entity, result)| result.is_ok().then_some(*entity));
+    for entity in entities {
+        if !visited.insert(entity) {
+            continue;
+        }
+        let Ok(entity_ref) = world.get_entity(entity) else {
+            continue;
+        };
+
+        if !<T::RelationshipTarget as RelationshipTarget>::LINKED_SPAWN {
+            if let Some(children) = entity_ref.get::<T::RelationshipTarget>() {
+                if children.iter().any(|child| !results.contains_key(&child)) {
+                    relationship_target_entities.push(entity);
+                }
+            }
+        }
+
+        let parent = entity_ref
+            .get::<T>()
+            .map(T::get)
+            .filter(|parent| !results.contains_key(parent) && visited.insert(*parent));
+        let Some(parent) = parent else {
+            continue;
+        };
+        let previous_relationship_len = relationship_entities.len();
+        let mut all_siblings_despawn = true;
+        let siblings = world
+            .get::<T::RelationshipTarget>(parent)
+            .into_iter()
+            .flat_map(RelationshipTarget::iter);
+        for sibling in siblings {
+            if results.contains_key(&sibling) {
+                relationship_entities.push(sibling);
+            } else {
+                all_siblings_despawn = false;
+            }
+        }
+        if all_siblings_despawn {
+            relationship_entities.truncate(previous_relationship_len);
+            relationship_target_entities.push(parent);
+        }
+    }
+    if let Some(buffer) = BufferOneForManyEntities::<T>::new(relationship_entities) {
+        world.redo_and_buffer(now, buffer);
+    }
+    if let Some(buffer) =
+        BufferOneForManyEntities::<T::RelationshipTarget>::new(relationship_target_entities)
+    {
+        world.redo_and_buffer(now, buffer);
+    }
+}
+
+fn buffer_despawn_both_extra<T: Relationship, const ONE_TO_ONE: bool>(
+    world: &mut World,
+    now: NonLogNow,
+    results: &DespawnResultsFn,
+    visited: &mut EntityHashSet,
+) {
+    let mut relationship_entities = Vec::new();
+    let mut relationship_target_entities = Vec::new();
+    for entity in results
+        .iter()
+        .filter_map(|(entity, result)| result.is_ok().then_some(*entity))
+    {
+        if !visited.insert(entity) {
+            continue;
+        }
+        let Ok(entity_ref) = world.get_entity(entity) else {
+            continue;
+        };
+
+        if !<T::RelationshipTarget as RelationshipTarget>::LINKED_SPAWN {
+            if let Some(children) = entity_ref.get::<T::RelationshipTarget>() {
+                let previous_relationship_len = relationship_entities.len();
+                let mut any_children_despawn = false;
+                for child in children.iter() {
+                    if results.contains_key(&child) {
+                        any_children_despawn = true;
+                    } else {
+                        relationship_entities.push(child);
+                    }
+                }
+                if relationship_entities.len() > previous_relationship_len && any_children_despawn {
+                    relationship_target_entities.push(entity);
+                }
+            }
+        }
+
+        let parent = entity_ref
+            .get::<T>()
+            .map(T::get)
+            .filter(|parent| !results.contains_key(parent) && visited.insert(*parent));
+        let Some(parent) = parent else {
+            continue;
+        };
+
+        let mut all_siblings_despawn = true;
+        let siblings = world
+            .get::<T::RelationshipTarget>(parent)
+            .into_iter()
+            .flat_map(RelationshipTarget::iter);
+        for sibling in siblings {
+            if results.contains_key(&sibling) {
+                relationship_entities.push(sibling);
+            } else {
+                all_siblings_despawn = false;
+            }
+        }
+        if all_siblings_despawn {
+            relationship_target_entities.push(parent);
+        }
+    }
+
+    match (
+        BufferOneForManyEntities::<T>::new(relationship_entities),
+        BufferOneForManyEntities::<T::RelationshipTarget>::new(relationship_target_entities),
+    ) {
+        (None, None) => return,
+        (Some(buffer), None) => world.redo_and_buffer(now, buffer),
+        (None, Some(buffer)) => world.redo_and_buffer(now, buffer),
+        (Some(relationship), Some(relationship_target)) => {
+            let buffer = BufferBothForManyEntities::<T, ONE_TO_ONE> {
+                relationship,
+                relationship_target,
+            };
+            world.redo_and_buffer(now, buffer)
+        }
+    }
 }
 
 // todo: buffer top does not need to check if parents are (reversibly) despawned if relationship is linked
@@ -487,6 +664,7 @@ fn backup_both_extra<T: Relationship, const ONE_TO_ONE: bool>(
 // problem: not only top entity can have non-despawned parent
 // unify buffer top/bottom again
 
+/*
 fn buffer_top_relationship_extra<T: Relationship>(
     entity_mut: &mut EntityWorldMut,
     now: NonLogNow,
@@ -541,7 +719,6 @@ fn buffer_bottom_both_extra<T: Relationship, const ONE_TO_ONE: bool>(
     todo!()
 }
 
-/*
 #[derive(Default, Clone, Resource)]
 pub(crate) struct RevRelationship {
     fns: Arc<Vec<RelationshipFns>>,
