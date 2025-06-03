@@ -16,6 +16,8 @@ use crate::meta::NonLogNow;
 use super::*;
 
 pub trait RevWorld {
+    fn redo_and_buffer(&mut self, now: NonLogNow, undo_redo: impl UndoRedo);
+
     fn buffer_components(
         &mut self,
         now: NonLogNow,
@@ -140,6 +142,11 @@ pub trait RevWorld {
 }
 
 impl RevWorld for World {
+    fn redo_and_buffer(&mut self, now: NonLogNow, mut undo_redo: impl UndoRedo) {
+        undo_redo.redo(self);
+        self.buffer_undo_redo(now, undo_redo)
+    }
+
     fn buffer_components(
         &mut self,
         now: NonLogNow,
