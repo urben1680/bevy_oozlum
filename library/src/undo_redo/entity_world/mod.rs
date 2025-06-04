@@ -379,7 +379,8 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
             .archetype()
             .components()
             .collect::<Vec<_>>();
-        non_entity_buffer(self, now, BufferAt::Undo, &components);
+        self.world_scope(|world| world.get_resource_or_init::<RevRelationship>().clone())
+            .buffer(self, &components, now, false);
         entity
     }
 
@@ -404,11 +405,15 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
     }
 
     #[track_caller]
-    fn rev_despawn(self, now: NonLogNow) {
+    fn rev_despawn(mut self, now: NonLogNow) {
         let entity = self.id();
-        recursive_rev_despawn(self, now).unwrap_or_else(|err| {
-            panic!("entity {entity} could not be reversibly despawned: {err}")
-        });
+        let relationship_res =
+            self.world_scope(|world| world.get_resource_or_init::<RevRelationship>().clone());
+        relationship_res
+            .try_despawn(self, now)
+            .unwrap_or_else(|err| {
+                panic!("entity {entity} could not be reversibly despawned: {err}")
+            });
     }
 
     #[track_caller]
