@@ -12,7 +12,6 @@ struct Required<const N: u8>(u8);
 fn setup() -> World {
     panic_on_error_events();
     let mut world = World::new();
-    register_rev_relationship::<ChildOf>(&mut world);
     world.init_resource::<UndoRedoBuffer>();
     world.insert_resource(RevDirection::NOT_LOG.to_meta(0, 1, 1));
     world
