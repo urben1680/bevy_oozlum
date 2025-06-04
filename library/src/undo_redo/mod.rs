@@ -420,46 +420,6 @@ impl<T: UndoRedo> UndoRedo for Box<[T]> {
     }
 }
 
-pub struct DeferredUndoRedo<T: UndoRedo, F: FnOnce(&mut World) -> T + Send + 'static>(
-    MaybeUninitUndoRedo<T, F>,
-);
-
-enum MaybeUninitUndoRedo<T: UndoRedo, F: FnOnce(&mut World) -> T + Send + 'static> {
-    Uninit(Option<F>),
-    Init(T),
-}
-
-impl<T: UndoRedo, F: FnOnce(&mut World) -> T + Send + 'static> DeferredUndoRedo<T, F> {
-    pub fn new(undo: F) -> Self {
-        Self(MaybeUninitUndoRedo::Uninit(Some(undo)))
-    }
-}
-
-// todo: change fn generic type here to FromWorld function item when https://github.com/rust-lang/rust/issues/63063 is stabilized
-impl<T: UndoRedo + FromWorld> Default for DeferredUndoRedo<T, fn(&mut World) -> T> {
-    fn default() -> Self {
-        Self::new(T::from_world)
-    }
-}
-
-impl<T: UndoRedo, F: FnOnce(&mut World) -> T + Send + 'static> UndoRedo for DeferredUndoRedo<T, F> {
-    fn undo(&mut self, world: &mut World) {
-        match &mut self.0 {
-            MaybeUninitUndoRedo::Uninit(undo) => {
-                let undo = undo.take().unwrap();
-                self.0 = MaybeUninitUndoRedo::Init(undo(world))
-            }
-            MaybeUninitUndoRedo::Init(init) => init.undo(world),
-        }
-    }
-    fn redo(&mut self, world: &mut World) {
-        match &mut self.0 {
-            MaybeUninitUndoRedo::Init(init) => init.redo(world),
-            MaybeUninitUndoRedo::Uninit(_) => panic!("todo"),
-        }
-    }
-}
-
 #[derive(Default)]
 pub(crate) struct UndoRedoLog {
     undo_redo_log: DenseTransitionsLog<SyncCell<Box<dyn UndoRedo>>>,

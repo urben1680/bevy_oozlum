@@ -136,13 +136,13 @@ impl RevRelationship {
         buffer_at_now: bool,
     ) -> bool {
         #[derive(Resource)]
-        struct Cache(Box<[bool]>);
+        struct BufferCache(Box<[bool]>);
 
         let mut components_sparse = entity_mut
-            .world_scope(World::remove_resource::<Cache>)
+            .world_scope(World::remove_resource::<BufferCache>)
             .unwrap_or_else(|| {
                 let max = self.registered().map(ComponentId::index).max().unwrap(); // never empty due to chained `self.0.child_of`
-                Cache(vec![false; max + 1].into_boxed_slice())
+                BufferCache(vec![false; max + 1].into_boxed_slice())
             })
             .0;
 
@@ -171,7 +171,7 @@ impl RevRelationship {
             }
         }
 
-        entity_mut.world_scope(|world| world.insert_resource(Cache(components_sparse)));
+        entity_mut.world_scope(|world| world.insert_resource(BufferCache(components_sparse)));
 
         buffered_any
     }
@@ -182,10 +182,9 @@ impl RevRelationship {
         now: NonLogNow,
     ) -> Result<(), RevEntitiesError> {
         #[derive(Default, Resource)]
-        struct Cache {
+        struct DespawnCache {
             results: DespawnResults,
             visited: EntityHashSet,
-            errors: Vec<RevEntityError>,
         }
 
         let entity = entity_mut.id();
@@ -200,7 +199,7 @@ impl RevRelationship {
         }
 
         let mut cache = entity_mut
-            .world_scope(World::remove_resource::<Cache>)
+            .world_scope(World::remove_resource::<DespawnCache>)
             .unwrap_or_default();
 
         cache.results.insert(entity, Ok(()));
@@ -213,11 +212,7 @@ impl RevRelationship {
         );
 
         entity_mut.world_scope(|world| {
-            let Cache {
-                results,
-                visited,
-                errors,
-            } = &mut cache;
+            let DespawnCache { results, visited } = &mut cache;
 
             // buffer relationship components of entities and their non-despawning parents/children if needed
             for f in self.0.fns.iter() {
@@ -227,29 +222,25 @@ impl RevRelationship {
 
             // add DisabledToDespawn to despawning entities
             let marker = DisabledToDespawn::for_spawn_despawn(now.0);
-            let mut result = world.rev_try_insert_batch(
+            let mut error = RevEntitiesError::empty();
+            world.rev_insert_batch(
                 now,
                 results.drain().filter_map(|(entity, result)| match result {
                     Ok(()) => Some((entity, marker)),
                     Err(err) => {
-                        errors.push(err);
+                        error.push(err);
                         None
                     }
                 }),
             );
 
-            // collect errors
-            if !errors.is_empty() {
-                let mut entities_error = result.err().unwrap_or_else(|| RevEntitiesError::empty());
-                errors
-                    .drain(..)
-                    .for_each(|entity_error| entities_error.push(entity_error));
-                result = Err(entities_error);
-            }
-
             world.insert_resource(cache);
 
-            result
+            if !error.is_empty() {
+                Err(error)
+            } else {
+                Ok(())
+            }
         })
     }
     fn recursive_collect_despawn(
@@ -339,9 +330,6 @@ fn buffer_relationship_target_extra<T: Relationship>(
     let mut relationship = None;
     if components_sparse[ids.relationship.index()] {
         if let Some(parent) = entity_mut.get::<T>().map(T::get) {
-            // todo: try to construct a failing case where two entities with the same parent are triggering this at the same time
-            // this would be bad because their parent would not be detected as vanishing when both children have their T overwritten/removed
-            // ideally this should be impossible to happen by the way this is called, write a regression test if that is true
             if entity_mut
                 .world()
                 .get::<T::RelationshipTarget>(parent)
@@ -795,6 +783,5 @@ mod test {
     -- je variant, je buffer_at_now (16)
     - despawn mit ChildOf relationships das sich auf despawn entities beschränkt und nur die varianten testen soll
     -- je variant, je linked spawn (16)
-    - conflicting buffer_relationship_target_extra (at another place, where?)
      */
 }

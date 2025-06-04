@@ -155,7 +155,7 @@ pub(super) fn buffer_bundle(
             EntityRevDespawnedError::new(entity, marker),
         ));
     }
-    let relationship_res = world.get_resource_or_init::<RevRelationship>().clone();
+    let relationship_res = world.resource::<RevRelationship>().clone();
     let mut buffer = BundleBuffer {
         bundle,
         entity,
@@ -374,12 +374,7 @@ pub(super) fn components_to_bundle(world: &mut World, components: &[ComponentId]
     let mut checked = world
         .remove_resource::<CheckedClonable>()
         .unwrap_or_else(|| {
-            CheckedClonable(
-                world
-                    .get_resource_or_init::<RevRelationship>()
-                    .registered()
-                    .collect(),
-            )
+            CheckedClonable(world.resource::<RevRelationship>().registered().collect())
         });
     // todo: this should be () outside reflect flag
     let registry = world
