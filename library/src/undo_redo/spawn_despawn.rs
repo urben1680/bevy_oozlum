@@ -107,7 +107,9 @@ impl BundleEffect for DespawnAtUndo {
             },
         );
         let components = entity.archetype().components().collect::<Vec<_>>();
-        non_entity_buffer(entity, self.0, BufferAt::Undo, &components);
+        entity
+            .world_scope(|world| world.get_resource_or_init::<RevRelationship>().clone())
+            .buffer(entity, &components, self.0, false);
     }
 }
 
