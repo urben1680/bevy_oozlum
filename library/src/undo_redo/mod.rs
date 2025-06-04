@@ -14,8 +14,8 @@ use bevy::{
         bundle::{Bundle, BundleEffect, BundleFromComponents, BundleId, DynamicBundle, InsertMode},
         change_detection::{MaybeLocation, Mut},
         component::{
-            Component, ComponentCloneBehavior, ComponentId, ComponentMutability, Components,
-            ComponentsRegistrator, RequiredComponents, StorageType,
+            Component, ComponentCloneBehavior, ComponentId, Components, ComponentsRegistrator,
+            RequiredComponents, StorageType,
         },
         entity::{Entity, EntityCloner, EntityDoesNotExistError, hash_set::EntityHashSet},
         hierarchy::{ChildOf, Children},
@@ -52,6 +52,7 @@ pub use bundle_buffer::*;
 pub use spawn_despawn::*;
 //pub use entity_commands::*;
 pub use entity_world::*;
+pub(crate) use relationship::*;
 pub use world::*;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -434,10 +435,10 @@ impl<T: UndoRedo, F: FnOnce(&mut World) -> T + Send + 'static> DeferredUndoRedo<
     }
 }
 
-// todo: change F type here when https://github.com/rust-lang/rust/issues/63063 is stabilized
+// todo: change fn generic type here to FromWorld function item when https://github.com/rust-lang/rust/issues/63063 is stabilized
 impl<T: UndoRedo + FromWorld> Default for DeferredUndoRedo<T, fn(&mut World) -> T> {
     fn default() -> Self {
-        Self::new(FromWorld::from_world)
+        Self::new(T::from_world)
     }
 }
 
@@ -454,7 +455,7 @@ impl<T: UndoRedo, F: FnOnce(&mut World) -> T + Send + 'static> UndoRedo for Defe
     fn redo(&mut self, world: &mut World) {
         match &mut self.0 {
             MaybeUninitUndoRedo::Init(init) => init.redo(world),
-            MaybeUninitUndoRedo::Uninit(_) => panic!("todo")
+            MaybeUninitUndoRedo::Uninit(_) => panic!("todo"),
         }
     }
 }
@@ -632,6 +633,7 @@ fn map_frame_log_err(
     }
 }
 
+#[derive(Copy, Clone, Debug)]
 pub struct UndoRedoSwap<T: UndoRedo>(pub T);
 
 impl<T: UndoRedo> UndoRedo for UndoRedoSwap<T> {
@@ -640,6 +642,12 @@ impl<T: UndoRedo> UndoRedo for UndoRedoSwap<T> {
     }
     fn redo(&mut self, world: &mut World) {
         self.0.undo(world);
+    }
+}
+
+impl<T: UndoRedo + FromWorld> FromWorld for UndoRedoSwap<T> {
+    fn from_world(world: &mut World) -> Self {
+        Self(T::from_world(world))
     }
 }
 
