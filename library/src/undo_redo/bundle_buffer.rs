@@ -4,12 +4,9 @@ use std::{
 };
 
 use bevy::{
-    ecs::{entity::EntityHashMap, reflect::AppTypeRegistry},
+    ecs::reflect::AppTypeRegistry,
     log::error,
-    platform::{
-        collections::hash_map::Entry,
-        hash::{FixedHasher, PassHash},
-    },
+    platform::hash::{FixedHasher, PassHash},
     reflect::ReflectFromPtr,
 };
 
@@ -158,6 +155,7 @@ pub(super) fn buffer_bundle(
             EntityRevDespawnedError::new(entity, marker),
         ));
     }
+    let relationship_res = world.get_resource_or_init::<RevRelationship>().clone();
     let mut buffer = BundleBuffer {
         bundle,
         entity,
@@ -167,17 +165,19 @@ pub(super) fn buffer_bundle(
         BufferAt::Now => {
             let entities = buffer.toggle_state(world);
             let components = buffer.get_component_ids(world);
-            let out = entities.buffer;
-            non_entity_buffer(&mut world.entity_mut(entity), now, at, &components);
-            entities.move_components(world, &components, RevDirection::NOT_LOG);
             world.buffer_undo_redo(now, buffer);
+
+            let out = entities.buffer;
+            relationship_res.buffer(&mut world.entity_mut(entity), &components, now, true);
+            entities.move_components(world, &components, RevDirection::NOT_LOG);
             Ok(Some(out))
         }
         BufferAt::Undo => {
             let components = buffer.get_component_ids(world);
             world.buffer_undo_redo(now, buffer);
+
             // needs to come after buffer_undo_redo so at undo, at reverse order, this gets to grap relevant components
-            non_entity_buffer(&mut world.entity_mut(entity), now, at, &components);
+            relationship_res.buffer(&mut world.entity_mut(entity), &components, now, false);
             Ok(None)
         }
         BufferAt::NowAndUndo => {
@@ -185,23 +185,15 @@ pub(super) fn buffer_bundle(
             let at_undo = buffer.clone(); // no buffer entity set yet so each spawns their own
             let entities = buffer.toggle_state(world);
             let components = buffer.get_component_ids(world);
-            let out = entities.buffer;
-            let has_non_entity_buffer = non_entity_buffer(
-                &mut world.entity_mut(entity),
-                now,
-                BufferAt::Now,
-                &components,
-            );
-            entities.move_components(world, &components, RevDirection::NOT_LOG);
             world.buffer_undo_redo(now, [buffer, at_undo]);
+
+            let out = entities.buffer;
+            let has_non_entity_buffer =
+                relationship_res.buffer(&mut world.entity_mut(entity), &components, now, true);
+            entities.move_components(world, &components, RevDirection::NOT_LOG);
             if has_non_entity_buffer {
                 // needs to come after buffer_undo_redo so at undo, at reverse order, this gets to grap relevant components
-                non_entity_buffer(
-                    &mut world.entity_mut(entity),
-                    now,
-                    BufferAt::Undo,
-                    &components,
-                );
+                relationship_res.buffer(&mut world.entity_mut(entity), &components, now, false);
             }
             Ok(Some(out))
         }
@@ -218,157 +210,6 @@ pub(crate) fn progress_scope(
     swap.undo(world);
     c(world);
     swap.redo(world);
-}
-
-pub(crate) fn register_rev_relationship<T: Relationship>(world: &mut World) {
-    let relationship_id = world.register_component::<T>();
-    let target_id = world.register_component::<T::RelationshipTarget>();
-    let mut resource = world.get_resource_or_init::<NonEntityBufferRes>();
-    resource.register_buffer::<T>(relationship_id);
-    //resource.register_buffer::<T::RelationshipTarget>(target_id); // T should be buffered + hooks do the rest
-    resource.register_despawn::<T::RelationshipTarget>(target_id);
-}
-
-// todo: buffer field with BundleId key
-#[derive(Resource, Default)]
-struct NonEntityBufferRes {
-    buffer: Arc<HashMap<ComponentId, fn(&mut EntityWorldMut, NonLogNow, BufferAt)>>,
-    despawn: HashMap<ComponentId, fn(&EntityWorldMut) -> EntityHashSet>,
-}
-
-impl NonEntityBufferRes {
-    fn register_buffer<T: Component>(&mut self, component_id: ComponentId) {
-        struct NonEntityBuffer<T: Component> {
-            entity: Entity,
-            component: Option<T>,
-        }
-
-        impl<T: Component> NonEntityBuffer<T> {
-            fn undo_redo(&mut self, world: &mut World, direction: RevDirection) {
-                let progress = BufferInProgress::NonEntityBuffer { direction };
-                progress_scope(world, progress, |world| {
-                    let mut entity = world.entity_mut(self.entity);
-                    if T::Mutability::MUTABLE {
-                        let component = unsafe {
-                            // SAFETY: this if branch asserts the component is mutable
-                            entity.get_mut_assume_mutable::<T>()
-                        };
-                        if let Some(mut c1) = component {
-                            match self.component.as_mut() {
-                                Some(c2) => core::mem::swap(&mut *c1, c2),
-                                None => self.component = entity.take::<T>(),
-                            }
-                            return;
-                        }
-                    } else {
-                        if let Some(mut c1) = entity.take::<T>() {
-                            match self.component.as_mut() {
-                                Some(c2) => {
-                                    core::mem::swap(&mut c1, c2);
-                                    entity.insert(c1);
-                                }
-                                None => self.component = Some(c1),
-                            }
-                            return;
-                        }
-                    }
-                    if let Some(c2) = self.component.take() {
-                        entity.insert(c2);
-                    }
-                })
-            }
-        }
-
-        impl<T: Component> UndoRedo for NonEntityBuffer<T> {
-            fn undo(&mut self, world: &mut World) {
-                self.undo_redo(world, RevDirection::BackwardLog);
-            }
-            fn redo(&mut self, world: &mut World) {
-                self.undo_redo(world, RevDirection::FORWARD_LOG);
-            }
-        }
-
-        Arc::get_mut(&mut self.buffer).expect("todo").insert(
-            component_id,
-            |entity_world_mut: &mut EntityWorldMut, now, at| {
-                let mut component = None;
-                if matches!(at, BufferAt::Now | BufferAt::NowAndUndo) {
-                    component = entity_world_mut.take::<T>();
-                }
-                let undo_redo = NonEntityBuffer {
-                    entity: entity_world_mut.id(),
-                    component,
-                };
-                entity_world_mut.buffer_undo_redo(now, undo_redo);
-            },
-        );
-    }
-
-    fn register_despawn<T: RelationshipTarget>(&mut self, component_id: ComponentId) {
-        self.despawn.insert(component_id, |entity| {
-            fn recursive<T: RelationshipTarget>(
-                world: &World,
-                entity: Entity,
-                entities: &mut EntityHashSet,
-            ) {
-                let Some(target) = world.get::<T>(entity) else {
-                    return;
-                };
-                for entity in target.iter() {
-                    if entities.insert(entity) {
-                        recursive::<T>(world, entity, entities);
-                    }
-                }
-            }
-
-            let mut entities = EntityHashSet::new(); // self.id() is already part of the map this one will be appended to
-            recursive::<T>(entity.world(), entity.id(), &mut entities);
-            // todo: use resource.buffer to remove T from entities here
-            entities
-        });
-    }
-}
-
-pub(crate) fn non_entity_buffer(
-    entity: &mut EntityWorldMut,
-    now: NonLogNow,
-    at: BufferAt,
-    components: &[ComponentId],
-) -> bool {
-    let buffer = entity
-        .world()
-        .resource::<NonEntityBufferRes>()
-        .buffer
-        .clone();
-    let mut has_non_entity_buffer = false;
-    for component in components.iter() {
-        if let Some(c) = buffer.get(component) {
-            c(entity, now, at);
-            has_non_entity_buffer = true;
-        }
-    }
-    has_non_entity_buffer
-}
-
-pub(crate) fn recursive_rev_despawn(
-    mut entity: EntityWorldMut,
-    now: NonLogNow,
-) -> Result<(), RevEntitiesError> {
-    let resource = entity.resource::<NonEntityBufferRes>();
-    let fns = entity
-        .archetype()
-        .components()
-        .filter_map(|id| resource.despawn.get(&id))
-        .copied();
-    let mut entities = EntityHashSet::from([entity.id()]);
-    for f in fns {
-        entities.extend(f(&entity));
-    }
-    let marker = DisabledToDespawn::for_buffer(now.0);
-    // rev_try_insert_batch_if_new is not needed as rev_try_insert_batch already skips entities that contain DisabledToDespawn
-    entity.world_scope(|world| {
-        world.rev_try_insert_batch(now, entities.into_iter().map(|entity| (entity, marker)))
-    })
 }
 
 #[derive(Clone)]
@@ -532,19 +373,13 @@ pub(super) fn components_to_bundle(world: &mut World, components: &[ComponentId]
 
     let mut checked = world
         .remove_resource::<CheckedClonable>()
-        .unwrap_or_else(|| match world.get_resource::<NonEntityBufferRes>() {
-            Some(non_entity_buffers) => {
-                // moving into UndoRedo instead of entities can bypass these checks
-                CheckedClonable(
-                    non_entity_buffers
-                        .buffer
-                        .keys()
-                        .into_iter()
-                        .copied()
-                        .collect(),
-                )
-            }
-            None => CheckedClonable::default(),
+        .unwrap_or_else(|| {
+            CheckedClonable(
+                world
+                    .get_resource_or_init::<RevRelationship>()
+                    .registered()
+                    .collect(),
+            )
         });
     // todo: this should be () outside reflect flag
     let registry = world
