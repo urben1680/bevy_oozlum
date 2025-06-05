@@ -155,49 +155,50 @@ pub(super) fn buffer_bundle(
             EntityRevDespawnedError::new(entity, marker),
         ));
     }
-    let relationship_res = world.resource::<RevRelationship>().clone();
-    let mut buffer = BundleBuffer {
-        bundle,
-        entity,
-        state: BufferState::Unspawned(marker),
-    };
-    match at {
-        BufferAt::Now => {
-            let entities = buffer.toggle_state(world);
-            let components = buffer.get_component_ids(world);
-            world.buffer_undo_redo(now, buffer);
+    world.resource_scope::<RevRelationship, _>(|world, mut relationship_res| {
+        let mut buffer = BundleBuffer {
+            bundle,
+            entity,
+            state: BufferState::Unspawned(marker),
+        };
+        match at {
+            BufferAt::Now => {
+                let entities = buffer.toggle_state(world);
+                let components = buffer.get_component_ids(world);
+                world.buffer_undo_redo(now, buffer);
 
-            let out = entities.buffer;
-            relationship_res.buffer(&mut world.entity_mut(entity), &components, now, true);
-            entities.move_components(world, &components, RevDirection::NOT_LOG);
-            Ok(Some(out))
-        }
-        BufferAt::Undo => {
-            let components = buffer.get_component_ids(world);
-            world.buffer_undo_redo(now, buffer);
-
-            // needs to come after buffer_undo_redo so at undo, at reverse order, this gets to grap relevant components
-            relationship_res.buffer(&mut world.entity_mut(entity), &components, now, false);
-            Ok(None)
-        }
-        BufferAt::NowAndUndo => {
-            // todo: different double buffer, not two, make use of same EntityCloner
-            let at_undo = buffer.clone(); // no buffer entity set yet so each spawns their own
-            let entities = buffer.toggle_state(world);
-            let components = buffer.get_component_ids(world);
-            world.buffer_undo_redo(now, [buffer, at_undo]);
-
-            let out = entities.buffer;
-            let has_non_entity_buffer =
+                let out = entities.buffer;
                 relationship_res.buffer(&mut world.entity_mut(entity), &components, now, true);
-            entities.move_components(world, &components, RevDirection::NOT_LOG);
-            if has_non_entity_buffer {
+                entities.move_components(world, &components, RevDirection::NOT_LOG);
+                Ok(Some(out))
+            }
+            BufferAt::Undo => {
+                let components = buffer.get_component_ids(world);
+                world.buffer_undo_redo(now, buffer);
+
                 // needs to come after buffer_undo_redo so at undo, at reverse order, this gets to grap relevant components
                 relationship_res.buffer(&mut world.entity_mut(entity), &components, now, false);
+                Ok(None)
             }
-            Ok(Some(out))
+            BufferAt::NowAndUndo => {
+                // todo: different double buffer, not two, make use of same EntityCloner
+                let at_undo = buffer.clone(); // no buffer entity set yet so each spawns their own
+                let entities = buffer.toggle_state(world);
+                let components = buffer.get_component_ids(world);
+                world.buffer_undo_redo(now, [buffer, at_undo]);
+
+                let out = entities.buffer;
+                let has_non_entity_buffer =
+                    relationship_res.buffer(&mut world.entity_mut(entity), &components, now, true);
+                entities.move_components(world, &components, RevDirection::NOT_LOG);
+                if has_non_entity_buffer {
+                    // needs to come after buffer_undo_redo so at undo, at reverse order, this gets to grap relevant components
+                    relationship_res.buffer(&mut world.entity_mut(entity), &components, now, false);
+                }
+                Ok(Some(out))
+            }
         }
-    }
+    })
 }
 
 /// [`World::buffer_components_in_progress`] returns `Some(direction)` during the execution of the closure.
@@ -373,8 +374,9 @@ pub(super) fn components_to_bundle(world: &mut World, components: &[ComponentId]
 
     let mut checked = world
         .remove_resource::<CheckedClonable>()
-        .unwrap_or_else(|| {
-            CheckedClonable(world.resource::<RevRelationship>().registered().collect())
+        .unwrap_or_else(|| match world.get_resource::<RevRelationship>() {
+            Some(resource) => CheckedClonable(resource.registered().collect()),
+            None => CheckedClonable::default(),
         });
     // todo: this should be () outside reflect flag
     let registry = world
