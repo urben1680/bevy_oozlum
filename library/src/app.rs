@@ -29,7 +29,7 @@ pub trait RevApp {
         schedule: impl ScheduleLabel,
         sets: impl IntoRevScheduleConfigs<InternedSystemSet, Marker>,
     ) -> &mut Self;
-    fn register_rev_relationship<T: Relationship>(&mut self);
+    fn rev_register_relationship<T: Relationship>(&mut self);
 }
 
 impl RevApp for App {
@@ -55,14 +55,13 @@ impl RevApp for App {
             .rev_configure_sets(sets);
         self
     }
-    fn register_rev_relationship<T: Relationship>(&mut self) {
+    fn rev_register_relationship<T: Relationship>(&mut self) {
         // as there is no pub interface to check if T was already used, this is an App method
         let world = self.world_mut();
-        let relationship = world.register_component::<T>();
-        let relationship_target = world.register_component::<T::RelationshipTarget>();
-        world
-            .get_resource_or_init::<RevRelationship>()
-            .register::<T>(relationship, relationship_target);
+        world.init_resource::<RevRelationship>();
+        world.resource_scope::<RevRelationship, _>(|world, mut resource| {
+            resource.register::<T>(world)
+        });
     }
 }
 
