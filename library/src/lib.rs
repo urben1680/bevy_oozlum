@@ -68,7 +68,8 @@ pub mod prelude {
     pub use crate::meta::{RevDirection, RevMeta};
     pub use crate::schedule::{RevSchedule as _, RevSystems, RevUpdate};
     pub use crate::undo_redo::{
-        BuffersUndoRedo as _, UndoRedo, UndoRedoBuffer, UndoRedoDirection, UndoRedoSwap,
+        BuffersUndoRedo as _, RevIsDespawned as _, UndoRedo, UndoRedoBuffer, UndoRedoDirection,
+        UndoRedoSwap,
     };
 }
 

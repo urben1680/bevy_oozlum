@@ -22,6 +22,8 @@ use super::*;
 mod test;
 
 pub trait RevEntityWorldMut<'w> {
+    fn redo_and_buffer(&mut self, now: NonLogNow, undo_redo: impl UndoRedo);
+
     fn buffer_components(
         &mut self,
         now: NonLogNow,
@@ -247,6 +249,10 @@ pub trait RevEntityWorldMut<'w> {
 }
 
 impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
+    fn redo_and_buffer(&mut self, now: NonLogNow, undo_redo: impl UndoRedo) {
+        self.world_scope(|world| world.redo_and_buffer(now, undo_redo))
+    }
+
     fn buffer_components(
         &mut self,
         now: NonLogNow,
@@ -364,25 +370,16 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
         now: NonLogNow,
         config: impl FnOnce(&mut EntityClonerBuilder) + Send + Sync + 'static,
     ) -> Entity {
-        let marker = DisabledToDespawn::for_spawn_despawn(now.0);
-        let entity = self.clone_and_spawn_with(config);
-        self.buffer_undo_redo(
-            now,
-            Spawn {
-                spawned: [entity],
-                marker,
-            },
-        );
-        let components = self
-            .world()
-            .entity(entity)
-            .archetype()
-            .components()
-            .collect::<Vec<_>>();
-        let mut resource = self.world_scope(World::remove_resource::<RevRelationship>).expect("todo");
-        resource.buffer(self, &components, now, false);
-        self.world_scope(|world| world.insert_resource(resource));
-        entity
+        let clone = self.clone_and_spawn_with(config);
+        let mut resource = self
+            .world_scope(World::remove_resource::<RevRelationship>)
+            .expect("todo");
+        self.world_scope(|world| {
+            let mut clone_mut = world.entity_mut(clone);
+            let _ok = resource.try_despawn(&mut clone_mut, now, false);
+            world.insert_resource(resource);
+        });
+        clone
     }
 
     fn rev_clone_components<B: Bundle>(&mut self, now: NonLogNow, target: Entity) -> &mut Self {
@@ -408,8 +405,10 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
     #[track_caller]
     fn rev_despawn(mut self, now: NonLogNow) {
         let entity = self.id();
-        let mut resource = self.world_scope(World::remove_resource::<RevRelationship>).expect("todo");
-        let result = resource.try_despawn(&mut self, now);
+        let mut resource = self
+            .world_scope(World::remove_resource::<RevRelationship>)
+            .expect("todo");
+        let result = resource.try_despawn(&mut self, now, true);
         self.world_scope(|world| world.insert_resource(resource));
         if let Err(err) = result {
             panic!("entity {entity} could not be reversibly despawned: {err}")

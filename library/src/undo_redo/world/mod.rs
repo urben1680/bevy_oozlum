@@ -256,27 +256,66 @@ impl RevWorld for World {
         I: IntoIterator,
         I::Item: Bundle<Effect: NoBundleEffect>,
     {
+        struct SpawnBatch {
+            entities: Arc<[Entity]>,
+            marker: DisabledToDespawn
+        }
+
+        impl UndoRedo for SpawnBatch {
+            fn undo(&mut self, world: &mut World) {
+                world.insert_batch(self.entities.iter().map(|entity| (*entity, self.marker)).rev());
+            }
+            fn redo(&mut self, world: &mut World) {
+                let id = world.register_component::<DisabledToDespawn>();
+                for entity in self.entities.iter() {
+                    world.entity_mut(*entity).remove_by_id(id);
+                }
+            }
+        }
+
         let marker = DisabledToDespawn::for_spawn_despawn(now.0);
         let entities: Arc<[Entity]> = self.spawn_batch(iter).collect();
         self.buffer_undo_redo(
             now,
-            Spawn::<Arc<[Entity]>> {
-                spawned: entities.clone(),
+            SpawnBatch {
+                entities: entities.clone(),
                 marker,
             },
         );
+        let mut resource = self.remove_resource::<RevRelationship>().expect("todo");
+        for entity in entities.iter() {
+            // this cannot be done as a batch method because the bundle's hooks/observers may cause the
+            // entities each be in different archetypes with different relationship components
+            let mut entity_mut = self.entity_mut(*entity);
+            let _ok = resource.buffer(&mut entity_mut, None, now, false);
+        }
+
         entities
     }
 
     #[track_caller]
     fn rev_spawn_empty(&mut self, now: NonLogNow) -> EntityWorldMut {
+        struct SpawnEmpty {
+            entity: Entity,
+            marker: DisabledToDespawn
+        }
+
+        impl UndoRedo for SpawnEmpty {
+            fn undo(&mut self, world: &mut World) {
+                world.entity_mut(self.entity).insert(self.marker);
+            }
+            fn redo(&mut self, world: &mut World) {
+                world.entity_mut(self.entity).remove::<DisabledToDespawn>();
+            }
+        }
+
         let mut entity_world_mut = self.spawn_empty();
         let entity = entity_world_mut.id();
         let marker = DisabledToDespawn::for_spawn_despawn(now.0);
         entity_world_mut.buffer_undo_redo(
             now,
-            Spawn {
-                spawned: [entity],
+            SpawnEmpty {
+                entity,
                 marker,
             },
         );

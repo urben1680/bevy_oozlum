@@ -93,22 +93,14 @@ impl RevIsDespawned for EntityWorldMut<'_> {
 }
 
 /// todo
-pub struct DespawnAtUndo(NonLogNow);
+pub struct DespawnAtUndo(pub NonLogNow);
 
 impl BundleEffect for DespawnAtUndo {
     fn apply(self, entity: &mut EntityWorldMut) {
-        let id = entity.id();
-        let marker = DisabledToDespawn::for_spawn_despawn(self.0.0);
-        entity.buffer_undo_redo(
-            self.0,
-            Spawn {
-                spawned: [id],
-                marker,
-            },
-        );
-        let components = entity.archetype().components().collect::<Vec<_>>();
-        let mut resource = entity.world_scope(World::remove_resource::<RevRelationship>).expect("todo");
-        resource.buffer(entity, &components, self.0, false);
+        let mut resource = entity
+            .world_scope(World::remove_resource::<RevRelationship>)
+            .expect("todo");
+        let _ok = resource.try_despawn(entity, self.0, false);
         entity.world_scope(|world| world.insert_resource(resource));
     }
 }
@@ -136,32 +128,6 @@ impl DynamicBundle for DespawnAtUndo {
     fn get_components(self, func: &mut impl FnMut(StorageType, OwningPtr<'_>)) -> Self::Effect {
         <() as DynamicBundle>::get_components((), func);
         self
-    }
-}
-
-pub(super) struct Spawn<I> {
-    pub(super) spawned: I,
-    pub(super) marker: DisabledToDespawn,
-}
-
-impl<I: Send + 'static> UndoRedo for Spawn<I>
-where
-    I: AsRef<[Entity]>,
-{
-    fn undo(&mut self, world: &mut World) {
-        world.insert_batch(
-            self.spawned
-                .as_ref()
-                .into_iter()
-                .rev()
-                .map(|entity| (*entity, self.marker)),
-        );
-    }
-    fn redo(&mut self, world: &mut World) {
-        let id = world.component_id::<DisabledToDespawn>().expect("todo");
-        for entity in self.spawned.as_ref().into_iter() {
-            world.entity_mut(*entity).remove_by_id(id);
-        }
     }
 }
 
