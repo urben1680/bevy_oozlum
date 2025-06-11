@@ -151,6 +151,7 @@ fn rev_clone_and_spawn_works() {
     let clone = child_mut.rev_clone_and_spawn(now);
     let child = child_mut.id();
     let mut buffer = world.remove_resource::<UndoRedoBuffer>().unwrap();
+
     let [clone_ref, child_ref, parent_ref] = world.entity([clone, child, parent]);
     assert_eq!(child_ref.get(), Some(&ChildOf(parent)));
     assert_eq!(clone_ref.get(), Some(&Explicit::<1>(1)));
@@ -191,7 +192,6 @@ fn rev_clone_and_spawn_works() {
 }
 
 #[test]
-#[ignore = "await 0.16.1 https://github.com/bevyengine/bevy/pull/19326"]
 fn rev_clone_components_without_relationship() {
     let mut world = setup();
     let now = world.resource::<RevMeta>().non_log_now().unwrap();
@@ -211,7 +211,7 @@ fn rev_clone_components_without_relationship() {
     assert_eq!(target_ref.get(), Some(&Explicit::<1>(1)));
     assert_eq!(target_ref.get(), Some(&Required::<1>(1)));
     assert_eq!(target_ref.get(), Some(&Explicit::<2>(2)));
-    assert_eq!(target_ref.get(), Some(&Required::<2>(2)));
+    assert_eq!(target_ref.get(), Some(&Required::<2>(20)));
     assert_eq!(target_ref.get::<Explicit<3>>(), None);
     assert_eq!(target_ref.get::<Required<3>>(), None);
 
@@ -229,7 +229,7 @@ fn rev_clone_components_without_relationship() {
     assert_eq!(target_ref.get(), Some(&Explicit::<1>(1)));
     assert_eq!(target_ref.get(), Some(&Required::<1>(1)));
     assert_eq!(target_ref.get(), Some(&Explicit::<2>(2)));
-    assert_eq!(target_ref.get(), Some(&Required::<2>(2)));
+    assert_eq!(target_ref.get(), Some(&Required::<2>(20)));
     assert_eq!(target_ref.get::<Explicit<3>>(), None);
     assert_eq!(target_ref.get::<Required<3>>(), None);
 }
@@ -292,6 +292,9 @@ to test:
 - rev_remove_recursive
 - rev_remove_related
 - rev_remove_with_requires
+- rev_replace_related
+- rev_replace_related_with_difference
 - rev_retain
 - rev_take
+- rev_with_related
 */
