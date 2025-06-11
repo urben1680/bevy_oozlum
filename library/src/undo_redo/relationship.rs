@@ -1,5 +1,5 @@
 use std::{
-    any::{type_name, TypeId},
+    any::{TypeId, type_name},
     mem::replace,
 };
 
@@ -50,7 +50,7 @@ struct Ids {
 
 type BufferFn = fn(&mut EntityWorldMut, Ids, &[bool], NonLogNow, bool) -> bool;
 type CollectDespawnFn = fn(&Vec<Fns>, EntityRef, &World, &mut DespawnResults);
-type BufferDespawnFn = fn(&mut World, NonLogNow, &DespawnResults, &mut EntityHashSet);
+type BufferDespawnFn = fn(&mut World, NonLogNow, &DespawnResults, &mut EntityHashSet, bool);
 type DespawnResults = EntityHashMap<Result<(), RevEntityError>>;
 
 impl IntoIterator for Ids {
@@ -163,8 +163,8 @@ impl RevRelationship {
         );
 
         for f in self.fns.iter() {
-            buffered_any = buffered_any
-                | (f.buffer)(entity_mut, f.ids, &self.cache_buffer, now, at_now);
+            buffered_any =
+                buffered_any | (f.buffer)(entity_mut, f.ids, &self.cache_buffer, now, at_now);
         }
 
         self.set_sparse(entity_mut, components, false);
@@ -175,17 +175,21 @@ impl RevRelationship {
         &mut self,
         entity_mut: &mut EntityWorldMut,
         components: Option<&[ComponentId]>,
-        value: bool
+        value: bool,
     ) {
         match components {
-            Some(components) => for id in components {
-                if let Some(contained) = self.cache_buffer.get_mut(id.index()) {
-                    *contained = value;
+            Some(components) => {
+                for id in components {
+                    if let Some(contained) = self.cache_buffer.get_mut(id.index()) {
+                        *contained = value;
+                    }
                 }
-            },
-            None => for id in entity_mut.archetype().components() {
-                if let Some(contained) = self.cache_buffer.get_mut(id.index()) {
-                    *contained = value;
+            }
+            None => {
+                for id in entity_mut.archetype().components() {
+                    if let Some(contained) = self.cache_buffer.get_mut(id.index()) {
+                        *contained = value;
+                    }
                 }
             }
         }
@@ -220,12 +224,21 @@ impl RevRelationship {
 
         entity_mut.world_scope(|world| {
             // buffer relationship components of entities and their non-despawning parents/children if needed
+            despawn_relationship::<ChildOf>(
+                world,
+                now,
+                &self.cache_despawn_results,
+                &mut self.cache_despawn_visited,
+                at_now,
+            );
+            self.cache_despawn_visited.clear();
             for f in self.fns.iter() {
                 (f.buffer_despawn)(
                     world,
                     now,
                     &self.cache_despawn_results,
                     &mut self.cache_despawn_visited,
+                    at_now,
                 );
                 self.cache_despawn_visited.clear();
             }
@@ -281,7 +294,10 @@ fn buffer_relationship<T: Relationship>(
     }
 
     if components_sparse[ids.relationship_target.index()] {
-        assert!(at_now, "todo, if false, entity does not contain this component yet, no way to elaborate, manually inserting RelationshipTarget is not intended from bevy's side too");
+        assert!(
+            at_now,
+            "todo, if false, entity does not contain this component yet, no way to elaborate, manually inserting RelationshipTarget is not intended from bevy's side too"
+        );
         if let Some(children) = entity_mut.get::<T::RelationshipTarget>() {
             entities.extend(children.iter());
         }
@@ -423,6 +439,7 @@ fn despawn_relationship<T: Relationship>(
     now: NonLogNow,
     results: &DespawnResults,
     visited: &mut EntityHashSet,
+    at_now: bool,
 ) {
     let mut relationship_entities = Vec::new();
 
@@ -457,7 +474,11 @@ fn despawn_relationship<T: Relationship>(
     }
 
     if let Some(buffer) = BufferComponent::<T>::new_if_not_empty(relationship_entities) {
-        world.redo_and_buffer(now, buffer);
+        if at_now {
+            world.redo_and_buffer(now, buffer);
+        } else {
+            world.buffer_undo_redo(now, UndoRedoSwap(buffer));
+        }
     }
 }
 
@@ -466,6 +487,7 @@ fn despawn_both<T: Relationship, const ONE_TO_ONE: bool>(
     now: NonLogNow,
     results: &DespawnResults,
     visited: &mut EntityHashSet,
+    at_now: bool,
 ) {
     let mut relationship_entities = Vec::new();
     let mut relationship_target_entities = Vec::new();
@@ -532,13 +554,18 @@ fn despawn_both<T: Relationship, const ONE_TO_ONE: bool>(
     };
 
     match BufferComponent::<T::RelationshipTarget>::new_if_not_empty(relationship_target_entities) {
-        None => world.redo_and_buffer(now, relationship),
+        None if at_now => world.redo_and_buffer(now, relationship),
+        None => world.buffer_undo_redo(now, UndoRedoSwap(relationship)),
         Some(relationship_target) => {
             let buffer = BufferBoth::<T, ONE_TO_ONE> {
                 relationship,
                 relationship_target,
             };
-            world.redo_and_buffer(now, buffer)
+            if at_now {
+                world.redo_and_buffer(now, buffer)
+            } else {
+                world.buffer_undo_redo(now, UndoRedoSwap(buffer));
+            }
         }
     }
 }
@@ -654,7 +681,7 @@ impl<T: Relationship, const ONE_TO_ONE: bool> UndoRedo for BufferBoth<T, ONE_TO_
                 replacement.add(child);
                 collection.clear();
                 let replacement = T::RelationshipTarget::from_collection_risky(replacement);
-                replace(value, replacement) //todo: T::Relationship remove hooks/observers can no longer see data
+                replace(value, replacement) //T::Relationship remove hooks/observers can no longer see data -> todo: open issue
             });
             self.relationship_target.values.extend(iter);
             self.relationship.redo(world);
@@ -756,12 +783,12 @@ mod test {
         data: ExtraData,
     }
 
-    trait NewSingle: Component + Debug + PartialEq {
+    trait RelationshipSetup: Component + Debug + PartialEq {
         fn new_single(entity: Entity) -> Self;
         fn set_non_default(&mut self);
     }
 
-    impl<Parent: RelationshipTarget<Relationship = Self> + Debug + PartialEq> NewSingle
+    impl<Parent: RelationshipTarget<Relationship = Self> + Debug + PartialEq> RelationshipSetup
         for Child<Parent>
     {
         fn new_single(parent: Entity) -> Self {
@@ -784,7 +811,7 @@ mod test {
         }
     }
 
-    impl NewSingle for PlainParent {
+    impl RelationshipSetup for PlainParent {
         fn new_single(entity: Entity) -> Self {
             Self::new_many([entity])
         }
@@ -800,7 +827,7 @@ mod test {
         }
     }
 
-    impl NewSingle for DataParent {
+    impl RelationshipSetup for DataParent {
         fn new_single(entity: Entity) -> Self {
             Self::new_many([entity])
         }
@@ -809,7 +836,7 @@ mod test {
         }
     }
 
-    impl NewSingle for DataSingleParent {
+    impl RelationshipSetup for DataSingleParent {
         fn new_single(child: Entity) -> Self {
             Self {
                 child,
@@ -821,14 +848,14 @@ mod test {
         }
     }
 
-    impl NewSingle for ChildOf {
+    impl RelationshipSetup for ChildOf {
         fn new_single(entity: Entity) -> Self {
             ChildOf(entity)
         }
         fn set_non_default(&mut self) {}
     }
 
-    impl NewSingle for Children {
+    impl RelationshipSetup for Children {
         fn new_single(entity: Entity) -> Self {
             Children::from_collection_risky(vec![entity])
         }
@@ -905,7 +932,7 @@ mod test {
             generic::<Child<DataSingleParent>, DataSingleParent>();
         }
 
-        fn generic<Child: NewSingle, Parent: NewSingle<Mutability = Mutable>>() {
+        fn generic<Child: RelationshipSetup, Parent: RelationshipSetup<Mutability = Mutable>>() {
             let mut world = setup();
             let now = world.resource::<RevMeta>().non_log_now().unwrap();
             let old_parent = world.spawn(Name::new("old_parent")).id();
@@ -1022,21 +1049,78 @@ mod test {
         use super::*;
 
         #[test]
-        fn relationship() {
-            generic::<Child<PlainParent>, PlainParent>();
+        fn non_linked_relationship() {
+            non_linked_generic::<Child<PlainParent>, PlainParent>();
         }
 
         #[test]
-        fn both() {
-            generic::<Child<DataParent>, DataParent>();
+        fn child_of_and_children() {
+            let mut world = setup();
+            let now = world.resource::<RevMeta>().non_log_now().unwrap();
+            let parent = world.spawn(Name::new("parent")).id();
+            let entity = world.spawn((Name::new("entity"), ChildOf(parent))).id();
+            let child = world.spawn((Name::new("child"), ChildOf(entity))).id();
+
+            world.resource_scope::<RevRelationship, _>(|world, mut resource| {
+                let mut entity = world.entity_mut(entity);
+                let result = resource.try_despawn(&mut entity, now, true);
+                assert_eq!(result, Ok(()));
+            });
+
+            let mut buffer = world.remove_resource::<UndoRedoBuffer>().unwrap();
+            let [parent_ref, entity_ref, child_ref] = world.entity([parent, entity, child]);
+
+            assert_eq!(parent_ref.rev_is_despawned(), false);
+            assert_eq!(parent_ref.get::<Children>(), None);
+
+            assert_eq!(entity_ref.rev_is_despawned(), true);
+
+            assert_eq!(child_ref.rev_is_despawned(), true);
+
+            buffer.undo(&mut world);
+            let [parent_ref, entity_ref, child_ref] = world.entity([parent, entity, child]);
+
+            assert_eq!(parent_ref.rev_is_despawned(), false);
+            assert_eq!(
+                parent_ref.get::<Children>(),
+                Some(&Children::from_collection_risky(vec![entity]))
+            );
+
+            assert_eq!(entity_ref.rev_is_despawned(), false);
+            assert_eq!(entity_ref.get::<ChildOf>(), Some(&ChildOf(parent)));
+            assert_eq!(
+                entity_ref.get::<Children>(),
+                Some(&Children::from_collection_risky(vec![child]))
+            );
+
+            assert_eq!(child_ref.rev_is_despawned(), false);
+            assert_eq!(child_ref.get::<ChildOf>(), Some(&ChildOf(entity)));
+
+            buffer.redo(&mut world);
+            let [parent_ref, entity_ref, child_ref] = world.entity([parent, entity, child]);
+
+            assert_eq!(parent_ref.rev_is_despawned(), false);
+            assert_eq!(parent_ref.get::<Children>(), None);
+
+            assert_eq!(entity_ref.rev_is_despawned(), true);
+
+            assert_eq!(child_ref.rev_is_despawned(), true);
         }
 
         #[test]
-        fn both_one_to_one() {
-            generic::<Child<DataSingleParent>, DataSingleParent>();
+        fn non_linked_both() {
+            non_linked_generic::<Child<DataParent>, DataParent>();
         }
 
-        fn generic<Child: NewSingle, Parent: NewSingle<Mutability = Mutable>>() {
+        #[test]
+        fn non_linked_both_one_to_one() {
+            non_linked_generic::<Child<DataSingleParent>, DataSingleParent>();
+        }
+
+        fn non_linked_generic<
+            Child: RelationshipSetup,
+            Parent: RelationshipSetup<Mutability = Mutable>,
+        >() {
             let mut world = setup();
             let now = world.resource::<RevMeta>().non_log_now().unwrap();
             let parent = world.spawn(Name::new("parent")).id();
@@ -1098,7 +1182,7 @@ mod test {
         }
 
         #[test]
-        fn both_staying_sibling() {
+        fn non_linked_both_staying_sibling() {
             let mut world = setup();
             let now = world.resource::<RevMeta>().non_log_now().unwrap();
 
@@ -1180,15 +1264,240 @@ mod test {
                 Some(&Child::<DataParent>::new_single(parent))
             );
         }
-
-        // todo: batch variant
     }
 
     mod spawn {
         use super::*;
 
-        // todo
+        #[test]
+        fn non_linked_relationship() {
+            non_linked_generic::<Child<PlainParent>, PlainParent>();
+        }
 
-        // todo: batch variant
+        #[test]
+        fn child_of_and_children() {
+            let mut world = setup();
+            let now = world.resource::<RevMeta>().non_log_now().unwrap();
+            let parent = world.spawn(Name::new("parent")).id();
+            let entity = world.spawn((Name::new("entity"), ChildOf(parent))).id();
+            let child = world.spawn((Name::new("child"), ChildOf(entity))).id();
+
+            world.resource_scope::<RevRelationship, _>(|world, mut resource| {
+                let mut entity = world.entity_mut(entity);
+                let result = resource.try_despawn(&mut entity, now, false);
+                assert_eq!(result, Ok(()));
+            });
+
+            let mut buffer = world.remove_resource::<UndoRedoBuffer>().unwrap();
+            let [parent_ref, entity_ref, child_ref] = world.entity([parent, entity, child]);
+
+            assert_eq!(parent_ref.rev_is_despawned(), false);
+            assert_eq!(
+                parent_ref.get::<Children>(),
+                Some(&Children::from_collection_risky(vec![entity]))
+            );
+
+            assert_eq!(entity_ref.rev_is_despawned(), false);
+            assert_eq!(entity_ref.get::<ChildOf>(), Some(&ChildOf(parent)));
+            assert_eq!(
+                entity_ref.get::<Children>(),
+                Some(&Children::from_collection_risky(vec![child]))
+            );
+
+            assert_eq!(child_ref.rev_is_despawned(), false);
+            assert_eq!(child_ref.get::<ChildOf>(), Some(&ChildOf(entity)));
+
+            buffer.undo(&mut world);
+            let [parent_ref, entity_ref, child_ref] = world.entity([parent, entity, child]);
+
+            assert_eq!(parent_ref.rev_is_despawned(), false);
+            assert_eq!(parent_ref.get::<Children>(), None);
+
+            assert_eq!(entity_ref.rev_is_despawned(), true);
+
+            assert_eq!(child_ref.rev_is_despawned(), true);
+
+            buffer.redo(&mut world);
+            let [parent_ref, entity_ref, child_ref] = world.entity([parent, entity, child]);
+
+            assert_eq!(parent_ref.rev_is_despawned(), false);
+            assert_eq!(
+                parent_ref.get::<Children>(),
+                Some(&Children::from_collection_risky(vec![entity]))
+            );
+
+            assert_eq!(entity_ref.rev_is_despawned(), false);
+            assert_eq!(entity_ref.get::<ChildOf>(), Some(&ChildOf(parent)));
+            assert_eq!(
+                entity_ref.get::<Children>(),
+                Some(&Children::from_collection_risky(vec![child]))
+            );
+
+            assert_eq!(child_ref.rev_is_despawned(), false);
+            assert_eq!(child_ref.get::<ChildOf>(), Some(&ChildOf(entity)));
+        }
+
+        #[test]
+        fn non_linked_both() {
+            non_linked_generic::<Child<DataParent>, DataParent>();
+        }
+
+        #[test]
+        fn non_linked_both_one_to_one() {
+            non_linked_generic::<Child<DataSingleParent>, DataSingleParent>();
+        }
+
+        fn non_linked_generic<
+            Child: RelationshipSetup,
+            Parent: RelationshipSetup<Mutability = Mutable>,
+        >() {
+            let mut world = setup();
+            let now = world.resource::<RevMeta>().non_log_now().unwrap();
+            let parent = world.spawn(Name::new("parent")).id();
+            let entity = world
+                .spawn((Name::new("entity"), Child::new_single(parent)))
+                .id();
+            let child = world
+                .spawn((Name::new("child"), Child::new_single(entity)))
+                .id();
+
+            let [mut parent_mut, mut entity_mut] = world.entity_mut([parent, entity]);
+
+            parent_mut.get_mut::<Parent>().unwrap().set_non_default();
+            entity_mut.get_mut::<Parent>().unwrap().set_non_default();
+
+            world.resource_scope::<RevRelationship, _>(|world, mut resource| {
+                let mut entity = world.entity_mut(entity);
+                let result = resource.try_despawn(&mut entity, now, false);
+                assert_eq!(result, Ok(()));
+            });
+
+            let mut buffer = world.remove_resource::<UndoRedoBuffer>().unwrap();
+            let [parent_ref, entity_ref, child_ref] = world.entity([parent, entity, child]);
+
+            assert_eq!(parent_ref.rev_is_despawned(), false);
+            assert_eq!(
+                parent_ref.get::<Parent>(),
+                Some(&Parent::new_single(entity))
+            );
+
+            assert_eq!(entity_ref.rev_is_despawned(), false);
+            assert_eq!(entity_ref.get::<Child>(), Some(&Child::new_single(parent)));
+            assert_eq!(entity_ref.get::<Parent>(), Some(&Parent::new_single(child)));
+
+            assert_eq!(child_ref.rev_is_despawned(), false);
+            assert_eq!(child_ref.get::<Child>(), Some(&Child::new_single(entity)));
+
+            buffer.undo(&mut world);
+            let [parent_ref, entity_ref, child_ref] = world.entity([parent, entity, child]);
+
+            assert_eq!(parent_ref.rev_is_despawned(), false);
+            assert_eq!(parent_ref.get::<Parent>(), None);
+
+            assert_eq!(entity_ref.rev_is_despawned(), true);
+
+            assert_eq!(child_ref.rev_is_despawned(), false);
+            assert_eq!(child_ref.get::<Child>(), None);
+
+            buffer.redo(&mut world);
+            let [parent_ref, entity_ref, child_ref] = world.entity([parent, entity, child]);
+
+            assert_eq!(parent_ref.rev_is_despawned(), false);
+            assert_eq!(
+                parent_ref.get::<Parent>(),
+                Some(&Parent::new_single(entity))
+            );
+
+            assert_eq!(entity_ref.rev_is_despawned(), false);
+            assert_eq!(entity_ref.get::<Child>(), Some(&Child::new_single(parent)));
+            assert_eq!(entity_ref.get::<Parent>(), Some(&Parent::new_single(child)));
+
+            assert_eq!(child_ref.rev_is_despawned(), false);
+            assert_eq!(child_ref.get::<Child>(), Some(&Child::new_single(entity)));
+        }
+
+        #[test]
+        fn non_linked_both_staying_sibling() {
+            let mut world = setup();
+            let now = world.resource::<RevMeta>().non_log_now().unwrap();
+
+            let parent = world.spawn(Name::new("parent")).id();
+            let entity = world
+                .spawn((Name::new("entity"), Child::<DataParent>::new_single(parent)))
+                .id();
+            let sibling = world
+                .spawn((
+                    Name::new("sibling"),
+                    Child::<DataParent>::new_single(parent),
+                ))
+                .id();
+
+            world
+                .entity_mut(parent)
+                .get_mut::<DataParent>()
+                .unwrap()
+                .data = ExtraData::NotDefault;
+
+            world.resource_scope::<RevRelationship, _>(|world, mut resource| {
+                let mut entity = world.entity_mut(entity);
+                let result = resource.try_despawn(&mut entity, now, true);
+                assert_eq!(result, Ok(()));
+            });
+
+            let mut buffer = world.remove_resource::<UndoRedoBuffer>().unwrap();
+            let [parent_ref, entity_ref, sibling_ref] = world.entity([parent, entity, sibling]);
+
+            assert_eq!(parent_ref.rev_is_despawned(), false);
+            assert_eq!(
+                parent_ref.get::<DataParent>(),
+                Some(&DataParent::new_many([sibling]))
+            );
+
+            assert_eq!(entity_ref.rev_is_despawned(), true);
+
+            assert_eq!(sibling_ref.rev_is_despawned(), false);
+            assert_eq!(
+                sibling_ref.get::<Child<DataParent>>(),
+                Some(&Child::<DataParent>::new_single(parent))
+            );
+
+            buffer.undo(&mut world);
+            let [parent_ref, entity_ref, sibling_ref] = world.entity([parent, entity, sibling]);
+
+            assert_eq!(parent_ref.rev_is_despawned(), false);
+            assert_eq!(
+                parent_ref.get::<DataParent>(),
+                Some(&DataParent::new_many([entity, sibling]))
+            );
+
+            assert_eq!(entity_ref.rev_is_despawned(), false);
+            assert_eq!(
+                entity_ref.get::<Child<DataParent>>(),
+                Some(&Child::<DataParent>::new_single(parent))
+            );
+
+            assert_eq!(sibling_ref.rev_is_despawned(), false);
+            assert_eq!(
+                sibling_ref.get::<Child<DataParent>>(),
+                Some(&Child::<DataParent>::new_single(parent))
+            );
+
+            buffer.redo(&mut world);
+            let [parent_ref, entity_ref, sibling_ref] = world.entity([parent, entity, sibling]);
+
+            assert_eq!(parent_ref.rev_is_despawned(), false);
+            assert_eq!(
+                parent_ref.get::<DataParent>(),
+                Some(&DataParent::new_many([sibling]))
+            );
+
+            assert_eq!(entity_ref.rev_is_despawned(), true);
+
+            assert_eq!(sibling_ref.rev_is_despawned(), false);
+            assert_eq!(
+                sibling_ref.get::<Child<DataParent>>(),
+                Some(&Child::<DataParent>::new_single(parent))
+            );
+        }
     }
 }
