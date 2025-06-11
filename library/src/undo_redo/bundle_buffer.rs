@@ -12,13 +12,6 @@ use bevy::{
 
 use super::*;
 
-/*
-todo:
-aktuell wird für insert nur pre-insert aufgerufen, überschreibungen werden nur mit InsertMode kommuniziert,
-entity enthält aber noch nicht die componenten nach dem insert, wodurch relationship.rs nicht die erzeugten
-relationships buffern kann
-*/
-
 /// Fails if `entity` is `rev_is_despawned`, it must be otherwise spawned as an `archetype_id` could be provided.
 pub(super) fn buffer_pre_insert<T: Bundle>(
     world: &mut World,
@@ -57,7 +50,7 @@ pub(super) fn buffer_pre_insert<T: Bundle>(
 pub(super) fn pre_insert_maybe_overwrite(
     world: &World,
     bundle_id: BundleId,
-    archetype_id: ArchetypeId, // todo: remove after https://github.com/bevyengine/bevy/pull/19326
+    archetype_id: ArchetypeId,
 ) -> (BufferAt, Vec<ComponentId>) {
     // Bundle explicit:  A(2), B(2), C(2)
     // Bundle required:                    D(2), E(2)
@@ -96,7 +89,7 @@ pub(super) fn pre_insert_maybe_overwrite(
 pub(super) fn pre_insert_no_overwrite(
     world: &World,
     bundle_id: BundleId,
-    archetype_id: ArchetypeId, // todo:
+    archetype_id: ArchetypeId, // todo: remove after https://github.com/bevyengine/bevy/pull/19326
 ) -> (BufferAt, Vec<ComponentId>) {
     // Bundle explicit:  A(2), B(2), C(2)
     // Bundle required:                    D(2), E(2)
@@ -173,7 +166,12 @@ pub(super) fn buffer_bundle(
                 let entities = buffer.toggle_state(world);
                 let components = buffer.get_component_ids(world);
                 let out = entities.buffer;
-                relationship_res.buffer(&mut world.entity_mut(entity), Some(&components), now, true);
+                relationship_res.buffer(
+                    &mut world.entity_mut(entity),
+                    Some(&components),
+                    now,
+                    true,
+                );
                 world.buffer_undo_redo(now, buffer);
                 entities.move_components(world, &components, RevDirection::NOT_LOG);
                 Ok(Some(out))
@@ -183,7 +181,12 @@ pub(super) fn buffer_bundle(
                 world.buffer_undo_redo(now, buffer);
 
                 // needs to come after buffer_undo_redo so at undo, at reverse order, this gets to grap relevant components
-                relationship_res.buffer(&mut world.entity_mut(entity), Some(&components), now, false);
+                relationship_res.buffer(
+                    &mut world.entity_mut(entity),
+                    Some(&components),
+                    now,
+                    false,
+                );
                 Ok(None)
             }
             BufferAt::NowAndUndo => {
@@ -194,12 +197,13 @@ pub(super) fn buffer_bundle(
 
                 let out = entities.buffer;
                 let mut entity_mut = world.entity_mut(entity);
-                let has_non_entity_buffer = relationship_res.buffer(&mut entity_mut, Some(&components), now, true);
+                let has_relationships =
+                    relationship_res.buffer(&mut entity_mut, Some(&components), now, true);
                 entity_mut.world_scope(|world| {
                     entities.move_components(world, &components, RevDirection::NOT_LOG);
                     world.buffer_undo_redo(now, [buffer, at_undo]);
                 });
-                if has_non_entity_buffer {
+                if has_relationships {
                     // needs to come after buffer_undo_redo so at undo, at reverse order, this gets to grap relevant components
                     relationship_res.buffer(&mut entity_mut, Some(&components), now, false);
                 }
