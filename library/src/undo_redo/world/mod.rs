@@ -258,12 +258,17 @@ impl RevWorld for World {
     {
         struct SpawnBatch {
             entities: Arc<[Entity]>,
-            marker: DisabledToDespawn
+            marker: DisabledToDespawn,
         }
 
         impl UndoRedo for SpawnBatch {
             fn undo(&mut self, world: &mut World) {
-                world.insert_batch(self.entities.iter().map(|entity| (*entity, self.marker)).rev());
+                world.insert_batch(
+                    self.entities
+                        .iter()
+                        .map(|entity| (*entity, self.marker))
+                        .rev(),
+                );
             }
             fn redo(&mut self, world: &mut World) {
                 let id = world.register_component::<DisabledToDespawn>();
@@ -297,7 +302,7 @@ impl RevWorld for World {
     fn rev_spawn_empty(&mut self, now: NonLogNow) -> EntityWorldMut {
         struct SpawnEmpty {
             entity: Entity,
-            marker: DisabledToDespawn
+            marker: DisabledToDespawn,
         }
 
         impl UndoRedo for SpawnEmpty {
@@ -312,13 +317,7 @@ impl RevWorld for World {
         let mut entity_world_mut = self.spawn_empty();
         let entity = entity_world_mut.id();
         let marker = DisabledToDespawn::for_spawn_despawn(now.0);
-        entity_world_mut.buffer_undo_redo(
-            now,
-            SpawnEmpty {
-                entity,
-                marker,
-            },
-        );
+        entity_world_mut.buffer_undo_redo(now, SpawnEmpty { entity, marker });
         entity_world_mut
     }
 
