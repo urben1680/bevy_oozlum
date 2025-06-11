@@ -100,7 +100,7 @@ impl BundleEffect for DespawnAtUndo {
         let mut resource = entity
             .world_scope(World::remove_resource::<RevRelationship>)
             .expect("todo");
-        let _ok = resource.try_despawn(entity, self.0, false);
+        let _ = resource.try_despawn(entity, self.0, false);
         entity.world_scope(|world| world.insert_resource(resource));
     }
 }
@@ -289,74 +289,7 @@ impl UndoRedo for RevDespawnHierarchy {
 
 #[cfg(test)]
 mod test {
-    /*
     use super::*;
 
-    fn despawn_at_undo_try_new() {
-        assert_eq!(
-            PrecomputedDespawnAtUndo::try_new(&RevMeta::new(None, 0, false)).err(),
-            Some(RevDirectionMismatch {
-                actual: None
-            })
-        );
-        assert_eq!(
-            PrecomputedDespawnAtUndo::try_new(&RevDirection::FORWARD_LOG.to_meta(0, 1, 1)).err(),
-            Some(RevDirectionMismatch {
-                actual: Some(RevDirection::FORWARD_LOG)
-            })
-        );
-        assert_eq!(
-            PrecomputedDespawnAtUndo::try_new(&RevDirection::BackwardLog.to_meta(0, 0, 1)).err(),
-            Some(RevDirectionMismatch {
-                actual: Some(RevDirection::BackwardLog)
-            })
-        );
-        assert_eq!(
-            PrecomputedDespawnAtUndo::try_new(&RevDirection::NOT_LOG.to_meta(0, 1, 1)).err(),
-            None
-        );
-    }
-
-    #[test]
-    fn rev_spawn_spawns() {
-        let mut world = setup();
-        world.spawn_empty().despawn(); // have a free entity in the world to be reused
-        let entity_mut = world.rev_spawn((Explicit1(10), children![Explicit1(20)]));
-        let entity2 = *entity_mut
-            .get::<Children>()
-            .unwrap()
-            .into_iter()
-            .next()
-            .unwrap();
-        let entity1 = entity_mut.id();
-        let mut buffer = world.remove_resource::<UndoRedoBuffer>().unwrap();
-
-        let [ref1, ref2] = world.entity([entity1, entity2]);
-
-        assert_eq!(ref1.get(), Some(&Explicit1(10)));
-        assert_eq!(ref1.get(), Some(&Required1(0)));
-        assert_eq!(ref1.rev_is_despawned(), false);
-
-        assert_eq!(ref2.get(), Some(&Explicit1(20)));
-        assert_eq!(ref2.get(), Some(&Required1(0)));
-        assert_eq!(ref2.rev_is_despawned(), false);
-
-        buffer.undo(&mut world);
-        let [ref1, ref2] = world.entity([entity1, entity2]);
-
-        assert_eq!(ref1.rev_is_despawned(), true);
-        assert_eq!(ref2.rev_is_despawned(), true);
-
-        buffer.redo(&mut world);
-        let [ref1, ref2] = world.entity([entity1, entity2]);
-
-        assert_eq!(ref1.get(), Some(&Explicit1(10)));
-        assert_eq!(ref1.get(), Some(&Required1(0)));
-        assert_eq!(ref1.rev_is_despawned(), false);
-
-        assert_eq!(ref2.get(), Some(&Explicit1(20)));
-        assert_eq!(ref2.get(), Some(&Required1(0)));
-        assert_eq!(ref2.rev_is_despawned(), false);
-    }
-     */
+    // todo
 }
