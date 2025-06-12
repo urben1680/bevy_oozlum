@@ -7,8 +7,8 @@ use bevy::{
         entity::{Entity, EntityClonerBuilder},
         hierarchy::ChildOf,
         relationship::{
-            OrderedRelationshipSourceCollection, Relationship,
-            RelationshipSourceCollection, RelationshipTarget,
+            OrderedRelationshipSourceCollection, Relationship, RelationshipSourceCollection,
+            RelationshipTarget,
         },
     },
     ptr::OwningPtr,
@@ -28,12 +28,14 @@ pub trait RevEntityWorldMut<'w> {
         &mut self,
         now: NonLogNow,
         at: BufferAt,
+        after_now_before_undo: impl FnOnce(&mut World),
         components: &[ComponentId],
     ) -> Result<Option<Entity>, EntityRevDespawnedError>;
 
     fn buffer_components_cached<T: AsRef<[ComponentId]>>(
         &mut self,
         now: NonLogNow,
+        after_now_before_undo: impl FnOnce(&mut World),
         key: impl Hash + 'static,
         components: impl FnOnce(&mut World) -> (BufferAt, T),
     ) -> Result<Option<Entity>, EntityRevDespawnedError>;
@@ -42,6 +44,7 @@ pub trait RevEntityWorldMut<'w> {
         &mut self,
         now: NonLogNow,
         at: BufferAt,
+        after_now_before_undo: impl FnOnce(&mut World),
         bundle: BundleId,
     ) -> Result<Option<Entity>, EntityRevDespawnedError>;
 
@@ -282,6 +285,7 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
         &mut self,
         now: NonLogNow,
         at: BufferAt,
+        after_now_before_undo: impl FnOnce(&mut World),
         components: &[ComponentId],
     ) -> Result<Option<Entity>, EntityRevDespawnedError> {
         let entity = self.id();
@@ -289,11 +293,18 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
             unsafe {
                 // SAFETY: No components of this entity are buffered now,
                 // only resources are mutated and a bundle is registered.
-                self.world_mut()
-                    .buffer_components(now, entity, at, components)
+                self.world_mut().buffer_components(
+                    now,
+                    entity,
+                    at,
+                    after_now_before_undo,
+                    components,
+                )
             }
         } else {
-            self.world_scope(|world| world.buffer_components(now, entity, at, components))
+            self.world_scope(|world| {
+                world.buffer_components(now, entity, at, after_now_before_undo, components)
+            })
         };
         result.map_err(|err| match err {
             RevEntityError::EntityRevDespawnedError(err) => err,
@@ -304,12 +315,14 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
     fn buffer_components_cached<T: AsRef<[ComponentId]>>(
         &mut self,
         now: NonLogNow,
+        after_now_before_undo: impl FnOnce(&mut World),
         key: impl Hash + 'static,
         components: impl FnOnce(&mut World) -> (BufferAt, T),
     ) -> Result<Option<Entity>, EntityRevDespawnedError> {
         let entity = self.id();
-        let result =
-            self.world_scope(|world| world.buffer_components_cached(now, entity, key, components));
+        let result = self.world_scope(|world| {
+            world.buffer_components_cached(now, entity, after_now_before_undo, key, components)
+        });
         result.map_err(|err| match err {
             RevEntityError::EntityRevDespawnedError(err) => err,
             RevEntityError::EntityDoesNotExistError(_) => unreachable!("entity must exist"),
@@ -320,6 +333,7 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
         &mut self,
         now: NonLogNow,
         at: BufferAt,
+        after_now_before_undo: impl FnOnce(&mut World),
         bundle: BundleId,
     ) -> Result<Option<Entity>, EntityRevDespawnedError> {
         let entity = self.id();
@@ -327,10 +341,13 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
             unsafe {
                 // SAFETY: No components of this entity are buffered now,
                 // only resources are mutated and a bundle is registered.
-                self.world_mut().buffer_bundle(now, entity, at, bundle)
+                self.world_mut()
+                    .buffer_bundle(now, entity, at, after_now_before_undo, bundle)
             }
         } else {
-            self.world_scope(|world| world.buffer_bundle(now, entity, at, bundle))
+            self.world_scope(|world| {
+                world.buffer_bundle(now, entity, at, after_now_before_undo, bundle)
+            })
         };
         result.map_err(|err| match err {
             RevEntityError::EntityRevDespawnedError(err) => err,
@@ -371,15 +388,20 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
     fn rev_clear(&mut self, now: NonLogNow) -> &mut Self {
         let archetype_id = self.location().archetype_id;
         let entity = self.id();
-        self.buffer_components_cached(now, unique_for_location!(archetype_id), |world| {
-            let components: Vec<_> = world
-                .archetypes()
-                .get(archetype_id)
-                .unwrap()
-                .components()
-                .collect();
-            (BufferAt::Now, components)
-        })
+        self.buffer_components_cached(
+            now,
+            |_| (),
+            unique_for_location!(archetype_id),
+            |world| {
+                let components: Vec<_> = world
+                    .archetypes()
+                    .get(archetype_id)
+                    .unwrap()
+                    .components()
+                    .collect();
+                (BufferAt::Now, components)
+            },
+        )
         .unwrap_or_else(rev_despawned_panic(entity));
         self
     }
@@ -417,12 +439,16 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
 
     fn rev_clone_components<B: Bundle>(&mut self, now: NonLogNow, target: Entity) -> &mut Self {
         // if the target entity does not exist, let `clone_components` panic here
+        let entity = self.id();
         if let Some(location) = self.world().entities().get(target) {
             let archetype_id = location.archetype_id;
             self.world_scope(|world| {
                 let _ok = world.buffer_components_cached(
                     now,
                     target,
+                    |world| {
+                        world.entity_mut(entity).clone_components::<B>(target);
+                    },
                     unique_for_location!(archetype_id, TypeId::of::<B>()),
                     |world| {
                         let bundle_id = world.register_bundle::<B>().id();
@@ -431,7 +457,6 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
                 );
             });
         }
-        self.clone_components::<B>(target);
         self
     }
 
@@ -515,14 +540,17 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
         let entity = self.id();
         self.buffer_components_cached(
             now,
+            |world| {
+                let mut entity_world_mut = world.entity_mut(entity);
+                unsafe {
+                    // SAFETY: todo
+                    entity_world_mut.insert_by_ids(component_ids, iter_components);
+                }
+            },
             unique_for_location!(archetype_id, bundle_id),
             |world: &mut World| pre_insert_maybe_overwrite(world, bundle_id, archetype_id),
         )
         .unwrap_or_else(rev_despawned_panic(entity));
-        unsafe {
-            // SAFETY: todo
-            self.insert_by_ids(component_ids, iter_components);
-        }
         self
     }
 
@@ -635,6 +663,7 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
         let entity = self.id();
         self.buffer_components_cached(
             now,
+            |_| (),
             unique_for_location!(archetype_id, PhantomData::<T>),
             |world| {
                 let bundle_id = world.register_bundle::<T>().id();
@@ -666,7 +695,7 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
             .filter(|component_id| archetype.contains(*component_id))
             .collect();
         // must be Ok because self.archetype() did not panic
-        let _ok = self.buffer_components(now, BufferAt::Now, &components);
+        let _ok = self.buffer_components(now, BufferAt::Now, |_| (), &components);
         self
     }
 
@@ -716,6 +745,7 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
         let entity = self.id();
         self.buffer_components_cached(
             now,
+            |_| (),
             unique_for_location!(archetype_id, PhantomData::<T>),
             |world| {
                 let bundle_id = world.register_bundle::<T>().id();
@@ -882,6 +912,7 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
         let entity = self.id();
         self.buffer_components_cached(
             now,
+            |_| (),
             unique_for_location!(archetype_id, PhantomData::<T>),
             |world| {
                 let contributed_components: HashSet<_> = world
@@ -940,7 +971,7 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
     }
 }
 
-fn insert_inner<'a, 'w, T: Bundle>(
+pub(super) fn insert_inner<'a, 'w, T: Bundle>(
     entity_world_mut: &'a mut EntityWorldMut<'w>,
     now: NonLogNow,
     bundle: T,
@@ -954,15 +985,18 @@ fn insert_inner<'a, 'w, T: Bundle>(
             world,
             now,
             entity,
+            |world| {
+                let mut entity_world_mut = world.entity_mut(entity);
+                match insert_mode {
+                    InsertMode::Replace => entity_world_mut.insert(bundle),
+                    InsertMode::Keep => entity_world_mut.insert_if_new(bundle),
+                };
+            },
             archetype_id,
             InsertMode::Replace,
             marker,
         )
     })?;
-    match insert_mode {
-        InsertMode::Replace => entity_world_mut.insert(bundle),
-        InsertMode::Keep => entity_world_mut.insert_if_new(bundle),
-    };
     Ok(entity_world_mut)
 }
 
