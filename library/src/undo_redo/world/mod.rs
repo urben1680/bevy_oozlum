@@ -23,6 +23,7 @@ pub trait RevWorld {
         now: NonLogNow,
         entity: Entity,
         at: BufferAt,
+        after_now_before_undo: impl FnOnce(&mut World),
         components: &[ComponentId],
     ) -> Result<Option<Entity>, RevEntityError>;
 
@@ -30,6 +31,7 @@ pub trait RevWorld {
         &mut self,
         now: NonLogNow,
         entity: Entity,
+        after_now_before_undo: impl FnOnce(&mut World),
         key: impl Hash + 'static,
         components: impl FnOnce(&mut World) -> (BufferAt, T),
     ) -> Result<Option<Entity>, RevEntityError>;
@@ -39,6 +41,7 @@ pub trait RevWorld {
         now: NonLogNow,
         entity: Entity,
         at: BufferAt,
+        after_now_before_undo: impl FnOnce(&mut World),
         bundle: BundleId,
     ) -> Result<Option<Entity>, RevEntityError>;
 
@@ -116,7 +119,7 @@ pub trait RevWorld {
     fn rev_spawn_empty(&mut self, now: NonLogNow) -> EntityWorldMut;
 
     /// Reversible version of [`World::try_despawn`].
-    fn rev_try_despawn(&mut self, now: NonLogNow, entity: Entity) -> Result<(), RevEntityError>;
+    fn rev_try_despawn(&mut self, now: NonLogNow, entity: Entity) -> Result<(), RevEntitiesError>;
 
     /// Reversible version of [`World::try_insert_batch`].
     fn rev_try_insert_batch<I, B>(
@@ -152,21 +155,31 @@ impl RevWorld for World {
         now: NonLogNow,
         entity: Entity,
         at: BufferAt,
+        after_now_before_undo: impl FnOnce(&mut World),
         components: &[ComponentId],
     ) -> Result<Option<Entity>, RevEntityError> {
         let bundle = components_to_bundle(self, components);
-        self.buffer_bundle(now, entity, at, bundle)
+        self.buffer_bundle(now, entity, at, after_now_before_undo, bundle)
     }
 
     fn buffer_components_cached<T: AsRef<[ComponentId]>>(
         &mut self,
         now: NonLogNow,
         entity: Entity,
+        after_now_before_undo: impl FnOnce(&mut World),
         key: impl Hash + 'static,
         components: impl FnOnce(&mut World) -> (BufferAt, T),
     ) -> Result<Option<Entity>, RevEntityError> {
         let marker = DisabledToDespawn::for_buffer(now.0);
-        buffer_components_cached(self, now, entity, key, components, marker)
+        buffer_components_cached(
+            self,
+            now,
+            entity,
+            after_now_before_undo,
+            key,
+            components,
+            marker,
+        )
     }
 
     fn buffer_bundle(
@@ -174,10 +187,11 @@ impl RevWorld for World {
         now: NonLogNow,
         entity: Entity,
         at: BufferAt,
+        after_now_before_undo: impl FnOnce(&mut World),
         bundle: BundleId,
     ) -> Result<Option<Entity>, RevEntityError> {
         let marker = DisabledToDespawn::for_buffer(now.0);
-        buffer_bundle(self, now, entity, at, bundle, marker)
+        buffer_bundle(self, now, entity, at, after_now_before_undo, bundle, marker)
     }
 
     #[track_caller]
@@ -322,14 +336,16 @@ impl RevWorld for World {
     }
 
     #[track_caller]
-    fn rev_try_despawn(&mut self, now: NonLogNow, entity: Entity) -> Result<(), RevEntityError> {
-        match self.get_entity_mut(entity) {
-            Ok(entity) => rev_despawn_inner(entity, now),
-            Err(EntityMutableFetchError::EntityDoesNotExist(err)) => Err(err.into()),
-            Err(EntityMutableFetchError::AliasedMutability(_)) => {
-                unreachable!("only one entity accessed")
+    fn rev_try_despawn(&mut self, now: NonLogNow, entity: Entity) -> Result<(), RevEntitiesError> {
+        self.resource_scope::<RevRelationship, _>(|world, mut resource| {
+            match world.get_entity_mut(entity) {
+                Ok(mut entity) => resource.try_despawn(&mut entity, now, true),
+                Err(EntityMutableFetchError::EntityDoesNotExist(err)) => Err(err.into()),
+                Err(EntityMutableFetchError::AliasedMutability(_)) => {
+                    unreachable!("only one entity accessed")
+                }
             }
-        }
+        })
     }
 
     #[track_caller]
@@ -373,30 +389,31 @@ where
     I::IntoIter: Iterator<Item = (Entity, B)>,
     B: Bundle<Effect: NoBundleEffect>,
 {
-    let marker = DisabledToDespawn::for_buffer(now.0);
-    let mut error = RevEntitiesError {
+    // todo: actually make this efficient
+
+    let mut errors = RevEntitiesError {
         invalid: Vec::new(),
         rev_despawned: Vec::new(),
         rev_despawned_buffers: MaybeLocation::new_with(|| Vec::new()),
     };
-    let batch: Vec<_> = batch
-        .into_iter()
-        .filter(|&(entity, _)| {
-            world
-                .get_entity(entity)
-                .map_err(|err| error.push(err))
-                .map(|entity| entity.location().archetype_id)
-                .is_ok_and(|archetype_id| {
-                    buffer_pre_insert::<B>(world, now, entity, archetype_id, insert_mode, marker)
-                        .map_err(|err| error.push(err))
-                        .is_ok()
-                })
-        })
-        .collect();
-    match insert_mode {
-        InsertMode::Replace => world.insert_batch(batch),
-        InsertMode::Keep => world.insert_batch_if_new(batch),
+
+    for (entity, bundle) in batch {
+        match world.get_entity_mut(entity) {
+            Ok(ref mut entity_mut) => {
+                if let Err(err) = insert_inner(entity_mut, now, bundle, insert_mode) {
+                    errors.push(err);
+                }
+            }
+            Err(EntityMutableFetchError::EntityDoesNotExist(err)) => errors.push(err),
+            Err(EntityMutableFetchError::AliasedMutability(_)) => {
+                unreachable!("only accessed one entity at a time")
+            }
+        }
     }
 
-    if error.is_empty() { Ok(()) } else { Err(error) }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
 }
