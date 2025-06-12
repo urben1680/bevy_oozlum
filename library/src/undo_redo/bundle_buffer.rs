@@ -12,11 +12,16 @@ use bevy::{
 
 use super::*;
 
+/*
+rework: upstream EntityCloner filter_if_new + BundleId methods, then see what changes here
+*/
+
 /// Fails if `entity` is `rev_is_despawned`, it must be otherwise spawned as an `archetype_id` could be provided.
 pub(super) fn buffer_pre_insert<T: Bundle>(
     world: &mut World,
     now: NonLogNow,
     entity: Entity,
+    after_now_before_undo: impl FnOnce(&mut World),
     archetype_id: ArchetypeId,
     insert_mode: InsertMode,
     marker: DisabledToDespawn,
@@ -26,6 +31,7 @@ pub(super) fn buffer_pre_insert<T: Bundle>(
             world,
             now,
             entity,
+            after_now_before_undo,
             unique_for_location!(archetype_id, PhantomData::<T>),
             |world: &mut World| {
                 let bundle_id = world.register_bundle::<T>().id();
@@ -37,6 +43,7 @@ pub(super) fn buffer_pre_insert<T: Bundle>(
             world,
             now,
             entity,
+            after_now_before_undo,
             unique_for_location!(archetype_id, PhantomData::<T>),
             |world| {
                 let bundle_id = world.register_bundle::<T>().id();
@@ -116,6 +123,7 @@ pub(super) fn buffer_components_cached<T: AsRef<[ComponentId]>>(
     world: &mut World,
     now: NonLogNow,
     entity: Entity,
+    after_now_before_undo: impl FnOnce(&mut World),
     key: impl Hash + 'static,
     components: impl FnOnce(&mut World) -> (BufferAt, T),
     marker: DisabledToDespawn,
@@ -139,7 +147,15 @@ pub(super) fn buffer_components_cached<T: AsRef<[ComponentId]>>(
         (at, components_to_bundle(world, &components))
     });
     world.insert_resource(cache);
-    buffer_bundle(world, now, entity, at, bundle, marker)
+    buffer_bundle(
+        world,
+        now,
+        entity,
+        at,
+        after_now_before_undo,
+        bundle,
+        marker,
+    )
 }
 
 pub(super) fn buffer_bundle(
@@ -147,6 +163,7 @@ pub(super) fn buffer_bundle(
     now: NonLogNow,
     entity: Entity,
     at: BufferAt,
+    after_now_before_undo: impl FnOnce(&mut World), // needed for RevRelationship::buffer being able to evaluate parents and siblings
     bundle: BundleId,
     marker: DisabledToDespawn,
 ) -> Result<Option<Entity>, RevEntityError> {
@@ -155,62 +172,70 @@ pub(super) fn buffer_bundle(
             EntityRevDespawnedError::new(entity, marker),
         ));
     }
-    world.resource_scope::<RevRelationship, _>(|world, mut relationship_res| {
-        let mut buffer = BundleBuffer {
-            bundle,
-            entity,
-            state: BufferState::Unspawned(marker),
-        };
-        match at {
-            BufferAt::Now => {
-                let entities = buffer.toggle_state(world);
-                let components = buffer.get_component_ids(world);
-                let out = entities.buffer;
-                relationship_res.buffer(
-                    &mut world.entity_mut(entity),
-                    Some(&components),
-                    now,
-                    true,
-                );
-                world.buffer_undo_redo(now, buffer);
-                entities.move_components(world, &components, RevDirection::NOT_LOG);
-                Ok(Some(out))
-            }
-            BufferAt::Undo => {
-                let components = buffer.get_component_ids(world);
-                world.buffer_undo_redo(now, buffer);
-
-                // needs to come after buffer_undo_redo so at undo, at reverse order, this gets to grap relevant components
-                relationship_res.buffer(
-                    &mut world.entity_mut(entity),
-                    Some(&components),
-                    now,
-                    false,
-                );
-                Ok(None)
-            }
-            BufferAt::NowAndUndo => {
-                // todo: different double buffer, not two, make use of same EntityCloner
-                let at_undo = buffer.clone(); // no buffer entity set yet so each spawns their own
-                let entities = buffer.toggle_state(world);
-                let components = buffer.get_component_ids(world);
-
-                let out = entities.buffer;
-                let mut entity_mut = world.entity_mut(entity);
-                let has_relationships =
-                    relationship_res.buffer(&mut entity_mut, Some(&components), now, true);
-                entity_mut.world_scope(|world| {
+    world.resource_scope::<RevRelationship, _>(
+        |world, mut relationship_res: Mut<'_, RevRelationship>| {
+            let mut buffer = BundleBuffer {
+                bundle,
+                entity,
+                state: BufferState::Unspawned(marker),
+            };
+            match at {
+                BufferAt::Now => {
+                    let entities = buffer.toggle_state(world);
+                    let components = buffer.get_component_ids(world);
+                    let out = entities.buffer;
+                    relationship_res.buffer(
+                        &mut world.entity_mut(entity),
+                        Some(&components),
+                        now,
+                        true,
+                    );
+                    world.buffer_undo_redo(now, buffer);
                     entities.move_components(world, &components, RevDirection::NOT_LOG);
-                    world.buffer_undo_redo(now, [buffer, at_undo]);
-                });
-                if has_relationships {
-                    // needs to come after buffer_undo_redo so at undo, at reverse order, this gets to grap relevant components
-                    relationship_res.buffer(&mut entity_mut, Some(&components), now, false);
+
+                    after_now_before_undo(world);
+                    Ok(Some(out))
                 }
-                Ok(Some(out))
+                BufferAt::Undo => {
+                    after_now_before_undo(world);
+
+                    let components = buffer.get_component_ids(world);
+                    world.buffer_undo_redo(now, buffer);
+
+                    // needs to come after buffer_undo_redo so at undo, at reverse order, this gets to grap relevant components
+                    relationship_res.buffer(
+                        &mut world.entity_mut(entity),
+                        Some(&components),
+                        now,
+                        false,
+                    );
+                    Ok(None)
+                }
+                BufferAt::NowAndUndo => {
+                    // todo: different double buffer, not two, make use of same EntityCloner
+                    let at_undo = buffer.clone(); // no buffer entity set yet so each spawns their own
+                    let entities = buffer.toggle_state(world);
+                    let components = buffer.get_component_ids(world);
+
+                    let out = entities.buffer;
+                    let mut entity_mut = world.entity_mut(entity);
+                    let has_relationships =
+                        relationship_res.buffer(&mut entity_mut, Some(&components), now, true);
+                    entity_mut.world_scope(|world| {
+                        entities.move_components(world, &components, RevDirection::NOT_LOG);
+                        world.buffer_undo_redo(now, [buffer, at_undo]);
+
+                        after_now_before_undo(world);
+                    });
+                    if has_relationships {
+                        // needs to come after buffer_undo_redo so at undo, at reverse order, this gets to grap relevant components
+                        relationship_res.buffer(&mut entity_mut, Some(&components), now, false);
+                    }
+                    Ok(Some(out))
+                }
             }
-        }
-    })
+        },
+    )
 }
 
 /// [`World::buffer_components_in_progress`] returns `Some(direction)` during the execution of the closure.
