@@ -1,11 +1,9 @@
 use std::{
-    any::{type_name, type_name_of_val},
+    any::type_name_of_val,
     error::Error,
     fmt::{Debug, Display},
     hash::Hash,
-    iter::FusedIterator,
     marker::PhantomData,
-    sync::Arc,
 };
 
 use bevy::{
@@ -27,14 +25,12 @@ use bevy::{
             FilteredEntityMut, FilteredEntityRef, FromWorld, World, error::EntityMutableFetchError,
         },
     },
-    log::warn,
     platform::collections::{HashMap, HashSet},
     ptr::OwningPtr,
     utils::synccell::SyncCell,
 };
 
 use crate::{
-    app::RevSystemsPlugin,
     log::{DenseTransitionsLog, FrameTransitionLog, MissedFrame},
     meta::{NonLogNow, RevDirection, RevMeta},
 };
