@@ -22,13 +22,15 @@ Enhancements:
 - track_location and bevy_reflect feature (both are not documented?), rename feature serde -> serialize
 - delete unused types
 - integrate BuffersUndoRedo in new Rev wrappers, find good way to support DeferredWorld
+- make buffer methods not-pub
 - missing apis:
--- World::entities_and_commands with RevCommands return
--- RelatedSpawner
---- EntityWorldMut::with_children
---- EntityWorldMut::with_related_entities
--- EntityWorldMut::clone_with (out of scope!)
--- EntityWorldMut::clone_and_spawn_with (out of scope!)
+-- EntityWorldMut::clone_with
+-- EntityWorldMut::insert_reflect
+-- EntityWorldMut::insert_reflect_with_registry
+-- EntityWorldMut::insert_with_relationship_hook_mode
+-- EntityWorldMut::remove_reflect
+-- EntityWorldMut::remove_reflect_with_registry
+
 -- ... (check Commands + friends)
 
 Docs
