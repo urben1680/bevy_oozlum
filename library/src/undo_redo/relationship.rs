@@ -25,6 +25,8 @@ use crate::{
 
 use super::{RevEntitiesError, RevEntityError, RevWorld};
 
+// todo: make this sensitive to upcoming changes by https://github.com/bevyengine/bevy/issues/19589
+
 #[derive(Resource)]
 pub(crate) struct RevRelationship {
     child_of: Ids,
@@ -288,16 +290,11 @@ fn buffer_relationship<T: Relationship>(
 ) -> bool {
     let mut entities = Vec::new();
 
-    if components_sparse[ids.relationship.index()] {
-        // trust caller that this entity will contain component at undo if at_now is false
+    if components_sparse[ids.relationship.index()] && entity_mut.contains_id(ids.relationship) {
         entities.push(entity_mut.id());
     }
 
     if components_sparse[ids.relationship_target.index()] {
-        assert!(
-            at_now,
-            "todo, if false, entity does not contain this component yet, no way to elaborate, manually inserting RelationshipTarget is not intended from bevy's side too"
-        );
         if let Some(children) = entity_mut.get::<T::RelationshipTarget>() {
             entities.extend(children.iter());
         }
@@ -327,6 +324,7 @@ fn buffer_both<T: Relationship, const ONE_TO_ONE: bool>(
     let mut relationship_target_entities = Vec::new();
 
     if components_sparse[ids.relationship.index()] {
+        // todo: this needs T to exist, why could buffer_relationship not see it?
         if let Some(parent) = entity_mut.get::<T>().map(T::get) {
             if entity_mut
                 .world()
