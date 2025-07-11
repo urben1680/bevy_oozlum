@@ -120,12 +120,20 @@ impl RevDirection {
 unsafe impl SystemParam for RevDirection {
     type Item<'world, 'state> = Self;
     type State = ComponentId;
-    fn init_state(world: &mut World, system_meta: &mut SystemMeta) -> Self::State {
-        <Res<RevMeta> as SystemParam>::init_state(world, system_meta)
+    fn init_state(world: &mut World) -> Self::State {
+        <Res<RevMeta> as SystemParam>::init_state(world)
+    }
+    fn init_access(
+        state: &Self::State,
+        system_meta: &mut SystemMeta,
+        component_access_set: &mut bevy::ecs::query::FilteredAccessSet<ComponentId>,
+        world: &mut World,
+    ) {
+        <Res<RevMeta> as SystemParam>::init_access(state, system_meta, component_access_set, world);
     }
     // todo: update implementation and doc for bevy 0.16 as the behavior of Res changes then again
     unsafe fn validate_param(
-        &component_id: &Self::State,
+        &mut component_id: &mut Self::State,
         _system_meta: &SystemMeta,
         world: UnsafeWorldCell,
     ) -> Result<(), SystemParamValidationError> {
