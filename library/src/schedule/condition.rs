@@ -1,16 +1,17 @@
-use std::{any::TypeId, borrow::Cow};
+use std::any::TypeId;
 
 use bevy::{
     ecs::{
-        archetype::ArchetypeComponentId,
-        component::{ComponentId, Tick},
-        query::Access,
-        resource::Resource,
-        schedule::{BoxedCondition, Condition, InternedSystemSet},
-        system::{IntoSystem, ReadOnlySystem, Res, System, SystemIn, SystemParamValidationError},
+        component::{CheckChangeTicks, ComponentId, Tick},
+        query::FilteredAccessSet,
+        schedule::{BoxedCondition, InternedSystemSet, SystemCondition},
+        system::{
+            IntoSystem, ReadOnlySystem, RunSystemError, System, SystemIn,
+            SystemParamValidationError, SystemStateFlags,
+        },
         world::{DeferredWorld, World, unsafe_world_cell::UnsafeWorldCell},
     },
-    utils::default,
+    utils::{default, prelude::DebugName},
 };
 
 use crate::{
@@ -19,13 +20,13 @@ use crate::{
     schedule::error_per_flag,
 };
 
-pub(super) fn into_rev_condition<Marker>(condition: impl Condition<Marker>) -> BoxedCondition {
+pub(super) fn into_rev_condition<Marker>(
+    condition: impl SystemCondition<Marker>,
+) -> BoxedCondition {
     let condition = RevCondition {
         condition: IntoSystem::into_system(condition),
         meta_id: default(),
         log: default(),
-        component_access: default(),
-        archetype_component_access: default(),
         out_of_log_err: false,
     };
     Box::new(condition)
@@ -35,81 +36,28 @@ struct RevCondition<T> {
     condition: T,
     meta_id: Option<ComponentId>,
     log: SparseTransitionLog<()>,
-    // needs its own Access to register RevMeta read
-    component_access: Access<ComponentId>,
-    archetype_component_access: Access<ArchetypeComponentId>,
 
     out_of_log_err: bool,
 }
 
-impl<T: ReadOnlySystem<Out = bool>> System for RevCondition<T> {
-    type In = T::In;
+impl<T: ReadOnlySystem<In = (), Out = bool>> System for RevCondition<T> {
+    type In = ();
     type Out = bool;
-    fn name(&self) -> Cow<'static, str> {
+    fn name(&self) -> DebugName {
         self.condition.name()
     }
     fn type_id(&self) -> TypeId {
         self.condition.type_id()
     }
-    fn component_access(&self) -> &Access<ComponentId> {
-        &self.component_access
+    fn flags(&self) -> SystemStateFlags {
+        self.condition.flags()
     }
-    fn archetype_component_access(&self) -> &Access<ArchetypeComponentId> {
-        &self.archetype_component_access
-    }
-    fn is_send(&self) -> bool {
-        self.condition.is_send()
-    }
-    fn is_exclusive(&self) -> bool {
-        self.condition.is_exclusive()
-    }
-    fn has_deferred(&self) -> bool {
-        self.condition.has_deferred()
-    }
-    fn initialize(&mut self, world: &mut World) {
-        // todo: try change implementation after https://github.com/bevyengine/bevy/pull/17485
-        /// Not everything of the bevy API that is needed here to update archetype_component_access is public,
-        /// so this is a rather complicated way to do it while trying to make it cheap after the first call.
-        /// The benefit is that this is agnostic to implementation details of how impl SystemParam for Res works.
-        #[derive(Resource)]
-        struct RevMetaAccesses {
-            component_access: Access<ComponentId>,
-            archarchetype_component_access: Access<ArchetypeComponentId>,
-        }
-
-        self.condition.initialize(world);
-        self.meta_id = Some(world.register_resource::<RevMeta>());
-        self.component_access
-            .extend(self.condition.component_access());
-        self.archetype_component_access
-            .extend(self.condition.archetype_component_access());
-
-        let access = match world.get_resource::<RevMetaAccesses>() {
-            Some(access) => access,
-            None => {
-                let mut system = IntoSystem::into_system(|_: Res<RevMeta>| {});
-                system.initialize(world);
-                world.insert_resource(RevMetaAccesses {
-                    component_access: system.component_access().clone(),
-                    archarchetype_component_access: system.archetype_component_access().clone(),
-                });
-                world.resource::<RevMetaAccesses>()
-            }
-        };
-
-        if access
-            .component_access
-            .is_compatible(&self.component_access)
-        {
-            self.component_access.extend(&access.component_access);
-        }
-        if access
-            .archarchetype_component_access
-            .is_compatible(&self.archetype_component_access)
-        {
-            self.archetype_component_access
-                .extend(&access.archarchetype_component_access);
-        }
+    fn initialize(&mut self, world: &mut World) -> FilteredAccessSet<ComponentId> {
+        let mut access = self.condition.initialize(world);
+        let meta_id = world.register_resource::<RevMeta>();
+        self.meta_id = Some(meta_id);
+        access.add_unfiltered_resource_read(meta_id); // cannot fail because `condition` is a read-only system
+        access
     }
     unsafe fn validate_param_unsafe(
         &mut self,
@@ -137,51 +85,69 @@ impl<T: ReadOnlySystem<Out = bool>> System for RevCondition<T> {
             self.condition.validate_param_unsafe(world)
         })
     }
-    unsafe fn run_unsafe(&mut self, input: SystemIn<'_, Self>, world: UnsafeWorldCell) -> bool {
-        let meta = unsafe {
+    unsafe fn run_unsafe(
+        &mut self,
+        (): SystemIn<'_, Self>,
+        world: UnsafeWorldCell,
+    ) -> Result<bool, RunSystemError> {
+        let ptr = unsafe {
             // SAFETY:
             // - Registered read access to resource
             // - T cannot have write access because T: ReadOnlySystem
             world.get_resource_by_id(self.meta_id.unwrap())
-        }
-        .expect("Self::validate_param ensured Some");
-        let meta = unsafe {
-            // SAFETY: todo
-            meta.deref::<RevMeta>()
         };
-        match meta.running_direction() {
+        let meta = ptr
+            .map(|ptr| unsafe {
+                // SAFETY: todo
+                ptr.deref::<RevMeta>()
+            })
+            .ok_or(SystemParamValidationError::invalid::<Self>(
+                RevMeta::EXPECT_IN_WORLD,
+            ))?;
+        let direction =
+            meta.get_running_direction()
+                .ok_or(SystemParamValidationError::invalid::<Self>(
+                    RevMeta::EXPECT_RUNNING,
+                ))?;
+
+        match direction {
             RevDirection::NOT_LOG => {
                 let out = unsafe {
-                    // SAFETY: todo
-                    self.condition.run_unsafe(input, world)
+                    // SAFETY: condition is readonly so meta reference is allowed to exist while condition runs
+                    // todo: other safety comments
+                    self.condition.run_unsafe((), world)
+                };
+                let transition = match out {
+                    Ok(true) => Some(()),
+                    _ => None,
                 };
                 self.log
-                    .push_and_pop_past(meta.past_len() as usize, out.then_some(()));
+                    .push_and_pop_past(meta.past_len() as usize, transition);
                 out
             }
             // todo: simplify error msg, can only be internal bug
             // todo: upstream systems returning Result<bool, BevyError> be valid conditions
             RevDirection::FORWARD_LOG => match self.log.forward_log() {
-                Ok(option) => option.is_some(),
-                Err(OutOfLog) => error_per_flag!(
+                Ok(option) => Ok(option.is_some()),
+                Err(OutOfLog) => Ok(error_per_flag!(
                     &mut self.out_of_log_err,
                     "Reversible condition {} got out of log. \
                         Make sure the reversible schedule this condition is in is correctly called in both the forward and backward direction. \
                         It seems that one or more backward schedule calls were missed. \
                         If this condition is in the RevUpdate schedule, this is likely a crate bug.\n{meta:?}",
                     self.name()
-                ),
+                )),
             },
             RevDirection::BackwardLog => match self.log.backward_log() {
-                Ok(option) => option.is_some(),
-                Err(OutOfLog) => error_per_flag!(
+                Ok(option) => Ok(option.is_some()),
+                Err(OutOfLog) => Ok(error_per_flag!(
                     &mut self.out_of_log_err,
                     "Reversible condition {} got out of log. \
                         Make sure the reversible schedule this condition is in is correctly called in both the forward and backward direction. \
                         It seems that one or more forward schedule calls were missed. \
                         If this condition is in the RevUpdate schedule, this is likely a crate bug.\n{meta:?}",
                     self.name()
-                ),
+                )),
             },
         }
     }
@@ -190,12 +156,7 @@ impl<T: ReadOnlySystem<Out = bool>> System for RevCondition<T> {
     fn default_system_sets(&self) -> Vec<InternedSystemSet> {
         self.condition.default_system_sets()
     }
-    fn update_archetype_component_access(&mut self, world: UnsafeWorldCell) {
-        self.condition.update_archetype_component_access(world);
-        self.archetype_component_access
-            .extend(self.condition.archetype_component_access());
-    }
-    fn check_change_tick(&mut self, change_tick: Tick) {
+    fn check_change_tick(&mut self, change_tick: CheckChangeTicks) {
         self.condition.check_change_tick(change_tick);
     }
     fn get_last_run(&self) -> Tick {
@@ -208,4 +169,4 @@ impl<T: ReadOnlySystem<Out = bool>> System for RevCondition<T> {
 
 // SAFETY:
 // todo
-unsafe impl<T: ReadOnlySystem<Out = bool>> ReadOnlySystem for RevCondition<T> {}
+unsafe impl<T: ReadOnlySystem<In = (), Out = bool>> ReadOnlySystem for RevCondition<T> {}
