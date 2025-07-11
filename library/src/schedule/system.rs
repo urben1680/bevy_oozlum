@@ -1,6 +1,5 @@
 use std::{
     any::{TypeId, type_name},
-    borrow::Cow,
     fmt::Debug,
     hash::Hash,
     sync::{
@@ -11,18 +10,17 @@ use std::{
 
 use bevy::{
     ecs::{
-        archetype::ArchetypeComponentId,
-        component::{ComponentId, Tick},
-        query::Access,
+        component::{CheckChangeTicks, ComponentId, Tick},
+        query::FilteredAccessSet,
         schedule::{ApplyDeferred, InternedSystemSet, IntoScheduleConfigs, SystemSet},
         system::{
-            IntoSystem, ReadOnlySystem, ScheduleSystem, System, SystemIn, SystemInput,
-            SystemParamValidationError,
+            IntoSystem, ReadOnlySystem, RunSystemError, ScheduleSystem, System, SystemIn,
+            SystemInput, SystemParamValidationError, SystemStateFlags,
         },
         world::{DeferredWorld, World, unsafe_world_cell::UnsafeWorldCell},
     },
     log::warn,
-    utils::default,
+    utils::{default, prelude::DebugName},
 };
 
 use crate::{
@@ -58,9 +56,10 @@ where
     }
 
     let name = |string: &str| {
+        let sys_name = sys_name.as_string();
         let mut name = String::with_capacity(sys_name.len() + string.len());
         name.extend([&sys_name, string]);
-        name
+        DebugName::owned(name)
     };
     let forward_system_name = name(" (forward system)");
     let backward_commands_name = name(" (backward commands)");
@@ -70,7 +69,7 @@ where
 
     let inner = Mutex::new(Inner {
         system,
-        initialized: false,
+        access: None,
         commands_log: default(),
     });
 
@@ -116,7 +115,7 @@ where
 struct AtomicSet {
     id: u32,
     #[allow(dead_code)]
-    name: Cow<'static, str>,
+    name: DebugName,
 }
 
 impl PartialEq for AtomicSet {
@@ -132,7 +131,7 @@ impl Hash for AtomicSet {
 }
 
 impl AtomicSet {
-    fn new(name: Cow<'static, str>) -> Self {
+    fn new(name: DebugName) -> Self {
         static ID: AtomicU32 = AtomicU32::new(0);
         let id = ID.fetch_add(1, Ordering::Relaxed);
         if id == u32::MAX {
@@ -147,30 +146,20 @@ impl AtomicSet {
 
 pub(super) struct RevSystem<T, const FORWARD: bool> {
     shared: Arc<Shared<T>>,
-    name: String,
+    name: DebugName,
     tick: Tick,
+    flags: SystemStateFlags,
     commands_err: bool,
-    is_send: bool,
-    is_exclusive: bool,
-    has_deferred: bool,
-
-    // these need to be cloned because `&'a Access` cannot be returned from owned `MutexGuard<'a, Access>`
-    component_access: Access<ComponentId>,
-    archetype_component_access: Access<ArchetypeComponentId>,
 }
 
 impl<T, const FORWARD: bool> RevSystem<T, FORWARD> {
-    fn new(shared: Arc<Shared<T>>, name: String) -> Self {
+    fn new(shared: Arc<Shared<T>>, name: DebugName) -> Self {
         Self {
             shared,
             name,
             tick: default(),
-            is_send: default(),
-            is_exclusive: default(),
-            has_deferred: default(),
+            flags: SystemStateFlags::empty(),
             commands_err: false,
-            component_access: default(),
-            archetype_component_access: default(),
         }
     }
 }
@@ -182,26 +171,24 @@ struct Shared<T> {
 
 struct Inner<T> {
     system: T,
-    initialized: bool,
     commands_log: UndoRedoLog,
+    access: Option<Box<AccessCache>>,
+}
+
+struct AccessCache {
+    access: FilteredAccessSet<ComponentId>,
+    last_access: bool,
 }
 
 impl<T, const FORWARD: bool> Debug for RevSystem<T, FORWARD> {
+    // todo: remove?
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct(type_name::<Self>())
             .field("shared", &self.shared)
             .field("name", &self.name)
             .field("tick", &self.tick)
             .field("commands_err", &self.commands_err)
-            .field("is_send", &self.is_send)
-            .field("is_exclusive", &self.is_exclusive)
-            .field("has_deferred", &self.has_deferred)
-            .field("component_access", &self.component_access)
-            .field(
-                "archetype_component_access",
-                &self.archetype_component_access,
-            )
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -217,33 +204,21 @@ impl<T: System, const FORWARD: bool> System for RevSystem<T, FORWARD> {
     type In = T::In;
     type Out = T::Out;
 
-    fn name(&self) -> Cow<'static, str> {
-        Cow::Owned(self.name.clone())
+    fn name(&self) -> DebugName {
+        self.name.clone()
     }
     fn type_id(&self) -> TypeId {
         TypeId::of::<Self>()
     }
-    fn component_access(&self) -> &Access<ComponentId> {
-        &self.component_access
-    }
-    fn archetype_component_access(&self) -> &Access<ArchetypeComponentId> {
-        &self.archetype_component_access
-    }
-    fn is_send(&self) -> bool {
-        self.is_send
-    }
-    fn is_exclusive(&self) -> bool {
-        self.is_exclusive
-    }
-    fn has_deferred(&self) -> bool {
-        self.has_deferred
+    fn flags(&self) -> SystemStateFlags {
+        self.flags
     }
     unsafe fn validate_param_unsafe(
         &mut self,
         world: UnsafeWorldCell,
     ) -> Result<(), SystemParamValidationError> {
         // commands log needs to read RevMeta
-        if self.is_exclusive {
+        if self.is_exclusive() {
             let meta = unsafe {
                 // SAFETY: todo
                 world.get_resource::<RevMeta>()
@@ -267,7 +242,7 @@ impl<T: System, const FORWARD: bool> System for RevSystem<T, FORWARD> {
     }
     fn validate_param(&mut self, world: &World) -> Result<(), SystemParamValidationError> {
         // commands log needs to read RevMeta
-        if self.is_exclusive && !world.contains_resource::<RevMeta>() {
+        if self.is_exclusive() && !world.contains_resource::<RevMeta>() {
             return Err(SystemParamValidationError::invalid::<Self>(
                 RevMeta::EXPECT_IN_WORLD,
             ));
@@ -283,7 +258,7 @@ impl<T: System, const FORWARD: bool> System for RevSystem<T, FORWARD> {
         &mut self,
         input: SystemIn<'_, Self>,
         world: UnsafeWorldCell,
-    ) -> Self::Out {
+    ) -> Result<Self::Out, RunSystemError> {
         let mut shared = self
             .shared
             .inner
@@ -333,7 +308,7 @@ impl<T: System, const FORWARD: bool> System for RevSystem<T, FORWARD> {
         }
     }
     fn apply_deferred(&mut self, world: &mut World) {
-        if self.is_exclusive {
+        if self.is_exclusive() {
             // ExclusiveSystemFunction::apply_deferred is noop
             return;
         }
@@ -358,30 +333,14 @@ impl<T: System, const FORWARD: bool> System for RevSystem<T, FORWARD> {
     fn queue_deferred(&mut self, _world: DeferredWorld) {
         unimplemented!("{} used as an observer", std::any::type_name::<T>())
     }
-    fn initialize(&mut self, world: &mut World) {
-        let shared = initialize_inner(&mut self.shared, &mut self.tick, &self.name, world);
-        self.is_send = shared.system.is_send();
-        self.is_exclusive = shared.system.is_exclusive();
-        self.has_deferred = shared.system.has_deferred();
-        self.component_access
-            .extend(shared.system.component_access());
-        self.archetype_component_access
-            .extend(shared.system.archetype_component_access());
+    fn initialize(&mut self, world: &mut World) -> FilteredAccessSet<ComponentId> {
+        let (shared, access) =
+            initialize_inner(&mut self.shared, &mut self.tick, &self.name, world);
+        self.flags = shared.system.flags();
+        access
     }
-    fn update_archetype_component_access(&mut self, world: UnsafeWorldCell) {
-        // reference: CombinatorSystem
-        let system = &mut self
-            .shared
-            .inner
-            .try_lock()
-            .unwrap_or_else(expect_lock(&self.name))
-            .system;
-        system.update_archetype_component_access(world);
-        self.archetype_component_access
-            .extend(system.archetype_component_access());
-    }
-    fn check_change_tick(&mut self, change_tick: Tick) {
-        check_tick(&mut self.tick, change_tick);
+    fn check_change_tick(&mut self, check: CheckChangeTicks) {
+        self.tick.check_tick(check);
     }
     fn default_system_sets(&self) -> Vec<InternedSystemSet> {
         self.shared.default_system_sets.clone()
@@ -398,7 +357,11 @@ impl<T: System, const FORWARD: bool> System for RevSystem<T, FORWARD> {
 unsafe impl<T: ReadOnlySystem<In = (), Out = ()>, const FORWARD: bool> ReadOnlySystem
     for RevSystem<T, FORWARD>
 {
-    fn run_readonly(&mut self, input: SystemIn<'_, Self>, world: &World) -> Self::Out {
+    fn run_readonly(
+        &mut self,
+        input: SystemIn<'_, Self>,
+        world: &World,
+    ) -> Result<Self::Out, RunSystemError> {
         self.shared
             .inner
             .try_lock()
@@ -410,14 +373,14 @@ unsafe impl<T: ReadOnlySystem<In = (), Out = ()>, const FORWARD: bool> ReadOnlyS
 
 struct CommandsBackward<T> {
     shared: Arc<Shared<T>>,
-    name: String,
+    name: DebugName,
     tick: Tick,
     has_deferred: bool,
     commands_err: bool,
 }
 
 impl<T> CommandsBackward<T> {
-    fn new(shared: Arc<Shared<T>>, name: String) -> Self {
+    fn new(shared: Arc<Shared<T>>, name: DebugName) -> Self {
         Self {
             shared,
             name,
@@ -431,16 +394,15 @@ impl<T> CommandsBackward<T> {
 impl<T: System> System for CommandsBackward<T> {
     type In = ();
     type Out = ();
-    fn name(&self) -> Cow<'static, str> {
-        Cow::Owned(self.name.clone())
+    fn name(&self) -> DebugName {
+        self.name.clone()
     }
-    fn component_access(&self) -> &Access<ComponentId> {
-        static EMPTY: Access<ComponentId> = Access::new();
-        &EMPTY
-    }
-    fn archetype_component_access(&self) -> &Access<ArchetypeComponentId> {
-        static EMPTY: Access<ArchetypeComponentId> = Access::new();
-        &EMPTY
+    fn flags(&self) -> SystemStateFlags {
+        if self.has_deferred {
+            SystemStateFlags::DEFERRED
+        } else {
+            SystemStateFlags::empty()
+        }
     }
     fn is_send(&self) -> bool {
         true
@@ -488,7 +450,13 @@ impl<T: System> System for CommandsBackward<T> {
             .system
             .validate_param(world)
     }
-    unsafe fn run_unsafe(&mut self, _input: (), _world: UnsafeWorldCell) {}
+    unsafe fn run_unsafe(
+        &mut self,
+        _input: (),
+        _world: UnsafeWorldCell,
+    ) -> Result<(), RunSystemError> {
+        Ok(())
+    }
     fn apply_deferred(&mut self, world: &mut World) {
         let result = self
             .shared
@@ -504,8 +472,8 @@ impl<T: System> System for CommandsBackward<T> {
     fn queue_deferred(&mut self, _world: DeferredWorld) {
         unreachable!("{} used as an observer", std::any::type_name::<T>())
     }
-    fn check_change_tick(&mut self, change_tick: Tick) {
-        check_tick(&mut self.tick, change_tick);
+    fn check_change_tick(&mut self, check: CheckChangeTicks) {
+        self.tick.check_tick(check);
     }
     fn get_last_run(&self) -> Tick {
         self.tick
@@ -516,44 +484,54 @@ impl<T: System> System for CommandsBackward<T> {
     fn default_system_sets(&self) -> Vec<InternedSystemSet> {
         self.shared.default_system_sets.clone()
     }
-    fn initialize(&mut self, world: &mut World) {
-        let shared = initialize_inner(&mut self.shared, &mut self.tick, &self.name, world);
+    fn initialize(&mut self, world: &mut World) -> FilteredAccessSet<ComponentId> {
+        let (shared, access) =
+            initialize_inner(&mut self.shared, &mut self.tick, &self.name, world);
         self.has_deferred = shared.system.has_deferred();
+        access
     }
-    fn update_archetype_component_access(&mut self, _world: UnsafeWorldCell) {}
 }
 
 // SAFETY: noop run_readonly
 unsafe impl<T: System> ReadOnlySystem for CommandsBackward<T> {
-    fn run_readonly(&mut self, _input: (), _world: &World) {}
+    fn run_readonly(&mut self, _input: (), _world: &World) -> Result<(), RunSystemError> {
+        Ok(())
+    }
 }
 
 fn initialize_inner<'a, T: System>(
     shared: &'a mut Arc<Shared<T>>,
     tick: &mut Tick,
-    name: &str,
+    name: &DebugName,
     world: &mut World,
-) -> MutexGuard<'a, Inner<T>> {
+) -> (MutexGuard<'a, Inner<T>>, FilteredAccessSet<ComponentId>) {
     world.init_resource::<UndoRedoBuffer>();
     *tick = world.change_tick();
     let mut shared = shared.inner.try_lock().unwrap_or_else(expect_lock(name));
-    if !shared.initialized {
-        shared.system.initialize(world);
-        shared.initialized = true;
+    match shared.access.take() {
+        None => {
+            let access = shared.system.initialize(world);
+            shared.access = Some(Box::new(AccessCache {
+                access: access.clone(),
+                last_access: false,
+            }));
+            (shared, access)
+        }
+        Some(mut access_cache) => {
+            if access_cache.last_access {
+                (shared, access_cache.access)
+            } else {
+                access_cache.last_access = true;
+                let access = access_cache.access.clone();
+                shared.access = Some(access_cache);
+                (shared, access)
+            }
+        }
     }
-    shared
 }
 
-fn expect_lock<T: Debug, Out>(name: &str) -> impl FnOnce(T) -> Out + '_ {
+fn expect_lock<T: Debug, Out>(name: &DebugName) -> impl FnOnce(T) -> Out + '_ {
     move |err| panic!("Could not access reversible system {name} because of {err:#?}")
-}
-
-/// reference: Tick::check_tick
-fn check_tick(this: &mut Tick, change_tick: Tick) {
-    let age = change_tick.get().wrapping_sub(this.get());
-    if age > Tick::MAX.get() {
-        *this = Tick::new(change_tick.get().wrapping_sub(Tick::MAX.get()));
-    }
 }
 
 #[cfg(test)]
@@ -562,9 +540,10 @@ mod test {
         app::{App, Update},
         ecs::{
             change_detection::{Res, ResMut},
-            component::{Component, HookContext},
+            component::Component,
             event::Event,
-            observer::Trigger,
+            lifecycle::HookContext,
+            observer::On,
             schedule::IntoScheduleConfigs,
             system::{Commands, IntoSystem},
             world::{DeferredWorld, World},
@@ -577,7 +556,8 @@ mod test {
 
     #[derive(Event)]
     struct Observer;
-    fn observer(_: Trigger<Observer>, mut world: DeferredWorld) {
+
+    fn observer(_: On<Observer>, mut world: DeferredWorld) {
         let now = world.resource::<RevMeta>().non_log_now().unwrap();
         world.buffer_undo_redo(now, blank_undo_redo);
         world.commands().queue(|world: &mut World| {
@@ -587,7 +567,7 @@ mod test {
 
     #[derive(Event)]
     struct EmptyObserver;
-    fn empty_observer(_: Trigger<Observer>, mut world: DeferredWorld) {
+    fn empty_observer(_: On<Observer>, mut world: DeferredWorld) {
         let now = world.resource::<RevMeta>().non_log_now().unwrap();
         world.buffer_undo_redo(now, blank_undo_redo);
     }
