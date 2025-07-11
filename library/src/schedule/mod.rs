@@ -2,12 +2,10 @@ use std::{fmt::Debug, hash::Hash};
 
 use bevy::ecs::{
     change_detection::Res,
-    error::BevyError,
-    never::Never,
     schedule::{
-        Chain, Condition, Fallible, Infallible, InternedSystemSet, IntoScheduleConfigs,
-        IntoSystemSet, Schedulable, Schedule, ScheduleConfigTupleMarker, ScheduleConfigs,
-        ScheduleLabel, SystemSet, graph::GraphInfo,
+        Chain, InternedSystemSet, IntoScheduleConfigs, IntoSystemSet, Schedulable, Schedule,
+        ScheduleConfigTupleMarker, ScheduleConfigs, ScheduleLabel, SystemCondition, SystemSet,
+        graph::GraphInfo,
     },
     system::{IntoSystem, ScheduleSystem},
 };
@@ -220,18 +218,18 @@ pub trait IntoRevScheduleConfigs<
             .before_ignore_deferred(BwdSysSet(set));
         configs
     }
-    fn rev_run_if<M>(self, condition: impl Condition<M>) -> RevScheduleConfigs<T> {
+    fn rev_run_if<M>(self, condition: impl SystemCondition<M>) -> RevScheduleConfigs<T> {
         let mut configs = self.into_rev_configs();
         configs.unified.run_if_dyn(into_rev_condition(condition));
         configs
     }
     fn rev_distributive_run_if<M>(
         self,
-        condition: impl Condition<M> + Clone,
+        condition: impl SystemCondition<M> + Clone,
     ) -> RevScheduleConfigs<T> {
         fn distribute<M>(
             unified: &mut ScheduleConfigs<InternedSystemSet>,
-            condition: impl Condition<M> + Clone,
+            condition: impl SystemCondition<M> + Clone,
         ) {
             match unified {
                 ScheduleConfigs::ScheduleConfig(_) => {
@@ -309,32 +307,9 @@ impl<S: SystemSet> IntoRevScheduleConfigs<InternedSystemSet, ()> for S {
     }
 }
 
-impl<F, Marker> IntoRevScheduleConfigs<ScheduleSystem, (Infallible, Marker)> for F
+impl<F, Marker> IntoRevScheduleConfigs<ScheduleSystem, (Marker,)> for F
 where
     F: IntoSystem<(), (), Marker>,
-{
-    fn into_rev_configs(self) -> RevScheduleConfigs<ScheduleSystem> {
-        into_rev_system(self)
-    }
-}
-
-// local type because bevy's Never causes implementation conflicts
-// see https://github.com/danielhenrymantilla/never-say-never.rs/issues/2
-#[doc(hidden)]
-pub struct LocalNever;
-
-impl<F, Marker> IntoRevScheduleConfigs<ScheduleSystem, (LocalNever, Marker)> for F
-where
-    F: IntoSystem<(), Never, Marker>,
-{
-    fn into_rev_configs(self) -> RevScheduleConfigs<ScheduleSystem> {
-        into_rev_system(self)
-    }
-}
-
-impl<F, Marker> IntoRevScheduleConfigs<ScheduleSystem, (Fallible, Marker)> for F
-where
-    F: IntoSystem<(), Result<(), BevyError>, Marker>,
 {
     fn into_rev_configs(self) -> RevScheduleConfigs<ScheduleSystem> {
         into_rev_system(self)
