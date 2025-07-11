@@ -4,7 +4,7 @@ use bevy::{
     app::{App, FixedUpdate},
     ecs::{
         change_detection::ResMut,
-        observer::Trigger,
+        observer::On,
         schedule::{ApplyDeferred, IntoSystemSet, LogLevel, ScheduleBuildSettings},
         system::IntoSystem,
         world::{DeferredWorld, World},
@@ -71,7 +71,7 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
     world.add_schedule(schedule);
 
     // set up observers
-    world.add_observer(|event: Trigger<SysObsv>, mut world: DeferredWorld| {
+    world.add_observer(|event: On<SysObsv>, mut world: DeferredWorld| {
         let n = event.0;
 
         world
@@ -100,7 +100,7 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
         world.buffer_undo_redo(now, test);
     });
     world.add_observer(
-        |event: Trigger<SysHookObsv>,
+        |event: On<SysHookObsv>,
          mut log: ResMut<TestLog>,
          meta: Res<RevMeta>,
          mut buffer: ResMut<UndoRedoBuffer>| {
@@ -113,7 +113,7 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
         },
     );
     world.add_observer(
-        |event: Trigger<SysObsvObsv>,
+        |event: On<SysObsvObsv>,
          mut log: ResMut<TestLog>,
          meta: Res<RevMeta>,
          mut buffer: ResMut<UndoRedoBuffer>| {
@@ -126,7 +126,7 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
         },
     );
     world.add_observer(
-        |event: Trigger<SysCmdObsv>,
+        |event: On<SysCmdObsv>,
          mut log: ResMut<TestLog>,
          meta: Res<RevMeta>,
          mut buffer: ResMut<UndoRedoBuffer>| {
@@ -268,7 +268,7 @@ fn test_step<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
     config(&mut schedule);
     schedule.set_apply_final_deferred(apply_final_deferred);
     app.add_schedule(schedule);
-    bevy_mod_debugdump::print_schedule_graph(&mut app, RevUpdate);
+    //bevy_mod_debugdump::print_schedule_graph(&mut app, RevUpdate);
     panic!(
         "expected: {expected:?}\nactual:   {actual:?}\nconfig: {variant}\napply_final_deferred: {apply_final_deferred}\ndirection: {direction:?}\nstep: {step}"
     )
