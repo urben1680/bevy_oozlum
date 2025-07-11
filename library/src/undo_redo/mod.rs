@@ -1,9 +1,11 @@
 use std::{
-    any::type_name_of_val,
+    any::{type_name, type_name_of_val},
     error::Error,
     fmt::{Debug, Display},
     hash::Hash,
+    iter::FusedIterator,
     marker::PhantomData,
+    sync::Arc,
 };
 
 use bevy::{
@@ -25,12 +27,14 @@ use bevy::{
             FilteredEntityMut, FilteredEntityRef, FromWorld, World, error::EntityMutableFetchError,
         },
     },
+    log::warn,
     platform::collections::{HashMap, HashSet},
     ptr::OwningPtr,
-    utils::synccell::SyncCell,
+    utils::{prelude::DebugName, synccell::SyncCell},
 };
 
 use crate::{
+    app::RevSystemsPlugin,
     log::{DenseTransitionsLog, FrameTransitionLog, MissedFrame},
     meta::{NonLogNow, RevDirection, RevMeta},
 };
@@ -450,7 +454,7 @@ impl UndoRedoLog {
     pub(crate) fn forward(
         &mut self,
         world: &mut World,
-        system_name: &str,
+        system_name: &DebugName,
     ) -> Result<(), UndoRedoLogError> {
         let meta = world
             .get_resource::<RevMeta>()
@@ -506,7 +510,7 @@ impl UndoRedoLog {
     pub(crate) fn backward(
         &mut self,
         world: &mut World,
-        system_name: &str,
+        system_name: &DebugName,
     ) -> Result<(), UndoRedoLogError> {
         let meta = world
             .get_resource::<RevMeta>()
