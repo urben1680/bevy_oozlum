@@ -26,8 +26,8 @@ use bevy::{
 use crate::{
     meta::RevMeta,
     schedule::{
-        BackwardSystems, BwdCmdSet, BwdCmdSysSet, BwdSysSet, ForwardSystems, FwdSysSet,
-        error_per_flag,
+        BackwardDeferred, BackwardSystem, BackwardSystems, BwdCmdSysSet, ForwardSystem,
+        ForwardSystems, error_per_flag,
     },
     undo_redo::{UndoRedoBuffer, UndoRedoLog},
 };
@@ -80,21 +80,21 @@ where
 
     let forward_systems = RevSystem::<_, true>::new(shared.clone(), forward_system_name)
         .in_set(unified)
-        .in_set(FwdSysSet(unified))
+        .in_set(ForwardSystem(unified))
         .in_set(ForwardSystems);
 
     let backward_commands = CommandsBackward::new(shared.clone(), backward_commands_name)
         .in_set(unified)
-        .in_set(BwdCmdSet(unified))
+        .in_set(BackwardDeferred(unified))
         .in_set(BwdCmdSysSet(unified))
         .in_set(BackwardSystems);
 
     let backward_systems = RevSystem::<_, false>::new(shared, backward_system_name)
         .in_set(unified)
-        .in_set(BwdSysSet(unified))
+        .in_set(BackwardSystem(unified))
         .in_set(BwdCmdSysSet(unified))
         .in_set(BackwardSystems)
-        .after(BwdCmdSet(unified));
+        .after(BackwardDeferred(unified));
 
     let mut configs = RevScheduleConfigs {
         forward_systems,
@@ -147,7 +147,7 @@ impl AtomicSet {
 pub(super) struct RevSystem<T, const FORWARD: bool> {
     shared: Arc<Shared<T>>,
     name: DebugName,
-    tick: Tick,
+    tick: Tick, // deprecate because not in sync?
     flags: SystemStateFlags,
     commands_err: bool,
 }
@@ -340,7 +340,13 @@ impl<T: System, const FORWARD: bool> System for RevSystem<T, FORWARD> {
         access
     }
     fn check_change_tick(&mut self, check: CheckChangeTicks) {
-        self.tick.check_tick(check);
+        let mut shared = self
+            .shared
+            .inner
+            .try_lock()
+            .unwrap_or_else(expect_lock(&self.name));
+        shared.system.check_change_tick(check);
+        self.tick = shared.system.get_last_run();
     }
     fn default_system_sets(&self) -> Vec<InternedSystemSet> {
         self.shared.default_system_sets.clone()

@@ -1,561 +1,501 @@
-use std::{
-    any::TypeId,
-    hash::{BuildHasher, Hasher},
+use std::any::TypeId;
+
+use bevy::ecs::{
+    bundle::{Bundle, BundleFromComponents, InsertMode, NoBundleEffect},
+    component::Component,
+    entity::Entity,
+    world::{EntityWorldMut, World},
 };
 
-use bevy::{
-    ecs::reflect::AppTypeRegistry,
-    log::error,
-    platform::hash::{FixedHasher, PassHash},
-    reflect::ReflectFromPtr,
+use variadics_please::all_tuples;
+
+use crate::{
+    meta::NonLogNow,
+    prelude::{UndoRedo, UndoRedoSwap},
+    undo_redo::{BuffersUndoRedo, RevEntityWorldMut},
 };
 
-use super::*;
+// todo: move to entity_world
+// todo: test unchecked methods
 
-/*
-rework: upstream EntityCloner filter_if_new + BundleId methods, then see what changes here
-*/
-
-/// Fails if `entity` is `rev_is_despawned`, it must be otherwise spawned as an `archetype_id` could be provided.
-pub(super) fn buffer_pre_insert<T: Bundle>(
-    world: &mut World,
+pub(crate) fn rev_remove<T: PartialOp<Marker>, Marker>(
+    entity: &mut EntityWorldMut,
     now: NonLogNow,
-    entity: Entity,
-    after_now_before_undo: impl FnOnce(&mut World),
-    archetype_id: ArchetypeId,
-    insert_mode: InsertMode,
-    marker: DisabledToDespawn,
-) -> Result<Option<Entity>, RevEntityError> {
-    match insert_mode {
-        InsertMode::Replace => buffer_components_cached(
-            world,
-            now,
-            entity,
-            after_now_before_undo,
-            unique_for_location!(archetype_id, PhantomData::<T>),
-            |world: &mut World| {
-                let bundle_id = world.register_bundle::<T>().id();
-                pre_insert_maybe_overwrite(world, bundle_id, archetype_id)
-            },
-            marker,
-        ),
-        InsertMode::Keep => buffer_components_cached(
-            world,
-            now,
-            entity,
-            after_now_before_undo,
-            unique_for_location!(archetype_id, PhantomData::<T>),
-            |world| {
-                let bundle_id = world.register_bundle::<T>().id();
-                pre_insert_no_overwrite(&world, bundle_id, archetype_id)
-            },
-            marker,
-        ),
-    }
-}
-
-pub(super) fn pre_insert_maybe_overwrite(
-    world: &World,
-    bundle_id: BundleId,
-    archetype_id: ArchetypeId,
-) -> (BufferAt, Vec<ComponentId>) {
-    // Bundle explicit:  A(2), B(2), C(2)
-    // Bundle required:                    D(2), E(2)
-
-    // Entity before:    A(1), B(1),             E(1)
-    // Entity after:     A(2), B(2), C(2), D(2), E(1)
-
-    // Buffer 1:         A(1), B(1), C(*), D(*)        *if any appear at redo
-    // Buffer 2 at undo: A(2), B(2), C(2), D(2)
-
-    let bundle = world.bundles().get(bundle_id).unwrap();
-    let archetype = world.archetypes().get(archetype_id).unwrap();
-    let components = bundle
-        .explicit_components()
-        .iter()
-        .chain(
-            bundle
-                .required_components()
-                .iter()
-                .filter(|component_id| !archetype.contains(**component_id)),
-        )
-        .copied()
-        .collect();
-    let overwrites = bundle
-        .explicit_components()
-        .iter()
-        .any(|component_id| archetype.contains(*component_id));
-    let at = if overwrites {
-        BufferAt::NowAndUndo
-    } else {
-        BufferAt::Undo
-    };
-    (at, components)
-}
-
-pub(super) fn pre_insert_no_overwrite(
-    world: &World,
-    bundle_id: BundleId,
-    archetype_id: ArchetypeId, // todo: remove after https://github.com/bevyengine/bevy/pull/19326
-) -> (BufferAt, Vec<ComponentId>) {
-    // Bundle explicit:  A(2), B(2), C(2)
-    // Bundle required:                    D(2), E(2)
-
-    // Entity before:    A(1), B(1),             E(1)
-    // Entity after:     A(1), B(1), C(2), D(2), E(1)
-
-    // Buffer at undo:               C(2), D(2)
-
-    let archetype = world.archetypes().get(archetype_id).unwrap();
-    let components = world
-        .bundles()
-        .get(bundle_id)
-        .unwrap()
-        .contributed_components()
-        .iter()
-        .copied()
-        .filter(|component_id| !archetype.contains(*component_id))
-        .collect();
-    (BufferAt::Undo, components)
-}
-
-pub(super) fn buffer_components_cached<T: AsRef<[ComponentId]>>(
-    world: &mut World,
-    now: NonLogNow,
-    entity: Entity,
-    after_now_before_undo: impl FnOnce(&mut World),
-    key: impl Hash + 'static,
-    components: impl FnOnce(&mut World) -> (BufferAt, T),
-    marker: DisabledToDespawn,
-) -> Result<Option<Entity>, RevEntityError> {
-    #[derive(Resource, Default)]
-    pub(crate) struct CachedBundles(HashMap<u64, (BufferAt, BundleId), PassHash>);
-
-    fn type_id_of_var<T: 'static>(_: &T) -> TypeId {
-        TypeId::of::<T>()
-    }
-
-    let mut hasher = FixedHasher::default().build_hasher();
-    type_id_of_var(&key).hash(&mut hasher);
-    key.hash(&mut hasher);
-    let key = hasher.finish();
-
-    let mut cache = world.remove_resource::<CachedBundles>().unwrap_or_default();
-    let (at, bundle) = *cache.0.entry(key).or_insert_with(|| {
-        let (at, components) = components(world);
-        let components = components.as_ref();
-        (at, components_to_bundle(world, &components))
-    });
-    world.insert_resource(cache);
-    buffer_bundle(
-        world,
-        now,
-        entity,
-        at,
-        after_now_before_undo,
-        bundle,
-        marker,
-    )
-}
-
-pub(super) fn buffer_bundle(
-    world: &mut World,
-    now: NonLogNow,
-    entity: Entity,
-    at: BufferAt,
-    after_now_before_undo: impl FnOnce(&mut World), // needed for RevRelationship::buffer being able to evaluate parents and siblings
-    bundle: BundleId,
-    marker: DisabledToDespawn,
-) -> Result<Option<Entity>, RevEntityError> {
-    if world.get_entity(entity)?.rev_is_despawned() {
-        return Err(RevEntityError::EntityRevDespawnedError(
-            EntityRevDespawnedError::new(entity, marker),
-        ));
-    }
-    world.resource_scope::<RevRelationship, _>(
-        |world, mut relationship_res: Mut<'_, RevRelationship>| {
-            let mut buffer = BundleBuffer {
-                bundle,
-                entity,
-                state: BufferState::Unspawned(marker),
-            };
-            match at {
-                BufferAt::Now => {
-                    let entities = buffer.toggle_state(world);
-                    let components = buffer.get_component_ids(world);
-                    let out = entities.buffer;
-                    relationship_res.buffer(
-                        &mut world.entity_mut(entity),
-                        Some(&components),
-                        now,
-                        true,
-                    );
-                    world.buffer_undo_redo(now, buffer);
-                    entities.move_components(world, &components, RevDirection::NOT_LOG);
-
-                    after_now_before_undo(world);
-                    Ok(Some(out))
-                }
-                BufferAt::Undo => {
-                    after_now_before_undo(world);
-
-                    let components = buffer.get_component_ids(world);
-                    world.buffer_undo_redo(now, buffer);
-
-                    // needs to come after buffer_undo_redo so at undo, at reverse order, this gets to grap relevant components
-                    relationship_res.buffer(
-                        &mut world.entity_mut(entity),
-                        Some(&components),
-                        now,
-                        false,
-                    );
-                    Ok(None)
-                }
-                BufferAt::NowAndUndo => {
-                    // todo: different double buffer, not two, make use of same EntityCloner
-                    let at_undo = buffer.clone(); // no buffer entity set yet so each spawns their own
-                    let entities = buffer.toggle_state(world);
-                    let components = buffer.get_component_ids(world);
-
-                    let out = entities.buffer;
-                    let mut entity_mut = world.entity_mut(entity);
-                    let has_relationships =
-                        relationship_res.buffer(&mut entity_mut, Some(&components), now, true);
-                    entity_mut.world_scope(|world| {
-                        entities.move_components(world, &components, RevDirection::NOT_LOG);
-                        world.buffer_undo_redo(now, [buffer, at_undo]);
-
-                        after_now_before_undo(world);
-                    });
-                    if has_relationships {
-                        // needs to come after buffer_undo_redo so at undo, at reverse order, this gets to grap relevant components
-                        relationship_res.buffer(&mut entity_mut, Some(&components), now, false);
-                    }
-                    Ok(Some(out))
-                }
-            }
-        },
-    )
-}
-
-/// [`World::buffer_components_in_progress`] returns `Some(direction)` during the execution of the closure.
-pub(crate) fn progress_scope(
-    world: &mut World,
-    progress: BufferInProgress,
-    c: impl FnOnce(&mut World),
 ) {
-    let mut swap = ResourceSwap(Some(BufferInProgressRes(progress)));
-    swap.undo(world);
-    c(world);
-    swap.redo(world);
+    T::apply_op::<(), (), (), _, _, _>(entity, now, RevOp::Remove);
 }
 
-#[derive(Clone)]
-struct BundleBuffer {
-    bundle: BundleId,
-    entity: Entity,
-    state: BufferState,
+pub(crate) fn rev_remove_unchecked<T: BundleFromComponents + Bundle>(
+    entity: &mut EntityWorldMut,
+    now: NonLogNow,
+) {
+    let id = entity.id();
+    entity.redo_and_buffer(
+        now,
+        RevRemove::<T> {
+            state: None,
+            entity: id,
+        },
+    );
 }
 
-#[derive(Copy, Clone)]
-enum BufferState {
-    Unspawned(DisabledToDespawn),
-    Empty(Entity),
-    Filled(Entity),
+pub(crate) fn rev_insert<T: PartialOp<Marker>, Marker>(
+    entity: &mut EntityWorldMut,
+    now: NonLogNow,
+    value: T,
+    insert_mode: InsertMode,
+) {
+    T::apply_op::<(), (), _, _, _, _>(entity, now, RevOp::Insert(value, insert_mode));
 }
 
-struct BundleEntities {
-    target: Entity,
-    source: Entity,
-    buffer: Entity,
-}
-
-impl BundleEntities {
-    fn move_components(
-        self,
-        world: &mut World,
-        components: &[ComponentId],
-        direction: RevDirection,
-    ) {
-        let progress = BufferInProgress::Buffer {
-            direction,
-            buffer: self.buffer,
-        };
-        progress_scope(world, progress, |world| {
-            EntityCloner::build(world)
-                .deny_all()
-                .move_components(true)
-                .without_required_components(|builder| {
-                    builder.allow_by_ids(components.iter().copied());
-                })
-                .clone_entity(self.source, self.target); // todo: return for 2nd step after overwrite
-        })
+pub(crate) fn rev_insert_unchecked<
+    Insert: BundleFromComponents + Bundle,
+    NewRequired: BundleFromComponents + Bundle,
+    Overwrite: BundleFromComponents + Bundle,
+>(
+    entity: &mut EntityWorldMut,
+    now: NonLogNow,
+    value: Insert,
+) {
+    let id = entity.id();
+    if TypeId::of::<Overwrite>() == TypeId::of::<()>() {
+        entity.insert(value).buffer_undo_redo(
+            now,
+            UndoRedoSwap(RevRemove::<(Insert, NewRequired)> {
+                state: None,
+                entity: id,
+            }),
+        );
+    } else {
+        let overwrite = entity.take::<Overwrite>().expect("todo");
+        entity.insert(value).buffer_undo_redo(
+            now,
+            RevInsert::<(Insert, NewRequired), _> {
+                state: Swap::Overwrite(overwrite),
+                entity: id,
+            },
+        );
     }
 }
 
-impl BundleBuffer {
-    fn toggle_state(&mut self, world: &mut World) -> BundleEntities {
-        match self.state {
-            BufferState::Unspawned(marker) => {
-                let buffer = world.spawn(marker).id();
-                self.state = BufferState::Filled(buffer);
-                BundleEntities {
-                    target: buffer,
-                    source: self.entity,
-                    buffer,
-                }
-            }
-            BufferState::Filled(buffer) => {
-                self.state = BufferState::Empty(buffer);
-                BundleEntities {
-                    target: self.entity,
-                    source: buffer,
-                    buffer,
-                }
-            }
-            BufferState::Empty(buffer) => {
-                self.state = BufferState::Filled(buffer);
-                BundleEntities {
-                    target: buffer,
-                    source: self.entity,
-                    buffer,
-                }
-            }
-        }
-    }
-    fn get_component_ids(&self, world: &World) -> Box<[ComponentId]> {
-        world
-            .bundles()
-            .get(self.bundle)
-            .expect("todo")
-            .explicit_components()
-            .into()
-    }
-    fn undo_redo(&mut self, world: &mut World, direction: RevDirection) {
-        let entities = self.toggle_state(world);
-        let components = self.get_component_ids(world);
-        entities.move_components(world, &components, direction);
-    }
+pub(crate) struct RevRemove<T> {
+    pub(crate) state: Option<T>,
+    pub(crate) entity: Entity,
 }
 
-impl UndoRedo for BundleBuffer {
+impl<T: Bundle + BundleFromComponents> UndoRedo for RevRemove<T> {
     fn undo(&mut self, world: &mut World) {
-        self.undo_redo(world, RevDirection::BackwardLog);
+        let Some(value) = self.state.take() else {
+            unreachable!()
+        };
+        world
+            .get_entity_mut(self.entity)
+            .expect("todo")
+            .insert(value);
     }
     fn redo(&mut self, world: &mut World) {
-        self.undo_redo(world, RevDirection::FORWARD_LOG);
+        self.state = world
+            .get_entity_mut(self.entity)
+            .expect("todo")
+            .take::<T>()
+            .map(Some)
+            .expect("todo");
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-pub enum BufferInProgress {
-    Buffer {
-        direction: RevDirection,
-        buffer: Entity,
-    },
-    NonEntityBuffer {
-        direction: RevDirection,
-    },
-    FinalDespawn,
+pub(crate) struct RevInsert<Insert, Overwrite> {
+    pub(crate) state: Swap<Insert, Overwrite>,
+    pub(crate) entity: Entity,
 }
 
-impl BufferInProgress {
-    pub fn check(world: &World) -> Option<Self> {
-        world.get_resource::<BufferInProgressRes>().map(|res| res.0)
+enum Swap<Insert, Overwrite> {
+    Insert(Insert),
+    Overwrite(Overwrite),
+}
+
+impl<Insert: Bundle + BundleFromComponents, Overwrite: Bundle + BundleFromComponents> UndoRedo
+    for RevInsert<Insert, Overwrite>
+{
+    fn undo(&mut self, world: &mut World) {
+        let mut entity_mut = world.get_entity_mut(self.entity).expect("todo");
+        let insert = entity_mut
+            .take::<Insert>()
+            .map(Swap::Insert)
+            .expect("todo");
+        let Swap::Overwrite(overwrite) = core::mem::replace(&mut self.state, insert) else {
+            unreachable!()
+        };
+        entity_mut.insert(overwrite);
     }
-    pub fn direction(self) -> RevDirection {
+    fn redo(&mut self, world: &mut World) {
+        let mut entity_mut = world.get_entity_mut(self.entity).expect("todo");
+        let overwrite = entity_mut
+            .take::<Overwrite>()
+            .map(Swap::Overwrite)
+            .expect("todo");
+        let Swap::Insert(insert) = core::mem::replace(&mut self.state, overwrite) else {
+            unreachable!()
+        };
+        entity_mut.insert(insert);
+    }
+}
+
+#[doc(hidden)]
+pub enum RevOp<T> {
+    Remove,
+    Insert(T, InsertMode),
+}
+
+pub trait PartialOp<Marker>: BundleFromComponents + Bundle<Effect: NoBundleEffect> {
+    /// If `Self` consists only of `()`, this is `true`. Otherwise, this is `false`.
+    const EMPTY: bool;
+
+    #[doc(hidden)]
+    fn apply_op<
+        Unpacked: PartialOp<UnpackedMarker>,
+        Queue: PartialOp<QueueMarker>,
+        Op: PartialOp<OpMarker>,
+        UnpackedMarker,
+        QueueMarker,
+        OpMarker,
+    >(
+        entity: &mut EntityWorldMut,
+        now: NonLogNow,
+        op: RevOp<Op>,
+    );
+}
+    
+impl<T: Bundle + BundleFromComponents> RevOp<T> {
+    fn apply_op<Unpacked, Marker, UnpackedMarker>(self, entity: &mut EntityWorldMut, now: NonLogNow)
+    where
+        T: PartialOp<Marker>,
+        Unpacked: PartialOp<UnpackedMarker>,
+    {
+        let id = entity.id();
         match self {
-            Self::Buffer { direction, .. } => direction,
-            Self::NonEntityBuffer { direction } => direction,
-            Self::FinalDespawn => RevDirection::NOT_LOG,
+            Self::Remove => {
+                if !Unpacked::EMPTY {
+                    entity.redo_and_buffer(
+                        now,
+                        RevRemove::<Unpacked> {
+                            state: None,
+                            entity: id,
+                        },
+                    )
+                }
+            }
+            Self::Insert(value, InsertMode::Replace) => {
+                if !T::EMPTY {
+                    if Unpacked::EMPTY {
+                        entity.redo_and_buffer(
+                            now,
+                            UndoRedoSwap(RevRemove {
+                                state: Some(value),
+                                entity: id,
+                            }),
+                        )
+                    } else {
+                        entity.redo_and_buffer(
+                            now,
+                            RevInsert::<_, Unpacked> {
+                                state: Swap::Insert(value),
+                                entity: id,
+                            },
+                        )
+                    }
+                }
+            }
+            Self::Insert(value, InsertMode::Keep) => {
+                if !Unpacked::EMPTY {
+                    entity.insert_if_new(value).buffer_undo_redo(
+                        now,
+                        UndoRedoSwap(RevRemove::<Unpacked> {
+                            state: None,
+                            entity: id,
+                        }),
+                    );
+                }
+            }
         }
     }
 }
 
-#[derive(Resource)]
-struct BufferInProgressRes(BufferInProgress);
+#[doc(hidden)]
+pub struct Empty;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum BufferAt {
-    /// The components will be buffered now which removes them from the entity.
-    ///
-    /// When this is undone, the components are moved back into the entity from the buffer.
-    ///
-    /// Redoing this results in buffering and removing them from the entity again.
-    ///
-    /// This variant is useful as reversible removals of these components.
-    ///
-    /// **Make sure to not manually remove the components and solely use this buffering.**
-    Now,
-    /// The components will be buffered when this action is undone, which then removed them
-    /// from the entity. Until then they remain at the entity.
-    ///
-    /// When this is redone, the components are moved back into the entity from the buffer.
-    ///
-    /// This variant is useful to make accompanied insertions of these components _without_
-    /// overwrites reversible.
-    Undo,
-    /// Combines [`BufferAt::Now`] and [`BufferAt::Undo`], utilizing two separate buffers.
-    ///
-    /// This variant is useful to make accompanied insertions of these components _with_
-    /// overwrites reversible.
-    ///
-    /// **Make sure to do such insertions right after and not before this buffering.**
-    NowAndUndo,
-}
+impl PartialOp<Empty> for () {
+    const EMPTY: bool = true;
 
-// todo: replace this with register_dynamic_bundle when moving components no longer requires cloning
-pub(super) fn components_to_bundle(world: &mut World, components: &[ComponentId]) -> BundleId {
-    #[derive(Resource, Default)]
-    struct CheckedClonable(HashSet<ComponentId>);
-
-    let mut checked = world
-        .remove_resource::<CheckedClonable>()
-        .unwrap_or_else(|| match world.get_resource::<RevRelationship>() {
-            Some(resource) => CheckedClonable(resource.registered().collect()),
-            None => CheckedClonable::default(),
-        });
-    // todo: this should be () outside reflect flag
-    let registry = world
-        .get_resource::<AppTypeRegistry>()
-        .map(|registry| registry.read());
-    for &component_id in components {
-        if !checked.0.insert(component_id) {
-            continue;
-        }
-        let Some(component_info) = world.components().get_info(component_id) else {
-            continue;
-        };
-        let movable = match component_info.clone_behavior() {
-            // todo: reflect feature cfg and alternative which returns false
-            ComponentCloneBehavior::Default => component_info
-                .type_id()
-                .zip(registry.as_ref())
-                .is_some_and(|(type_id, registry)| {
-                    registry
-                        .get_type_data::<ReflectFromPtr>(type_id)
-                        .is_some_and(|registration| registration.type_id() == type_id)
-                }),
-            ComponentCloneBehavior::Custom(_) => true, // impls Clone or intentionally does not clone relationship
-            ComponentCloneBehavior::Ignore => false,
-        };
-        if !movable {
-            error!(
-                "Component {} is unclonable and unreflectable, it's insert, remove or overwrite \
-                will not be reversible, see https://github.com/bevyengine/bevy/issues/18079",
-                component_info.name()
-            );
+    fn apply_op<
+        Unpacked: PartialOp<UnpackedMarker>,
+        Queue: PartialOp<QueueMarker>,
+        Op: PartialOp<OpMarker>,
+        UnpackedMarker,
+        QueueMarker,
+        OpMarker,
+    >(
+        entity: &mut EntityWorldMut,
+        now: NonLogNow,
+        op: RevOp<Op>,
+    ) {
+        if !Queue::EMPTY {
+            Queue::apply_op::<Unpacked, (), Op, _, _, _>(entity, now, op);
+        } else if !Unpacked::EMPTY {
+            op.apply_op::<Unpacked, _, _>(entity, now);
         }
     }
-    drop(registry);
-
-    world.insert_resource(checked);
-
-    world.register_dynamic_bundle(components).id()
 }
 
-#[macro_export]
-macro_rules! unique_for_location {
-    ($($hashable: expr),*) => {
-        // extra scope to keep `UniquePerInvoke`s isolated
+#[doc(hidden)]
+pub struct Single;
+
+impl<T: Component> PartialOp<Single> for T {
+    const EMPTY: bool = false;
+
+    fn apply_op<
+        Unpacked: PartialOp<UnpackedMarker>,
+        Queue: PartialOp<QueueMarker>,
+        Op: PartialOp<OpMarker>,
+        UnpackedMarker,
+        QueueMarker,
+        OpMarker,
+    >(
+        entity: &mut EntityWorldMut,
+        now: NonLogNow,
+        op: RevOp<Op>,
+    ) {
+        let add_to_unpacked =
+            matches!(op, RevOp::Insert(_, InsertMode::Keep)) != entity.contains::<T>();
+        if Queue::EMPTY {
+            if add_to_unpacked {
+                op.apply_op::<(Unpacked, T), _, _>(entity, now);
+            } else if !Unpacked::EMPTY {
+                op.apply_op::<Unpacked, _, _>(entity, now);
+            }
+        } else if add_to_unpacked {
+            if Unpacked::EMPTY {
+                Queue::apply_op::<T, (), Op, _, _, _>(entity, now, op);
+            } else {
+                Queue::apply_op::<(Unpacked, T), (), Op, _, _, _>(entity, now, op);
+            }
+        } else {
+            Queue::apply_op::<Unpacked, (), Op, _, _, _>(entity, now, op);
+        }
+    }
+}
+
+macro_rules! impl_remove {
+    ($(($T: ident, $M: ident)),*) => {
+        impl<T, Marker, $($T, $M),*> PartialOp<(Marker, $($M,)*)> for (T, $($T,)*)
+        where
+            T: PartialOp<Marker>,
+            $($T: PartialOp<$M>,)*
         {
-            struct UniquePerInvoke;
-            (core::any::TypeId::of::<UniquePerInvoke>(), $($hashable,)*)
+            const EMPTY: bool = T::EMPTY $(&& $T::EMPTY)*;
+
+            fn apply_op<
+                Unpacked: PartialOp<UnpackedMarker>,
+                Queue: PartialOp<QueueMarker>,
+                Op: PartialOp<OpMarker>,
+                UnpackedMarker,
+                QueueMarker,
+                OpMarker
+            >(
+                entity: &mut EntityWorldMut,
+                now: NonLogNow,
+                op: RevOp<Op>
+            ) {
+                if Queue::EMPTY {
+                    T::apply_op::<Unpacked, ($($T,)*), Op, _, _, _>(entity, now, op);
+                } else {
+                    T::apply_op::<Unpacked, (Queue, $($T,)*), Op, _, _, _>(entity, now, op);
+                }
+            }
         }
-    }
+    };
 }
 
-pub(super) use unique_for_location;
+all_tuples!(impl_remove, 0, 14, T, Marker);
 
 #[cfg(test)]
 mod test {
-    use bevy::prelude::{Reflect, ReflectDefault, ReflectFromWorld};
-
-    use crate::panic_on_error_events;
+    use crate::{
+        meta::{RevDirection, RevMeta},
+        panic_on_error_events,
+        prelude::UndoRedoBuffer,
+    };
 
     use super::*;
 
-    #[test]
-    fn components_to_bundle_does_not_panic_for_clonable_or_reflectable() {
-        #[derive(Component, Clone)]
-        struct Clonable;
+    mod remove {
+        use super::*;
 
-        // following components taken from bevy's clone_entity_using_reflect_all_paths test
+        #[derive(Component, Default)]
+        struct C1;
 
-        // `reflect_clone`-based fast path
-        #[derive(Component, Reflect)]
-        #[reflect(from_reflect = false)]
-        struct ReflectableA;
+        #[derive(Component, Default)]
+        struct C2;
 
-        // `ReflectDefault`-based fast path
-        #[derive(Component, Reflect, Default)]
-        #[reflect(Default)]
-        #[reflect(from_reflect = false)]
-        struct ReflectableB;
+        fn test<T: PartialOp<Marker> + Default, Marker>(remove_count: usize) {
+            panic_on_error_events();
 
-        // `ReflectFromReflect`-based fast path
-        #[derive(Component, Reflect)]
-        struct ReflectableC;
+            let mut world = World::new();
 
-        // `ReflectFromWorld`-based fast path
-        #[derive(Component, Reflect, Default)]
-        #[reflect(FromWorld)]
-        #[reflect(from_reflect = false)]
-        struct ReflectableD;
+            world.insert_resource(RevDirection::NOT_LOG.to_meta(0, 1, 1));
+            world.init_resource::<UndoRedoBuffer>();
+            let now = world.resource::<RevMeta>().non_log_now().unwrap();
 
-        panic_on_error_events();
-        let mut world = World::new();
-        world.init_resource::<AppTypeRegistry>();
-        let registry = world.get_resource::<AppTypeRegistry>().unwrap();
-        registry
-            .write()
-            .register::<(ReflectableA, ReflectableB, ReflectableC, ReflectableD)>();
-        let clonable_id = world.register_component::<Clonable>();
-        let reflectable_a_id = world.register_component::<ReflectableA>();
-        let reflectable_b_id = world.register_component::<ReflectableB>();
-        let reflectable_c_id = world.register_component::<ReflectableC>();
-        let reflectable_d_id = world.register_component::<ReflectableD>();
+            let mut entity_mut = world.spawn(T::default());
+            let entity = entity_mut.id();
 
-        components_to_bundle(
-            &mut world,
-            &[
-                clonable_id,
-                reflectable_a_id,
-                reflectable_b_id,
-                reflectable_c_id,
-                reflectable_d_id,
-            ],
-        );
+            rev_remove::<T, _>(&mut entity_mut, now);
+            let mut buffer = world.remove_resource::<UndoRedoBuffer>().unwrap();
 
-        // test if these really are movable
-        let clone = world
-            .spawn((
-                Clonable,
-                ReflectableA,
-                ReflectableB,
-                ReflectableC,
-                ReflectableD,
-            ))
-            .clone_and_spawn();
+            if remove_count == 0 {
+                assert!(buffer.is_empty());
+                return;
+            }
 
-        let entity = world.entity(clone);
-        assert!(entity.contains::<Clonable>());
-        assert!(entity.contains::<ReflectableA>());
-        assert!(entity.contains::<ReflectableB>());
-        assert!(entity.contains::<ReflectableC>());
-        assert!(entity.contains::<ReflectableD>());
+            assert_eq!(world.entity(entity).archetype().component_count(), 0);
+
+            buffer.undo(&mut world);
+            assert_eq!(
+                world.entity(entity).archetype().component_count(),
+                remove_count
+            );
+
+            buffer.redo(&mut world);
+            assert_eq!(world.entity(entity).archetype().component_count(), 0);
+        }
+
+        #[test]
+        fn remove() {
+            test::<(), _>(0);
+            test::<((),), _>(0);
+            test::<((), ()), _>(0);
+            test::<(((),), ((),)), _>(0);
+            test::<(((), ()), ((), ())), _>(0);
+
+            test::<C1, _>(1);
+
+            test::<(C1,), _>(1);
+            test::<(C1, ()), _>(1);
+            test::<((), C1), _>(1);
+
+            test::<((C1,),), _>(1);
+            test::<((C1, ()),), _>(1);
+            test::<(((), C1),), _>(1);
+
+            test::<((C1,), ()), _>(1);
+            test::<((C1, ()), ()), _>(1);
+            test::<(((), C1), ()), _>(1);
+
+            test::<(C1, C2), _>(2);
+
+            test::<((C1,), C2), _>(2);
+            test::<((C1, ()), C2), _>(2);
+            test::<(((), C1), C2), _>(2);
+
+            test::<(C1, (C2,)), _>(2);
+            test::<(C1, (C2, ())), _>(2);
+            test::<(C1, ((), C2)), _>(2);
+        }
     }
 
-    #[test]
-    #[should_panic(expected = "MyComponent is unclonable and unreflectable")]
-    fn components_to_bundle_errors_on_non_clone_component() {
-        #[derive(Component)]
-        struct MyComponent;
+    mod insert {
+        use super::*;
 
-        panic_on_error_events();
-        let mut world = World::new();
-        world.init_resource::<AppTypeRegistry>();
-        let component_id = world.register_component::<MyComponent>();
-        components_to_bundle(&mut world, &[component_id]);
+        #[derive(Component, Default, PartialEq, Debug)]
+        struct C1(bool);
+
+        #[derive(Component, Default, PartialEq, Debug)]
+        struct C2;
+
+        /// Tests on entity with `C1` unequal to a potential insert and no C2.
+        fn test<T: PartialOp<Marker> + Default, Marker>(
+            insert_1: bool,
+            insert_2: bool,
+            insert_mode: InsertMode,
+        ) {
+            panic_on_error_events();
+
+            let mut world = World::new();
+
+            world.insert_resource(RevDirection::NOT_LOG.to_meta(0, 1, 1));
+            world.init_resource::<UndoRedoBuffer>();
+            let now = world.resource::<RevMeta>().non_log_now().unwrap();
+
+            let mut entity_mut = world.spawn(C1(true));
+
+            let entity = entity_mut.id();
+
+            rev_insert::<_, _>(&mut entity_mut, now, T::default(), insert_mode);
+            let mut buffer = world.remove_resource::<UndoRedoBuffer>().unwrap();
+
+            if !insert_1 && !insert_2 {
+                assert!(buffer.is_empty());
+                return;
+            }
+
+            let entity_ref = world.entity(entity);
+            assert_eq!(entity_ref.get::<C1>(), Some(&C1(!insert_1)));
+            assert_eq!(entity_ref.contains::<C2>(), insert_2);
+
+            buffer.undo(&mut world);
+
+            let entity_ref = world.entity(entity);
+            assert_eq!(entity_ref.get::<C1>(), Some(&C1(true)));
+            assert_eq!(entity_ref.contains::<C2>(), false);
+
+            buffer.redo(&mut world);
+
+            let entity_ref = world.entity(entity);
+            assert_eq!(entity_ref.get::<C1>(), Some(&C1(!insert_1)));
+            assert_eq!(entity_ref.contains::<C2>(), insert_2);
+        }
+
+        fn insert(insert_mode: InsertMode) {
+            let insert_1 = insert_mode == InsertMode::Replace;
+
+            test::<(), _>(false, false, insert_mode);
+            test::<((),), _>(false, false, insert_mode);
+            test::<((), ()), _>(false, false, insert_mode);
+            test::<(((),), ((),)), _>(false, false, insert_mode);
+            test::<(((), ()), ((), ())), _>(false, false, insert_mode);
+
+            test::<C1, _>(insert_1, false, insert_mode);
+
+            test::<(C1,), _>(insert_1, false, insert_mode);
+            test::<(C1, ()), _>(insert_1, false, insert_mode);
+            test::<((), C1), _>(insert_1, false, insert_mode);
+
+            test::<((C1,),), _>(insert_1, false, insert_mode);
+            test::<((C1, ()),), _>(insert_1, false, insert_mode);
+            test::<(((), C1),), _>(insert_1, false, insert_mode);
+
+            test::<((C1,), ()), _>(insert_1, false, insert_mode);
+            test::<((C1, ()), ()), _>(insert_1, false, insert_mode);
+            test::<(((), C1), ()), _>(insert_1, false, insert_mode);
+
+            test::<(C1, C2), _>(insert_1, true, insert_mode);
+
+            test::<((C1,), C2), _>(insert_1, true, insert_mode);
+            test::<((C1, ()), C2), _>(insert_1, true, insert_mode);
+            test::<(((), C1), C2), _>(insert_1, true, insert_mode);
+
+            test::<(C1, (C2,)), _>(insert_1, true, insert_mode);
+            test::<(C1, (C2, ())), _>(insert_1, true, insert_mode);
+            test::<(C1, ((), C2)), _>(insert_1, true, insert_mode);
+        }
+
+        #[test]
+        fn replace() {
+            insert(InsertMode::Replace);
+        }
+
+        #[test]
+        fn keep() {
+            insert(InsertMode::Keep);
+        }
     }
 }

@@ -4,7 +4,6 @@ use crate::meta::NonLogNow;
 
 use super::*;
 
-/// todo, mention register_non_entity_buffer
 #[derive(Component, Clone, Copy, Debug, Eq, Ord)]
 #[component(immutable)]
 pub struct DisabledToDespawn {
@@ -89,45 +88,6 @@ impl RevIsDespawned for FilteredEntityMut<'_> {
 impl RevIsDespawned for EntityWorldMut<'_> {
     fn rev_is_despawned(&self) -> bool {
         self.contains::<DisabledToDespawn>()
-    }
-}
-
-/// todo
-pub struct DespawnAtUndo(pub NonLogNow);
-
-impl BundleEffect for DespawnAtUndo {
-    fn apply(self, entity: &mut EntityWorldMut) {
-        let mut resource = entity
-            .world_scope(World::remove_resource::<RevRelationship>)
-            .expect("todo");
-        let _ = resource.try_despawn(entity, self.0, false);
-        entity.world_scope(|world| world.insert_resource(resource));
-    }
-}
-
-unsafe impl Bundle for DespawnAtUndo {
-    fn get_component_ids(components: &Components, ids: &mut impl FnMut(Option<ComponentId>)) {
-        <() as Bundle>::get_component_ids(components, ids);
-    }
-
-    fn register_required_components(
-        components: &mut ComponentsRegistrator,
-        required_components: &mut RequiredComponents,
-    ) {
-        <() as Bundle>::register_required_components(components, required_components);
-    }
-
-    fn component_ids(components: &mut ComponentsRegistrator, ids: &mut impl FnMut(ComponentId)) {
-        <() as Bundle>::component_ids(components, ids);
-    }
-}
-
-impl DynamicBundle for DespawnAtUndo {
-    type Effect = Self;
-
-    fn get_components(self, func: &mut impl FnMut(StorageType, OwningPtr<'_>)) -> Self::Effect {
-        <() as DynamicBundle>::get_components((), func);
-        self
     }
 }
 

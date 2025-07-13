@@ -24,7 +24,7 @@ use bevy::reflect::{ReflectDeserialize, ReflectSerialize};
 use crate::{
     log::OutOfLog,
     schedule::RevUpdate,
-    undo_redo::{BufferInProgress, DisabledToDespawn, UndoRedoBuffer, progress_scope},
+    undo_redo::{DisabledToDespawn, UndoRedoBuffer},
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -462,11 +462,9 @@ impl RevMeta {
                                     .filter(|(_, marker)| !meta.contains(marker.added_frame()))
                                     .map(|(entity, _)| entity),
                             );
-                            progress_scope(world, BufferInProgress::FinalDespawn, |world| {
-                                for entity in out_of_log_buffers.drain(..) {
-                                    world.despawn(entity);
-                                }
-                            });
+                            for entity in out_of_log_buffers.drain(..) {
+                                world.despawn(entity);
+                            }
                         }
                         Ok(frame)
                     }

@@ -17,5 +17,6 @@ crossterm = "0.28"
 # bevy_mod_debugdump = "0.13"
 
 [features]
-default = ["serde"] # todo: remove line before release
+default = ["serde", "relationship"] # todo: remove line before release
 serde = ["dep:serde", "bevy/serialize"]
+relationship = [] # todo: document
