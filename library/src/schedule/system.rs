@@ -1,5 +1,5 @@
 use std::{
-    any::TypeId,
+    any::{TypeId, type_name},
     fmt::Debug,
     hash::Hash,
     sync::{
@@ -178,6 +178,26 @@ struct Inner<T> {
 struct AccessCache {
     access: FilteredAccessSet<ComponentId>,
     last_access: bool,
+}
+
+impl<T, const FORWARD: bool> Debug for RevSystem<T, FORWARD> {
+    // todo: remove?
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct(type_name::<Self>())
+            .field("shared", &self.shared)
+            .field("name", &self.name)
+            .field("tick", &self.tick)
+            .field("commands_err", &self.commands_err)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<T> Debug for Shared<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct(type_name::<Self>())
+            .field("default_system_sets", &self.default_system_sets)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<T: System, const FORWARD: bool> System for RevSystem<T, FORWARD> {
