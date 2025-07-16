@@ -1,6 +1,10 @@
 use std::{io::stdout, num::NonZeroUsize, time::Duration};
 
-use bevy::{app::App, ecs::world::DeferredWorld, prelude::*};
+use bevy::{
+    app::App,
+    ecs::{component::HookContext, world::DeferredWorld},
+    prelude::*,
+};
 
 use crossterm::{ExecutableCommand, cursor::*, terminal::*};
 

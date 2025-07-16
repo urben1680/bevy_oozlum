@@ -29,37 +29,37 @@ pub struct RevUpdate;
 #[derive(SystemSet, Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub struct RevSystems;
 
-/// Subset of [`RevSystems`].
+/// Subset of [`RevSystemsSet`].
 ///
 /// Contains [`FwdArcSet`]s.
 #[derive(SystemSet, Debug, Copy, Clone, Hash, PartialEq, Eq)]
 struct ForwardSystems;
 
-/// Subset of [`RevSystems`].
+/// Subset of [`RevSystemsSet`].
 ///
-/// Contains [`BwdCmdSysSet`]s in reverse order.
+/// Contains [`BwdCmdArcSet`]s in reverse order.
 #[derive(SystemSet, Debug, Copy, Clone, Hash, PartialEq, Eq)]
 struct BackwardSystems;
 
-/// Subsets of [`ForwardSystems`].
+/// Subsets of [`ForwardSet`].
 ///
 /// Each contains the system wrapped in `Arc`.
 #[derive(SystemSet, Debug, Copy, Clone, Hash, PartialEq, Eq)]
-struct ForwardSystem(InternedSystemSet);
+struct FwdSysSet(InternedSystemSet);
 
-/// Subsets of [`BackwardSystems`].
+/// Subsets of [`BackwardSet`].
 ///
 /// todo
 #[derive(SystemSet, Debug, Copy, Clone, Hash, PartialEq, Eq)]
-struct BackwardDeferred(InternedSystemSet);
+struct BwdCmdSet(InternedSystemSet);
 
-/// Subsets of [`BackwardSystems`].
+/// Subsets of [`BackwardSet`].
 ///
 /// Each contains the system wrapped in `Arc`.
 #[derive(SystemSet, Debug, Copy, Clone, Hash, PartialEq, Eq)]
-struct BackwardSystem(InternedSystemSet);
+struct BwdSysSet(InternedSystemSet);
 
-/// Subsets of [`BackwardSystems`].
+/// Subsets of [`BackwardSet`].
 ///
 /// Each contains the system wrapped in `Arc`.
 #[derive(SystemSet, Debug, Copy, Clone, Hash, PartialEq, Eq)]
@@ -160,7 +160,7 @@ pub trait IntoRevScheduleConfigs<
         //  cmd B -> sync -> sys B -> cmd A -> sync -> sys A
         let set = set.into_system_set().intern();
         let mut configs = self.into_rev_configs();
-        configs.forward_systems = configs.forward_systems.before(ForwardSystem(set));
+        configs.forward_systems = configs.forward_systems.before(FwdSysSet(set));
         configs.backward_commands_systems = configs
             .backward_commands_systems
             .after_ignore_deferred(BwdCmdSysSet(set));
@@ -174,7 +174,7 @@ pub trait IntoRevScheduleConfigs<
         //  cmd A -> sync -> sys A -> cmd B -> sync -> sys B
         let set = set.into_system_set().intern();
         let mut configs = self.into_rev_configs();
-        configs.forward_systems = configs.forward_systems.after(ForwardSystem(set));
+        configs.forward_systems = configs.forward_systems.after(FwdSysSet(set));
         configs.backward_commands_systems = configs
             .backward_commands_systems
             .before_ignore_deferred(BwdCmdSysSet(set));
@@ -190,13 +190,13 @@ pub trait IntoRevScheduleConfigs<
         let mut configs = self.into_rev_configs();
         configs.forward_systems = configs
             .forward_systems
-            .before_ignore_deferred(ForwardSystem(set));
+            .before_ignore_deferred(FwdSysSet(set));
         configs.backward_commands = configs
             .backward_commands
-            .after_ignore_deferred(BackwardDeferred(set));
+            .after_ignore_deferred(BwdCmdSet(set));
         configs.backward_systems = configs
             .backward_systems
-            .after_ignore_deferred(BackwardSystem(set));
+            .after_ignore_deferred(BwdSysSet(set));
         configs
     }
     fn rev_after_ignore_deferred<M>(self, set: impl IntoSystemSet<M>) -> RevScheduleConfigs<T> {
@@ -209,13 +209,13 @@ pub trait IntoRevScheduleConfigs<
         let mut configs = self.into_rev_configs();
         configs.forward_systems = configs
             .forward_systems
-            .after_ignore_deferred(ForwardSystem(set));
+            .after_ignore_deferred(FwdSysSet(set));
         configs.backward_commands = configs
             .backward_commands
-            .before_ignore_deferred(BackwardDeferred(set));
+            .before_ignore_deferred(BwdCmdSet(set));
         configs.backward_systems = configs
             .backward_systems
-            .before_ignore_deferred(BackwardSystem(set));
+            .before_ignore_deferred(BwdSysSet(set));
         configs
     }
     fn rev_run_if<M>(self, condition: impl SystemCondition<M>) -> RevScheduleConfigs<T> {
@@ -250,8 +250,8 @@ pub trait IntoRevScheduleConfigs<
     fn rev_ambiguous_with<M>(self, set: impl IntoSystemSet<M>) -> RevScheduleConfigs<T> {
         let set = set.into_system_set().intern();
         let mut configs = self.into_rev_configs();
-        configs.forward_systems = configs.forward_systems.ambiguous_with(ForwardSystem(set));
-        configs.backward_systems = configs.backward_systems.ambiguous_with(BackwardSystem(set));
+        configs.forward_systems = configs.forward_systems.ambiguous_with(FwdSysSet(set));
+        configs.backward_systems = configs.backward_systems.ambiguous_with(BwdSysSet(set));
         configs
     }
     fn rev_ambiguous_with_all(self) -> RevScheduleConfigs<T> {
@@ -298,9 +298,9 @@ impl<S: SystemSet> IntoRevScheduleConfigs<InternedSystemSet, ()> for S {
     fn into_rev_configs(self) -> RevScheduleConfigs<InternedSystemSet> {
         let set = self.intern();
         RevScheduleConfigs {
-            forward_systems: ForwardSystem(set).in_set(set),
-            backward_commands: BackwardDeferred(set).into_configs(),
-            backward_systems: BackwardSystem(set).into_configs(),
+            forward_systems: FwdSysSet(set).in_set(set),
+            backward_commands: BwdCmdSet(set).into_configs(),
+            backward_systems: BwdSysSet(set).into_configs(),
             backward_commands_systems: BwdCmdSysSet(set).in_set(set),
             unified: set.into_configs(),
         }
@@ -318,12 +318,9 @@ where
 
 impl<T: Schedulable<Metadata = GraphInfo, GroupMetadata = Chain>> RevScheduleConfigs<T> {
     pub fn rev_in_set_inner(&mut self, set: InternedSystemSet) {
-        self.forward_systems
-            .in_set_inner(ForwardSystem(set).intern());
-        self.backward_commands
-            .in_set_inner(BackwardDeferred(set).intern());
-        self.backward_systems
-            .in_set_inner(BackwardSystem(set).intern());
+        self.forward_systems.in_set_inner(FwdSysSet(set).intern());
+        self.backward_commands.in_set_inner(BwdCmdSet(set).intern());
+        self.backward_systems.in_set_inner(BwdSysSet(set).intern());
         self.backward_commands_systems
             .in_set_inner(BwdCmdSysSet(set).intern());
     }

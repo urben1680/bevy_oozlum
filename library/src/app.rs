@@ -15,7 +15,7 @@ use crate::{
     meta::RevMeta,
     prelude::UndoRedoBuffer,
     schedule::{IntoRevScheduleConfigs, RevSchedule},
-    undo_redo::DisabledToDespawn,
+    undo_redo::{DisabledToDespawn, RevRelationship},
 };
 
 pub trait RevApp {
@@ -29,6 +29,7 @@ pub trait RevApp {
         schedule: impl ScheduleLabel,
         sets: impl IntoRevScheduleConfigs<InternedSystemSet, Marker>,
     ) -> &mut Self;
+    fn rev_register_relationship<T: Relationship>(&mut self);
 }
 
 impl RevApp for App {
@@ -53,6 +54,14 @@ impl RevApp for App {
             .entry(schedule)
             .rev_configure_sets(sets);
         self
+    }
+    fn rev_register_relationship<T: Relationship>(&mut self) {
+        // as there is no pub interface to check if T was already used, this is an App method
+        let world = self.world_mut();
+        world.init_resource::<RevRelationship>();
+        world.resource_scope::<RevRelationship, _>(|world, mut resource| {
+            resource.register::<T>(world)
+        });
     }
 }
 
@@ -120,5 +129,6 @@ impl Plugin for RevSystemsPlugin {
         }
         app.register_disabling_component::<DisabledToDespawn>();
         app.init_resource::<UndoRedoBuffer>();
+        app.init_resource::<RevRelationship>();
     }
 }

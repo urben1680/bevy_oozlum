@@ -18,6 +18,33 @@ use super::*;
 pub trait RevWorld {
     fn redo_and_buffer(&mut self, now: NonLogNow, undo_redo: impl UndoRedo);
 
+    fn buffer_components(
+        &mut self,
+        now: NonLogNow,
+        entity: Entity,
+        at: BufferAt,
+        after_now_before_undo: impl FnOnce(&mut World),
+        components: &[ComponentId],
+    ) -> Result<Option<Entity>, RevEntityError>;
+
+    fn buffer_components_cached<T: AsRef<[ComponentId]>>(
+        &mut self,
+        now: NonLogNow,
+        entity: Entity,
+        after_now_before_undo: impl FnOnce(&mut World),
+        key: impl Hash + 'static,
+        components: impl FnOnce(&mut World) -> (BufferAt, T),
+    ) -> Result<Option<Entity>, RevEntityError>;
+
+    fn buffer_bundle(
+        &mut self,
+        now: NonLogNow,
+        entity: Entity,
+        at: BufferAt,
+        after_now_before_undo: impl FnOnce(&mut World),
+        bundle: BundleId,
+    ) -> Result<Option<Entity>, RevEntityError>;
+
     // the methods here are purposely sorted alphabetically to make it easily comparable to bevy's docs
     // unmentioned methods are either
     // a) unrelated to reversible structural changes OR
@@ -121,6 +148,50 @@ impl RevWorld for World {
     fn redo_and_buffer(&mut self, now: NonLogNow, mut undo_redo: impl UndoRedo) {
         undo_redo.redo(self);
         self.buffer_undo_redo(now, undo_redo)
+    }
+
+    fn buffer_components(
+        &mut self,
+        now: NonLogNow,
+        entity: Entity,
+        at: BufferAt,
+        after_now_before_undo: impl FnOnce(&mut World),
+        components: &[ComponentId],
+    ) -> Result<Option<Entity>, RevEntityError> {
+        let bundle = components_to_bundle(self, components);
+        self.buffer_bundle(now, entity, at, after_now_before_undo, bundle)
+    }
+
+    fn buffer_components_cached<T: AsRef<[ComponentId]>>(
+        &mut self,
+        now: NonLogNow,
+        entity: Entity,
+        after_now_before_undo: impl FnOnce(&mut World),
+        key: impl Hash + 'static,
+        components: impl FnOnce(&mut World) -> (BufferAt, T),
+    ) -> Result<Option<Entity>, RevEntityError> {
+        let marker = DisabledToDespawn::for_buffer(now.0);
+        buffer_components_cached(
+            self,
+            now,
+            entity,
+            after_now_before_undo,
+            key,
+            components,
+            marker,
+        )
+    }
+
+    fn buffer_bundle(
+        &mut self,
+        now: NonLogNow,
+        entity: Entity,
+        at: BufferAt,
+        after_now_before_undo: impl FnOnce(&mut World),
+        bundle: BundleId,
+    ) -> Result<Option<Entity>, RevEntityError> {
+        let marker = DisabledToDespawn::for_buffer(now.0);
+        buffer_bundle(self, now, entity, at, after_now_before_undo, bundle, marker)
     }
 
     #[track_caller]
@@ -329,11 +400,9 @@ where
     for (entity, bundle) in batch {
         match world.get_entity_mut(entity) {
             Ok(ref mut entity_mut) => {
-                /* 
                 if let Err(err) = insert_inner(entity_mut, now, bundle, insert_mode) {
                     errors.push(err);
                 }
-                */
             }
             Err(EntityMutableFetchError::EntityDoesNotExist(err)) => errors.push(err),
             Err(EntityMutableFetchError::AliasedMutability(_)) => {

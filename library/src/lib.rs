@@ -23,8 +23,6 @@ Enhancements:
 - delete unused types
 - integrate BuffersUndoRedo in new Rev wrappers, find good way to support DeferredWorld
 - make buffer methods not-pub
-- clone behavior only checked in debug builds
-- relationship logic opt-out/opt-in?
 - missing apis:
 -- EntityWorldMut::clone_with
 -- EntityWorldMut::insert_reflect
@@ -34,16 +32,6 @@ Enhancements:
 -- EntityWorldMut::remove_reflect_with_registry
 
 -- ... (check Commands + friends)
-
-Simplify Buffer
-- rev_remove
-- rev_take
-- rev_insert
-- rev_insert_with_required // generic to list additional required components
-- rev_despawn_single
-
-- no extra support for required components and relationships
-
 
 Docs
 - make fake variadics docs work

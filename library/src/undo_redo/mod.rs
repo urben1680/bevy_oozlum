@@ -28,12 +28,9 @@ use bevy::{
         },
     },
     log::warn,
-    platform::{
-        cell::SyncCell,
-        collections::{HashMap, HashSet},
-    },
+    platform::collections::{HashMap, HashSet},
     ptr::OwningPtr,
-    utils::prelude::DebugName,
+    utils::{prelude::DebugName, synccell::SyncCell},
 };
 
 use crate::{
@@ -42,21 +39,20 @@ use crate::{
     meta::{NonLogNow, RevDirection, RevMeta},
 };
 
-//mod bundle_buffer;
 mod bundle_buffer;
 //mod commands;
 mod spawn_despawn;
 //mod entity_commands;
 mod entity_world;
-//mod relationship;
+mod relationship;
 mod world;
 
-//pub use bundle_buffer::*;
+pub use bundle_buffer::*;
 //pub use commands::*;
 pub use spawn_despawn::*;
 //pub use entity_commands::*;
 pub use entity_world::*;
-//pub(crate) use relationship::*;
+pub(crate) use relationship::*;
 pub use world::*;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -365,8 +361,6 @@ impl Debug for BoxedUndoRedo {
     }
 }
 
-// todo: return BevyError
-// todo: impl for tuples
 pub trait UndoRedo: Send + 'static {
     fn undo(&mut self, world: &mut World);
     fn redo(&mut self, world: &mut World);
@@ -426,7 +420,6 @@ impl<T: UndoRedo> UndoRedo for Box<[T]> {
     }
 }
 
-// todo: track location
 #[derive(Default)]
 pub(crate) struct UndoRedoLog {
     undo_redo_log: DenseTransitionsLog<SyncCell<Box<dyn UndoRedo>>>,
@@ -436,24 +429,24 @@ pub(crate) struct UndoRedoLog {
 #[derive(Debug)]
 pub(crate) enum UndoRedoLogError {
     RevMetaMissing {
-        system_name: DebugName,
+        system_name: String,
     },
     UndoRedoBufferMissing {
         now: u64,
-        system_name: DebugName,
+        system_name: String,
     },
     RevDirectionMismatch {
         now: u64,
-        system_name: DebugName,
+        system_name: String,
     },
     MissedFrame {
         frame: u64,
         now: u64,
-        system_name: DebugName,
+        system_name: String,
     },
     OutOfLog {
         now: u64,
-        system_name: DebugName,
+        system_name: String,
     },
 }
 
@@ -466,7 +459,7 @@ impl UndoRedoLog {
         let meta = world
             .get_resource::<RevMeta>()
             .ok_or_else(|| UndoRedoLogError::RevMetaMissing {
-                system_name: system_name.clone(),
+                system_name: system_name.to_owned(),
             })?
             .clone();
         let now = meta.now();
@@ -475,7 +468,7 @@ impl UndoRedoLog {
                 let mut buffer = world.get_resource_mut::<UndoRedoBuffer>().ok_or_else(|| {
                     UndoRedoLogError::UndoRedoBufferMissing {
                         now,
-                        system_name: system_name.clone(),
+                        system_name: system_name.to_owned(),
                     }
                 })?;
                 if !buffer.0.is_empty() {
@@ -490,7 +483,7 @@ impl UndoRedoLog {
                 if !self
                     .frame_log
                     .try_forward_log(&meta)
-                    .map_err(map_frame_log_err(now, &system_name))?
+                    .map_err(map_frame_log_err(now, system_name))?
                 {
                     return Ok(());
                 };
@@ -499,7 +492,7 @@ impl UndoRedoLog {
                     .forward_log()
                     .map_err(|_| UndoRedoLogError::OutOfLog {
                         now,
-                        system_name: system_name.clone(),
+                        system_name: system_name.to_owned(),
                     })?
                     .value
                     .map(SyncCell::get);
@@ -544,7 +537,7 @@ impl UndoRedoLog {
             .backward_log()
             .map_err(|_| UndoRedoLogError::OutOfLog {
                 now,
-                system_name: system_name.clone(),
+                system_name: system_name.to_owned(),
             })?
             .value
             .map(SyncCell::get)
@@ -591,12 +584,12 @@ impl Error for UndoRedoLogError {}
 
 fn map_frame_log_err(
     now: u64,
-    system_name: &DebugName,
+    system_name: &str,
 ) -> impl FnOnce(MissedFrame) -> UndoRedoLogError + '_ {
     move |err| UndoRedoLogError::MissedFrame {
         frame: err.0,
         now,
-        system_name: system_name.clone(),
+        system_name: system_name.to_owned(),
     }
 }
 
@@ -618,6 +611,7 @@ impl<T: UndoRedo + FromWorld> FromWorld for UndoRedoSwap<T> {
     }
 }
 
+#[expect(dead_code)] // https://github.com/bevyengine/bevy/pull/18880
 struct InsertRelationship<R, Target>
 where
     R: Relationship,
@@ -744,29 +738,5 @@ impl<R: Resource> UndoRedo for ResourceSwap<R> {
     }
     fn redo(&mut self, world: &mut World) {
         self.undo(world)
-    }
-}
-
-pub(super) struct RevSpawn<E> {
-    pub(super) entities: E,
-    pub(super) marker: DisabledToDespawn,
-}
-
-impl<E: AsRef<[Entity]> + Send + 'static> UndoRedo for RevSpawn<E> {
-    fn undo(&mut self, world: &mut World) {
-        world.insert_batch(
-            self.entities
-                .as_ref()
-                .iter()
-                .copied()
-                .rev()
-                .map(|entity| (entity, self.marker)),
-        );
-    }
-    fn redo(&mut self, world: &mut World) {
-        let id = world.component_id::<DisabledToDespawn>().expect("todo");
-        for entity in self.entities.as_ref().iter().copied() {
-            world.entity_mut(entity).remove_by_id(id);
-        }
     }
 }
