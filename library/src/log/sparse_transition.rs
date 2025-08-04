@@ -149,7 +149,7 @@ impl<T> SparseTransitionLog<T> {
         self.skips = 0;
         self.skips_max = 0;
     }
-    pub fn push(&mut self, transition: Option<T>) {
+    fn push(&mut self, transition: Option<T>) {
         self.transitions.truncate(self.index);
         match transition {
             None => {

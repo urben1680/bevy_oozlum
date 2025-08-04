@@ -161,31 +161,6 @@ impl<T, U, const AMOUNT_BYTES: usize> SparseTransitionsLog<T, U, AMOUNT_BYTES> {
     pub fn transitions_shrink_to_fit(&mut self) {
         self.transitions.shrink_to_fit()
     }
-    pub fn push_some<Out: Into<U>>(&mut self, c: impl FnOnce(LogMut<T>) -> Out) {
-        self.try_push_some(c).unwrap_or_else(|err| panic!("{err}"))
-    }
-    pub fn try_push_some<Out: Into<U>>(
-        &mut self,
-        c: impl FnOnce(LogMut<T>) -> Out,
-    ) -> Result<(), PushedTooMany<Drain<T>, U, AMOUNT_BYTES>> {
-        self.transitions.truncate(self.index);
-        let entry = c(LogMut(&mut self.transitions)).into();
-        let pushed_amount = self.transitions.len() - self.index;
-        let entry_amount = EntryAmount::new(entry, pushed_amount);
-        if AMOUNT_BYTES < USIZE_BYTES && pushed_amount != entry_amount.amount() {
-            return Err(PushedTooMany {
-                values: self.transitions.drain(self.index..),
-                entry: entry_amount.entry,
-            });
-        }
-        self.index = self.transitions.len();
-        self.amounts.push(Some(entry_amount));
-        Ok(())
-    }
-    pub fn push_none(&mut self) {
-        self.transitions.truncate(self.index);
-        self.amounts.push(None);
-    }
     pub fn push_some_and_pop_past<Out: Into<U>>(
         &mut self,
         max_past_len: usize,
@@ -350,11 +325,11 @@ mod test {
         }
 
         let mut original = SparseTransitionsLog::new();
-        original.push_some(|mut log| {
+        original.push_some_and_pop_past(usize::MAX, |mut log| {
             log.extend(['a', 'b']);
             1
         });
-        original.push_some(|mut log| {
+        original.push_some_and_pop_past(usize::MAX, |mut log| {
             log.extend(['c', 'd']);
             2
         });

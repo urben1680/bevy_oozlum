@@ -258,28 +258,6 @@ impl<T, U, const AMOUNT_BYTES: usize> DenseStatesLog<T, U, AMOUNT_BYTES> {
     pub fn states_shrink_to_fit(&mut self) {
         self.states.shrink_to_fit()
     }
-    pub fn push<Out: Into<U>>(&mut self, c: impl FnOnce(LogMut<T>) -> Out) {
-        self.try_push(c).unwrap_or_else(|err| panic!("{err}"))
-    }
-    pub fn try_push<Out: Into<U>>(
-        &mut self,
-        c: impl FnOnce(LogMut<T>) -> Out,
-    ) -> Result<(), PushedTooMany<Drain<T>, U, AMOUNT_BYTES>> {
-        self.states.truncate(self.index);
-        let entry = c(LogMut(&mut self.states)).into();
-        let pushed_amount = self.states.len() - self.index;
-        let entry_amount = EntryAmount::new(entry, pushed_amount);
-        if AMOUNT_BYTES < USIZE_BYTES && pushed_amount != entry_amount.amount() {
-            let values = self.states.drain(self.index..);
-            return Err(PushedTooMany {
-                values,
-                entry: entry_amount.entry,
-            });
-        }
-        self.index = self.states.len();
-        self.amounts.push(entry_amount);
-        Ok(())
-    }
     pub fn push_and_pop_past<Out: Into<U>>(
         &mut self,
         max_past_len: usize,
@@ -443,11 +421,11 @@ mod test {
         }
 
         let mut original = DenseStatesLog::new(['a', 'b'], 1);
-        original.push(|mut log| {
+        original.push_and_pop_past(usize::MAX, |mut log| {
             log.extend(['c', 'd']);
             2
         });
-        original.push(|mut log| {
+        original.push_and_pop_past(usize::MAX, |mut log| {
             log.extend(['e', 'f']);
             3
         });
@@ -525,13 +503,13 @@ mod test {
     fn clear() {
         let mut original = DenseStatesLog::<_, _, 1>::try_new([1, 1], 'a').unwrap();
         original
-            .try_push(|mut log| {
+            .try_push_and_pop_past(usize::MAX, |mut log| {
                 log.extend([2, 2]);
                 'b'
             })
             .unwrap();
         original
-            .try_push(|mut log| {
+            .try_push_and_pop_past(usize::MAX, |mut log| {
                 log.extend([3, 3]);
                 'c'
             })

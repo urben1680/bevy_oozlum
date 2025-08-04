@@ -101,11 +101,6 @@ impl<T> DenseTransitionLog<T> {
     pub fn transitions_shrink_to_fit(&mut self) {
         self.transitions.shrink_to_fit()
     }
-    pub fn push(&mut self, transition: T) {
-        self.transitions.truncate(self.index);
-        self.transitions.push_back(transition);
-        self.index = self.transitions.len();
-    }
     pub fn push_and_pop_past(&mut self, max_past_len: usize, transition: T) -> Option<T> {
         self.transitions.truncate(self.index);
         self.transitions.push_back(transition);
@@ -176,8 +171,8 @@ mod test {
         }
 
         let mut original = DenseTransitionLog::new();
-        original.push('a');
-        original.push('b');
+        original.push_and_pop_past(usize::MAX, 'a');
+        original.push_and_pop_past(usize::MAX, 'b');
         original.backward_log().expect("in log");
 
         let mut logs = Logs {

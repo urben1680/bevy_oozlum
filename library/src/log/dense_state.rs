@@ -172,12 +172,6 @@ impl<T> DenseStateLog<T> {
     pub fn states_shrink_to_fit(&mut self) {
         self.states.shrink_to_fit()
     }
-    pub fn push(&mut self, state: T) {
-        self.states.truncate(self.index);
-        let before = core::mem::replace(&mut self.present, state);
-        self.states.push_back(before);
-        self.index += 1;
-    }
     pub fn push_and_pop_past(&mut self, max_past_len: usize, state: T) -> Option<T> {
         self.states.truncate(self.index);
         let before = core::mem::replace(&mut self.present, state);
@@ -275,8 +269,8 @@ mod test {
         }
 
         let mut original = DenseStateLog::from('a');
-        original.push('b');
-        original.push('c');
+        original.push_and_pop_past(usize::MAX, 'b');
+        original.push_and_pop_past(usize::MAX, 'c');
         original.backward_log().expect("in log");
 
         let mut logs = Logs {
@@ -326,8 +320,8 @@ mod test {
     #[test]
     fn clear() {
         let mut original = DenseStateLog::new(1);
-        original.push(2);
-        original.push(3);
+        original.push_and_pop_past(usize::MAX, 2);
+        original.push_and_pop_past(usize::MAX, 3);
         original.backward_log().expect("in log");
 
         let mut log = original.clone();

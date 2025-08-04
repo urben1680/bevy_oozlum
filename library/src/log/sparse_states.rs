@@ -273,31 +273,6 @@ impl<T, U, const AMOUNT_BYTES: usize> SparseStatesLog<T, U, AMOUNT_BYTES> {
         let states = self.states.range(range);
         (states, entry)
     }
-    pub fn push_some<Out: Into<U>>(&mut self, c: impl FnOnce(LogMut<T>) -> Out) {
-        self.try_push_some(c).unwrap_or_else(|err| panic!("{err}"))
-    }
-    pub fn try_push_some<Out: Into<U>>(
-        &mut self,
-        c: impl FnOnce(LogMut<T>) -> Out,
-    ) -> Result<(), PushedTooMany<Drain<T>, U, AMOUNT_BYTES>> {
-        self.states.truncate(self.index);
-        let entry = c(LogMut(&mut self.states)).into();
-        let pushed_amount = self.states.len() - self.index;
-        let entry_amount = EntryAmount::new(entry, pushed_amount);
-        if AMOUNT_BYTES < USIZE_BYTES && pushed_amount != entry_amount.amount() {
-            return Err(PushedTooMany {
-                values: self.states.drain(self.index..),
-                entry: entry_amount.entry,
-            });
-        }
-        self.index = self.states.len();
-        self.amounts.push(Some(entry_amount));
-        Ok(())
-    }
-    pub fn push_none(&mut self) {
-        self.states.truncate(self.index);
-        self.amounts.push(None);
-    }
     pub fn push_some_and_pop_past<Out: Into<U>>(
         &mut self,
         max_past_len: usize,
@@ -467,6 +442,8 @@ impl<T, U, const AMOUNT_BYTES: usize> SparseStatesLog<T, U, AMOUNT_BYTES> {
 
 #[cfg(test)]
 mod test {
+    use std::usize;
+
     use serde::{Deserialize, Serialize};
 
     use super::*;
@@ -487,11 +464,11 @@ mod test {
         }
 
         let mut original = SparseStatesLog::<char, u8>::new(['a', 'b'], 1);
-        original.push_some(|mut log| {
+        original.push_some_and_pop_past(usize::MAX, |mut log| {
             log.extend(['c', 'd']);
             2
         });
-        original.push_some(|mut log| {
+        original.push_some_and_pop_past(usize::MAX, |mut log| {
             log.extend(['e', 'f']);
             3
         });
@@ -569,14 +546,14 @@ mod test {
     fn clear() {
         let mut original = SparseStatesLog::<_, _, 1>::try_new([1, 1], 'a').unwrap();
         original
-            .try_push_some(|mut log| {
+            .try_push_some_and_pop_past(usize::MAX, |mut log| {
                 log.extend([2, 2]);
                 'b'
             })
             .unwrap();
-        original.push_none();
+        original.push_none_and_pop_past(usize::MAX);
         original
-            .try_push_some(|mut log| {
+            .try_push_some_and_pop_past(usize::MAX, |mut log| {
                 log.extend([3, 3]);
                 'c'
             })

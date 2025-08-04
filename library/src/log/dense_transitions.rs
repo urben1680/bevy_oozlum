@@ -160,28 +160,6 @@ impl<T, U, const AMOUNT_BYTES: usize> DenseTransitionsLog<T, U, AMOUNT_BYTES> {
     pub fn transitions_shrink_to_fit(&mut self) {
         self.transitions.shrink_to_fit()
     }
-    pub fn push<Out: Into<U>>(&mut self, c: impl FnOnce(LogMut<T>) -> Out) {
-        self.try_push(c).unwrap_or_else(|err| panic!("{err}"))
-    }
-    pub fn try_push<Out: Into<U>>(
-        &mut self,
-        c: impl FnOnce(LogMut<T>) -> Out,
-    ) -> Result<(), PushedTooMany<Drain<T>, U, AMOUNT_BYTES>> {
-        self.transitions.truncate(self.index);
-        let entry = c(LogMut(&mut self.transitions)).into();
-        let pushed_amount = self.transitions.len() - self.index;
-        let entry_amount = EntryAmount::new(entry, pushed_amount);
-        if AMOUNT_BYTES < USIZE_BYTES && pushed_amount != entry_amount.amount() {
-            let values = self.transitions.drain(self.index..);
-            return Err(PushedTooMany {
-                values,
-                entry: entry_amount.entry,
-            });
-        }
-        self.amounts.push(entry_amount);
-        self.index = self.transitions.len();
-        Ok(())
-    }
     pub fn push_and_pop_past<Out: Into<U>>(
         &mut self,
         max_past_len: usize,
@@ -311,11 +289,11 @@ mod test {
         }
 
         let mut original = DenseTransitionsLog::new();
-        original.push(|mut log| {
+        original.push_and_pop_past(usize::MAX, |mut log| {
             log.extend(['a', 'b']);
             1
         });
-        original.push(|mut log| {
+        original.push_and_pop_past(usize::MAX, |mut log| {
             log.extend(['c', 'd']);
             2
         });

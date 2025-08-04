@@ -201,7 +201,7 @@ impl<T> SparseStateLog<T> {
         self.present = present;
         self.clear();
     }
-    pub fn push(&mut self, state: Option<T>) {
+    fn push(&mut self, state: Option<T>) {
         self.states.truncate(self.index);
         match state {
             None => {

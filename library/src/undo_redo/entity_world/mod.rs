@@ -4,7 +4,7 @@ use bevy::{
     ecs::{
         bundle::{Bundle, BundleFromComponents},
         component::{Component, ComponentId},
-        entity::{Entity, EntityClonerBuilder},
+        entity::{Entity, EntityClonerBuilder, OptIn, OptOut},
         hierarchy::ChildOf,
         relationship::{
             OrderedRelationshipSourceCollection, Relationship, RelationshipSourceCollection,
@@ -24,28 +24,13 @@ mod test;
 pub trait RevEntityWorldMut<'w> {
     fn redo_and_buffer(&mut self, now: NonLogNow, undo_redo: impl UndoRedo);
 
-    fn buffer_components(
-        &mut self,
-        now: NonLogNow,
-        at: BufferAt,
-        after_now_before_undo: impl FnOnce(&mut World),
-        components: &[ComponentId],
-    ) -> Result<Option<Entity>, EntityRevDespawnedError>;
-
-    fn buffer_components_cached<T: AsRef<[ComponentId]>>(
-        &mut self,
-        now: NonLogNow,
-        after_now_before_undo: impl FnOnce(&mut World),
-        key: impl Hash + 'static,
-        components: impl FnOnce(&mut World) -> (BufferAt, T),
-    ) -> Result<Option<Entity>, EntityRevDespawnedError>;
-
     fn buffer_bundle(
         &mut self,
         now: NonLogNow,
         at: BufferAt,
         after_now_before_undo: impl FnOnce(&mut World),
         bundle: BundleId,
+        if_new: bool
     ) -> Result<Option<Entity>, EntityRevDespawnedError>;
 
     // the methods here are purposely sorted alphabetically to make it easily comparable to bevy's docs
@@ -85,16 +70,28 @@ pub trait RevEntityWorldMut<'w> {
     /// `RelationshipTarget` despite being [temporarily despawned](DisabledToDespawn).
     fn rev_clone_and_spawn(&mut self, now: NonLogNow) -> Entity;
 
-    /// Reversible version of [`EntityWorldMut::clone_and_spawn_with`].
+    /// Reversible version of [`EntityWorldMut::clone_and_spawn_with_opt_in`].
     ///
     /// Note that if `self` is in relationship with another entity, these relationship types need to be
     /// registered with [`RevApp::register_non_entity_buffer`](crate::app::RevApp::register_non_entity_buffer).
     /// Otherwise, at undo, the spawned entity will still be in relationship with the common
     /// `RelationshipTarget` despite being [temporarily despawned](DisabledToDespawn).
-    fn rev_clone_and_spawn_with(
+    fn rev_clone_and_spawn_with_opt_in(
         &mut self,
         now: NonLogNow,
-        config: impl FnOnce(&mut EntityClonerBuilder) + Send + Sync + 'static,
+        config: impl FnOnce(&mut EntityClonerBuilder<OptIn>) + Send + Sync + 'static,
+    ) -> Entity;
+
+    /// Reversible version of [`EntityWorldMut::clone_and_spawn_with_opt_out].
+    ///
+    /// Note that if `self` is in relationship with another entity, these relationship types need to be
+    /// registered with [`RevApp::register_non_entity_buffer`](crate::app::RevApp::register_non_entity_buffer).
+    /// Otherwise, at undo, the spawned entity will still be in relationship with the common
+    /// `RelationshipTarget` despite being [temporarily despawned](DisabledToDespawn).
+    fn rev_clone_and_spawn_with_opt_out(
+        &mut self,
+        now: NonLogNow,
+        config: impl FnOnce(&mut EntityClonerBuilder<OptOut>) + Send + Sync + 'static,
     ) -> Entity;
 
     /// Reversible version of [`EntityWorldMut::clone_components`].
@@ -281,60 +278,13 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
         self.world_scope(|world| world.redo_and_buffer(now, undo_redo))
     }
 
-    fn buffer_components(
-        &mut self,
-        now: NonLogNow,
-        at: BufferAt,
-        after_now_before_undo: impl FnOnce(&mut World),
-        components: &[ComponentId],
-    ) -> Result<Option<Entity>, EntityRevDespawnedError> {
-        let entity = self.id();
-        let result = if at == BufferAt::Undo {
-            unsafe {
-                // SAFETY: No components of this entity are buffered now,
-                // only resources are mutated and a bundle is registered.
-                self.world_mut().buffer_components(
-                    now,
-                    entity,
-                    at,
-                    after_now_before_undo,
-                    components,
-                )
-            }
-        } else {
-            self.world_scope(|world| {
-                world.buffer_components(now, entity, at, after_now_before_undo, components)
-            })
-        };
-        result.map_err(|err| match err {
-            RevEntityError::EntityRevDespawnedError(err) => err,
-            RevEntityError::EntityDoesNotExistError(_) => unreachable!("entity must exist"),
-        })
-    }
-
-    fn buffer_components_cached<T: AsRef<[ComponentId]>>(
-        &mut self,
-        now: NonLogNow,
-        after_now_before_undo: impl FnOnce(&mut World),
-        key: impl Hash + 'static,
-        components: impl FnOnce(&mut World) -> (BufferAt, T),
-    ) -> Result<Option<Entity>, EntityRevDespawnedError> {
-        let entity = self.id();
-        let result = self.world_scope(|world| {
-            world.buffer_components_cached(now, entity, after_now_before_undo, key, components)
-        });
-        result.map_err(|err| match err {
-            RevEntityError::EntityRevDespawnedError(err) => err,
-            RevEntityError::EntityDoesNotExistError(_) => unreachable!("entity must exist"),
-        })
-    }
-
     fn buffer_bundle(
         &mut self,
         now: NonLogNow,
         at: BufferAt,
         after_now_before_undo: impl FnOnce(&mut World),
         bundle: BundleId,
+        if_new: bool,
     ) -> Result<Option<Entity>, EntityRevDespawnedError> {
         let entity = self.id();
         let result = if at == BufferAt::Undo {
@@ -342,11 +292,11 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
                 // SAFETY: No components of this entity are buffered now,
                 // only resources are mutated and a bundle is registered.
                 self.world_mut()
-                    .buffer_bundle(now, entity, at, after_now_before_undo, bundle)
+                    .buffer_bundle(now, entity, at, after_now_before_undo, bundle, if_new)
             }
         } else {
             self.world_scope(|world| {
-                world.buffer_bundle(now, entity, at, after_now_before_undo, bundle)
+                world.buffer_bundle(now, entity, at, after_now_before_undo, bundle, if_new)
             })
         };
         result.map_err(|err| match err {
@@ -386,9 +336,10 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
     }
 
     fn rev_clear(&mut self, now: NonLogNow) -> &mut Self {
+        // todo: extend if_new by all variant
         let archetype_id = self.location().archetype_id;
         let entity = self.id();
-        self.buffer_components_cached(
+        self.buffer_bundle(
             now,
             |_| (),
             unique_for_location!(archetype_id),
@@ -416,16 +367,34 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
 
     #[track_caller]
     fn rev_clone_and_spawn(&mut self, now: NonLogNow) -> Entity {
-        self.rev_clone_and_spawn_with(now, |_| {})
+        self.rev_clone_and_spawn_with_opt_out(now, |_| {})
     }
 
     #[track_caller]
-    fn rev_clone_and_spawn_with(
+    fn rev_clone_and_spawn_with_opt_in(
         &mut self,
         now: NonLogNow,
-        config: impl FnOnce(&mut EntityClonerBuilder) + Send + Sync + 'static,
+        config: impl FnOnce(&mut EntityClonerBuilder<OptIn>) + Send + Sync + 'static,
     ) -> Entity {
-        let clone = self.clone_and_spawn_with(config);
+        let clone = self.clone_and_spawn_with_opt_in(config);
+        let mut resource = self
+            .world_scope(World::remove_resource::<RevRelationship>)
+            .expect("todo");
+        self.world_scope(|world| {
+            let mut clone_mut = world.entity_mut(clone);
+            let _ = resource.try_despawn(&mut clone_mut, now, false);
+            world.insert_resource(resource);
+        });
+        clone
+    }
+
+    #[track_caller]
+    fn rev_clone_and_spawn_with_opt_out(
+        &mut self,
+        now: NonLogNow,
+        config: impl FnOnce(&mut EntityClonerBuilder<OptOut>) + Send + Sync + 'static,
+    ) -> Entity {
+        let clone = self.clone_and_spawn_with_opt_out(config);
         let mut resource = self
             .world_scope(World::remove_resource::<RevRelationship>)
             .expect("todo");
@@ -443,7 +412,7 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
         if let Some(location) = self.world().entities().get(target) {
             let archetype_id = location.archetype_id;
             self.world_scope(|world| {
-                let _ok = world.buffer_components_cached(
+                let _ok = world.buffer_bundle(
                     now,
                     target,
                     |world| {
@@ -538,7 +507,7 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
             self.world_mut().register_dynamic_bundle(component_ids).id()
         };
         let entity = self.id();
-        self.buffer_components_cached(
+        self.buffer_bundle(
             now,
             |world| {
                 let mut entity_world_mut = world.entity_mut(entity);
@@ -661,7 +630,7 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
     fn rev_remove<T: Bundle>(&mut self, now: NonLogNow) -> &mut Self {
         let archetype_id = self.location().archetype_id;
         let entity = self.id();
-        self.buffer_components_cached(
+        self.buffer_bundle(
             now,
             |_| (),
             unique_for_location!(archetype_id, PhantomData::<T>),
@@ -743,7 +712,7 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
     fn rev_remove_with_requires<T: Bundle>(&mut self, now: NonLogNow) -> &mut Self {
         let archetype_id = self.location().archetype_id;
         let entity = self.id();
-        self.buffer_components_cached(
+        self.buffer_bundle(
             now,
             |_| (),
             unique_for_location!(archetype_id, PhantomData::<T>),
@@ -910,7 +879,7 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
     fn rev_retain<T: Bundle>(&mut self, now: NonLogNow) -> &mut Self {
         let archetype_id = self.location().archetype_id;
         let entity = self.id();
-        self.buffer_components_cached(
+        self.buffer_bundle(
             now,
             |_| (),
             unique_for_location!(archetype_id, PhantomData::<T>),

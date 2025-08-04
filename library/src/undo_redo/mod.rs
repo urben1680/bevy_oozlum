@@ -1,22 +1,17 @@
 use std::{
-    any::{type_name, type_name_of_val},
+    any::type_name_of_val,
     error::Error,
     fmt::{Debug, Display},
     hash::Hash,
-    iter::FusedIterator,
     marker::PhantomData,
-    sync::Arc,
 };
 
 use bevy::{
     ecs::{
         archetype::ArchetypeId,
-        bundle::{Bundle, BundleEffect, BundleFromComponents, BundleId, DynamicBundle, InsertMode},
+        bundle::{Bundle, BundleFromComponents, BundleId, InsertMode},
         change_detection::{MaybeLocation, Mut},
-        component::{
-            Component, ComponentCloneBehavior, ComponentId, Components, ComponentsRegistrator,
-            RequiredComponents, StorageType,
-        },
+        component::Component,
         entity::{Entity, EntityCloner, EntityDoesNotExistError, hash_set::EntityHashSet},
         hierarchy::{ChildOf, Children},
         relationship::{OrderedRelationshipSourceCollection, Relationship, RelationshipTarget},
@@ -27,14 +22,14 @@ use bevy::{
             FilteredEntityMut, FilteredEntityRef, FromWorld, World, error::EntityMutableFetchError,
         },
     },
-    log::warn,
-    platform::collections::{HashMap, HashSet},
-    ptr::OwningPtr,
-    utils::{prelude::DebugName, synccell::SyncCell},
+    platform::{
+        cell::SyncCell,
+        collections::{HashMap, HashSet},
+    },
+    utils::prelude::DebugName,
 };
 
 use crate::{
-    app::RevSystemsPlugin,
     log::{DenseTransitionsLog, FrameTransitionLog, MissedFrame},
     meta::{NonLogNow, RevDirection, RevMeta},
 };
@@ -43,40 +38,40 @@ mod bundle_buffer;
 //mod commands;
 mod spawn_despawn;
 //mod entity_commands;
-mod entity_world;
-mod relationship;
-mod world;
+//mod entity_world;
+//mod relationship;
+//mod world;
 
 pub use bundle_buffer::*;
 //pub use commands::*;
 pub use spawn_despawn::*;
 //pub use entity_commands::*;
-pub use entity_world::*;
-pub(crate) use relationship::*;
-pub use world::*;
+//pub use entity_world::*;
+//pub(crate) use relationship::*;
+//pub use world::*;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct EntityRevDespawnedError {
     pub entity: Entity,
-    pub marker: DisabledToDespawn,
+    pub location: MaybeLocation,
 }
 
 impl Display for EntityRevDespawnedError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.marker.added_location().into_option() {
+        match self.location.into_option() {
             None => write!(
                 f,
                 "entity {} is marked as reversibly despawned (enable `track_location` feature for more details)",
                 self.entity
             ),
-            Some(Some(location)) => write!(
-                f,
-                "entity {} is marked as reversibly despawned by {location}",
-                self.entity
-            ),
-            Some(None) => write!(
+            Some(BUFFER_LOCATION) => write!(
                 f,
                 "entity {} is a bundle buffer which is not intended to be manually modified",
+                self.entity
+            ),
+            Some(location) => write!(
+                f,
+                "entity {} is marked as reversibly despawned by {location}",
                 self.entity
             ),
         }
@@ -84,12 +79,6 @@ impl Display for EntityRevDespawnedError {
 }
 
 impl Error for EntityRevDespawnedError {}
-
-impl EntityRevDespawnedError {
-    pub(super) fn new(entity: Entity, marker: DisabledToDespawn) -> Self {
-        EntityRevDespawnedError { entity, marker }
-    }
-}
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum RevEntityError {
@@ -119,124 +108,6 @@ impl Display for RevEntityError {
 }
 
 impl Error for RevEntityError {}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RevEntitiesError {
-    pub invalid: Vec<EntityDoesNotExistError>,
-    pub rev_despawned: Vec<EntityRevDespawnedError>,
-    pub rev_despawned_buffers: MaybeLocation<Vec<EntityRevDespawnedError>>,
-}
-
-impl From<EntityRevDespawnedError> for RevEntitiesError {
-    fn from(error: EntityRevDespawnedError) -> Self {
-        RevEntityError::from(error).into()
-    }
-}
-
-impl From<EntityDoesNotExistError> for RevEntitiesError {
-    fn from(error: EntityDoesNotExistError) -> Self {
-        RevEntityError::from(error).into()
-    }
-}
-
-impl From<RevEntityError> for RevEntitiesError {
-    fn from(error: RevEntityError) -> Self {
-        let mut this = Self::empty();
-        this.push(error);
-        this
-    }
-}
-
-impl RevEntitiesError {
-    fn empty() -> Self {
-        Self {
-            invalid: Vec::new(),
-            rev_despawned: Vec::new(),
-            rev_despawned_buffers: MaybeLocation::new_with(|| Vec::new()),
-        }
-    }
-    fn push(&mut self, error: impl Into<RevEntityError>) {
-        match error.into() {
-            RevEntityError::EntityDoesNotExistError(error) => self.invalid.push(error),
-            RevEntityError::EntityRevDespawnedError(error) => match self
-                .rev_despawned_buffers
-                .as_mut()
-                .zip(error.marker.added_location())
-                .into_option()
-            {
-                Some((rev_despawned_buffers, location)) if location.is_none() => {
-                    rev_despawned_buffers.push(error)
-                }
-                _ => self.rev_despawned.push(error),
-            },
-        }
-    }
-    fn is_empty(&self) -> bool {
-        self.invalid.is_empty()
-            && self.rev_despawned.is_empty()
-            && self
-                .rev_despawned_buffers
-                .as_ref()
-                .map(|rev_despawned_buffers| rev_despawned_buffers.is_empty())
-                .into_option()
-                .unwrap_or(true)
-    }
-}
-
-impl Display for RevEntitiesError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if size_of::<MaybeLocation<u8>>() == 0 {
-            if !self.invalid.is_empty() {
-                write!(f, "non-existing entities: ")?;
-                for entity in self.invalid.iter() {
-                    write!(f, "{}, ", entity.entity)?;
-                }
-            }
-            if !self.rev_despawned.is_empty() {
-                write!(f, "reversibly despawned entities: ")?;
-                for err in self.rev_despawned.iter() {
-                    let entity = err.entity;
-                    let at = err.marker.added_frame();
-                    write!(f, "{entity} at {at}, ")?;
-                }
-            }
-            write!(f, "(enable `track_location` feature for more details)")?;
-        } else {
-            if !self.invalid.is_empty() {
-                write!(f, "non-existing entities: ")?;
-                for err in self.invalid.iter() {
-                    write!(f, "{err}, ")?;
-                }
-            }
-            if !self.rev_despawned.is_empty() {
-                write!(f, "reversibly despawned entities: ")?;
-                for err in self.rev_despawned.iter() {
-                    let entity = err.entity;
-                    let at = err.marker.added_frame();
-                    let by = err
-                        .marker
-                        .added_location()
-                        .into_option()
-                        .flatten()
-                        .expect("non-buffer entity should have a despawn location");
-                    write!(f, "{entity} {by} at {at}, ")?;
-                }
-            }
-            let rev_despawned_buffers = self.rev_despawned_buffers.as_ref().into_option().unwrap();
-            if !rev_despawned_buffers.is_empty() {
-                write!(f, "reversibly despawned buffer entities: ")?;
-                for err in rev_despawned_buffers.iter() {
-                    let entity = err.entity;
-                    let at = err.marker.added_frame();
-                    write!(f, "{entity} at {at}, ")?;
-                }
-            }
-        }
-        Ok(())
-    }
-}
-
-impl Error for RevEntitiesError {}
 
 // todo: split trait for _deferred variant? try to trigger bugs by using trait as-is in wrong contexts
 pub trait BuffersUndoRedo {
@@ -429,24 +300,24 @@ pub(crate) struct UndoRedoLog {
 #[derive(Debug)]
 pub(crate) enum UndoRedoLogError {
     RevMetaMissing {
-        system_name: String,
+        system_name: DebugName,
     },
     UndoRedoBufferMissing {
         now: u64,
-        system_name: String,
+        system_name: DebugName,
     },
     RevDirectionMismatch {
         now: u64,
-        system_name: String,
+        system_name: DebugName,
     },
     MissedFrame {
         frame: u64,
         now: u64,
-        system_name: String,
+        system_name: DebugName,
     },
     OutOfLog {
         now: u64,
-        system_name: String,
+        system_name: DebugName,
     },
 }
 
@@ -459,7 +330,7 @@ impl UndoRedoLog {
         let meta = world
             .get_resource::<RevMeta>()
             .ok_or_else(|| UndoRedoLogError::RevMetaMissing {
-                system_name: system_name.to_owned(),
+                system_name: system_name.clone(),
             })?
             .clone();
         let now = meta.now();
@@ -468,7 +339,7 @@ impl UndoRedoLog {
                 let mut buffer = world.get_resource_mut::<UndoRedoBuffer>().ok_or_else(|| {
                     UndoRedoLogError::UndoRedoBufferMissing {
                         now,
-                        system_name: system_name.to_owned(),
+                        system_name: system_name.clone(),
                     }
                 })?;
                 if !buffer.0.is_empty() {
@@ -483,7 +354,7 @@ impl UndoRedoLog {
                 if !self
                     .frame_log
                     .try_forward_log(&meta)
-                    .map_err(map_frame_log_err(now, system_name))?
+                    .map_err(map_frame_log_err(now, system_name.clone()))?
                 {
                     return Ok(());
                 };
@@ -492,7 +363,7 @@ impl UndoRedoLog {
                     .forward_log()
                     .map_err(|_| UndoRedoLogError::OutOfLog {
                         now,
-                        system_name: system_name.to_owned(),
+                        system_name: system_name.clone(),
                     })?
                     .value
                     .map(SyncCell::get);
@@ -503,7 +374,7 @@ impl UndoRedoLog {
             }
             _ => Err(UndoRedoLogError::RevDirectionMismatch {
                 now,
-                system_name: system_name.to_owned(),
+                system_name: system_name.clone(),
             }),
         }
     }
@@ -528,7 +399,7 @@ impl UndoRedoLog {
         if !self
             .frame_log
             .try_backward_log(&meta)
-            .map_err(map_frame_log_err(now, system_name))?
+            .map_err(map_frame_log_err(now, system_name.to_owned()))?
         {
             return Ok(());
         };
@@ -584,12 +455,12 @@ impl Error for UndoRedoLogError {}
 
 fn map_frame_log_err(
     now: u64,
-    system_name: &str,
-) -> impl FnOnce(MissedFrame) -> UndoRedoLogError + '_ {
+    system_name: DebugName,
+) -> impl FnOnce(MissedFrame) -> UndoRedoLogError {
     move |err| UndoRedoLogError::MissedFrame {
         frame: err.0,
         now,
-        system_name: system_name.to_owned(),
+        system_name,
     }
 }
 
@@ -641,66 +512,6 @@ where
                 .copied()
                 .map(|target| (target, R::from(self.entity))),
         );
-    }
-}
-
-struct InsertExistingRelated<R> {
-    id: Entity,
-    related: Entity,
-    index: usize,
-    old_index: usize,
-    _marker: PhantomData<R>,
-}
-
-impl<R> InsertExistingRelated<R>
-where
-    R: Relationship,
-    <R::RelationshipTarget as RelationshipTarget>::Collection: OrderedRelationshipSourceCollection,
-{
-    fn undo_redo(&self, world: &mut World, index: usize) {
-        world
-            .get_mut::<R::RelationshipTarget>(self.id)
-            .expect("todo")
-            .collection_mut_risky()
-            .place(self.related, index);
-    }
-}
-
-impl<R> UndoRedo for InsertExistingRelated<R>
-where
-    R: Relationship,
-    <R::RelationshipTarget as RelationshipTarget>::Collection: OrderedRelationshipSourceCollection,
-{
-    fn undo(&mut self, world: &mut World) {
-        self.undo_redo(world, self.old_index);
-    }
-    fn redo(&mut self, world: &mut World) {
-        self.undo_redo(world, self.index);
-    }
-}
-
-struct InsertNewRelated<R> {
-    id: Entity,
-    related: Entity,
-    index: usize,
-    _marker: PhantomData<R>,
-}
-
-impl<R> UndoRedo for InsertNewRelated<R>
-where
-    R: Relationship,
-    <R::RelationshipTarget as RelationshipTarget>::Collection: OrderedRelationshipSourceCollection,
-{
-    fn undo(&mut self, world: &mut World) {
-        world.entity_mut(self.related).remove::<ChildOf>();
-    }
-    fn redo(&mut self, world: &mut World) {
-        world.entity_mut(self.related).insert(R::from(self.id));
-        world
-            .get_mut::<R::RelationshipTarget>(self.id)
-            .expect("todo")
-            .collection_mut_risky()
-            .place_most_recent(self.index);
     }
 }
 

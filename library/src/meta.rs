@@ -5,13 +5,9 @@ use bevy::{
     ecs::{
         change_detection::Mut,
         component::{ComponentId, Tick},
-        entity::Entity,
         error::BevyError,
-        query::QueryState,
         resource::Resource,
-        system::{
-            Local, ReadOnlySystemParam, Res, SystemMeta, SystemParam, SystemParamValidationError,
-        },
+        system::{ReadOnlySystemParam, Res, SystemMeta, SystemParam, SystemParamValidationError},
         world::{World, unsafe_world_cell::UnsafeWorldCell},
     },
     log::info,
@@ -24,15 +20,24 @@ use bevy::reflect::{ReflectDeserialize, ReflectSerialize};
 use crate::{
     log::OutOfLog,
     schedule::RevUpdate,
-    undo_redo::{BufferInProgress, DisabledToDespawn, UndoRedoBuffer, progress_scope},
+    undo_redo::{SpawnDespawnBackwardErr, SpawnDespawnRes, UndoRedoBuffer},
 };
 
 #[derive(Clone, Debug, PartialEq)]
 enum TryRunRevUpdateError {
-    RevMetaRemovedInSchedule { frame: u64 },
+    RevMetaRemovedInSchedule {
+        frame: u64,
+    },
     UnexpectedInitialRunning(RevMeta),
     RevUpdateMissing(RevMeta),
-    UndoRedoBufferNotEmptyBeforeUpdate { meta: RevMeta, buffer_types: String },
+    UndoRedoBufferNotEmptyBeforeUpdate {
+        meta: RevMeta,
+        buffer_types: String,
+    },
+    SpawnDespawnBackwardErr {
+        meta: RevMeta,
+        err: SpawnDespawnBackwardErr,
+    },
 }
 
 impl Display for TryRunRevUpdateError {
@@ -55,6 +60,9 @@ impl Display for TryRunRevUpdateError {
                 "UndoRedoBuffer was not fully drained at frame {}, RevUpdate is not run, undrained UndoRedo: {buffer_types:#?}",
                 meta.now()
             ),
+            Self::SpawnDespawnBackwardErr { meta, err } => {
+                write!(f, "{err} at frame {}", meta.now())
+            }
         }
     }
 }
@@ -404,11 +412,7 @@ impl RevMeta {
     /// - `RevUpdate` is missing.
     /// This indicates that this system ran recursively, this schedule was never populated or it was removed. This error
     /// will cause `RevMeta` to be reverted to its state it was in before the run was attempted.
-    pub fn try_run_rev_update(
-        world: &mut World,
-        buffers: &mut QueryState<(Entity, &DisabledToDespawn)>,
-        mut out_of_log_buffers: Local<Vec<Entity>>,
-    ) -> Result<(), BevyError> {
+    pub fn try_run_rev_update(world: &mut World) -> Result<(), BevyError> {
         /// Use a Resource instead of Local so this system can be added multiple times and keeps track globally
         #[derive(Resource, Clone, Copy)]
         struct Existed(bool);
@@ -454,22 +458,33 @@ impl RevMeta {
                 });
 
                 match result {
-                    Ok(()) => {
-                        if meta.running_direction() == RevDirection::NOT_LOG {
-                            out_of_log_buffers.extend(
-                                buffers
-                                    .iter(world)
-                                    .filter(|(_, marker)| !meta.contains(marker.added_frame()))
-                                    .map(|(entity, _)| entity),
-                            );
-                            progress_scope(world, BufferInProgress::FinalDespawn, |world| {
-                                for entity in out_of_log_buffers.drain(..) {
-                                    world.despawn(entity);
+                    Ok(()) => world
+                        .resource_scope::<SpawnDespawnRes, Result<u64, TryRunRevUpdateError>>(
+                            |world: &mut World, mut res| {
+                                match meta.running_direction() {
+                                    RevDirection::NOT_LOG => {
+                                        res.forward(world, meta.past_len() as usize)
+                                    }
+                                    RevDirection::FORWARD_LOG => {
+                                        res.forward_log().map_err(|OutOfLog| {
+                                            TryRunRevUpdateError::SpawnDespawnBackwardErr {
+                                                meta: meta.clone(),
+                                                err: SpawnDespawnBackwardErr::OutOfLog,
+                                            }
+                                        })?
+                                    }
+                                    RevDirection::BackwardLog => {
+                                        res.backward_log().map_err(|err| {
+                                            TryRunRevUpdateError::SpawnDespawnBackwardErr {
+                                                meta: meta.clone(),
+                                                err,
+                                            }
+                                        })?
+                                    }
                                 }
-                            });
-                        }
-                        Ok(frame)
-                    }
+                                Ok(frame)
+                            },
+                        ),
                     Err(_) => Err(TryRunRevUpdateError::RevUpdateMissing(meta.clone())),
                 }
             });
