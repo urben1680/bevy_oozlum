@@ -20,7 +20,7 @@ use bevy::reflect::{ReflectDeserialize, ReflectSerialize};
 use crate::{
     log::OutOfLog,
     schedule::RevUpdate,
-    undo_redo::{SpawnDespawnBackwardErr, SpawnDespawnRes, UndoRedoBuffer},
+    undo_redo::{SpawnDespawnRes, UndoRedoBuffer},
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -34,10 +34,8 @@ enum TryRunRevUpdateError {
         meta: RevMeta,
         buffer_types: String,
     },
-    SpawnDespawnBackwardErr {
-        meta: RevMeta,
-        err: SpawnDespawnBackwardErr,
-    },
+    SpawnDespawnMissing(RevMeta),
+    SpawnDespawnOutOfLog(RevMeta),
 }
 
 impl Display for TryRunRevUpdateError {
@@ -45,7 +43,7 @@ impl Display for TryRunRevUpdateError {
         match self {
             Self::RevMetaRemovedInSchedule { frame } => write!(
                 f,
-                "RevMeta was removed while RevUpdate ran at frame {frame}"
+                "RevMeta was removed while RevUpdate ran at frame {frame}" // todo: show removal location
             ),
             Self::UnexpectedInitialRunning(meta) => write!(
                 f,
@@ -53,15 +51,18 @@ impl Display for TryRunRevUpdateError {
                 meta.now()
             ),
             Self::RevUpdateMissing(meta) => {
-                write!(f, "RevUpdate was missing at frame {}", meta.now())
+                write!(f, "RevUpdate was missing at frame {}", meta.now()) // todo: show removal location
             }
             Self::UndoRedoBufferNotEmptyBeforeUpdate { meta, buffer_types } => write!(
                 f,
                 "UndoRedoBuffer was not fully drained at frame {}, RevUpdate is not run, undrained UndoRedo: {buffer_types:#?}",
                 meta.now()
             ),
-            Self::SpawnDespawnBackwardErr { meta, err } => {
-                write!(f, "{err} at frame {}", meta.now())
+            Self::SpawnDespawnMissing(meta) => {
+                write!(f, "The resource tracking delayed despawns and component buffers is missing at frame {}", meta.now()) // todo: show removal location
+            }
+            Self::SpawnDespawnOutOfLog(meta) => {
+                write!(f, "The resource tracking delayed despawns and component buffers unexpectedly reached the end of its log at frame {}", meta.now())
             }
         }
     }
@@ -459,32 +460,23 @@ impl RevMeta {
 
                 match result {
                     Ok(()) => world
-                        .resource_scope::<SpawnDespawnRes, Result<u64, TryRunRevUpdateError>>(
+                        .try_resource_scope::<SpawnDespawnRes, Result<u64, TryRunRevUpdateError>>(
                             |world: &mut World, mut res| {
+                                let err_mapper = |OutOfLog| TryRunRevUpdateError::SpawnDespawnOutOfLog(meta.clone());
                                 match meta.running_direction() {
                                     RevDirection::NOT_LOG => {
                                         res.forward(world, meta.past_len() as usize)
                                     }
                                     RevDirection::FORWARD_LOG => {
-                                        res.forward_log().map_err(|OutOfLog| {
-                                            TryRunRevUpdateError::SpawnDespawnBackwardErr {
-                                                meta: meta.clone(),
-                                                err: SpawnDespawnBackwardErr::OutOfLog,
-                                            }
-                                        })?
+                                        res.forward_log().map_err(err_mapper)?
                                     }
                                     RevDirection::BackwardLog => {
-                                        res.backward_log().map_err(|err| {
-                                            TryRunRevUpdateError::SpawnDespawnBackwardErr {
-                                                meta: meta.clone(),
-                                                err,
-                                            }
-                                        })?
+                                        res.backward_log().map_err(err_mapper)?
                                     }
                                 }
                                 Ok(frame)
                             },
-                        ),
+                        ).ok_or_else(|| TryRunRevUpdateError::SpawnDespawnMissing(meta.clone())).flatten(),
                     Err(_) => Err(TryRunRevUpdateError::RevUpdateMissing(meta.clone())),
                 }
             });

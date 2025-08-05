@@ -1,5 +1,7 @@
 use std::panic::Location;
 
+use bevy::log::warn_once;
+
 use crate::log::OutOfLog;
 
 use super::*;
@@ -25,43 +27,8 @@ pub struct SpawnDespawnRes {
     spawn_queue: Vec<(Entity, MaybeLocation)>,
     despawn_queue: Vec<(Entity, MaybeLocation)>,
     spawn_buffer_queue: Vec<Option<Entity>>,
+    spawn_buffer_queue_delay: Vec<Entity>
 }
-
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) enum SpawnDespawnBackwardErr {
-    OutOfLog,
-    EmptyBufferSpawn,
-    UnreservedBufferSpawn,
-    UnusedBufferSpawnReservation,
-}
-
-impl From<OutOfLog> for SpawnDespawnBackwardErr {
-    fn from(_: OutOfLog) -> Self {
-        Self::OutOfLog
-    }
-}
-
-impl Display for SpawnDespawnBackwardErr {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::OutOfLog => write!(f, "{}", OutOfLog),
-            Self::EmptyBufferSpawn => write!(
-                f,
-                "an empty internal buffer entity was reserved during the backward direction instead of the non-log direction",
-            ),
-            Self::UnreservedBufferSpawn => write!(
-                f,
-                "an internal buffer entity was attempted to be logged during the backward direction but no slot was reserved"
-            ),
-            Self::UnusedBufferSpawnReservation => write!(
-                f,
-                "an internal buffer entity reservation remained unclaimed during the backward direction",
-            ),
-        }
-    }
-}
-
-impl Error for SpawnDespawnBackwardErr {}
 
 impl SpawnDespawnRes {
     /// Must be called during [`RevDirection::NOT_LOG`].
@@ -118,6 +85,7 @@ impl SpawnDespawnRes {
         self.spawn_buffer
             .push_and_pop_past(max_past_len, |mut log| {
                 log.extend(self.spawn_buffer_queue.drain(..));
+                log.extend(self.spawn_buffer_queue_delay.drain(..).map(Some));
             });
 
         world.remove_resource::<BufferInProgressRes>();
@@ -131,8 +99,9 @@ impl SpawnDespawnRes {
         Ok(())
     }
 
-    /// Must be called at the beginning of [`RevDirection::BackwardLog`].
-    pub(crate) fn backward_log(&mut self) -> Result<(), SpawnDespawnBackwardErr> {
+    /// Must be called at the end of [`RevDirection::BackwardLog`].
+    // todo: consider to just warn at these errors as they are recoverable except OutOfLog
+    pub(crate) fn backward_log(&mut self) -> Result<(), OutOfLog> {
         self.spawn.backward_log()?;
         let _ok = self.despawn.backward_log();
         let mut buffer_iter = self
@@ -140,23 +109,28 @@ impl SpawnDespawnRes {
             .backward_log()
             .expect("should not be out-of-log like `Self::spawn` as the logs they get called identically in `forward`")
             .value;
-        let delayed_iter = self.spawn_buffer_queue.drain(..);
+        let mut delayed_iter = self.spawn_buffer_queue.drain(..);
 
-        'delayed_loop: for delayed in delayed_iter {
+        'delayed_loop: for delayed in delayed_iter.by_ref() {
             let Some(delayed) = delayed else {
-                return Err(SpawnDespawnBackwardErr::EmptyBufferSpawn);
+                warn_once!("an empty internal buffer entity was reserved during the backward direction instead of the non-log direction, this indicates a bug occured");
+                continue;
             };
+
             for buffer in buffer_iter.by_ref() {
                 if buffer.is_none() {
                     *buffer = Some(delayed);
                     continue 'delayed_loop;
                 }
             }
-            return Err(SpawnDespawnBackwardErr::UnreservedBufferSpawn);
+            
+            self.spawn_buffer_queue_delay.extend(delayed_iter.flatten());
+            warn_once!("an internal buffer entity was attempted to be logged during the backward direction but no slot was reserved, this indicates a bug occured");
+            break;
         }
 
         if !buffer_iter.all(|buffer| buffer.is_some()) {
-            return Err(SpawnDespawnBackwardErr::UnusedBufferSpawnReservation);
+            warn_once!("an internal buffer entity reservation remained unclaimed during the backward direction, this indicates a bug occured");
         }
 
         Ok(())
