@@ -52,7 +52,9 @@ pub(super) fn rev_insert<T: Bundle<Effect: NoBundleEffect>>(
     });
     let cloner_builder = BundleIdCloner::<false>(bundle_id);
     let mut buffer = BundleBuffer::new(cloner_builder, entity);
-    world.resource_mut::<SpawnDespawnRes>().spawn_buffer(None); // reserve log entry for buffer of inserted components
+    world
+        .resource_mut::<SpawnDespawnRes>()
+        .log_spawn_buffer(None); // reserve log entry for buffer of inserted components
     match insert_mode {
         InsertMode::Replace => {
             let mut cloner = cloner_builder.cloner(world);
@@ -181,9 +183,9 @@ pub(crate) fn progress_scope(
     c: impl FnOnce(&mut World),
 ) {
     let mut swap = ResourceSwap(Some(BufferInProgressRes(progress)));
-    swap.undo(world);
-    c(world);
     swap.redo(world);
+    c(world);
+    swap.undo(world);
 }
 
 struct BundleBuffer<Cloner> {
@@ -267,10 +269,12 @@ impl<Cloner: ClonerBuilder> BundleBuffer<Cloner> {
     fn toggle_state(&mut self, world: &mut World) -> BundleEntities {
         match self.state {
             BufferState::Unspawned => {
-                let buffer = world.spawn(RevDespawned::with_caller(BUFFER_MAYBE_LOCATION)).id();
+                let buffer = world
+                    .spawn(RevDespawned::with_caller(BUFFER_MAYBE_LOCATION))
+                    .id();
                 world
                     .resource_mut::<SpawnDespawnRes>()
-                    .spawn_buffer(Some(buffer));
+                    .log_spawn_buffer(Some(buffer));
                 self.state = BufferState::Filled(buffer);
                 BundleEntities {
                     target: buffer,
@@ -322,9 +326,7 @@ impl UndoRedo for BundleBufferReplace {
         let mut cloner = self.insert_buffer.cloner_builder.cloner(world);
 
         // move inserted components from the entity into the insert_buffer
-        let entities = self
-            .insert_buffer
-            .toggle_state(world);
+        let entities = self.insert_buffer.toggle_state(world);
         entities.move_components(world, &mut cloner, RevDirection::BackwardLog);
 
         // move backuped components from the backup_buffer into the entity
@@ -347,9 +349,7 @@ impl UndoRedo for BundleBufferReplace {
         entities.move_components(world, &mut cloner, RevDirection::FORWARD_LOG);
 
         // move inserted components from the insert_buffer into the entity
-        let entities = self
-            .insert_buffer
-            .toggle_state(world);
+        let entities = self.insert_buffer.toggle_state(world);
         entities.move_components(world, &mut cloner, RevDirection::FORWARD_LOG);
     }
 }

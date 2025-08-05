@@ -25,15 +25,10 @@ use crate::{
 
 #[derive(Clone, Debug, PartialEq)]
 enum TryRunRevUpdateError {
-    RevMetaRemovedInSchedule {
-        frame: u64,
-    },
+    RevMetaRemovedInSchedule { frame: u64 },
     UnexpectedInitialRunning(RevMeta),
     RevUpdateMissing(RevMeta),
-    UndoRedoBufferNotEmptyBeforeUpdate {
-        meta: RevMeta,
-        buffer_types: String,
-    },
+    UndoRedoBufferNotEmptyBeforeUpdate { meta: RevMeta, buffer_types: String },
     SpawnDespawnMissing(RevMeta),
     SpawnDespawnOutOfLog(RevMeta),
 }
@@ -59,10 +54,18 @@ impl Display for TryRunRevUpdateError {
                 meta.now()
             ),
             Self::SpawnDespawnMissing(meta) => {
-                write!(f, "The resource tracking delayed despawns and component buffers is missing at frame {}", meta.now()) // todo: show removal location
+                write!(
+                    f,
+                    "The resource tracking delayed despawns and component buffers is missing at frame {}",
+                    meta.now()
+                ) // todo: show removal location
             }
             Self::SpawnDespawnOutOfLog(meta) => {
-                write!(f, "The resource tracking delayed despawns and component buffers unexpectedly reached the end of its log at frame {}", meta.now())
+                write!(
+                    f,
+                    "The resource tracking delayed despawns and component buffers unexpectedly reached the end of its log at frame {}",
+                    meta.now()
+                )
             }
         }
     }
@@ -437,7 +440,7 @@ impl RevMeta {
             return Ok(());
         }
 
-        world.resource_scope(|world: &mut World, mut meta: Mut<Self>| {
+        world.try_resource_scope(|world: &mut World, mut meta: Mut<Self>| {
             let buffer = world.get_resource_or_init::<UndoRedoBuffer>();
             if !buffer.is_empty() {
                 Err(TryRunRevUpdateError::UndoRedoBufferNotEmptyBeforeUpdate {
@@ -451,8 +454,9 @@ impl RevMeta {
             }
 
             let previous = meta.clone();
+
+
             let result = meta.update(|meta| {
-                let frame = meta.now();
                 let result = world.try_schedule_scope(RevUpdate, |world, schedule| {
                     world.insert_resource(meta.clone());
                     schedule.run(world);
@@ -460,23 +464,15 @@ impl RevMeta {
 
                 match result {
                     Ok(()) => world
-                        .try_resource_scope::<SpawnDespawnRes, Result<u64, TryRunRevUpdateError>>(
-                            |world: &mut World, mut res| {
-                                let err_mapper = |OutOfLog| TryRunRevUpdateError::SpawnDespawnOutOfLog(meta.clone());
-                                match meta.running_direction() {
-                                    RevDirection::NOT_LOG => {
-                                        res.forward(world, meta.past_len() as usize)
-                                    }
-                                    RevDirection::FORWARD_LOG => {
-                                        res.forward_log().map_err(err_mapper)?
-                                    }
-                                    RevDirection::BackwardLog => {
-                                        res.backward_log().map_err(err_mapper)?
-                                    }
-                                }
-                                Ok(frame)
-                            },
-                        ).ok_or_else(|| TryRunRevUpdateError::SpawnDespawnMissing(meta.clone())).flatten(),
+                        .try_resource_scope(|world: &mut World, mut res: Mut<SpawnDespawnRes>| {
+                            res
+                                .update(meta, world)
+                                .map(|()| meta.now())
+                                .map_err(|OutOfLog| TryRunRevUpdateError::SpawnDespawnOutOfLog(meta.clone()))
+                        })
+                        .unwrap_or_else(|| {
+                            Err(TryRunRevUpdateError::SpawnDespawnMissing(meta.clone()))
+                        }),
                     Err(_) => Err(TryRunRevUpdateError::RevUpdateMissing(meta.clone())),
                 }
             });
@@ -501,8 +497,27 @@ impl RevMeta {
                     Err(err)?
                 }
             }
+        }).unwrap_or_else(|| {
+            #[derive(Resource, Clone, Copy)]
+            struct Existed(bool);
+
+            let existed = world.remove_resource::<Existed>();
+            world.insert_resource(Existed(false));
+            match existed {
+                None => info!(
+                    "RevMeta does not exist yet, reversible schedule RevUpdate will not be called until it is inserted"
+                ),
+                Some(Existed(true)) => info!(
+                    "RevMeta was removed, reversible schedule RevUpdate will not be called until it is inserted again"
+                ),
+                Some(Existed(false)) => {}
+            };
+
+            // `RevMeta` missing is not an error but a possible way to make `RevUpdate` not run
+            return Ok(());
         })
     }
+
     /// Updates `RevMeta`. The closure is called if the updated direction is not paused.
     ///
     /// The given `&mut RevMeta` in the closure has the following characteristics:
