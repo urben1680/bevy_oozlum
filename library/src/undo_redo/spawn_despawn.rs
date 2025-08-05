@@ -197,7 +197,7 @@ impl RevIsDespawned for EntityRef<'_> {
     }
 }
 
-impl<B: Bundle> RevIsDespawned for EntityRefExcept<'_, B> {
+impl<B: Bundle> RevIsDespawned for EntityRefExcept<'_, '_, B> {
     fn rev_is_despawned(&self) -> bool {
         self.contains::<RevDespawned>()
     }
@@ -209,7 +209,7 @@ impl<B: Bundle> RevIsDespawned for EntityRefExcept<'_, B> {
     }
 }
 
-impl RevIsDespawned for FilteredEntityRef<'_> {
+impl RevIsDespawned for FilteredEntityRef<'_, '_> {
     fn rev_is_despawned(&self) -> bool {
         self.contains::<RevDespawned>()
     }
@@ -234,7 +234,7 @@ impl RevIsDespawned for EntityMut<'_> {
     }
 }
 
-impl<B: Bundle> RevIsDespawned for EntityMutExcept<'_, B> {
+impl<B: Bundle> RevIsDespawned for EntityMutExcept<'_, '_, B> {
     fn rev_is_despawned(&self) -> bool {
         self.contains::<RevDespawned>()
     }
@@ -246,7 +246,7 @@ impl<B: Bundle> RevIsDespawned for EntityMutExcept<'_, B> {
     }
 }
 
-impl RevIsDespawned for FilteredEntityMut<'_> {
+impl RevIsDespawned for FilteredEntityMut<'_, '_> {
     fn rev_is_despawned(&self) -> bool {
         self.contains::<RevDespawned>()
     }

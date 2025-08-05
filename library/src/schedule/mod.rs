@@ -115,7 +115,7 @@ fn set_base_sets(schedule: &mut Schedule) {
     }
 
     // check needs to be on a non-pub set
-    if !schedule.graph().contains_set(ForwardSystems) {
+    if !schedule.graph().system_sets.contains(ForwardSystems) {
         schedule.configure_sets(
             (
                 ForwardSystems.run_if(is_forward::<true>),
