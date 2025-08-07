@@ -2,18 +2,22 @@ use std::sync::Arc;
 
 use bevy::{
     ecs::{
-        bundle::{Bundle, BundleId, NoBundleEffect},
+        bundle::{Bundle, NoBundleEffect},
+        change_detection::MaybeLocation,
         component::ComponentId,
         entity::Entity,
         resource::Resource,
-        world::{FromWorld, World},
+        world::{EntityWorldMut, FromWorld, Mut, World},
     },
     log::warn,
 };
 
-use crate::meta::NonLogNow;
+use crate::{meta::NonLogNow, undo_redo::RevDespawned};
 
-use super::*;
+use super::{
+    BuffersUndoRedo, EntityRevDespawnedError, ResourceSwap, RevDespawnCleaner, RevDespawnedBy,
+    RevEntityError, Spawn, UndoRedo, UndoRedoSwap, rev_spawn_finish,
+};
 
 pub trait RevWorld {
     fn redo_and_buffer(&mut self, now: NonLogNow, undo_redo: impl UndoRedo);
@@ -43,19 +47,11 @@ pub trait RevWorld {
     /// Reversible version of [`World::init_resource`].
     fn rev_init_resource<R: Resource + FromWorld>(&mut self, now: NonLogNow) -> ComponentId;
 
-    /// Reversible version of [`World::insert_batch`].
-    fn rev_insert_batch<I, B>(&mut self, now: NonLogNow, batch: I)
-    where
-        I: IntoIterator,
-        I::IntoIter: Iterator<Item = (Entity, B)>,
-        B: Bundle<Effect: NoBundleEffect>;
+    // rev_insert_batch
+    // out of scope
 
-    /// Reversible version of [`World::insert_batch_if_new`].
-    fn rev_insert_batch_if_new<I, B>(&mut self, now: NonLogNow, batch: I)
-    where
-        I: IntoIterator,
-        I::IntoIter: Iterator<Item = (Entity, B)>,
-        B: Bundle<Effect: NoBundleEffect>;
+    // rev_insert_batch_if_new
+    // out of scope
 
     // rev_insert_non_send_by_id
     // out of scope due Send bound on UndoRedo
@@ -82,6 +78,9 @@ pub trait RevWorld {
     /// rev_remove_resource_by_id
     // blocked on https://github.com/bevyengine/bevy/pull/17485
 
+    /// Reversible version of [`World::spawn`].
+    fn rev_spawn<T: Bundle>(&mut self, now: NonLogNow, bundle: T) -> EntityWorldMut;
+
     /// Reversible version of [`World::spawn_batch`].
     fn rev_spawn_batch<I>(&mut self, now: NonLogNow, iter: I) -> Arc<[Entity]>
     where
@@ -92,29 +91,13 @@ pub trait RevWorld {
     fn rev_spawn_empty(&mut self, now: NonLogNow) -> EntityWorldMut;
 
     /// Reversible version of [`World::try_despawn`].
-    fn rev_try_despawn(&mut self, now: NonLogNow, entity: Entity) -> Result<(), RevEntitiesError>;
+    fn rev_try_despawn(&mut self, now: NonLogNow, entity: Entity) -> Result<(), RevEntityError>;
 
-    /// Reversible version of [`World::try_insert_batch`].
-    fn rev_try_insert_batch<I, B>(
-        &mut self,
-        now: NonLogNow,
-        batch: I,
-    ) -> Result<(), RevEntitiesError>
-    where
-        I: IntoIterator,
-        I::IntoIter: Iterator<Item = (Entity, B)>,
-        B: Bundle<Effect: NoBundleEffect>;
+    // rev_try_insert_batch
+    // out of scope
 
-    /// Reversible version of [`World::try_insert_batch_if_new`].
-    fn rev_try_insert_batch_if_new<I, B>(
-        &mut self,
-        now: NonLogNow,
-        batch: I,
-    ) -> Result<(), RevEntitiesError>
-    where
-        I: IntoIterator,
-        I::IntoIter: Iterator<Item = (Entity, B)>,
-        B: Bundle<Effect: NoBundleEffect>;
+    // rev_try_insert_batch_if_new
+    // out of scope
 }
 
 impl RevWorld for World {
@@ -153,28 +136,6 @@ impl RevWorld for World {
         self.init_resource::<R>()
     }
 
-    #[track_caller]
-    fn rev_insert_batch<I, B>(&mut self, now: NonLogNow, batch: I)
-    where
-        I: IntoIterator,
-        I::IntoIter: Iterator<Item = (Entity, B)>,
-        B: Bundle<Effect: NoBundleEffect>,
-    {
-        self.rev_try_insert_batch(now, batch)
-            .unwrap_or_else(|err| panic!("{err}"))
-    }
-
-    #[track_caller]
-    fn rev_insert_batch_if_new<I, B>(&mut self, now: NonLogNow, batch: I)
-    where
-        I: IntoIterator,
-        I::IntoIter: Iterator<Item = (Entity, B)>,
-        B: Bundle<Effect: NoBundleEffect>,
-    {
-        self.rev_try_insert_batch_if_new(now, batch)
-            .unwrap_or_else(|err| panic!("{err}"))
-    }
-
     fn rev_insert_resource<R: Resource>(&mut self, now: NonLogNow, resource: R) {
         let swap = ResourceSwap(self.remove_resource::<R>());
         self.insert_resource(resource);
@@ -194,6 +155,14 @@ impl RevWorld for World {
     }
 
     #[track_caller]
+    fn rev_spawn<T: Bundle>(&mut self, now: NonLogNow, bundle: T) -> EntityWorldMut {
+        let mut entity_world_mut = self.spawn(bundle);
+        let entity = entity_world_mut.id();
+        rev_spawn_finish(&mut entity_world_mut, now, entity, MaybeLocation::caller());
+        entity_world_mut
+    }
+
+    #[track_caller]
     fn rev_spawn_batch<I>(&mut self, now: NonLogNow, iter: I) -> Arc<[Entity]>
     where
         I: IntoIterator,
@@ -201,7 +170,7 @@ impl RevWorld for World {
     {
         struct SpawnBatch {
             entities: Arc<[Entity]>,
-            marker: DisabledToDespawn,
+            location: MaybeLocation,
         }
 
         impl UndoRedo for SpawnBatch {
@@ -209,140 +178,56 @@ impl RevWorld for World {
                 world.insert_batch(
                     self.entities
                         .iter()
-                        .map(|entity| (*entity, self.marker))
+                        .map(|entity| (*entity, RevDespawned(self.location)))
                         .rev(),
                 );
             }
             fn redo(&mut self, world: &mut World) {
-                let id = world.register_component::<DisabledToDespawn>();
+                let id = world.register_component::<RevDespawned>();
                 for entity in self.entities.iter() {
                     world.entity_mut(*entity).remove_by_id(id);
                 }
             }
         }
 
-        let marker = DisabledToDespawn::for_spawn_despawn(now.0);
         let entities: Arc<[Entity]> = self.spawn_batch(iter).collect();
+        let location = MaybeLocation::caller();
+
         self.buffer_undo_redo(
             now,
             SpawnBatch {
                 entities: entities.clone(),
-                marker,
+                location,
             },
         );
-        let mut resource = self.remove_resource::<RevRelationship>().expect("todo");
-        for entity in entities.iter() {
-            // this cannot be done as a batch method because the bundle's hooks/observers may cause the
-            // entities each be in different archetypes with different relationship components
-            let mut entity_mut = self.entity_mut(*entity);
-            let _ok = resource.buffer(&mut entity_mut, None, now, false);
-        }
+        self.resource_mut::<RevDespawnCleaner>()
+            .log_spawn_batch(&entities, location, now);
 
         entities
     }
 
     #[track_caller]
     fn rev_spawn_empty(&mut self, now: NonLogNow) -> EntityWorldMut {
-        struct SpawnEmpty {
-            entity: Entity,
-            marker: DisabledToDespawn,
-        }
-
-        impl UndoRedo for SpawnEmpty {
-            fn undo(&mut self, world: &mut World) {
-                world.entity_mut(self.entity).insert(self.marker);
-            }
-            fn redo(&mut self, world: &mut World) {
-                world.entity_mut(self.entity).remove::<DisabledToDespawn>();
-            }
-        }
-
         let mut entity_world_mut = self.spawn_empty();
         let entity = entity_world_mut.id();
-        let marker = DisabledToDespawn::for_spawn_despawn(now.0);
-        entity_world_mut.buffer_undo_redo(now, SpawnEmpty { entity, marker });
+        rev_spawn_finish(&mut entity_world_mut, now, entity, MaybeLocation::caller());
         entity_world_mut
     }
 
     #[track_caller]
-    fn rev_try_despawn(&mut self, now: NonLogNow, entity: Entity) -> Result<(), RevEntitiesError> {
-        self.resource_scope::<RevRelationship, _>(|world, mut resource| {
-            match world.get_entity_mut(entity) {
-                Ok(mut entity) => resource.try_despawn(&mut entity, now, true),
-                Err(EntityMutableFetchError::EntityDoesNotExist(err)) => Err(err.into()),
-                Err(EntityMutableFetchError::AliasedMutability(_)) => {
-                    unreachable!("only one entity accessed")
-                }
-            }
-        })
-    }
-
-    #[track_caller]
-    fn rev_try_insert_batch<I, B>(
-        &mut self,
-        now: NonLogNow,
-        batch: I,
-    ) -> Result<(), RevEntitiesError>
-    where
-        I: IntoIterator,
-        I::IntoIter: Iterator<Item = (Entity, B)>,
-        B: Bundle<Effect: NoBundleEffect>,
-    {
-        try_insert_batch_inner(self, now, batch, InsertMode::Replace)
-    }
-
-    #[track_caller]
-    fn rev_try_insert_batch_if_new<I, B>(
-        &mut self,
-        now: NonLogNow,
-        batch: I,
-    ) -> Result<(), RevEntitiesError>
-    where
-        I: IntoIterator,
-        I::IntoIter: Iterator<Item = (Entity, B)>,
-        B: Bundle<Effect: NoBundleEffect>,
-    {
-        try_insert_batch_inner(self, now, batch, InsertMode::Keep)
-    }
-}
-
-#[track_caller]
-fn try_insert_batch_inner<I, B>(
-    world: &mut World,
-    now: NonLogNow,
-    batch: I,
-    insert_mode: InsertMode,
-) -> Result<(), RevEntitiesError>
-where
-    I: IntoIterator,
-    I::IntoIter: Iterator<Item = (Entity, B)>,
-    B: Bundle<Effect: NoBundleEffect>,
-{
-    // todo: actually make this efficient
-
-    let mut errors = RevEntitiesError {
-        invalid: Vec::new(),
-        rev_despawned: Vec::new(),
-        rev_despawned_buffers: MaybeLocation::new_with(|| Vec::new()),
-    };
-
-    for (entity, bundle) in batch {
-        match world.get_entity_mut(entity) {
-            Ok(ref mut entity_mut) => {
-                if let Err(err) = insert_inner(entity_mut, now, bundle, insert_mode) {
-                    errors.push(err);
-                }
-            }
-            Err(EntityMutableFetchError::EntityDoesNotExist(err)) => errors.push(err),
-            Err(EntityMutableFetchError::AliasedMutability(_)) => {
-                unreachable!("only accessed one entity at a time")
-            }
+    fn rev_try_despawn(&mut self, now: NonLogNow, entity: Entity) -> Result<(), RevEntityError> {
+        if let Some(location) = self.get_entity(entity)?.get_rev_despawned_by() {
+            return Err(RevEntityError::EntityRevDespawnedError(
+                EntityRevDespawnedError { entity, location },
+            ));
         }
-    }
 
-    if errors.is_empty() {
+        let location = MaybeLocation::caller();
+
+        self.redo_and_buffer(now, UndoRedoSwap(Spawn { entity, location }));
+        self.resource_mut::<RevDespawnCleaner>()
+            .log_despawn(entity, location, now);
+
         Ok(())
-    } else {
-        Err(errors)
     }
 }

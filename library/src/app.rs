@@ -14,7 +14,7 @@ use crate::{
     meta::RevMeta,
     prelude::UndoRedoBuffer,
     schedule::{IntoRevScheduleConfigs, RevSchedule},
-    undo_redo::RevDespawned,
+    undo_redo::{RevDespawnCleaner, RevDespawned},
 };
 
 pub trait RevApp {
@@ -55,7 +55,9 @@ impl RevApp for App {
     }
 }
 
+// todo: rename to crate name
 pub enum RevSystemsPlugin {
+    Minimum,
     AddMeta(RevMeta),
     AddMetaAndRunner(RevMeta, InternedScheduleLabel),
     AddMetaAndRunnerInSet(RevMeta, InternedScheduleLabel, InternedSystemSet),
@@ -70,7 +72,10 @@ impl Default for RevSystemsPlugin {
 }
 
 impl RevSystemsPlugin {
-    pub fn add_meta(meta: RevMeta) -> Self {
+    pub const fn minimum() -> Self {
+        Self::Minimum
+    }
+    pub const fn add_meta(meta: RevMeta) -> Self {
         Self::AddMeta(meta)
     }
     pub fn add_meta_and_runner(meta: RevMeta, schedule: impl ScheduleLabel) -> Self {
@@ -93,6 +98,7 @@ impl RevSystemsPlugin {
 
 impl Plugin for RevSystemsPlugin {
     fn build(&self, app: &mut App) {
+        // add meta
         match self {
             Self::AddMeta(meta, ..)
             | Self::AddMetaAndRunner(meta, ..)
@@ -108,6 +114,8 @@ impl Plugin for RevSystemsPlugin {
             }
             _ => {}
         };
+
+        // add runner
         match self {
             Self::AddMetaAndRunner(_, schedule) | Self::AddRunner(schedule) => {
                 app.add_systems(*schedule, RevMeta::try_run_rev_update);
@@ -115,9 +123,12 @@ impl Plugin for RevSystemsPlugin {
             Self::AddMetaAndRunnerInSet(_, schedule, set) | Self::AddRunnerInSet(schedule, set) => {
                 app.add_systems(*schedule, RevMeta::try_run_rev_update.in_set(*set));
             }
-            Self::AddMeta(..) => {}
+            _ => {}
         }
-        app.register_disabling_component::<RevDespawned>();
-        app.init_resource::<UndoRedoBuffer>();
+
+        // other
+        app.init_resource::<RevDespawnCleaner>()
+            .init_resource::<UndoRedoBuffer>()
+            .register_disabling_component::<RevDespawned>();
     }
 }

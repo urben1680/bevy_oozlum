@@ -20,7 +20,7 @@ use bevy::reflect::{ReflectDeserialize, ReflectSerialize};
 use crate::{
     log::OutOfLog,
     schedule::RevUpdate,
-    undo_redo::{SpawnDespawnRes, UndoRedoBuffer},
+    undo_redo::{RevDespawnCleaner, UndoRedoBuffer},
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -29,7 +29,7 @@ enum TryRunRevUpdateError {
     UnexpectedInitialRunning(RevMeta),
     RevUpdateMissing(RevMeta),
     UndoRedoBufferNotEmptyBeforeUpdate { meta: RevMeta, buffer_types: String },
-    SpawnDespawnMissing(RevMeta),
+    SpawnDespawnRemovedInSchedule(RevMeta),
     SpawnDespawnOutOfLog(RevMeta),
 }
 
@@ -38,28 +38,28 @@ impl Display for TryRunRevUpdateError {
         match self {
             Self::RevMetaRemovedInSchedule { frame } => write!(
                 f,
-                "RevMeta was removed while RevUpdate ran at frame {frame}" // todo: show removal location
-            ),
+                "RevMeta was removed while RevUpdate ran at frame {frame}"
+            ), // todo: show removal location
             Self::UnexpectedInitialRunning(meta) => write!(
                 f,
                 "RevMeta was in a running state at frame {} before RevUpdate could run",
                 meta.now()
             ),
             Self::RevUpdateMissing(meta) => {
-                write!(f, "RevUpdate was missing at frame {}", meta.now()) // todo: show removal location
-            }
+                write!(f, "RevUpdate was missing at frame {}", meta.now())
+            } // todo: show removal location
             Self::UndoRedoBufferNotEmptyBeforeUpdate { meta, buffer_types } => write!(
                 f,
                 "UndoRedoBuffer was not fully drained at frame {}, RevUpdate is not run, undrained UndoRedo: {buffer_types:#?}",
                 meta.now()
             ),
-            Self::SpawnDespawnMissing(meta) => {
+            Self::SpawnDespawnRemovedInSchedule(meta) => {
                 write!(
                     f,
-                    "The resource tracking delayed despawns and component buffers is missing at frame {}",
+                    "The resource tracking delayed despawns and component buffers was removed at frame {}",
                     meta.now()
-                ) // todo: show removal location
-            }
+                )
+            } // todo: show removal location
             Self::SpawnDespawnOutOfLog(meta) => {
                 write!(
                     f,
@@ -412,35 +412,13 @@ impl RevMeta {
     /// This indicates that this system ran recursively or `RevMeta` was manually inserted from a clone that was acquired
     /// when the schedule ran a previous time. If `RevMeta` is manually inserted, then this should be done with
     /// [RevMeta::new] or from a state it was removed as when no reversible schedule ran.
-    /// - `RevUpdate` was removed while `RevUpdate` ran.
     /// - `RevUpdate` is missing.
     /// This indicates that this system ran recursively, this schedule was never populated or it was removed. This error
     /// will cause `RevMeta` to be reverted to its state it was in before the run was attempted.
     pub fn try_run_rev_update(world: &mut World) -> Result<(), BevyError> {
-        /// Use a Resource instead of Local so this system can be added multiple times and keeps track globally
-        #[derive(Resource, Clone, Copy)]
-        struct Existed(bool);
-
-        if world.contains_resource::<Self>() {
-            world.insert_resource(Existed(true));
-        } else {
-            let existed = world.remove_resource::<Existed>();
-            world.insert_resource(Existed(false));
-            match existed {
-                None => info!(
-                    "RevMeta does not exist yet, reversible schedule RevUpdate will not be called until it is inserted"
-                ),
-                Some(Existed(true)) => info!(
-                    "RevMeta was removed, reversible schedule RevUpdate will not be called until it is inserted again"
-                ),
-                Some(Existed(false)) => {}
-            };
-
-            // `RevMeta` missing is not an error but a possible way to make `RevUpdate` not run
-            return Ok(());
-        }
-
         world.try_resource_scope(|world: &mut World, mut meta: Mut<Self>| {
+            world.init_resource::<RevDespawnCleaner>();
+
             let buffer = world.get_resource_or_init::<UndoRedoBuffer>();
             if !buffer.is_empty() {
                 Err(TryRunRevUpdateError::UndoRedoBufferNotEmptyBeforeUpdate {
@@ -453,39 +431,44 @@ impl RevMeta {
                 Err(TryRunRevUpdateError::UnexpectedInitialRunning(meta.clone()))?;
             }
 
+            // revert to previous state in case the schedule could not be run
             let previous = meta.clone();
 
-
+            // update meta here
             let result = meta.update(|meta| {
-                let result = world.try_schedule_scope(RevUpdate, |world, schedule| {
+                // run schedule
+                let schedule_result = world.try_schedule_scope(RevUpdate, |world, schedule| {
                     world.insert_resource(meta.clone());
                     schedule.run(world);
                 });
 
-                match result {
+                match schedule_result {
+                    // despawn entities that are marked as reversibly despawned for long enough
+                    // despawn buffer entities for operations that are out of log now
                     Ok(()) => world
-                        .try_resource_scope(|world: &mut World, mut res: Mut<SpawnDespawnRes>| {
+                        .try_resource_scope(|world: &mut World, mut res: Mut<RevDespawnCleaner>| {
                             res
                                 .update(meta, world)
                                 .map(|()| meta.now())
                                 .map_err(|OutOfLog| TryRunRevUpdateError::SpawnDespawnOutOfLog(meta.clone()))
                         })
                         .unwrap_or_else(|| {
-                            Err(TryRunRevUpdateError::SpawnDespawnMissing(meta.clone()))
+                            Err(TryRunRevUpdateError::SpawnDespawnRemovedInSchedule(meta.clone()))
                         }),
                     Err(_) => Err(TryRunRevUpdateError::RevUpdateMissing(meta.clone())),
                 }
             });
 
             match result.transpose() {
+                // remove meta as a guard against invalid insertions and to make resource_scope not panic
                 Ok(frame) => match world.remove_resource::<Self>() {
                     None => {
-                        let frame = frame.expect(
-                            "RevMeta could not have been removed without running RevUpdate",
-                        );
+                        // meta could not have been removed without running RevUpdate, so frame is Some
+                        let frame = frame.unwrap();
                         Err(TryRunRevUpdateError::RevMetaRemovedInSchedule { frame })?
                     }
                     Some(updated) => {
+                        // updates to these fields are valid changes to meta, keep them
                         meta.max_world_states = updated.max_world_states;
                         meta.queue = updated.queue;
                         Ok(())
@@ -498,6 +481,7 @@ impl RevMeta {
                 }
             }
         }).unwrap_or_else(|| {
+            /// Use a Resource instead of Local so this system can be added multiple times and keeps track globally
             #[derive(Resource, Clone, Copy)]
             struct Existed(bool);
 
@@ -513,7 +497,7 @@ impl RevMeta {
                 Some(Existed(false)) => {}
             };
 
-            // `RevMeta` missing is not an error but a possible way to make `RevUpdate` not run
+            // `RevMeta` missing is not an error but a valid way to make `RevUpdate` not run
             return Ok(());
         })
     }

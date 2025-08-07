@@ -1,91 +1,145 @@
 use std::{any::TypeId, panic::Location};
 
-use bevy::ecs::bundle::NoBundleEffect;
+use bevy::{
+    ecs::{
+        archetype::ArchetypeId,
+        bundle::{Bundle, BundleId, InsertMode},
+        change_detection::MaybeLocation,
+        component::ComponentId,
+        entity::{Entity, EntityCloner},
+        resource::Resource,
+        world::{EntityWorldMut, World},
+    },
+    platform::collections::{HashMap, HashSet},
+};
 
-use super::*;
+use crate::meta::{NonLogNow, RevDirection};
 
-pub(super) fn rev_clear(
-    world: &mut World,
-    entity: Entity,
+use super::{
+    BuffersUndoRedo, EntityRevDespawnedError, ResourceSwap, RevDespawnCleaner, RevDespawned,
+    UndoRedo,
+};
+
+// todo: move to entity_world module except RevOpInProgress + friends
+// does that work out with MaybeLocation of rev commands?
+// alternativeley, move all logic to commands with correct location passing and make RevEntityWorldMut generate and apply them
+// make all RevEntityWorldMut methods check for rev_despawned
+
+pub(super) fn try_rev_clear(
+    entity: &mut EntityWorldMut,
     now: NonLogNow,
-) -> Result<(), RevEntityError> {
-    check_spawned(world, entity)?;
-    let mut buffer = BundleBuffer::new((), entity);
-    let mut cloner = ().cloner(world);
-    let entities = buffer.toggle_state(world);
-    entities.move_components(world, &mut cloner, RevDirection::NOT_LOG);
-    world.buffer_undo_redo(now, buffer);
+    location: MaybeLocation,
+) -> Result<(), EntityRevDespawnedError> {
+    check_spawned(&entity)?;
+    let id = entity.id();
+    entity.world_scope(|world| {
+        let mut buffer = BundleBuffer::new((), id, location);
+        let mut cloner = ().cloner(world);
+        let entities = buffer.toggle_state(world);
+        entities.move_components(world, &mut cloner, RevDirection::NOT_LOG);
+        world.buffer_undo_redo(now, buffer);
+    });
     Ok(())
 }
 
-pub(super) fn rev_remove<T: Bundle<Effect: NoBundleEffect>, const WITH_REQUIRED: bool>(
-    world: &mut World,
-    entity: Entity,
+pub(super) fn try_rev_remove<T: Bundle, const WITH_REQUIRED: bool>(
+    entity: &mut EntityWorldMut,
     now: NonLogNow,
-) -> Result<(), RevEntityError> {
-    check_spawned(world, entity)?;
-    let bundle_id = world.register_bundle::<T>().id();
-    let cloner_builder = BundleIdCloner::<WITH_REQUIRED>(bundle_id);
-    let mut buffer = BundleBuffer::new(cloner_builder, entity);
-    let mut cloner = cloner_builder.cloner(world);
-    let entities = buffer.toggle_state(world);
-    entities.move_components(world, &mut cloner, RevDirection::NOT_LOG);
-    world.buffer_undo_redo(now, buffer);
+    location: MaybeLocation,
+) -> Result<(), EntityRevDespawnedError> {
+    check_spawned(&entity)?;
+    let id = entity.id();
+    entity.world_scope(|world| {
+        let bundle_id = world.register_bundle::<T>().id();
+        let cloner_builder = BundleIdCloner::<WITH_REQUIRED>(bundle_id);
+        let mut buffer = BundleBuffer::new(cloner_builder, id, location);
+        let mut cloner = cloner_builder.cloner(world);
+        let entities = buffer.toggle_state(world);
+        entities.move_components(world, &mut cloner, RevDirection::NOT_LOG);
+        world.buffer_undo_redo(now, buffer);
+    });
     Ok(())
 }
 
-pub(super) fn rev_insert<T: Bundle<Effect: NoBundleEffect>>(
-    world: &mut World,
-    entity: Entity,
+pub(super) fn try_rev_retain<T: Bundle>(
+    entity: &mut EntityWorldMut,
+    now: NonLogNow,
+    location: MaybeLocation,
+) -> Result<(), EntityRevDespawnedError> {
+    let archetype = check_spawned(&entity)?;
+    let id = entity.id();
+    entity.world_scope(|world| {
+        let bundle_id = world.resource_scope::<BundleIdOfOpCache, _>(|world, mut res| {
+            res.get_retain::<T>(world, archetype)
+        });
+        // using an opt-out cloner does not work because moving would not opt out of required but required_by components of bundle components
+        let cloner_builder = BundleIdCloner::<false>(bundle_id);
+        let mut buffer = BundleBuffer::new(cloner_builder, id, location);
+        let mut cloner = cloner_builder.cloner(world);
+        let entities = buffer.toggle_state(world);
+        entities.move_components(world, &mut cloner, RevDirection::NOT_LOG);
+        world.buffer_undo_redo(now, buffer);
+    });
+    Ok(())
+}
+
+pub(super) fn try_rev_insert<T: Bundle>(
+    entity: &mut EntityWorldMut,
     bundle: T,
     mut insert_mode: InsertMode,
     now: NonLogNow,
-) -> Result<(), RevEntityError> {
-    let archetype = check_spawned(world, entity)?;
-    let bundle_id = world.resource_scope::<InsertCache, _>(|world, mut res| match insert_mode {
-        InsertMode::Replace => {
-            let (bundle_id, updated_insert_mode) = res.get_insert::<T>(world, archetype);
-            insert_mode = updated_insert_mode; // when there is nothing to replace, simplify to `Keep`
-            bundle_id
+    location: MaybeLocation,
+) -> Result<(), EntityRevDespawnedError> {
+    let archetype = check_spawned(&entity)?;
+    let id = entity.id();
+    entity.world_scope(|world| { // todo: manually do the logic of world_scope without a closure so #[track_caller] enters below logic
+        let bundle_id =
+            world.resource_scope::<BundleIdOfOpCache, _>(|world, mut res| match insert_mode {
+                InsertMode::Replace => {
+                    let (bundle_id, updated_insert_mode) = res.get_insert::<T>(world, archetype);
+                    insert_mode = updated_insert_mode; // when there is nothing to replace, simplify to `Keep`
+                    bundle_id
+                }
+                InsertMode::Keep => res.get_insert_if_new::<T>(world, archetype),
+            });
+        let cloner_builder = BundleIdCloner::<false>(bundle_id);
+        let mut buffer = BundleBuffer::new(cloner_builder, id, location);
+        world
+            .resource_mut::<RevDespawnCleaner>()
+            .log_spawn_buffer(None, location); // reserve log entry for buffer of inserted components
+        match insert_mode {
+            InsertMode::Replace => {
+                let mut cloner = cloner_builder.cloner(world);
+                // here the `buffer` is the buffer for the overwritten components...
+                let entities = buffer.toggle_state(world);
+                let backup_buffer = entities.buffer;
+                entities.move_components(world, &mut cloner, RevDirection::NOT_LOG);
+                // ...here `buffer` becomes the buffer for the inserted components
+                buffer.state = BufferState::Unspawned(location);
+                let buffer = BundleBufferReplace {
+                    backup_buffer,
+                    insert_buffer: buffer,
+                };
+                world.buffer_undo_redo(now, buffer);
+                world.entity_mut(id).insert(bundle); // todo: upstream a way to set the location
+            }
+            InsertMode::Keep => {
+                world.buffer_undo_redo(now, buffer);
+                world.entity_mut(id).insert_if_new(bundle); // todo: upstream a way to set the location
+            }
         }
-        InsertMode::Keep => res.get_insert_if_new::<T>(world, archetype),
     });
-    let cloner_builder = BundleIdCloner::<false>(bundle_id);
-    let mut buffer = BundleBuffer::new(cloner_builder, entity);
-    world
-        .resource_mut::<SpawnDespawnRes>()
-        .log_spawn_buffer(None); // reserve log entry for buffer of inserted components
-    match insert_mode {
-        InsertMode::Replace => {
-            let mut cloner = cloner_builder.cloner(world);
-            // here the `buffer` is the buffer for the overwritten components...
-            let entities = buffer.toggle_state(world);
-            let backup_buffer = entities.buffer;
-            entities.move_components(world, &mut cloner, RevDirection::NOT_LOG);
-            // ...here `buffer` becomes the buffer for the inserted components
-            buffer.state = BufferState::Unspawned;
-            let buffer = BundleBufferReplace {
-                backup_buffer,
-                insert_buffer: buffer,
-            };
-            world.buffer_undo_redo(now, buffer);
-            world.entity_mut(entity).insert(bundle);
-        }
-        InsertMode::Keep => {
-            world.buffer_undo_redo(now, buffer);
-            world.entity_mut(entity).insert_if_new(bundle);
-        }
-    }
     Ok(())
 }
 
 #[derive(Resource, Default)]
-struct InsertCache {
+struct BundleIdOfOpCache {
     insert: HashMap<(ArchetypeId, TypeId), (BundleId, InsertMode)>,
     insert_if_new: HashMap<(ArchetypeId, TypeId), BundleId>,
+    retain: HashMap<(ArchetypeId, TypeId), BundleId>,
 }
 
-impl InsertCache {
+impl BundleIdOfOpCache {
     fn get_insert<T: Bundle>(
         &mut self,
         world: &mut World,
@@ -161,31 +215,37 @@ impl InsertCache {
             world.register_dynamic_bundle(&components).id()
         })
     }
+    fn get_retain<T: Bundle>(&mut self, world: &mut World, archetype_id: ArchetypeId) -> BundleId {
+        let key = (archetype_id, TypeId::of::<T>());
+        *self.retain.entry(key).or_insert_with(|| {
+            let bundle_id = world.register_bundle::<T>().id();
+            let bundle_components: HashSet<ComponentId> = world
+                .bundles()
+                .get(bundle_id)
+                .unwrap()
+                .contributed_components()
+                .iter()
+                .copied()
+                .collect();
+            let archetype = world.archetypes().get(archetype_id).unwrap();
+            let components: Vec<_> = archetype
+                .components()
+                .filter(|component_id| !bundle_components.contains(component_id))
+                .collect();
+            world.register_dynamic_bundle(&components).id()
+        })
+    }
 }
 
-fn check_spawned(world: &mut World, entity: Entity) -> Result<ArchetypeId, RevEntityError> {
-    let entity_ref = world.get_entity(entity)?;
-    if let Some(despawned) = entity_ref.get::<RevDespawned>() {
-        return Err(RevEntityError::EntityRevDespawnedError(
-            EntityRevDespawnedError {
-                entity,
-                location: despawned.caller(),
-            },
-        ));
+fn check_spawned(entity: &EntityWorldMut) -> Result<ArchetypeId, EntityRevDespawnedError> {
+    let id = entity.id();
+    if let Some(despawned) = entity.get::<RevDespawned>() {
+        return Err(EntityRevDespawnedError {
+            entity: id,
+            location: despawned.0,
+        });
     };
-    Ok(entity_ref.location().archetype_id)
-}
-
-/// [`World::buffer_components_in_progress`] returns `Some(direction)` during the execution of the closure.
-pub(crate) fn progress_scope(
-    world: &mut World,
-    progress: BufferInProgress,
-    c: impl FnOnce(&mut World),
-) {
-    let mut swap = ResourceSwap(Some(BufferInProgressRes(progress)));
-    swap.redo(world);
-    c(world);
-    swap.undo(world);
+    Ok(entity.location().archetype_id)
 }
 
 struct BundleBuffer<Cloner> {
@@ -227,7 +287,7 @@ impl ClonerBuilder for () {
 
 #[derive(Copy, Clone)]
 enum BufferState {
-    Unspawned,
+    Unspawned(MaybeLocation),
     Empty(Entity),
     Filled(Entity),
 }
@@ -245,36 +305,31 @@ impl BundleEntities {
         cloner: &mut EntityCloner,
         direction: RevDirection,
     ) {
-        let progress = BufferInProgress::Buffer {
+        let progress = RevOpInProgress::Buffer {
             direction,
             buffer: self.buffer,
         };
-        progress_scope(world, progress, |world| {
+        progress.scope(world, |world| {
             cloner.clone_entity(world, self.source, self.target);
         })
     }
 }
 
-pub(crate) const BUFFER_LOCATION: &Location = Location::caller();
-pub(crate) const BUFFER_MAYBE_LOCATION: MaybeLocation = MaybeLocation::new(&BUFFER_LOCATION);
-
 impl<Cloner: ClonerBuilder> BundleBuffer<Cloner> {
-    fn new(cloner_builder: Cloner, entity: Entity) -> Self {
+    fn new(cloner_builder: Cloner, entity: Entity, location: MaybeLocation) -> Self {
         Self {
             cloner_builder,
             entity,
-            state: BufferState::Unspawned,
+            state: BufferState::Unspawned(location),
         }
     }
     fn toggle_state(&mut self, world: &mut World) -> BundleEntities {
         match self.state {
-            BufferState::Unspawned => {
-                let buffer = world
-                    .spawn(RevDespawned::with_caller(BUFFER_MAYBE_LOCATION))
-                    .id();
+            BufferState::Unspawned(location) => {
+                let buffer = world.spawn(RevDespawned(location)).id();
                 world
-                    .resource_mut::<SpawnDespawnRes>()
-                    .log_spawn_buffer(Some(buffer));
+                    .resource_mut::<RevDespawnCleaner>()
+                    .log_spawn_buffer(Some(buffer), location);
                 self.state = BufferState::Filled(buffer);
                 BundleEntities {
                     target: buffer,
@@ -355,7 +410,7 @@ impl UndoRedo for BundleBufferReplace {
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-pub enum BufferInProgress {
+pub enum RevOpInProgress {
     Buffer {
         direction: RevDirection,
         buffer: Entity,
@@ -365,7 +420,7 @@ pub enum BufferInProgress {
     },
 }
 
-impl BufferInProgress {
+impl RevOpInProgress {
     pub fn check(world: &World) -> Option<Self> {
         world.get_resource::<BufferInProgressRes>().map(|res| res.0)
     }
@@ -375,10 +430,23 @@ impl BufferInProgress {
             Self::FinalDespawn { .. } => RevDirection::NOT_LOG,
         }
     }
+    pub(crate) fn scope(
+        self,
+        world: &mut World,
+        c: impl FnOnce(&mut World),
+    ) {
+        let mut swap = ResourceSwap(Some(BufferInProgressRes(self)));
+        swap.redo(world);
+        c(world);
+        swap.undo(world);
+    }
 }
 
 #[derive(Resource)]
-pub(super) struct BufferInProgressRes(pub(super) BufferInProgress);
+pub(super) struct BufferInProgressRes(pub(super) RevOpInProgress);
 
 #[cfg(test)]
-mod test {}
+mod test {
+    use super::*;
+    //todo
+}

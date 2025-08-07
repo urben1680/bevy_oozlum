@@ -38,17 +38,17 @@ mod bundle_buffer;
 //mod commands;
 mod spawn_despawn;
 //mod entity_commands;
-//mod entity_world;
+mod entity_world;
 //mod relationship;
-//mod world;
+mod world;
 
 pub use bundle_buffer::*;
 //pub use commands::*;
 pub use spawn_despawn::*;
 //pub use entity_commands::*;
-//pub use entity_world::*;
+pub use entity_world::*;
 //pub(crate) use relationship::*;
-//pub use world::*;
+pub use world::*;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct EntityRevDespawnedError {
@@ -110,6 +110,7 @@ impl Display for RevEntityError {
 impl Error for RevEntityError {}
 
 // todo: split trait for _deferred variant? try to trigger bugs by using trait as-is in wrong contexts
+// NOTE: does not contain `redo_and_buffer` as the `DeferredWorld` impl cannot do that
 pub trait BuffersUndoRedo {
     /// Buffers an [`UndoRedo`] implementor in a resource to be collected by the reversible system's state during sync points.
     ///
@@ -180,6 +181,7 @@ impl BuffersUndoRedo for DeferredWorld<'_> {
 }
 
 impl BuffersUndoRedo for UndoRedoBuffer {
+    // an unused NonLogNow is included intentionally here to bring a type-based guarantee that this happens during the non-log direction
     fn buffer_undo_redo(&mut self, _: NonLogNow, undo_redo: impl UndoRedo) {
         let name = type_name_of_val(&undo_redo);
         let boxed = BoxedUndoRedo {
@@ -549,5 +551,21 @@ impl<R: Resource> UndoRedo for ResourceSwap<R> {
     }
     fn redo(&mut self, world: &mut World) {
         self.undo(world)
+    }
+}
+
+struct Spawn {
+    entity: Entity,
+    location: MaybeLocation,
+}
+
+impl UndoRedo for Spawn {
+    fn undo(&mut self, world: &mut World) {
+        world
+            .entity_mut(self.entity)
+            .insert(RevDespawned(self.location));
+    }
+    fn redo(&mut self, world: &mut World) {
+        world.entity_mut(self.entity).remove::<RevDespawned>();
     }
 }

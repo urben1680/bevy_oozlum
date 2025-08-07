@@ -1,30 +1,76 @@
 use std::panic::Location;
 
-use bevy::log::{warn, warn_once};
+use bevy::{
+    ecs::{
+        bundle::Bundle,
+        change_detection::MaybeLocation,
+        component::Component,
+        entity::Entity,
+        resource::Resource,
+        world::{
+            EntityMut, EntityMutExcept, EntityRef, EntityRefExcept, EntityWorldMut,
+            FilteredEntityMut, FilteredEntityRef, World,
+        },
+    },
+    log::{error, error_once, once},
+    reflect::Reflect,
+};
 
-use crate::log::OutOfLog;
+use crate::{
+    log::{DenseTransitionsLog, OutOfLog},
+    meta::{NonLogNow, RevDirection, RevMeta},
+};
 
-use super::*;
+use super::{BufferInProgressRes, BuffersUndoRedo, RevOpInProgress, Spawn};
 
-#[derive(Resource)]
-pub struct SpawnDespawnRes {
-    spawn: DenseTransitionsLog<(Entity, MaybeLocation)>,
-    despawn: DenseTransitionsLog<(Entity, MaybeLocation)>,
-    spawn_buffer: DenseTransitionsLog<Option<Entity>>,
-    spawn_queue: Vec<(Entity, MaybeLocation)>,
-    despawn_queue: Vec<(Entity, MaybeLocation)>,
-    spawn_buffer_queue: Vec<Option<Entity>>,
-    spawn_buffer_queue_delay: Vec<Entity>,
+/// `entity_world_mut` does not need to be the spawned entity
+pub(crate) fn rev_spawn_finish(
+    some_entity_world_mut: &mut EntityWorldMut,
+    now: NonLogNow,
+    spawned_entity: Entity,
+    location: MaybeLocation,
+) {
+    some_entity_world_mut.world_scope(|world| {
+        world.buffer_undo_redo(
+            now,
+            Spawn {
+                entity: spawned_entity,
+                location,
+            },
+        );
+        world
+            .resource_mut::<RevDespawnCleaner>()
+            .log_spawn(spawned_entity, location, now);
+    });
 }
 
-impl SpawnDespawnRes {
-    /// Must be called during [`RevDirection::NOT_LOG`].
-    pub(crate) fn log_spawn(&mut self, entity: Entity, location: MaybeLocation) {
+#[derive(Resource, Default, Reflect)]
+pub(crate) struct RevDespawnCleaner {
+    spawn: DenseTransitionsLog<Entity>,
+    despawn: DenseTransitionsLog<Entity>,
+    spawn_buffer: DenseTransitionsLog<(Option<Entity>, MaybeLocation)>,
+    spawn_queue: Vec<(Entity, MaybeLocation)>,
+    despawn_queue: Vec<(Entity, MaybeLocation)>,
+    spawn_buffer_queue: Vec<(Option<Entity>, MaybeLocation)>,
+    spawn_buffer_queue_fallback: Vec<(Entity, MaybeLocation)>,
+}
+
+impl RevDespawnCleaner {
+    pub(crate) fn log_spawn(&mut self, entity: Entity, location: MaybeLocation, _: NonLogNow) {
         self.spawn_queue.push((entity, location));
     }
 
-    /// Must be called during [`RevDirection::NOT_LOG`].
-    pub(crate) fn log_despawn(&mut self, entity: Entity, location: MaybeLocation) {
+    pub(crate) fn log_spawn_batch(
+        &mut self,
+        entities: &[Entity],
+        location: MaybeLocation,
+        _: NonLogNow,
+    ) {
+        self.spawn_queue
+            .extend(entities.iter().copied().map(|entity| (entity, location)));
+    }
+
+    pub(crate) fn log_despawn(&mut self, entity: Entity, location: MaybeLocation, _: NonLogNow) {
         self.despawn_queue.push((entity, location));
     }
 
@@ -32,10 +78,11 @@ impl SpawnDespawnRes {
     ///
     /// At the latter, `buffer` must be `Some` and the current frame's [`RevDirection::NOT_LOG`]
     /// run must have called this with `None` to reserve the entity that is pushed here.
-    pub(crate) fn log_spawn_buffer(&mut self, buffer: Option<Entity>) {
-        self.spawn_buffer_queue.push(buffer);
+    pub(crate) fn log_spawn_buffer(&mut self, buffer: Option<Entity>, location: MaybeLocation) {
+        self.spawn_buffer_queue.push((buffer, location));
     }
 
+    /// Despawn entities that contain [`RevDespawned`] and their relevant operation (spawn, despawn, move_components) fell out of log.
     pub(crate) fn update(&mut self, meta: &RevMeta, world: &mut World) -> Result<(), OutOfLog> {
         match meta.running_direction() {
             RevDirection::NOT_LOG => Ok(self.forward(world, meta.past_len() as usize)),
@@ -45,39 +92,47 @@ impl SpawnDespawnRes {
     }
 
     fn forward(&mut self, world: &mut World, max_past_len: usize) {
-        let progress = BufferInProgress::FinalDespawn { buffer: false };
-        progress_scope(world, progress, |world| {
+        let progress = RevOpInProgress::FinalDespawn { buffer: false };
+        progress.scope(world, |world| {
             let (despawned, _) = self.spawn.drain_future();
-            for (entity, _) in despawned {
-                let _ = world.try_despawn(entity);
+            for entity in despawned {
+                let _ = world.try_despawn(entity); // todo: upstream a way to set the location
             }
             self.spawn.push_and_pop_past(max_past_len, |mut log| {
-                log.extend(self.spawn_queue.drain(..));
+                log.extend(self.spawn_queue.drain(..).map(|(entity, _)| entity));
             });
 
             let despawned = self
                 .despawn
                 .push_and_pop_past(max_past_len, |mut log| {
-                    log.extend(self.despawn_queue.drain(..));
+                    log.extend(self.despawn_queue.drain(..).map(|(entity, _)| entity));
                 })
                 .into_iter()
                 .flat_map(|value_entry| value_entry.value);
-            for (entity, _) in despawned {
-                let _ = world.try_despawn(entity);
+            for entity in despawned {
+                let _ = world.try_despawn(entity); // todo: upstream a way to set the location
             }
 
-            world.insert_resource(BufferInProgressRes(BufferInProgress::FinalDespawn {
+            world.insert_resource(BufferInProgressRes(RevOpInProgress::FinalDespawn {
                 buffer: true,
             }));
 
-            let despawned = self.spawn_buffer.drain_future().0.flatten();
+            let despawned = self
+                .spawn_buffer
+                .drain_future()
+                .0
+                .flat_map(|(entity, _)| entity);
             for entity in despawned {
-                let _ = world.try_despawn(entity);
+                let _ = world.try_despawn(entity); // todo: upstream a way to set the location
             }
             self.spawn_buffer
                 .push_and_pop_past(max_past_len, |mut log| {
                     log.extend(self.spawn_buffer_queue.drain(..));
-                    log.extend(self.spawn_buffer_queue_delay.drain(..).map(Some));
+                    log.extend(
+                        self.spawn_buffer_queue_fallback
+                            .drain(..)
+                            .map(|(entity, location)| (Some(entity), location)),
+                    );
                 });
         });
     }
@@ -86,6 +141,41 @@ impl SpawnDespawnRes {
         self.spawn.forward_log()?;
         let _ok = self.despawn.forward_log();
         let _ok = self.spawn_buffer.forward_log();
+
+        if size_of::<MaybeLocation>() == 0 {
+            if !self.spawn_queue.is_empty() {
+                error_once!(
+                    "a reversible spawn was queued during the forward log direction instead of the non-log direction"
+                );
+            }
+            if !self.despawn_queue.is_empty() {
+                error_once!(
+                    "a reversible despawn was queued during the forward log direction instead of the non-log direction"
+                );
+            }
+            if !self.spawn_buffer_queue.is_empty() {
+                error_once!(
+                    "an internal buffer entity was queued during the forward log direction"
+                );
+            }
+        } else {
+            for (_, location) in &self.spawn_queue {
+                error!(
+                    "a reversible spawn was queued during the forward log direction instead of the non-log direction at {location}"
+                );
+            }
+            for (_, location) in &self.despawn_queue {
+                error!(
+                    "a reversible despawn was queued during the forward log direction instead of the non-log direction at {location}"
+                );
+            }
+            for (_, location) in &self.spawn_buffer_queue {
+                error!(
+                    "an internal buffer entity was queued during the forward log direction at {location}"
+                );
+            }
+        }
+
         Ok(())
     }
 
@@ -99,36 +189,72 @@ impl SpawnDespawnRes {
             .value;
         let mut delayed_iter = self.spawn_buffer_queue.drain(..);
 
-        'delayed_loop: for delayed in delayed_iter.by_ref() {
+        'delayed_loop: for (delayed, location) in delayed_iter.by_ref() {
             let Some(delayed) = delayed else {
-                warn_once!(
-                    "an empty internal buffer entity was reserved during the backward direction instead of the non-log direction, this indicates a bug occured"
-                );
+                match location.into_option() {
+                    Some(location) => error!(
+                        "an empty internal buffer entity was reserved during the backward direction instead of the non-log direction at {location}"
+                    ),
+                    None => error_once!(
+                        "an empty internal buffer entity was reserved during the backward direction instead of the non-log direction"
+                    ),
+                }
                 continue;
             };
 
             for buffer in buffer_iter.by_ref() {
-                if buffer.is_none() {
-                    *buffer = Some(delayed);
+                if buffer.0.is_none() {
+                    buffer.0 = Some(delayed);
                     continue 'delayed_loop;
                 }
             }
 
-            self.spawn_buffer_queue_delay.extend(delayed_iter.flatten());
-            warn_once!(
-                "an internal buffer entity was attempted to be logged during the backward direction but no slot was reserved, this indicates a bug occured"
-            );
-            break;
+            // fallback: postpone to later frame to prevent leak
+            self.spawn_buffer_queue_fallback.push((delayed, location));
+
+            match location.into_option() {
+                Some(location) => error!(
+                    "an internal buffer entity was attempted to be logged during the backward direction at {location} but no slot was reserved"
+                ),
+                None => error_once!(
+                    "an internal buffer entity was attempted to be logged during the backward direction but no slot was reserved"
+                ),
+            }
         }
 
-        use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
-        static ANY_SOME_ERR: AtomicBool = AtomicBool::new(false);
-        if !ANY_SOME_ERR.load(Relaxed) {
-            if !buffer_iter.all(|buffer| buffer.is_some()) {
-                warn!(
-                    "an internal buffer entity reservation remained unclaimed during the backward direction, this indicates a bug occured"
+        if size_of::<MaybeLocation>() == 0 {
+            if !self.spawn_queue.is_empty() {
+                error_once!(
+                    "a reversible spawn was queued during the backward direction instead of the non-log direction"
                 );
-                ANY_SOME_ERR.store(true, Relaxed);
+            }
+            if !self.despawn_queue.is_empty() {
+                error_once!(
+                    "a reversible despawn was queued during the backward direction instead of the non-log direction"
+                );
+            }
+            once!(if buffer_iter.any(|buffer| buffer.0.is_none()) {
+                error!(
+                    "an internal buffer entity reservation remained unclaimed during the backward direction"
+                );
+            });
+        } else {
+            for (_, location) in &self.spawn_queue {
+                error!(
+                    "a reversible spawn was queued during the backward direction instead of the non-log direction at {location}"
+                );
+            }
+            for (_, location) in &self.despawn_queue {
+                error!(
+                    "a reversible despawn was queued during the backward direction instead of the non-log direction at {location}"
+                );
+            }
+            for (buffer, location) in buffer_iter {
+                if buffer.is_none() {
+                    error!(
+                        "an internal buffer entity reservation remained unclaimed during the backward direction at {location}"
+                    );
+                }
             }
         }
 
@@ -136,31 +262,28 @@ impl SpawnDespawnRes {
     }
 }
 
-#[derive(Component, Clone, Copy, Debug)]
+#[derive(Component, Debug, Reflect)]
 #[component(immutable)]
-pub(crate) struct RevDespawned(MaybeLocation);
-
-impl RevDespawned {
-    #[track_caller]
-    pub(crate) fn new() -> Self {
-        Self(MaybeLocation::caller())
-    }
-    pub(crate) fn with_caller(location: MaybeLocation) -> Self {
-        Self(location)
-    }
-    pub(crate) fn caller(self) -> MaybeLocation {
-        self.0
-    }
-}
+pub(crate) struct RevDespawned(pub(crate) MaybeLocation);
 
 pub trait RevIsDespawned {
-    fn rev_is_despawned(&self) -> bool;
+    fn is_rev_despawned(&self) -> bool;
+}
+
+pub trait RevDespawnedBy {
+    fn get_rev_despawned_by(&self) -> Option<MaybeLocation>;
     fn rev_despawned_by(&self) -> MaybeLocation<Option<&'static Location<'static>>>;
 }
 
 impl RevIsDespawned for EntityRef<'_> {
-    fn rev_is_despawned(&self) -> bool {
+    fn is_rev_despawned(&self) -> bool {
         self.contains::<RevDespawned>()
+    }
+}
+
+impl RevDespawnedBy for EntityRef<'_> {
+    fn get_rev_despawned_by(&self) -> Option<MaybeLocation> {
+        self.get::<RevDespawned>().map(|despawned| despawned.0)
     }
     fn rev_despawned_by(&self) -> MaybeLocation<Option<&'static Location<'static>>> {
         MaybeLocation::new_with(|| {
@@ -171,33 +294,26 @@ impl RevIsDespawned for EntityRef<'_> {
 }
 
 impl<B: Bundle> RevIsDespawned for EntityRefExcept<'_, '_, B> {
-    fn rev_is_despawned(&self) -> bool {
+    fn is_rev_despawned(&self) -> bool {
         self.contains::<RevDespawned>()
-    }
-    fn rev_despawned_by(&self) -> MaybeLocation<Option<&'static Location<'static>>> {
-        MaybeLocation::new_with(|| {
-            self.get::<RevDespawned>()
-                .map(|despawned| despawned.0.into_option().unwrap())
-        })
     }
 }
 
 impl RevIsDespawned for FilteredEntityRef<'_, '_> {
-    fn rev_is_despawned(&self) -> bool {
+    fn is_rev_despawned(&self) -> bool {
         self.contains::<RevDespawned>()
-    }
-    // todo: may return None if not part of filter
-    fn rev_despawned_by(&self) -> MaybeLocation<Option<&'static Location<'static>>> {
-        MaybeLocation::new_with(|| {
-            self.get::<RevDespawned>()
-                .map(|despawned| despawned.0.into_option().unwrap())
-        })
     }
 }
 
 impl RevIsDespawned for EntityMut<'_> {
-    fn rev_is_despawned(&self) -> bool {
+    fn is_rev_despawned(&self) -> bool {
         self.contains::<RevDespawned>()
+    }
+}
+
+impl RevDespawnedBy for EntityMut<'_> {
+    fn get_rev_despawned_by(&self) -> Option<MaybeLocation> {
+        self.get::<RevDespawned>().map(|despawned| despawned.0)
     }
     fn rev_despawned_by(&self) -> MaybeLocation<Option<&'static Location<'static>>> {
         MaybeLocation::new_with(|| {
@@ -208,32 +324,26 @@ impl RevIsDespawned for EntityMut<'_> {
 }
 
 impl<B: Bundle> RevIsDespawned for EntityMutExcept<'_, '_, B> {
-    fn rev_is_despawned(&self) -> bool {
+    fn is_rev_despawned(&self) -> bool {
         self.contains::<RevDespawned>()
-    }
-    fn rev_despawned_by(&self) -> MaybeLocation<Option<&'static Location<'static>>> {
-        MaybeLocation::new_with(|| {
-            self.get::<RevDespawned>()
-                .map(|despawned| despawned.0.into_option().unwrap())
-        })
     }
 }
 
 impl RevIsDespawned for FilteredEntityMut<'_, '_> {
-    fn rev_is_despawned(&self) -> bool {
+    fn is_rev_despawned(&self) -> bool {
         self.contains::<RevDespawned>()
-    }
-    fn rev_despawned_by(&self) -> MaybeLocation<Option<&'static Location<'static>>> {
-        MaybeLocation::new_with(|| {
-            self.get::<RevDespawned>()
-                .map(|despawned| despawned.0.into_option().unwrap())
-        })
     }
 }
 
 impl RevIsDespawned for EntityWorldMut<'_> {
-    fn rev_is_despawned(&self) -> bool {
+    fn is_rev_despawned(&self) -> bool {
         self.contains::<RevDespawned>()
+    }
+}
+
+impl RevDespawnedBy for EntityWorldMut<'_> {
+    fn get_rev_despawned_by(&self) -> Option<MaybeLocation> {
+        self.get::<RevDespawned>().map(|despawned| despawned.0)
     }
     fn rev_despawned_by(&self) -> MaybeLocation<Option<&'static Location<'static>>> {
         MaybeLocation::new_with(|| {
