@@ -14,7 +14,7 @@ use crate::{
     meta::RevMeta,
     prelude::UndoRedoBuffer,
     schedule::{IntoRevScheduleConfigs, RevSchedule},
-    undo_redo::{RevDespawnCleaner, RevDespawned},
+    undo_redo::{BundleIdOfOpCache, RevDespawnCleaner, RevDespawned},
 };
 
 pub trait RevApp {
@@ -129,6 +129,7 @@ impl Plugin for RevSystemsPlugin {
         // other
         app.init_resource::<RevDespawnCleaner>()
             .init_resource::<UndoRedoBuffer>()
+            .init_resource::<BundleIdOfOpCache>()
             .register_disabling_component::<RevDespawned>();
     }
 }

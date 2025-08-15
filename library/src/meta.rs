@@ -20,7 +20,7 @@ use bevy::reflect::{ReflectDeserialize, ReflectSerialize};
 use crate::{
     log::OutOfLog,
     schedule::RevUpdate,
-    undo_redo::{RevDespawnCleaner, UndoRedoBuffer},
+    undo_redo::{BundleIdOfOpCache, RevDespawnCleaner, UndoRedoBuffer},
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -99,32 +99,6 @@ impl RevDirection {
             .get_resource::<RevMeta>()
             .and_then(RevMeta::get_running_direction)
             == Some(self)
-    }
-    #[cfg(test)]
-    pub fn to_meta(self, past_end: u64, now: u64, future_end: u64) -> RevMeta {
-        if self.is_forward() {
-            assert!(past_end < now);
-            assert!(now <= future_end);
-        } else {
-            assert!(past_end <= now);
-            assert!(now < future_end);
-        }
-        RevMeta {
-            max_world_states: None,
-            past_end,
-            now,
-            future_end,
-            queue: Some(InternalDirection::Pause),
-            direction: match self {
-                Self::NOT_LOG => InternalDirection::RunningForward,
-                Self::FORWARD_LOG => InternalDirection::RunningForwardLog {
-                    updates_until_pause: NonZeroU64::MIN,
-                },
-                Self::BackwardLog => InternalDirection::RunningBackwardLog {
-                    updates_until_pause: NonZeroU64::MIN,
-                },
-            },
-        }
     }
 }
 
@@ -303,6 +277,15 @@ impl Default for RevMeta {
 impl RevMeta {
     pub(crate) const EXPECT_IN_WORLD: &'static str = "RevMeta does not exist";
     pub(crate) const EXPECT_RUNNING: &'static str = "RevMeta is not in a running direction";
+    #[cfg(test)]
+    pub(crate) const RUNNING_TEST_SETUP: Self = Self {
+        max_world_states: None,
+        past_end: 1,
+        now: 0,
+        future_end: 1,
+        queue: Some(InternalDirection::Pause),
+        direction: InternalDirection::RunningForward,
+    };
     pub const fn new(max_world_states: Option<NonZeroU64>, now: u64, paused: bool) -> Self {
         Self {
             max_world_states,
@@ -418,6 +401,7 @@ impl RevMeta {
     pub fn try_run_rev_update(world: &mut World) -> Result<(), BevyError> {
         world.try_resource_scope(|world: &mut World, mut meta: Mut<Self>| {
             world.init_resource::<RevDespawnCleaner>();
+            world.init_resource::<BundleIdOfOpCache>();
 
             let buffer = world.get_resource_or_init::<UndoRedoBuffer>();
             if !buffer.is_empty() {

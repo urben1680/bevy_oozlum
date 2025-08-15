@@ -1,5 +1,3 @@
-use std::panic::Location;
-
 use bevy::{
     ecs::{
         bundle::Bundle,
@@ -19,28 +17,28 @@ use bevy::{
 use crate::{
     log::{DenseTransitionsLog, OutOfLog},
     meta::{NonLogNow, RevDirection, RevMeta},
+    undo_redo::Spawn,
 };
 
-use super::{BufferInProgressRes, BuffersUndoRedo, RevOpInProgress, Spawn};
+use super::{BufferInProgressRes, BuffersUndoRedo, RevOpInProgress};
 
-/// `entity_world_mut` does not need to be the spawned entity
 pub(crate) fn rev_spawn_finish(
     some_entity_world_mut: &mut EntityWorldMut,
     now: NonLogNow,
     spawned_entity: Entity,
-    location: MaybeLocation,
+    caller: MaybeLocation,
 ) {
     some_entity_world_mut.world_scope(|world| {
         world.buffer_undo_redo(
             now,
             Spawn {
                 entity: spawned_entity,
-                location,
+                location: caller,
             },
         );
         world
             .resource_mut::<RevDespawnCleaner>()
-            .log_spawn(spawned_entity, location, now);
+            .log_spawn(spawned_entity, caller, now);
     });
 }
 
@@ -264,32 +262,22 @@ impl RevDespawnCleaner {
 
 #[derive(Component, Debug, Reflect)]
 #[component(immutable)]
-pub(crate) struct RevDespawned(pub(crate) MaybeLocation);
+pub(crate) struct RevDespawned; // todo: store MaybeLocation in component change meta
 
 pub trait RevIsDespawned {
     fn is_rev_despawned(&self) -> bool;
 }
 
+/* todo: implement for entity pointers when https://github.com/bevyengine/bevy/issues/20494 landed
 pub trait RevDespawnedBy {
     fn get_rev_despawned_by(&self) -> Option<MaybeLocation>;
     fn rev_despawned_by(&self) -> MaybeLocation<Option<&'static Location<'static>>>;
 }
+*/
 
 impl RevIsDespawned for EntityRef<'_> {
     fn is_rev_despawned(&self) -> bool {
         self.contains::<RevDespawned>()
-    }
-}
-
-impl RevDespawnedBy for EntityRef<'_> {
-    fn get_rev_despawned_by(&self) -> Option<MaybeLocation> {
-        self.get::<RevDespawned>().map(|despawned| despawned.0)
-    }
-    fn rev_despawned_by(&self) -> MaybeLocation<Option<&'static Location<'static>>> {
-        MaybeLocation::new_with(|| {
-            self.get::<RevDespawned>()
-                .map(|despawned| despawned.0.into_option().unwrap())
-        })
     }
 }
 
@@ -311,18 +299,6 @@ impl RevIsDespawned for EntityMut<'_> {
     }
 }
 
-impl RevDespawnedBy for EntityMut<'_> {
-    fn get_rev_despawned_by(&self) -> Option<MaybeLocation> {
-        self.get::<RevDespawned>().map(|despawned| despawned.0)
-    }
-    fn rev_despawned_by(&self) -> MaybeLocation<Option<&'static Location<'static>>> {
-        MaybeLocation::new_with(|| {
-            self.get::<RevDespawned>()
-                .map(|despawned| despawned.0.into_option().unwrap())
-        })
-    }
-}
-
 impl<B: Bundle> RevIsDespawned for EntityMutExcept<'_, '_, B> {
     fn is_rev_despawned(&self) -> bool {
         self.contains::<RevDespawned>()
@@ -338,18 +314,6 @@ impl RevIsDespawned for FilteredEntityMut<'_, '_> {
 impl RevIsDespawned for EntityWorldMut<'_> {
     fn is_rev_despawned(&self) -> bool {
         self.contains::<RevDespawned>()
-    }
-}
-
-impl RevDespawnedBy for EntityWorldMut<'_> {
-    fn get_rev_despawned_by(&self) -> Option<MaybeLocation> {
-        self.get::<RevDespawned>().map(|despawned| despawned.0)
-    }
-    fn rev_despawned_by(&self) -> MaybeLocation<Option<&'static Location<'static>>> {
-        MaybeLocation::new_with(|| {
-            self.get::<RevDespawned>()
-                .map(|despawned| despawned.0.into_option().unwrap())
-        })
     }
 }
 

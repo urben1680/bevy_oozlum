@@ -3,29 +3,13 @@ use std::{
     error::Error,
     fmt::{Debug, Display},
     hash::Hash,
-    marker::PhantomData,
 };
 
 use bevy::{
     ecs::{
-        archetype::ArchetypeId,
-        bundle::{Bundle, BundleFromComponents, BundleId, InsertMode},
-        change_detection::{MaybeLocation, Mut},
-        component::Component,
-        entity::{Entity, EntityCloner, EntityDoesNotExistError, hash_set::EntityHashSet},
-        hierarchy::{ChildOf, Children},
-        relationship::{OrderedRelationshipSourceCollection, Relationship, RelationshipTarget},
-        resource::Resource,
-        system::{Commands, EntityCommands},
-        world::{
-            DeferredWorld, EntityMut, EntityMutExcept, EntityRef, EntityRefExcept, EntityWorldMut,
-            FilteredEntityMut, FilteredEntityRef, FromWorld, World, error::EntityMutableFetchError,
-        },
+        bundle::{Bundle, BundleFromComponents}, change_detection::MaybeLocation, entity::{Entity, EntityDoesNotExistError}, resource::Resource, system::{Commands, EntityCommands}, world::{DeferredWorld, EntityWorldMut, FromWorld, World}
     },
-    platform::{
-        cell::SyncCell,
-        collections::{HashMap, HashSet},
-    },
+    platform::cell::SyncCell,
     utils::prelude::DebugName,
 };
 
@@ -34,7 +18,6 @@ use crate::{
     meta::{NonLogNow, RevDirection, RevMeta},
 };
 
-mod bundle_buffer;
 //mod commands;
 mod spawn_despawn;
 //mod entity_commands;
@@ -42,7 +25,6 @@ mod entity_world;
 //mod relationship;
 mod world;
 
-pub use bundle_buffer::*;
 //pub use commands::*;
 pub use spawn_despawn::*;
 //pub use entity_commands::*;
@@ -53,11 +35,17 @@ pub use world::*;
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct EntityRevDespawnedError {
     pub entity: Entity,
-    pub location: MaybeLocation,
+    //pub location: MaybeLocation, todo: implement with https://github.com/bevyengine/bevy/issues/20494
 }
 
 impl Display for EntityRevDespawnedError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "entity {} is marked as reversibly despawned",
+            self.entity
+        )
+        /* todo: implement with https://github.com/bevyengine/bevy/issues/20494
         match self.location.into_option() {
             None => write!(
                 f,
@@ -75,6 +63,7 @@ impl Display for EntityRevDespawnedError {
                 self.entity
             ),
         }
+        */
     }
 }
 
@@ -110,7 +99,6 @@ impl Display for RevEntityError {
 impl Error for RevEntityError {}
 
 // todo: split trait for _deferred variant? try to trigger bugs by using trait as-is in wrong contexts
-// NOTE: does not contain `redo_and_buffer` as the `DeferredWorld` impl cannot do that
 pub trait BuffersUndoRedo {
     /// Buffers an [`UndoRedo`] implementor in a resource to be collected by the reversible system's state during sync points.
     ///
@@ -466,6 +454,59 @@ fn map_frame_log_err(
     }
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub enum RevOpInProgress {
+    Buffer {
+        direction: RevDirection,
+        buffer: Entity,
+    },
+    FinalDespawn {
+        buffer: bool,
+    },
+}
+
+impl RevOpInProgress {
+    pub fn check(world: &World) -> Option<Self> {
+        world.get_resource::<BufferInProgressRes>().map(|res| res.0)
+    }
+    pub fn direction(self) -> RevDirection {
+        match self {
+            Self::Buffer { direction, .. } => direction,
+            Self::FinalDespawn { .. } => RevDirection::NOT_LOG,
+        }
+    }
+    pub(crate) fn scope(self, world: &mut World, c: impl FnOnce(&mut World)) {
+        let mut swap = ResourceSwap(Some(BufferInProgressRes(self)));
+        swap.redo(world);
+        c(world);
+        swap.undo(world);
+    }
+}
+
+#[derive(Resource)]
+pub(crate) struct BufferInProgressRes(pub(crate) RevOpInProgress);
+
+/* 
+pub(crate) fn on_rev_buffer_relationship<R: Relationship>(_: On<Add, (R, R::RelationshipTarget)>, world: DeferredWorld, mut commands: Commands) {
+    // todo: where to assert on no-extra-data?
+    if let Some(RevOpInProgress::Buffer { direction: RevDirection::NOT_LOG, buffer }) = RevOpInProgress::check(&world) {
+        // event target does not need to be checked on, during NOT_LOG and RevOpInProgress being present, this Add always targets the buffer
+
+        // todo: upstream DeferredWorld::modify_component for one less indirection via commands
+        commands.queue(move |world: &mut World| {
+            let mut buffer = world.entity_mut(buffer);
+            if let Some(relationship) = buffer.take::<R>() {
+                todo!()
+            }
+            if let Some(target) = buffer.take::<R::RelationshipTarget>() {
+                todo!()
+            }
+        })
+        // todo: in RevDespawned hook/observer linked despawn umsetzen, darauf achten das buffers auch RevDespawned haben
+    }
+}
+*/
+
 #[derive(Copy, Clone, Debug)]
 pub struct UndoRedoSwap<T: UndoRedo>(pub T);
 
@@ -481,39 +522,6 @@ impl<T: UndoRedo> UndoRedo for UndoRedoSwap<T> {
 impl<T: UndoRedo + FromWorld> FromWorld for UndoRedoSwap<T> {
     fn from_world(world: &mut World) -> Self {
         Self(T::from_world(world))
-    }
-}
-
-#[expect(dead_code)] // https://github.com/bevyengine/bevy/pull/18880
-struct InsertRelationship<R, Target>
-where
-    R: Relationship,
-    Target: AsRef<[Entity]> + Send + Sync + 'static,
-{
-    entity: Entity,
-    target: Target,
-    _marker: PhantomData<R>,
-}
-
-impl<R, Target> UndoRedo for InsertRelationship<R, Target>
-where
-    R: Relationship,
-    Target: AsRef<[Entity]> + Send + Sync + 'static,
-{
-    fn undo(&mut self, world: &mut World) {
-        let component_id = world.component_id::<R>().unwrap();
-        for &target in self.target.as_ref().into_iter() {
-            world.entity_mut(target).remove_by_id(component_id);
-        }
-    }
-    fn redo(&mut self, world: &mut World) {
-        world.insert_batch(
-            self.target
-                .as_ref()
-                .into_iter()
-                .copied()
-                .map(|target| (target, R::from(self.entity))),
-        );
     }
 }
 
@@ -561,9 +569,8 @@ struct Spawn {
 
 impl UndoRedo for Spawn {
     fn undo(&mut self, world: &mut World) {
-        world
-            .entity_mut(self.entity)
-            .insert(RevDespawned(self.location));
+        world.entity_mut(self.entity).insert(RevDespawned);
+        // todo: set location of RevDespawned change meta https://github.com/bevyengine/bevy/issues/20494
     }
     fn redo(&mut self, world: &mut World) {
         world.entity_mut(self.entity).remove::<RevDespawned>();
