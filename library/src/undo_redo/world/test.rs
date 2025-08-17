@@ -1,6 +1,10 @@
 use bevy::ecs::component::Component;
 
-use crate::{meta::{RevDirection, RevMeta}, panic_on_error_events, prelude::UndoRedoBuffer};
+use crate::{
+    meta::RevMeta,
+    panic_on_error_events,
+    undo_redo::{RevIsDespawned, UndoRedoBuffer},
+};
 
 use super::*;
 
@@ -112,13 +116,19 @@ fn rev_spawn_spawns() {
     let entity = world.rev_spawn(now, Required(0)).id();
     let mut buffer = world.remove_resource::<UndoRedoBuffer>().unwrap();
 
-    assert_eq!(world.entity(entity).is_rev_despawned(), false);
+    let entity_ref = world.entity(entity);
+    assert_eq!(entity_ref.is_rev_despawned(), false);
+    assert_eq!(entity_ref.get(), Some(&Required(0)));
 
     buffer.undo(&mut world);
-    assert_eq!(world.entity(entity).is_rev_despawned(), true);
+    let entity_ref = world.entity(entity);
+    assert_eq!(entity_ref.is_rev_despawned(), true);
+    assert_eq!(entity_ref.get::<Required>(), None);
 
     buffer.redo(&mut world);
-    assert_eq!(world.entity(entity).is_rev_despawned(), false);
+    let entity_ref = world.entity(entity);
+    assert_eq!(entity_ref.is_rev_despawned(), false);
+    assert_eq!(entity_ref.get(), Some(&Required(0)));
 }
 
 #[test]
@@ -140,8 +150,13 @@ fn rev_spawn_batch_spawns() {
     assert_eq!(ref2.is_rev_despawned(), false);
 
     buffer.undo(&mut world);
-    assert_eq!(world.entity(entity1).is_rev_despawned(), true);
-    assert_eq!(world.entity(entity2).is_rev_despawned(), true);
+    let [ref1, ref2] = world.entity([entity1, entity2]);
+    assert_eq!(ref1.get::<Explicit>(), None);
+    assert_eq!(ref1.get::<Required>(), None);
+    assert_eq!(ref1.is_rev_despawned(), true);
+    assert_eq!(ref2.get::<Explicit>(), None);
+    assert_eq!(ref2.get::<Required>(), None);
+    assert_eq!(ref2.is_rev_despawned(), true);
 
     buffer.redo(&mut world);
     let [ref1, ref2] = world.entity([entity1, entity2]);

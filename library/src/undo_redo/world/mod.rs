@@ -5,28 +5,32 @@ use bevy::{
         bundle::{Bundle, NoBundleEffect},
         change_detection::MaybeLocation,
         component::ComponentId,
-        entity::Entity,
+        entity::{Entity, EntityCloner},
         resource::Resource,
-        world::{EntityWorldMut, FromWorld, Mut, World},
+        world::{
+            DeferredWorld, EntityWorldMut, FromWorld, Mut, World, error::EntityMutableFetchError,
+        },
     },
     log::warn,
 };
 
 use crate::{
-    meta::NonLogNow,
-    undo_redo::{RevDespawned, RevIsDespawned},
+    meta::{NonLogNow, RevMeta},
+    undo_redo::{RevDespawned, rev_spawn_despawn_with_caller, rev_spawn_empty_inner},
 };
 
-use super::{
-    BuffersUndoRedo, EntityRevDespawnedError, ResourceSwap, RevDespawnCleaner, RevEntityError,
-    Spawn, UndoRedo, UndoRedoSwap, rev_spawn_finish,
-};
+use super::{BuffersUndoRedo, ResourceSwap, RevDespawnCleaner, RevEntityError, UndoRedo};
 
 #[cfg(test)]
 mod test;
 
 pub trait RevWorld {
     fn redo_and_buffer(&mut self, now: NonLogNow, undo_redo: impl UndoRedo);
+
+    fn non_log_now(&self) -> Option<NonLogNow>;
+
+    #[track_caller]
+    fn rev_log_scope(&mut self, now: NonLogNow, entity: Entity);
 
     // the methods here are purposely sorted alphabetically to make it easily comparable to bevy's docs
     // unmentioned methods are either
@@ -101,7 +105,11 @@ pub trait RevWorld {
     fn rev_spawn_empty(&mut self, now: NonLogNow) -> EntityWorldMut;
 
     /// Reversible version of [`World::try_despawn`].
-    fn rev_try_despawn_single(&mut self, now: NonLogNow, entity: Entity) -> Result<(), RevEntityError>;
+    fn rev_try_despawn_single(
+        &mut self,
+        now: NonLogNow,
+        entity: Entity,
+    ) -> Result<(), RevEntityError>;
 
     // rev_try_insert_batch
     // no efficient algorithm found yet
@@ -112,8 +120,19 @@ pub trait RevWorld {
 
 impl RevWorld for World {
     fn redo_and_buffer(&mut self, now: NonLogNow, mut undo_redo: impl UndoRedo) {
+        // todo: pass location
         undo_redo.redo(self);
         self.buffer_undo_redo(now, undo_redo)
+    }
+
+    fn non_log_now(&self) -> Option<NonLogNow> {
+        self.get_resource::<RevMeta>()?.non_log_now()
+    }
+
+    #[track_caller]
+    fn rev_log_scope(&mut self, now: NonLogNow, entity: Entity) {
+        self.resource_mut::<RevDespawnCleaner>()
+            .log_spawn(entity, MaybeLocation::caller(), now);
     }
 
     #[track_caller]
@@ -166,7 +185,7 @@ impl RevWorld for World {
         now: NonLogNow,
         bundle: T,
     ) -> EntityWorldMut {
-        rev_spawn_with_caller(self, now, bundle, MaybeLocation::caller())
+        rev_spawn_with_caller_world(self, now, bundle, MaybeLocation::caller())
     }
 
     #[track_caller]
@@ -184,8 +203,24 @@ impl RevWorld for World {
     }
 
     #[track_caller]
-    fn rev_try_despawn_single(&mut self, now: NonLogNow, entity: Entity) -> Result<(), RevEntityError> {
-        rev_try_despawn_single_with_caller(self, now, entity, MaybeLocation::caller())
+    fn rev_try_despawn_single(
+        &mut self,
+        now: NonLogNow,
+        entity: Entity,
+    ) -> Result<(), RevEntityError> {
+        rev_try_despawn_single_with_caller_world(self, now, entity, MaybeLocation::caller())
+    }
+}
+
+pub trait RevDeferredWorld {
+    fn rev_log_scope(&mut self, now: NonLogNow, entity: Entity);
+}
+
+impl RevDeferredWorld for DeferredWorld<'_> {
+    #[track_caller]
+    fn rev_log_scope(&mut self, now: NonLogNow, entity: Entity) {
+        self.resource_mut::<RevDespawnCleaner>()
+            .log_spawn(entity, MaybeLocation::caller(), now);
     }
 }
 
@@ -224,16 +259,15 @@ pub(crate) fn rev_remove_resource_with_caller<R: Resource, Out>(
     })
 }
 
-pub(crate) fn rev_spawn_with_caller<B: Bundle<Effect: NoBundleEffect>>(
+pub(crate) fn rev_spawn_with_caller_world<B: Bundle<Effect: NoBundleEffect>>(
     world: &mut World,
     now: NonLogNow,
     bundle: B,
     caller: MaybeLocation,
 ) -> EntityWorldMut {
-    let mut entity_world_mut = world.spawn(bundle);
-    let entity = entity_world_mut.id();
-    rev_spawn_finish(&mut entity_world_mut, now, entity, MaybeLocation::caller());
-    entity_world_mut
+    let mut entity_mut = world.spawn(bundle);
+    rev_spawn_despawn_with_caller::<true>(&mut entity_mut, now, caller);
+    entity_mut
 }
 
 pub(crate) fn rev_spawn_batch_with_caller<I>(
@@ -248,16 +282,38 @@ where
 {
     struct SpawnBatch {
         entities: Arc<[Entity]>,
-        spawn_location: MaybeLocation,
+        buffers: Option<Box<[Entity]>>,
+        caller: MaybeLocation,
+    }
+
+    fn move_all_cloner(world: &mut World) -> EntityCloner {
+        let mut builder = EntityCloner::build_opt_out(world);
+        builder.move_components(true).deny::<RevDespawned>();
+        builder.finish()
     }
 
     impl UndoRedo for SpawnBatch {
         fn undo(&mut self, world: &mut World) {
+            let entities = self.entities.iter().copied();
+            let buffers = self
+                .buffers
+                .get_or_insert_with(|| {
+                    world
+                        .spawn_batch(core::iter::repeat_n(RevDespawned, self.entities.len()))
+                        .collect()
+                })
+                .iter()
+                .copied();
+
+            let mut cloner = move_all_cloner(world);
+            for (entity, buffer) in entities.zip(buffers) {
+                cloner.clone_entity(world, entity, buffer);
+            }
+
             world.insert_batch(
                 self.entities
                     .iter()
                     .map(|entity| (*entity, RevDespawned))
-                    // todo: set location of RevDespawned change meta https://github.com/bevyengine/bevy/issues/20494
                     .rev(),
             );
         }
@@ -265,6 +321,14 @@ where
             let id = world.register_component::<RevDespawned>();
             for entity in self.entities.iter() {
                 world.entity_mut(*entity).remove_by_id(id);
+            }
+
+            let entities = self.entities.iter().copied();
+            let buffers = self.buffers.as_ref().unwrap().iter().copied();
+
+            let mut cloner = move_all_cloner(world);
+            for (entity, buffer) in entities.zip(buffers) {
+                cloner.clone_entity(world, buffer, entity);
             }
         }
     }
@@ -275,9 +339,11 @@ where
         now,
         SpawnBatch {
             entities: entities.clone(),
-            spawn_location: caller,
+            buffers: None,
+            caller,
         },
     );
+
     world
         .resource_mut::<RevDespawnCleaner>()
         .log_spawn_batch(&entities, caller, now);
@@ -290,34 +356,23 @@ pub(crate) fn rev_spawn_empty_with_caller(
     now: NonLogNow,
     caller: MaybeLocation,
 ) -> EntityWorldMut {
-    let mut entity_world_mut = world.spawn_empty();
-    let entity = entity_world_mut.id();
-    rev_spawn_finish(&mut entity_world_mut, now, entity, caller);
-    entity_world_mut
+    let mut entity_mut = world.spawn_empty();
+    rev_spawn_empty_inner(&mut entity_mut, now, caller);
+    entity_mut
 }
 
-pub(crate) fn rev_try_despawn_single_with_caller(
+pub(crate) fn rev_try_despawn_single_with_caller_world(
     world: &mut World,
     now: NonLogNow,
     entity: Entity,
     caller: MaybeLocation,
 ) -> Result<(), RevEntityError> {
-    if world.get_entity(entity)?.is_rev_despawned() {
-        return Err(RevEntityError::EntityRevDespawnedError(
-            EntityRevDespawnedError { entity },
-        ));
+    match world.get_entity_mut(entity) {
+        Ok(entity_mut) => {
+            super::entity_world::rev_try_despawn_single_with_caller(entity_mut, now, caller)?
+        }
+        Err(EntityMutableFetchError::EntityDoesNotExist(err)) => Err(err)?,
+        Err(EntityMutableFetchError::AliasedMutability(_)) => unreachable!(), // fetching only a single entity
     }
-
-    world.redo_and_buffer(
-        now,
-        UndoRedoSwap(Spawn {
-            entity,
-            location: caller,
-        }),
-    );
-    world
-        .resource_mut::<RevDespawnCleaner>()
-        .log_despawn(entity, caller, now);
-
     Ok(())
 }

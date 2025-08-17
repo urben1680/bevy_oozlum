@@ -1,111 +1,84 @@
+use std::marker::PhantomData;
+
 use bevy::{
     ecs::{
+        bundle::{Bundle, InsertMode},
+        change_detection::MaybeLocation,
+        component::{Component, ComponentId},
+        entity::{EntityClonerBuilder, OptIn, OptOut},
         error::ignore,
-        hierarchy::ChildOf,
-        relationship::{
-            OrderedRelationshipSourceCollection, RelatedSpawnerCommands, Relationship,
-            RelationshipTarget,
-        },
-        system::{EntityCommand, EntityEntryCommands},
-        world::FromWorld,
+        system::{EntityCommand, EntityCommands, EntityEntryCommands},
+        world::{DeferredWorld, EntityWorldMut, FromWorld},
     },
     ptr::OwningPtr,
 };
 
-use super::*;
+use crate::{
+    meta::NonLogNow,
+    prelude::UndoRedo,
+    undo_redo::{
+        EntityRevDespawnedError, RevCommands, RevDespawnCleaner, assert_not_rev_despawned,
+        rev_spawn_with_caller, rev_try_clear_with_caller, rev_try_despawn_single_with_caller,
+        rev_try_insert_with_caller, rev_try_remove_with_caller, rev_try_retain_with_caller,
+    },
+};
 
 pub trait RevEntityCommands<'a> {
-    /// Reversible version of [`EntityCommands::add_children`].
-    fn rev_add_children(&mut self, children: &[Entity]) -> &mut EntityCommands<'a> {
-        self.rev_add_related::<ChildOf>(children)
-    }
+    fn redo_and_buffer(&mut self, now: NonLogNow, undo_redo: impl UndoRedo);
 
-    /// Reversible version of [`EntityCommands::insert_children`]
-    fn rev_insert_children(
+    #[track_caller]
+    fn rev_log_scope(&mut self, now: NonLogNow) -> &mut Self;
+
+    // the methods here are purposely sorted alphabetically to make it easily comparable to bevy's docs
+    // unmentioned methods are either
+    // a) unrelated to reversible structural changes OR
+    // b) deprecated in bevy OR
+    // c) relationship related that is not yet supported
+    // d) missed by accident!
+
+    /// Reversible version of [`EntityCommands::clear`].
+    fn rev_clear(&mut self, now: NonLogNow) -> &mut EntityCommands<'a>;
+
+    /// Reversible version of [`EntityCommands::clone_and_spawn`].
+    fn rev_clone_and_spawn(&mut self, now: NonLogNow) -> EntityCommands<'_>;
+
+    /// Reversible version of [`EntityCommands::clone_and_spawn_with_opt_in`].
+    fn rev_clone_and_spawn_with_opt_in(
         &mut self,
-        index: usize,
-        children: &[Entity],
-    ) -> &mut EntityCommands<'a> {
-        self.rev_insert_related::<ChildOf>(index, children)
-    }
+        now: NonLogNow,
+        config: impl FnOnce(&mut EntityClonerBuilder<OptIn>) + Send + Sync + 'static,
+    ) -> EntityCommands<'_>;
 
-    /// Reversible version of [`EntityCommands::add_child`].
-    fn rev_add_child(&mut self, child: Entity) -> &mut EntityCommands<'a> {
-        self.rev_add_one_related::<ChildOf>(child)
-    }
-
-    /// Reversible version of [`EntityCommands::remove_children`].
-    fn rev_remove_children(&mut self, children: &[Entity]) -> &mut EntityCommands<'a> {
-        self.rev_remove_related::<ChildOf>(children)
-    }
-
-    /// Reversible version of [`EntityCommands::with_child`].
-    fn rev_with_child(
+    /// Reversible version of [`EntityCommands::clone_and_spawn_with_opt_out`].
+    fn rev_clone_and_spawn_with_opt_out(
         &mut self,
-        bundle: impl Bundle,
-    ) -> &mut EntityCommands<'a> {
-        self.rev_with_related::<ChildOf>(bundle)
-    }
+        now: NonLogNow,
+        config: impl FnOnce(&mut EntityClonerBuilder<OptOut>) + Send + Sync + 'static,
+    ) -> EntityCommands<'_>;
 
-    /// Reversible version of [`EntityCommands::with_related`].
-    fn rev_with_related<R>(
-        &mut self,
-        bundle: impl Bundle,
-    ) -> &mut EntityCommands<'a>
-    where
-        R: Relationship;
+    // rev_clone_components
+    // out of scope
 
-    /// Reversible version of [`EntityCommands::add_related`].
-    fn rev_add_related<R>(&mut self, related: &[Entity]) -> &mut EntityCommands<'a>
-    where
-        R: Relationship;
-
-    /// Reversible version of [`EntityCommands::insert_related`].
-    fn rev_insert_related<R>(
-        &mut self,
-        index: usize,
-        related: &[Entity],
-    ) -> &mut EntityCommands<'a>
-    where
-        R: Relationship,
-        <<R as Relationship>::RelationshipTarget as RelationshipTarget>::Collection:
-            OrderedRelationshipSourceCollection;
-
-    /// Reversible version of [`EntityCommands::add_one_related`].
-    fn rev_add_one_related<R>(&mut self, entity: Entity) -> &mut EntityCommands<'a>
-    where
-        R: Relationship;
-
-    /// Reversible version of [`EntityCommands::remove_related`].
-    fn rev_remove_related<R>(&mut self, related: &[Entity]) -> &mut EntityCommands<'a>
-    where
-        R: Relationship;
-
-    /// Reversible version of [`EntityCommands::despawn_related`].
-    fn rev_despawn_related<S>(&mut self) -> &mut EntityCommands<'a>
-    where
-        S: RelationshipTarget;
-
-    /// Reversible version of [`EntityCommands::insert_recursive`].
-    fn rev_insert_recursive<S>(
-        &mut self,
-        bundle: impl Bundle + Clone,
-    ) -> &mut EntityCommands<'a>
-    where
-        S: RelationshipTarget;
-
-    /// Reversible version of [`EntityCommands::remove_recursive`].
-    fn rev_remove_recursive<S, B>(&mut self) -> &mut EntityCommands<'a>
-    where
-        S: RelationshipTarget,
-        B: Bundle;
+    /// Reversible version of [`EntityCommands::despawn`].
+    fn rev_despawn_single(&mut self, now: NonLogNow);
 
     /// Reversible version of [`EntityCommands::insert`].
-    fn rev_insert(&mut self, bundle: impl Bundle) -> &mut EntityCommands<'a>;
+    fn rev_insert(&mut self, now: NonLogNow, bundle: impl Bundle) -> &mut EntityCommands<'a>;
+
+    /// Reversible version of [`EntityCommands::insert_by_id`].
+    unsafe fn rev_insert_by_id<T>(
+        &mut self,
+        now: NonLogNow,
+        component_id: ComponentId,
+        value: T,
+    ) -> &mut EntityCommands<'a>
+    where
+        T: Send + 'static;
 
     /// Reversible version of [`EntityCommands::insert_if`].
     fn rev_insert_if<F>(
         &mut self,
+        now: NonLogNow,
         bundle: impl Bundle,
         condition: F,
     ) -> &mut EntityCommands<'a>
@@ -113,205 +86,133 @@ pub trait RevEntityCommands<'a> {
         F: FnOnce() -> bool;
 
     /// Reversible version of [`EntityCommands::insert_if_new`].
-    fn rev_insert_if_new(
-        &mut self,
-        bundle: impl Bundle,
-    ) -> &mut EntityCommands<'a>;
+    fn rev_insert_if_new(&mut self, now: NonLogNow, bundle: impl Bundle)
+    -> &mut EntityCommands<'a>;
 
     /// Reversible version of [`EntityCommands::insert_if_new_and`].
     fn rev_insert_if_new_and<F>(
         &mut self,
+        now: NonLogNow,
         bundle: impl Bundle,
         condition: F,
     ) -> &mut EntityCommands<'a>
     where
         F: FnOnce() -> bool;
 
-    /// Reversible version of [`EntityCommands::insert_by_id`].
-    unsafe fn rev_insert_by_id<T>(
-        &mut self,
-        component_id: ComponentId,
-        value: T,
-    ) -> &mut EntityCommands<'a>
-    where
-        T: Send + 'static;
+    // rev_move_components
+    // out of scope
 
-    /// Reversible version of [`EntityCommands::try_insert_by_id`].
-    unsafe fn rev_try_insert_by_id<T>(
+    /// Reversible version of [`EntityCommands::remove`].
+    fn rev_remove<B: Bundle>(&mut self, now: NonLogNow) -> &mut EntityCommands<'a>;
+
+    /// Reversible version of [`EntityCommands::remove_by_id`].
+    fn rev_remove_by_id(
         &mut self,
+        now: NonLogNow,
         component_id: ComponentId,
-        value: T,
-    ) -> &mut EntityCommands<'a>
+    ) -> &mut EntityCommands<'a>;
+
+    /// Reversible version of [`EntityCommands::remove_with_requires`].
+    fn rev_remove_with_requires<B: Bundle>(&mut self, now: NonLogNow) -> &mut EntityCommands<'a>;
+
+    /// Reversible version of [`EntityCommands::retain`].
+    fn rev_retain<B>(&mut self, now: NonLogNow) -> &mut EntityCommands<'a>
     where
-        T: Send + 'static;
+        B: Bundle;
+
+    /// Reversible version of [`EntityCommands::try_despawn`].
+    fn rev_try_despawn_single(&mut self, now: NonLogNow);
 
     /// Reversible version of [`EntityCommands::try_insert`].
-    fn rev_try_insert(&mut self, bundle: impl Bundle)
-    -> &mut EntityCommands<'a>;
+    fn rev_try_insert(&mut self, now: NonLogNow, bundle: impl Bundle) -> &mut EntityCommands<'a>;
+
+    /// Reversible version of [`EntityCommands::try_insert_by_id`].
+    unsafe fn rev_try_insert_by_id<T: Send + 'static>(
+        &mut self,
+        now: NonLogNow,
+        component_id: ComponentId,
+        value: T,
+    ) -> &mut EntityCommands<'a>;
 
     /// Reversible version of [`EntityCommands::try_insert_if`].
-    fn rev_try_insert_if<F>(
+    fn rev_try_insert_if<F: FnOnce() -> bool>(
         &mut self,
+        now: NonLogNow,
         bundle: impl Bundle,
         condition: F,
-    ) -> &mut EntityCommands<'a>
-    where
-        F: FnOnce() -> bool;
-
-    /// Reversible version of [`EntityCommands::try_insert_if_new_and`].
-    fn rev_try_insert_if_new_and<F>(
-        &mut self,
-        bundle: impl Bundle,
-        condition: F,
-    ) -> &mut EntityCommands<'a>
-    where
-        F: FnOnce() -> bool;
+    ) -> &mut EntityCommands<'a>;
 
     /// Reversible version of [`EntityCommands::try_insert_if_new`].
     fn rev_try_insert_if_new(
         &mut self,
+        now: NonLogNow,
         bundle: impl Bundle,
     ) -> &mut EntityCommands<'a>;
 
-    /// Reversible version of [`EntityCommands::remove`].
-    fn rev_remove<B>(&mut self) -> &mut EntityCommands<'a>
-    where
-        B: Bundle;
+    /// Reversible version of [`EntityCommands::try_insert_if_new_and`].
+    fn rev_try_insert_if_new_and<F: FnOnce() -> bool>(
+        &mut self,
+        now: NonLogNow,
+        bundle: impl Bundle,
+        condition: F,
+    ) -> &mut EntityCommands<'a>;
 
     /// Reversible version of [`EntityCommands::try_remove`].
-    fn rev_try_remove<B>(&mut self) -> &mut EntityCommands<'a>
-    where
-        B: Bundle;
-
-    /// Reversible version of [`EntityCommands::remove_with_requires`].
-    fn rev_remove_with_requires<B>(&mut self) -> &mut EntityCommands<'a>
-    where
-        B: Bundle;
-
-    /// Reversible version of [`EntityCommands::remove_by_id`].
-    fn rev_remove_by_id(&mut self, component_id: ComponentId) -> &mut EntityCommands<'a>;
-
-    /// Reversible version of [`EntityCommands::clear`].
-    fn rev_clear(&mut self) -> &mut EntityCommands<'a>;
-
-    /// Reversible version of [`EntityCommands::despawn`].
-    fn rev_despawn(&mut self);
-
-    /// Reversible version of [`EntityCommands::try_despawn`].
-    fn rev_try_despawn(&mut self);
-
-    /// Reversible version of [`EntityCommands::retain`].
-    fn rev_retain<B>(&mut self) -> &mut EntityCommands<'a>
-    where
-        B: Bundle;
-
-    /// Reversible version of [`EntityCommands::clone_and_spawn`].
-    fn rev_clone_and_spawn(&mut self) -> EntityCommands<'_>;
-
-    /// Reversible version of [`EntityCommands::clone_components`].
-    fn rev_clone_components<B>(&mut self, target: Entity) -> &mut EntityCommands<'a>
-    where
-        B: Bundle;
-
-    /// Reversible version of [`EntityCommands::move_components`].
-    fn rev_move_components<B>(&mut self, target: Entity) -> &mut EntityCommands<'a>
-    where
-        B: Bundle;
+    fn rev_try_remove<B: Bundle>(&mut self, now: NonLogNow) -> &mut EntityCommands<'a>;
 }
 
 impl<'a> RevEntityCommands<'a> for EntityCommands<'a> {
-    fn rev_with_related<R>(
+    fn redo_and_buffer(&mut self, now: NonLogNow, undo_redo: impl UndoRedo) {
+        self.commands_mut().redo_and_buffer(now, undo_redo);
+    }
+
+    #[track_caller]
+    fn rev_clone_and_spawn_with_opt_in(
         &mut self,
-        bundle: impl Bundle,
-    ) -> &mut EntityCommands<'a>
-    where
-        R: Relationship,
-    {
-        self.queue(move |mut entity: EntityWorldMut| {
-            entity.rev_with_related::<R>(bundle);
-        })
+        now: NonLogNow,
+        config: impl FnOnce(&mut EntityClonerBuilder<OptIn>) + Send + Sync + 'static,
+    ) -> EntityCommands<'_> {
+        let caller = MaybeLocation::caller();
+        let source = self.id();
+        let mut clone = self.clone_and_spawn_with_opt_in(config);
+        clone.queue(move |mut entity_mut: EntityWorldMut| {
+            let clone = entity_mut.id();
+            // SAFETY: cannot change entity location as DeferredWorld
+            let world: DeferredWorld = unsafe { entity_mut.world_mut().into() };
+            assert_not_rev_despawned(world.entity(source))
+                .map(|_| rev_spawn_with_caller(world, clone, now, caller))
+        });
+        clone
     }
 
-    fn rev_add_related<R>(&mut self, related: &[Entity]) -> &mut EntityCommands<'a>
-    where
-        R: Relationship,
-    {
-        let related: Box<[Entity]> = related.into();
-        self.queue(move |mut entity: EntityWorldMut| {
-            entity.rev_add_related::<R>(&related);
-        })
-    }
-
-    fn rev_insert_related<R>(&mut self, index: usize, related: &[Entity]) -> &mut EntityCommands<'a>
-    where
-        R: Relationship,
-        <<R as Relationship>::RelationshipTarget as RelationshipTarget>::Collection:
-            OrderedRelationshipSourceCollection,
-    {
-        let related: Box<[Entity]> = related.into();
-        self.queue(move |mut entity: EntityWorldMut| {
-            entity.rev_insert_related::<R>(index, &related);
-        })
-    }
-
-    fn rev_add_one_related<R>(&mut self, related: Entity) -> &mut EntityCommands<'a>
-    where
-        R: Relationship,
-    {
-        self.queue(move |mut entity: EntityWorldMut| {
-            entity.rev_add_one_related::<R>(related);
-        })
-    }
-
-    fn rev_remove_related<R>(&mut self, related: &[Entity]) -> &mut EntityCommands<'a>
-    where
-        R: Relationship,
-    {
-        let related: Box<[Entity]> = related.into();
-        self.queue(move |mut entity: EntityWorldMut| {
-            entity.rev_remove_related::<R>(&related);
-        })
-    }
-
-    fn rev_despawn_related<S>(&mut self) -> &mut EntityCommands<'a>
-    where
-        S: RelationshipTarget,
-    {
-        self.queue(|mut entity: EntityWorldMut| {
-            entity.rev_despawn_related::<S>();
-        })
-    }
-
-    fn rev_insert_recursive<S>(
+    #[track_caller]
+    fn rev_clone_and_spawn_with_opt_out(
         &mut self,
-        bundle: impl Bundle + Clone,
-    ) -> &mut EntityCommands<'a>
-    where
-        S: RelationshipTarget,
-    {
-        self.queue(|mut entity: EntityWorldMut| {
-            entity.rev_insert_recursive::<S>(bundle);
-        })
+        now: NonLogNow,
+        config: impl FnOnce(&mut EntityClonerBuilder<OptOut>) + Send + Sync + 'static,
+    ) -> EntityCommands<'_> {
+        let caller = MaybeLocation::caller();
+        let source = self.id();
+        let mut clone = self.clone_and_spawn_with_opt_out(config);
+        clone.queue(move |mut entity_mut: EntityWorldMut| {
+            let clone = entity_mut.id();
+            // SAFETY: cannot change entity location as DeferredWorld
+            let world: DeferredWorld = unsafe { entity_mut.world_mut().into() };
+            assert_not_rev_despawned(world.entity(source))
+                .map(|_| rev_spawn_with_caller(world, clone, now, caller))
+        });
+        clone
     }
 
-    fn rev_remove_recursive<S, B>(&mut self) -> &mut EntityCommands<'a>
-    where
-        S: RelationshipTarget,
-        B: Bundle,
-    {
-        self.queue(|mut entity: EntityWorldMut| {
-            entity.remove_recursive::<S, B>();
-        })
+    #[track_caller]
+    fn rev_insert(&mut self, now: NonLogNow, bundle: impl Bundle) -> &mut EntityCommands<'a> {
+        self.queue(rev_insert(now, bundle, InsertMode::Replace))
     }
 
-    fn rev_insert(&mut self, bundle: impl Bundle) -> &mut EntityCommands<'a> {
-        self.queue(move |mut entity: EntityWorldMut| {
-            entity.rev_insert(bundle);
-        })
-    }
-
+    #[track_caller]
     fn rev_insert_if<F>(
         &mut self,
+        now: NonLogNow,
         bundle: impl Bundle,
         condition: F,
     ) -> &mut EntityCommands<'a>
@@ -319,23 +220,25 @@ impl<'a> RevEntityCommands<'a> for EntityCommands<'a> {
         F: FnOnce() -> bool,
     {
         if condition() {
-            self.rev_insert(bundle)
+            self.rev_insert(now, bundle)
         } else {
             self
         }
     }
 
+    #[track_caller]
     fn rev_insert_if_new(
         &mut self,
+        now: NonLogNow,
         bundle: impl Bundle,
     ) -> &mut EntityCommands<'a> {
-        self.queue(move |mut entity: EntityWorldMut| {
-            entity.rev_insert_if_new(bundle);
-        })
+        self.queue(rev_insert(now, bundle, InsertMode::Keep))
     }
 
+    #[track_caller]
     fn rev_insert_if_new_and<F>(
         &mut self,
+        now: NonLogNow,
         bundle: impl Bundle,
         condition: F,
     ) -> &mut EntityCommands<'a>
@@ -343,61 +246,52 @@ impl<'a> RevEntityCommands<'a> for EntityCommands<'a> {
         F: FnOnce() -> bool,
     {
         if condition() {
-            self.rev_insert_if_new(bundle)
+            self.rev_insert_if_new(now, bundle)
         } else {
             self
         }
     }
 
+    #[track_caller]
     unsafe fn rev_insert_by_id<T>(
         &mut self,
+        now: NonLogNow,
         component_id: ComponentId,
         value: T,
     ) -> &mut EntityCommands<'a>
     where
         T: Send + 'static,
     {
-        self.queue(move |mut entity: EntityWorldMut| {
-            OwningPtr::make(value, |ptr| unsafe {
-                // SAFETY: todo
-                entity.rev_insert_by_id(component_id, ptr);
-            })
-        })
+        // SAFETY: todo
+        self.queue(unsafe { rev_insert_by_id(now, component_id, value, InsertMode::Replace) })
     }
 
+    #[track_caller]
     unsafe fn rev_try_insert_by_id<T>(
         &mut self,
+        now: NonLogNow,
         component_id: ComponentId,
         value: T,
     ) -> &mut EntityCommands<'a>
     where
         T: Send + 'static,
     {
+        // SAFETY: todo
         self.queue_handled(
-            move |mut entity: EntityWorldMut| {
-                OwningPtr::make(value, |ptr| unsafe {
-                    // SAFETY: todo
-                    entity.rev_insert_by_id(component_id, ptr);
-                })
-            },
+            unsafe { rev_insert_by_id(now, component_id, value, InsertMode::Replace) },
             ignore,
         )
     }
 
-    fn rev_try_insert(
-        &mut self,
-        bundle: impl Bundle,
-    ) -> &mut EntityCommands<'a> {
-        self.queue_handled(
-            move |mut entity: EntityWorldMut| {
-                entity.rev_insert(bundle);
-            },
-            ignore,
-        )
+    #[track_caller]
+    fn rev_try_insert(&mut self, now: NonLogNow, bundle: impl Bundle) -> &mut EntityCommands<'a> {
+        self.queue_handled(rev_insert(now, bundle, InsertMode::Replace), ignore)
     }
 
+    #[track_caller]
     fn rev_try_insert_if<F>(
         &mut self,
+        now: NonLogNow,
         bundle: impl Bundle,
         condition: F,
     ) -> &mut EntityCommands<'a>
@@ -405,14 +299,16 @@ impl<'a> RevEntityCommands<'a> for EntityCommands<'a> {
         F: FnOnce() -> bool,
     {
         if condition() {
-            self.rev_try_insert(bundle)
+            self.rev_try_insert(now, bundle)
         } else {
             self
         }
     }
 
+    #[track_caller]
     fn rev_try_insert_if_new_and<F>(
         &mut self,
+        now: NonLogNow,
         bundle: impl Bundle,
         condition: F,
     ) -> &mut EntityCommands<'a>
@@ -420,211 +316,169 @@ impl<'a> RevEntityCommands<'a> for EntityCommands<'a> {
         F: FnOnce() -> bool,
     {
         if condition() {
-            self.rev_try_insert_if_new(bundle)
+            self.rev_try_insert_if_new(now, bundle)
         } else {
             self
         }
     }
 
+    #[track_caller]
     fn rev_try_insert_if_new(
         &mut self,
+        now: NonLogNow,
         bundle: impl Bundle,
     ) -> &mut EntityCommands<'a> {
-        self.queue_handled(
-            move |mut entity: EntityWorldMut| {
-                entity.rev_insert_if_new(bundle);
-            },
-            ignore,
-        )
+        self.queue_handled(rev_insert(now, bundle, InsertMode::Keep), ignore)
     }
 
-    fn rev_remove<B>(&mut self) -> &mut EntityCommands<'a>
+    #[track_caller]
+    fn rev_remove<B>(&mut self, now: NonLogNow) -> &mut EntityCommands<'a>
     where
         B: Bundle,
     {
-        self.queue(|mut entity: EntityWorldMut| {
-            entity.rev_remove::<B>();
-        })
+        self.queue(rev_remove::<B>(now))
     }
 
-    fn rev_try_remove<B>(&mut self) -> &mut EntityCommands<'a>
+    #[track_caller]
+    fn rev_try_remove<B>(&mut self, now: NonLogNow) -> &mut EntityCommands<'a>
     where
         B: Bundle,
     {
-        self.queue_handled(
-            |mut entity: EntityWorldMut| {
-                entity.rev_remove::<B>();
-            },
-            ignore,
-        )
+        self.queue_handled(rev_remove::<B>(now), ignore)
     }
 
-    fn rev_remove_with_requires<B>(&mut self) -> &mut EntityCommands<'a>
+    #[track_caller]
+    fn rev_remove_with_requires<B>(&mut self, now: NonLogNow) -> &mut EntityCommands<'a>
     where
         B: Bundle,
     {
-        self.queue(|mut entity: EntityWorldMut| {
-            entity.rev_remove_with_requires::<B>();
-        })
+        self.queue(rev_remove_with_requires::<B>(now))
     }
 
-    fn rev_remove_by_id(&mut self, component_id: ComponentId) -> &mut EntityCommands<'a> {
-        self.queue(move |mut entity: EntityWorldMut| {
-            entity.rev_remove_by_id(component_id);
-        })
+    #[track_caller]
+    fn rev_remove_by_id(
+        &mut self,
+        now: NonLogNow,
+        component_id: ComponentId,
+    ) -> &mut EntityCommands<'a> {
+        self.queue(rev_remove_by_id(now, component_id))
     }
 
-    fn rev_clear(&mut self) -> &mut EntityCommands<'a> {
-        self.queue(|mut entity: EntityWorldMut| {
-            entity.rev_clear();
-        })
+    #[track_caller]
+    fn rev_clear(&mut self, now: NonLogNow) -> &mut EntityCommands<'a> {
+        self.queue(rev_clear(now))
     }
 
-    fn rev_despawn(&mut self) {
-        self.queue(|entity: EntityWorldMut| {
-            entity.rev_despawn();
+    #[track_caller]
+    fn rev_despawn_single(&mut self, now: NonLogNow) {
+        self.queue(rev_despawn_single(now));
+    }
+
+    #[track_caller]
+    fn rev_try_despawn_single(&mut self, now: NonLogNow) {
+        self.queue_handled(rev_despawn_single(now), ignore);
+    }
+
+    #[track_caller]
+    fn rev_log_scope(&mut self, now: NonLogNow) -> &mut Self {
+        let caller = MaybeLocation::caller();
+        self.queue(move |mut entity_mut: EntityWorldMut| {
+            let entity = entity_mut.id();
+            entity_mut
+                .resource_mut::<RevDespawnCleaner>()
+                .log_spawn(entity, caller, now);
         });
+        self
     }
 
-    fn rev_try_despawn(&mut self) {
-        self.queue_handled(rev_despawn(), ignore);
-    }
-
-    fn rev_retain<B>(&mut self) -> &mut EntityCommands<'a>
+    #[track_caller]
+    fn rev_retain<B>(&mut self, now: NonLogNow) -> &mut EntityCommands<'a>
     where
         B: Bundle,
     {
-        self.queue(|mut entity: EntityWorldMut| {
-            entity.rev_retain::<B>();
-        })
+        self.queue(rev_retain::<B>(now))
     }
 
-    fn rev_clone_and_spawn(&mut self) -> EntityCommands<'_> {
-        after_spawn(self.clone_and_spawn())
-    }
-
-    fn rev_clone_components<B>(&mut self, target: Entity) -> &mut EntityCommands<'a>
-    where
-        B: Bundle,
-    {
-        self.queue(move |mut entity: EntityWorldMut| {
-            entity.rev_clone_components::<B>(target);
-        })
-    }
-
-    fn rev_move_components<B>(&mut self, target: Entity) -> &mut EntityCommands<'a>
-    where
-        B: Bundle,
-    {
-        self.queue(move |mut entity: EntityWorldMut| {
-            entity.rev_move_components::<B>(target);
-        })
-    }
-}
-
-pub trait RevRelatedSpawnerCommands {
-    /// Reversible version of [`RelatedSpawnerCommands::spawn`].
-    fn rev_spawn(&mut self, bundle: impl Bundle) -> EntityCommands<'_>;
-
-    /// Reversible version of [`RelatedSpawnerCommands::spawn_empty`].
-    fn rev_spawn_empty(&mut self) -> EntityCommands<'_>;
-}
-
-impl<'w, R: Relationship> RevRelatedSpawnerCommands for RelatedSpawnerCommands<'w, R> {
-    fn rev_spawn(&mut self, bundle: impl Bundle) -> EntityCommands<'_> {
-        let target = self.target_entity();
-        let mut entity_commands = self.commands_mut().rev_spawn((R::from(target), bundle));
-        let entity = entity_commands.id();
-        entity_commands.buffer_undo_redo(InsertRelationship {
-            entity,
-            target: [target],
-            _marker: PhantomData::<R>,
-        });
-        entity_commands
-    }
-
-    fn rev_spawn_empty(&mut self) -> EntityCommands<'_> {
-        self.rev_spawn(())
+    #[track_caller]
+    fn rev_clone_and_spawn(&mut self, now: NonLogNow) -> EntityCommands<'_> {
+        self.rev_clone_and_spawn_with_opt_out(now, |_| ())
     }
 }
 
 pub trait RevEntityEntryCommands<T: Component> {
-    fn rev_or_default(&mut self) -> &mut Self
+    fn rev_or_default(&mut self, now: NonLogNow) -> &mut Self
     where
         T: Default;
 
-    fn rev_or_from_world(&mut self) -> &mut Self
+    fn rev_or_from_world(&mut self, now: NonLogNow) -> &mut Self
     where
         T: FromWorld;
 
-    fn rev_or_insert(&mut self, default: T) -> &mut Self;
+    fn rev_or_insert(&mut self, now: NonLogNow, default: T) -> &mut Self;
 
-    fn rev_or_insert_with(&mut self, default: impl Fn() -> T) -> &mut Self;
+    fn rev_or_insert_with(&mut self, now: NonLogNow, default: impl Fn() -> T) -> &mut Self;
 
-    fn rev_or_try_insert(&mut self, default: T) -> &mut Self;
+    fn rev_or_try_insert(&mut self, now: NonLogNow, default: T) -> &mut Self;
 
-    fn rev_or_try_insert_with(&mut self, default: impl Fn() -> T) -> &mut Self;
+    fn rev_or_try_insert_with(&mut self, now: NonLogNow, default: impl Fn() -> T) -> &mut Self;
 }
 
 impl<T: Component> RevEntityEntryCommands<T> for EntityEntryCommands<'_, T> {
-    fn rev_or_default(&mut self) -> &mut Self
+    fn rev_or_default(&mut self, now: NonLogNow) -> &mut Self
     where
         T: Default,
     {
-        self.rev_or_insert(T::default())
+        self.rev_or_insert(now, T::default())
     }
 
-    fn rev_or_from_world(&mut self) -> &mut Self
+    fn rev_or_from_world(&mut self, now: NonLogNow) -> &mut Self
     where
         T: FromWorld,
     {
         self.entity()
-            .queue(rev_insert_from_world::<T>(InsertMode::Keep));
+            .queue(rev_insert_from_world::<T>(now, InsertMode::Keep));
         self
     }
 
-    fn rev_or_insert(&mut self, default: T) -> &mut Self {
-        self.entity().rev_insert_if_new(default);
+    fn rev_or_insert(&mut self, now: NonLogNow, default: T) -> &mut Self {
+        self.entity().rev_insert_if_new(now, default);
         self
     }
 
-    fn rev_or_insert_with(&mut self, default: impl Fn() -> T) -> &mut Self {
-        self.rev_or_insert(default())
+    fn rev_or_insert_with(&mut self, now: NonLogNow, default: impl Fn() -> T) -> &mut Self {
+        self.rev_or_insert(now, default())
     }
 
-    fn rev_or_try_insert(&mut self, default: T) -> &mut Self {
-        self.entity().rev_try_insert_if_new(default);
+    fn rev_or_try_insert(&mut self, now: NonLogNow, default: T) -> &mut Self {
+        self.entity().rev_try_insert_if_new(now, default);
         self
     }
 
-    fn rev_or_try_insert_with(&mut self, default: impl Fn() -> T) -> &mut Self {
-        self.rev_or_try_insert(default())
+    fn rev_or_try_insert_with(&mut self, now: NonLogNow, default: impl Fn() -> T) -> &mut Self {
+        self.rev_or_try_insert(now, default())
     }
 }
 
-pub(super) fn after_spawn(mut entity_commands: EntityCommands) -> EntityCommands {
-    let entity = entity_commands.id();
-    entity_commands
-        .commands_mut()
-        .queue(move |world: &mut World| {
-            let marker = DisabledToDespawn::for_spawn_despawn(world.get_resource::<RevMeta>())
-                .unwrap_or_else(|err| panic!("{err}"));
-            world.buffer_undo_redo(Spawn {
-                spawned: [entity],
-                marker,
-            });
-        });
-    entity_commands
-}
+type CmdOut = Result<(), EntityRevDespawnedError>;
 
 /// Reversible version of [`insert`](bevy::ecs::system::entity_command::insert).
 #[track_caller]
-pub fn rev_insert<B: Bundle>(bundle: B, mode: InsertMode) -> impl EntityCommand {
-    move |mut entity: EntityWorldMut| {
-        match mode {
-            InsertMode::Keep => entity.rev_insert_if_new(bundle),
-            InsertMode::Replace => entity.rev_insert(bundle),
-        };
+pub fn rev_insert<B: Bundle>(
+    now: NonLogNow,
+    bundle: B,
+    mode: InsertMode,
+) -> impl EntityCommand<CmdOut> {
+    let caller = MaybeLocation::caller();
+    move |mut entity_mut: EntityWorldMut| {
+        rev_try_insert_with_caller(
+            &mut entity_mut,
+            PhantomData::<B>,
+            mode,
+            |entity_mut| entity_mut.insert(bundle),
+            now,
+            caller,
+        )
+        .map(|_| ())
     }
 }
 
@@ -634,94 +488,139 @@ pub fn rev_insert<B: Bundle>(bundle: B, mode: InsertMode) -> impl EntityCommand 
 ///
 /// - [`ComponentId`] must be from the same world as the target entity.
 /// - `T` must have the same layout as the one passed during `component_id` creation.
-pub unsafe fn rev_insert_by_id<T: Component + Send + 'static>(
+#[track_caller]
+pub unsafe fn rev_insert_by_id<T: Send + 'static>(
+    now: NonLogNow,
     component_id: ComponentId,
     value: T,
     mode: InsertMode,
-) -> impl EntityCommand {
-    move |mut entity: EntityWorldMut| {
-        if entity.contains_id(component_id) && mode == InsertMode::Keep {
-            return;
-        }
-        OwningPtr::make(value, |ptr| unsafe {
-            // SAFETY: user promised fulfilling the contract in this command's docs
-            entity.rev_insert_by_id(component_id, ptr);
+) -> impl EntityCommand<CmdOut> {
+    let caller = MaybeLocation::caller();
+    move |mut entity_mut: EntityWorldMut| {
+        OwningPtr::make(value, |component| {
+            rev_try_insert_with_caller(
+                &mut entity_mut,
+                component_id,
+                mode,
+                // SAFETY:
+                // - `component_id` safety is ensured by the caller
+                // - `ptr` is valid within the `make` block
+                |entity_mut| unsafe { entity_mut.insert_by_id(component_id, component) },
+                now,
+                caller,
+            )
+            .map(|_| ())
         })
     }
 }
 
 /// Reversible version of [`insert_from_world`](bevy::ecs::system::entity_command::insert_from_world).
 #[track_caller]
-pub fn rev_insert_from_world<T: Component + FromWorld>(mode: InsertMode) -> impl EntityCommand {
-    move |mut entity: EntityWorldMut| {
-        let value = entity.world_scope(|world| T::from_world(world));
-        match mode {
-            InsertMode::Keep => entity.insert_if_new(value),
-            InsertMode::Replace => entity.insert(value),
-        };
+pub fn rev_insert_from_world<T: Component + FromWorld>(
+    now: NonLogNow,
+    mode: InsertMode,
+) -> impl EntityCommand<CmdOut> {
+    let caller = MaybeLocation::caller();
+    move |mut entity_mut: EntityWorldMut| {
+        if !(mode == InsertMode::Keep && entity_mut.contains::<T>()) {
+            let value = entity_mut.world_scope(|world| T::from_world(world));
+            rev_try_insert_with_caller(
+                &mut entity_mut,
+                PhantomData::<T>,
+                mode,
+                |entity_mut| entity_mut.insert(value),
+                now,
+                caller,
+            )
+            .map(|_| ())
+        } else {
+            Ok(())
+        }
+    }
+}
+
+/// Reversible version of [`insert_with`](bevy::ecs::system::entity_command::insert_with).
+#[track_caller]
+pub fn rev_insert_with<T: Component, F>(
+    now: NonLogNow,
+    component_fn: F,
+    mode: InsertMode,
+) -> impl EntityCommand<CmdOut>
+where
+    F: FnOnce() -> T + Send + 'static,
+{
+    let caller = MaybeLocation::caller();
+    move |mut entity_mut: EntityWorldMut| {
+        if !(mode == InsertMode::Keep && entity_mut.contains::<T>()) {
+            let value = component_fn();
+            rev_try_insert_with_caller(
+                &mut entity_mut,
+                PhantomData::<T>,
+                mode,
+                |entity_mut| entity_mut.insert(value),
+                now,
+                caller,
+            )
+            .map(|_| ())
+        } else {
+            Ok(())
+        }
     }
 }
 
 /// Reversible version of [`remove`](bevy::ecs::system::entity_command::remove).
 #[track_caller]
-pub fn rev_remove<B: Bundle>() -> impl EntityCommand {
-    |mut entity: EntityWorldMut| {
-        entity.rev_remove::<B>();
+pub fn rev_remove<T: Bundle>(now: NonLogNow) -> impl EntityCommand<CmdOut> {
+    let caller = MaybeLocation::caller();
+    move |mut entity_mut: EntityWorldMut| {
+        rev_try_remove_with_caller::<_, false>(&mut entity_mut, PhantomData::<T>, now, caller)
+            .map(|_| ())
     }
 }
 
 /// Reversible version of [`remove_with_requires`](bevy::ecs::system::entity_command::remove_with_requires).
 #[track_caller]
-pub fn rev_remove_with_requires<B: Bundle>() -> impl EntityCommand {
-    |mut entity: EntityWorldMut| {
-        entity.rev_remove_with_requires::<B>();
+pub fn rev_remove_with_requires<T: Bundle>(now: NonLogNow) -> impl EntityCommand<CmdOut> {
+    let caller = MaybeLocation::caller();
+    move |mut entity_mut: EntityWorldMut| {
+        rev_try_remove_with_caller::<_, true>(&mut entity_mut, PhantomData::<T>, now, caller)
+            .map(|_| ())
     }
 }
 
 /// Reversible version of [`remove_by_id`](bevy::ecs::system::entity_command::remove_by_id).
 #[track_caller]
-pub fn rev_remove_by_id(component_id: ComponentId) -> impl EntityCommand {
-    move |mut entity: EntityWorldMut| {
-        entity.rev_remove_by_id(component_id);
+pub fn rev_remove_by_id(now: NonLogNow, component_id: ComponentId) -> impl EntityCommand<CmdOut> {
+    let caller = MaybeLocation::caller();
+    move |mut entity_mut: EntityWorldMut| {
+        rev_try_remove_with_caller::<_, false>(&mut entity_mut, component_id, now, caller)
+            .map(|_| ())
     }
 }
 
 /// Reversible version of [`clear`](bevy::ecs::system::entity_command::clear).
 #[track_caller]
-pub fn rev_clear() -> impl EntityCommand {
-    |mut entity: EntityWorldMut| {
-        entity.rev_clear();
+pub fn rev_clear(now: NonLogNow) -> impl EntityCommand<CmdOut> {
+    let caller = MaybeLocation::caller();
+    move |mut entity_mut: EntityWorldMut| {
+        rev_try_clear_with_caller(&mut entity_mut, now, caller).map(|_| ())
     }
 }
 
 /// Reversible version of [`retain`](bevy::ecs::system::entity_command::retain).
 #[track_caller]
-pub fn rev_retain<B: Bundle>() -> impl EntityCommand {
-    |mut entity: EntityWorldMut| {
-        entity.rev_retain::<B>();
+pub fn rev_retain<T: Bundle>(now: NonLogNow) -> impl EntityCommand<CmdOut> {
+    let caller = MaybeLocation::caller();
+    move |mut entity_mut: EntityWorldMut| {
+        rev_try_retain_with_caller(&mut entity_mut, PhantomData::<T>, now, caller).map(|_| ())
     }
 }
 
 /// Reversible version of [`despawn`](bevy::ecs::system::entity_command::despawn).
 #[track_caller]
-pub fn rev_despawn() -> impl EntityCommand {
-    |entity: EntityWorldMut| {
-        entity.rev_despawn();
-    }
-}
-
-/// Reversible version of [`clone_components`](bevy::ecs::system::entity_command::clone_components).
-#[track_caller]
-pub fn rev_clone_components<B: Bundle>(target: Entity) -> impl EntityCommand {
-    move |mut entity: EntityWorldMut| {
-        entity.rev_clone_components::<B>(target);
-    }
-}
-
-/// Reversible version of [`move_components`](bevy::ecs::system::entity_command::move_components).
-#[track_caller]
-pub fn rev_move_components<B: Bundle>(target: Entity) -> impl EntityCommand {
-    move |mut entity: EntityWorldMut| {
-        entity.rev_move_components::<B>(target);
+pub fn rev_despawn_single(now: NonLogNow) -> impl EntityCommand<CmdOut> {
+    let caller = MaybeLocation::caller();
+    move |entity_mut: EntityWorldMut| {
+        rev_try_despawn_single_with_caller(entity_mut, now, caller).map(|_| ())
     }
 }

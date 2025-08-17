@@ -1,34 +1,36 @@
-use std::{io::stdout, num::NonZeroUsize, time::Duration};
+use std::{io::stdout, num::NonZeroU64, time::Duration};
 
-use bevy::{app::App, ecs::world::DeferredWorld, prelude::*};
+use bevy::{
+    app::App,
+    ecs::{lifecycle::HookContext, world::DeferredWorld},
+    prelude::*,
+};
 
 use crossterm::{ExecutableCommand, cursor::*, terminal::*};
 
 use library::{
     log::{DenseTransitionLog, FrameTransitionLog, SparseTransitionLog},
+    meta::NonLogNow,
     prelude::*,
-    schedule::IntoRevScheduleConfigs,
 };
 
-const MAX_LOG_LEN: usize = 71;
+const MAX_LOG_LEN: u64 = 71;
 const FIXED_TIMESTEP: Duration = Duration::from_millis(100);
 
 // todo: mention how the last column cannot be undone
 
 // todo: entirely work with entity disabling instead of removing/readding components
 
-fn main() {}
-/*
 fn main() {
     let _crossterm = GlobalSettings::new();
-    let meta = RevMeta::new(NonZeroUsize::new(MAX_LOG_LEN), 0, false);
+    let meta = RevMeta::new(NonZeroU64::new(MAX_LOG_LEN), 0, false);
     App::new()
         .add_plugins((
             MinimalPlugins,
             // todo: explain plugin
             RevSystemsPlugin::add_meta_and_runner(meta, FixedUpdate),
             // todo: explain general task of a row
-            (row1, row2, row3, row4, row5, row6),
+            (row1, row2, row3, row4, row5, row6, row7),
         ))
         .rev_configure_sets(
             RevUpdate,
@@ -39,6 +41,7 @@ fn main() {
                     Row(3).rev_after_ignore_deferred(Row(2)),
                     Row(4),
                     Row(5).rev_before(Row(6)),
+                    Row(7),
                 )
                     .rev_chain(),
             ),
@@ -51,7 +54,7 @@ fn main() {
                 render.after(RevMeta::try_run_rev_update),
             ),
         )
-        .add_systems(RevUpdate, clear_input.after(RevSystemsSet))
+        .add_systems(RevUpdate, clear_input.after(RevSystems))
         .init_resource::<KeysPressed>()
         .init_resource::<LostWaste>()
         .insert_resource(Time::<Fixed>::from_duration(FIXED_TIMESTEP))
@@ -62,7 +65,7 @@ fn main() {
 pub struct Row(u8);
 
 #[derive(Component, Clone, Copy)]
-#[component(on_remove = on_remove)]
+#[component(on_despawn = on_despawn)]
 struct Waste {
     tossed_at: u64,
     row: usize,
@@ -71,29 +74,108 @@ struct Waste {
 #[derive(Resource, Default)]
 struct LostWaste(usize);
 
-fn on_remove(mut world: DeferredWorld, _: HookContext) {
-    if world.resource::<RevMeta>().get_running_direction() == Some(RevDirection::NOT_LOG) {
+// If a Waste component is removed during NOT_LOG, then that only happens because the player missed
+// undoing the littering and this adds to the LostWaste penality, bringing the player closer to
+// the game-over.
+// todo: misleading comment and impl, may only need meta to be running, explain "undone" despawns
+fn on_despawn(mut world: DeferredWorld, _: HookContext) {
+    if RevDirection::NOT_LOG.is_running(&world) {
         world.resource_mut::<LostWaste>().0 += 1;
     }
 }
 
+// The most simple way to cause a Waste entity to be reversibly spawned is just to use Commands::rev_spawn.
+// Such spawns are logged in the system state and is undone/redone when this system runs during a log phase.
 fn row1(app: &mut App) {
     app.rev_add_systems(RevUpdate, system.rev_in_set(Row(1)));
 
     fn system(meta: Res<RevMeta>, pressed: Res<KeysPressed>, mut commands: Commands) {
-        if meta.running_direction() != RevDirection::NOT_LOG || !pressed.num1 {
-            return;
+        // RevMeta::non_log_now returns a tiny type that is used in the API to express that
+        // currently the RevDirection::NOT_LOG phase is active. This makes it much easier
+        // to prevent incorrectly issued reversible commands, in contrast to some additional
+        // runtime checks deep inside the crate's implementation and confusing call stacks.
+        if pressed.num1
+            && let Some(now) = meta.non_log_now()
+        {
+            commands.rev_spawn(
+                now,
+                Waste {
+                    tossed_at: meta.now(), // the current frame can be received from RevMeta
+                    row: 1,
+                },
+            );
         }
-        commands./*rev_*/spawn(Waste {
-            tossed_at: meta.now(),
-            row: 1,
-        });
     }
 }
 
+// This row works as the previous one but uses direct World access instead of commands.
 fn row2(app: &mut App) {
     app.rev_add_systems(RevUpdate, system.rev_in_set(Row(2)));
 
+    fn system(world: &mut World) {
+        if world.resource::<KeysPressed>().num2
+            && let Some(now) = world.non_log_now()
+        {
+            world.rev_spawn(
+                now,
+                Waste {
+                    tossed_at: now.get(), // the current frame can be received from NonLogNow
+                    row: 2,
+                },
+            );
+        }
+    }
+}
+
+// Both previous variants use the BuffersUndoRedo trait API under the hood that all reversible
+// structural changes are using. This example is a variant of row1 but with a manual implementation.
+fn row3(app: &mut App) {
+    app.rev_add_systems(RevUpdate, system.rev_in_set(Row(3)));
+
+    fn system(meta: Res<RevMeta>, pressed: Res<KeysPressed>, mut commands: Commands) {
+        // The system is noop during log phases.
+        let Some(now) = meta.non_log_now() else {
+            return;
+        };
+
+        // If the key is pressed we want to spawn and log a waste entity.
+        if pressed.num3 {
+            let waste = Waste {
+                tossed_at: meta.now(),
+                row: 3,
+            };
+
+            // We spawn the entity with the regular bevy API.
+            let entity = commands.spawn(waste).id();
+
+            // We mark the entity as log scoped which means it will be despawned when this frame gets out of log.
+            commands.rev_log_scope(now, entity);
+
+            // We pass in a closure here but the underlying UndoRedo trait can be implemented for any
+            // of your types.
+            commands.buffer_undo_redo(now, move |world: &mut World, variant: UndoRedoDirection| {
+                let mut entity = world.entity_mut(entity);
+                match variant {
+                    UndoRedoDirection::Undo => {
+                        entity.remove::<Waste>();
+                    }
+                    UndoRedoDirection::Redo => {
+                        entity.insert(waste);
+                    }
+                };
+            });
+        }
+    }
+}
+
+// One can also use a system-local log to track the spawn of Waste entities to undo/redo that depending on
+// the active RevDirection phase.
+fn row4(app: &mut App) {
+    app.rev_add_systems(RevUpdate, system.rev_in_set(Row(4)));
+
+    // We choose a SparseTransitionLog as we understand pressing of a key and the resulting spawn as a
+    // transition between a state where a new Waste entity does not exist to the state where it does.
+    // It also has to be a sparse log because not every frame the key is pressed.
     fn system(
         meta: Res<RevMeta>,
         pressed: Res<KeysPressed>,
@@ -102,18 +184,52 @@ fn row2(app: &mut App) {
     ) {
         let waste = Waste {
             tossed_at: meta.now(),
-            row: 2,
+            row: 4,
         };
+
+        // Depending on the current RevDirection, the system has different behavior
         match meta.running_direction() {
+            // During NOT_LOG we want to react on the pressed keys to spawn Waste entities and to log that.
             RevDirection::NOT_LOG => {
+                // Any logs in the future of the log, for example after going backward in time and resuming
+                // the NOT_LOG phase, should be despawned as they are no longer part of our reality as we
+                // rewrite the future now!
                 for entity in log.drain_future() {
                     commands.entity(entity).despawn();
                 }
-                // todo: explain why this is needed, point out how waste is visible but not undoable at the right edge
+
+                // A quirk of Transition logs is that they need one less log entry compared to State logs.
+                // For example if the global log can be up to 3 states, then...
+                // - State logs need to have these three states
+                // - Transition logs only need to have the two transitions that are used for transitioning
+                //   from the first to the second state and from the second to the third state
+                //
+                // So, the transition log would just pop earlier transitions in push_and_pop_past as the log
+                // itself does not need that transition anymore.
+                // In our case however this popped transition is used to despawn a Waste entity. But we dont
+                // want that to happen a frame earlier as otherwise the waste would vanish before it went past
+                // the right edge of the water.
+                //
+                // That is why we add a + 1 here to compensate that behavior.
                 let past_len = meta.past_len() + 1;
-                let entity = pressed.num2.then(|| commands.spawn(waste).id());
+
+                // If the key is pressed, we spawn another Waste entity.
+                // If not, we still need to push a None to advance the log.
+                let entity = pressed.num4.then(|| commands.spawn(waste).id());
+
+                // Pushing potential Waste entities may also pop an entity that got out-of-log now.
+                // These need to be despawned as they are now past the edge of the screen and cannot come back.
                 if let Some(entity) = log.push_and_pop_past(past_len as usize, entity) {
                     commands.entity(entity).despawn();
+                }
+            }
+
+            // When we go backward in log, we just remove the component from the entity that got spawned
+            // this frame. When we go forward in log, we reinsert the component.
+            // This way we dont need to despawn and respawn during the log phase.
+            RevDirection::BackwardLog => {
+                if let Some(entity) = log.backward_log().unwrap() {
+                    commands.entity(*entity).remove::<Waste>();
                 }
             }
             RevDirection::FORWARD_LOG => {
@@ -121,27 +237,31 @@ fn row2(app: &mut App) {
                     commands.entity(*entity).insert(waste);
                 }
             }
-            RevDirection::BackwardLog => {
-                if let Some(entity) = log.backward_log().unwrap() {
-                    commands.entity(*entity).remove::<Waste>();
-                }
-            }
         }
     }
 }
 
-fn row3(app: &mut App) {
+// This row works as the previous row but we want to demonstrate it with using a running condition.
+fn row5(app: &mut App) {
     app.rev_add_systems(
         RevUpdate,
+        // The system will now only run when the key is pressed. The state of the condition system will make
+        // sure to pass at the correct log phases as well. The actual key press only matters for
+        // RevDirection::NOT_LOG.
         spawn_and_log_system
             .rev_run_if(spawn_condition)
-            .rev_in_set(Row(3)),
-    )
-    .add_systems(
-        RevUpdate,
-        despawn_system.after(forward_set(spawn_and_log_system)),
+            .rev_in_set(Row(5)),
     );
 
+    fn spawn_condition(pressed: Res<KeysPressed>) -> bool {
+        pressed.num5
+    }
+
+    // Other than the previous row, the used log does not need to support Option updates - every system
+    // run will cause a spawn so we pick DenseTransitionLog.
+    // However, because the past is "shorter" from the point of view of this system, we need to add a
+    // FrameTransitionLog to track the exact past length. This may not be needed if you dont care for the
+    // entity log length here, then the RevMeta::past_len is fine. We do it here for demonstration purpose.
     fn spawn_and_log_system(
         meta: Res<RevMeta>,
         mut entity_log: Local<DenseTransitionLog<Entity>>,
@@ -150,22 +270,34 @@ fn row3(app: &mut App) {
     ) {
         let waste = Waste {
             tossed_at: meta.now(),
-            row: 3,
+            row: 5,
         };
+
         match meta.running_direction() {
+            // Note that no despawns happen in this system as the it does not necessarily run when an entity
+            // spawned from here gets out-of-log.
+            // Not need to check if the key is pressed before the spawn, it is implied by the system running.
             RevDirection::NOT_LOG => {
-                for entity in entity_log.drain_future() {
-                    commands.entity(entity).despawn();
-                }
-                // todo: explain why this is needed, point out how waste is visible but not undoable at the right edge
+                // During RevDirection::NOT_LOG, this is always Some.
+                let now = meta.non_log_now().unwrap();
+
+                // We spawn the waste entity and mark is as log scoped to be despawned when out-of-log.
+                let entity = commands.spawn(waste).rev_log_scope(now).id();
+
+                // We do not use the push_and_pop_past method because, as this system does not run every frame,
+                // multiple log entries may be out of log now.
                 let past_len = frame_log.push_and_get_past_len(&meta);
-                let entity = commands.spawn(waste).id();
-                // do not despawn drained entities here, could be too late because this system does not run every frame
                 entity_log.push_and_drain_past(past_len, entity);
             }
+
+            // As before, the log behavior is just removing and readding the Waste component.
             RevDirection::FORWARD_LOG => {
+                // We also need to update the frame log. As the frame log is advanced every time this system runs,
+                // this method should always return true as well because the run condition makes sure it only runs
+                // in these frames, also during the log.
                 let expects_forward_log_run = frame_log.forward_log(&meta);
                 assert!(expects_forward_log_run);
+
                 let entity = *entity_log.forward_log().unwrap();
                 commands.entity(entity).insert(waste);
             }
@@ -177,75 +309,42 @@ fn row3(app: &mut App) {
             }
         }
     }
-
-    fn spawn_condition(pressed: Res<KeysPressed>) -> bool {
-        pressed.num3
-    }
-
-    fn despawn_system(meta: Res<RevMeta>, query: Query<(Entity, &Waste)>, mut commands: Commands) {
-        query
-            .into_iter()
-            .filter(|(_, waste)| waste.row == 3 && waste.tossed_at < meta.past_end())
-            .for_each(|(entity, _)| commands.entity(entity).despawn());
-    }
 }
 
-fn row4(app: &mut App) {
-    app.rev_add_systems(RevUpdate, system.rev_in_set(Row(4)));
-
-    fn system(meta: Res<RevMeta>, pressed: Res<KeysPressed>, mut commands: Commands) {
-        if meta.running_direction().is_log() || !pressed.num4 {
-            return;
-        }
-        let waste = Waste {
-            tossed_at: meta.now(),
-            row: 4,
-        };
-        let entity = commands.spawn(waste).id();
-        commands.buffer_undo_redo(move |world: &mut World, variant: UndoRedoDirection| {
-            let mut entity = world.entity_mut(entity);
-            match variant {
-                UndoRedoDirection::Undo => {
-                    entity.remove::<Waste>();
-                }
-                UndoRedoDirection::Redo => {
-                    entity.insert(waste);
-                }
-            };
-        });
-        commands.buffer_finalize(move |world: &mut World, _: FinalizeDirection| {
-            world.entity_mut(entity).despawn();
-        });
-    }
-}
-
-fn row5(app: &mut App) {
+// Hooks can be reversible as well.
+fn row6(app: &mut App) {
     app.rev_add_systems(RevUpdate, system.rev_in_set(Row(5)))
         .world_mut()
         .register_component_hooks::<Waste>()
         .on_add(on_add);
 
-    // buffered UndoRedo from on_add ends up in this system's state and thus needs to be added as a reversible system
     fn system(meta: Res<RevMeta>, pressed: Res<KeysPressed>, mut commands: Commands) {
-        if meta.running_direction().is_log() || !pressed.num5 {
-            return;
+        if pressed.num6
+            && let Some(now) = meta.non_log_now()
+        {
+            commands.spawn(Waste {
+                tossed_at: now.get(),
+                row: 6,
+            });
         }
-        commands.spawn(Waste {
-            tossed_at: meta.now(),
-            row: 5,
-        });
     }
 
     fn on_add(mut world: DeferredWorld, context: HookContext) {
-        if world.resource::<RevMeta>().running_direction().is_log() {
+        let Some(now) = world.non_log_now() else {
             return;
-        }
+        };
+
         let entity = context.entity;
         let waste = *world.entity(entity).get::<Waste>().unwrap();
-        if waste.row != 5 {
+
+        // We only want this hook to be in effect for this specific row.
+        if waste.row != 6 {
             return;
         }
-        world.buffer_undo_redo(move |world: &mut World, variant: UndoRedoDirection| {
+
+        world.rev_log_scope(now, entity);
+
+        world.buffer_undo_redo(now, move |world: &mut World, variant: UndoRedoDirection| {
             let mut entity = world.entity_mut(entity);
             match variant {
                 UndoRedoDirection::Undo => {
@@ -256,35 +355,38 @@ fn row5(app: &mut App) {
                 }
             };
         });
-        world.buffer_finalize(move |world: &mut World, _: FinalizeDirection| {
-            world.entity_mut(entity).despawn();
-        });
     }
 }
 
-fn row6(app: &mut App) {
-    app.rev_add_systems(RevUpdate, system.rev_in_set(Row(6)))
+// And observer can also be reversible.
+fn row7(app: &mut App) {
+    app.rev_add_systems(RevUpdate, system.rev_in_set(Row(7)))
         .add_observer(observer);
 
     #[derive(Event)]
-    struct WasteObserverEvent(Waste);
+    struct WasteObserverEvent(NonLogNow);
 
     fn system(meta: Res<RevMeta>, pressed: Res<KeysPressed>, mut commands: Commands) {
-        if meta.running_direction().is_log() || !pressed.num6 {
-            return;
+        if pressed.num7
+            && let Some(now) = meta.non_log_now()
+        {
+            commands.trigger(WasteObserverEvent(now));
         }
-        let waste = Waste {
-            tossed_at: meta.now(),
-            row: 6,
-        };
-        let entity = commands.spawn(waste).id();
-        commands.trigger_targets(WasteObserverEvent(waste), entity);
     }
 
-    fn observer(trigger: Trigger<WasteObserverEvent>, mut world: DeferredWorld) {
-        let waste = trigger.0;
-        let entity = trigger.target();
-        world.buffer_undo_redo(move |world: &mut World, variant: UndoRedoDirection| {
+    fn observer(trigger: On<WasteObserverEvent>, mut world: DeferredWorld) {
+        let now = trigger.0;
+
+        let waste = Waste {
+            tossed_at: now.get(),
+            row: 7,
+        };
+
+        let entity = world.commands().spawn(waste).id();
+
+        world.rev_log_scope(now, entity);
+
+        world.buffer_undo_redo(now, move |world: &mut World, variant: UndoRedoDirection| {
             let mut entity = world.entity_mut(entity);
             match variant {
                 UndoRedoDirection::Undo => {
@@ -293,10 +395,7 @@ fn row6(app: &mut App) {
                 UndoRedoDirection::Redo => {
                     entity.insert(waste);
                 }
-            }
-        });
-        world.buffer_finalize(move |world: &mut World, _: FinalizeDirection| {
-            world.entity_mut(entity).despawn();
+            };
         });
     }
 }
@@ -310,6 +409,7 @@ struct KeysPressed {
     num4: bool,
     num5: bool,
     num6: bool,
+    num7: bool,
 }
 
 enum Direction {
@@ -352,6 +452,7 @@ fn map_input(mut keys: ResMut<KeysPressed>, lost: Res<LostWaste>, mut exit: Even
             KeyCode::Char('4') => keys.num4 = true,
             KeyCode::Char('5') => keys.num5 = true,
             KeyCode::Char('6') => keys.num6 = true,
+            KeyCode::Char('7') => keys.num7 = true,
             _ => {}
         }
         Ok(())
@@ -448,7 +549,7 @@ fn render(
         .skip(meta.future_len() as usize % 7)
         .take(meta.past_len() as usize + 1)
         .collect();
-    let mut past_rows: [String; 6] = std::array::from_fn(|_| row_past.clone());
+    let mut past_rows: [String; 7] = std::array::from_fn(|_| row_past.clone());
 
     let padding_cols = match *last_future_end {
         Some(frame) => {
@@ -470,10 +571,11 @@ fn render(
         let index = (meta.now() - tossed_at) as usize;
         // replace_range would panic if a waste is tossed into the water at a frame that is not the present or that is not within the past log
         // this is ensured by reversible logic and by wastes being despawned when they go out of log
-        past_rows
-            .get_mut(row - 1)
-            .unwrap()
-            .replace_range(index..=index, "#");
+        let str = past_rows.get_mut(row - 1).unwrap();
+        if str.len() <= index {
+            panic!("row {row} out of log");
+        }
+        str.replace_range(index..=index, "#");
     }
 
     for (i, past_row) in past_rows.into_iter().enumerate() {
@@ -506,4 +608,3 @@ fn render(
     let _ = stdout().execute(MoveTo(0, 0));
     let _ = stdout().execute(EndSynchronizedUpdate);
 }
-    */

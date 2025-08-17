@@ -23,6 +23,7 @@ Enhancements:
 - delete unused types
 - integrate BuffersUndoRedo in new Rev wrappers, find good way to support DeferredWorld
 - make buffer methods not-pub
+- integrate entity_log_scoped
 - missing apis:
 -- EntityWorldMut::clone_with
 -- EntityWorldMut::insert_reflect
@@ -58,7 +59,12 @@ ISSUES/DISCUSSIONS:
 - RevRelationship
 -- support via Observers:
 --- if added during NOT_LOG to a buffer entity, Relationship uses non-buffer-entity UndoRedo
---- 
+- rev_insert_batch
+-- backup components one by one
+-- insert closure for each is noop
+- batch insert
+
+example broken, first write tests for spawn_despawn
 */
 
 pub mod app;
@@ -67,15 +73,17 @@ pub mod meta;
 pub mod schedule;
 pub mod undo_redo;
 
-// todo: update
 /// Contains all extension traits `as _` and common types.
 pub mod prelude {
     pub use crate::app::{RevApp as _, RevSystemsPlugin};
     pub use crate::meta::{RevDirection, RevMeta};
-    pub use crate::schedule::{RevSchedule as _, RevSystems, RevUpdate};
+    pub use crate::schedule::{
+        IntoRevScheduleConfigs as _, RevSchedule as _, RevSystems, RevUpdate,
+    };
     pub use crate::undo_redo::{
-        BuffersUndoRedo as _, RevIsDespawned as _, UndoRedo, UndoRedoBuffer, UndoRedoDirection,
-        UndoRedoSwap,
+        BuffersUndoRedo as _, RevCommands as _, RevComponentEntry, RevDeferredWorld as _,
+        RevEntityCommands as _, RevEntityWorldMut as _, RevIsDespawned as _, RevIsDespawned as _,
+        RevOpInProgress, RevWorld as _, UndoRedo, UndoRedoDirection,
     };
 }
 

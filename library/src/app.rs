@@ -12,9 +12,8 @@ use bevy::{
 
 use crate::{
     meta::RevMeta,
-    prelude::UndoRedoBuffer,
     schedule::{IntoRevScheduleConfigs, RevSchedule},
-    undo_redo::{BundleIdOfOpCache, RevDespawnCleaner, RevDespawned},
+    undo_redo::{BundleIdOfOpCache, RevDespawnCleaner, RevDespawned, UndoRedoBuffer},
 };
 
 pub trait RevApp {

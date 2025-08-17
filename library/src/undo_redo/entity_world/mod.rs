@@ -3,27 +3,23 @@ use std::{any::TypeId, hash::Hash, marker::PhantomData};
 use bevy::{
     ecs::{
         archetype::ArchetypeId,
-        bundle::{Bundle, BundleFromComponents, BundleId, InsertMode, NoBundleEffect},
+        bundle::{Bundle, BundleFromComponents, BundleId, InsertMode},
         change_detection::MaybeLocation,
         component::{Component, ComponentId},
         entity::{Entity, EntityCloner, EntityClonerBuilder, OptIn, OptOut},
         resource::Resource,
-        world::{EntityRef, EntityWorldMut, World},
+        world::{DeferredWorld, EntityRef, EntityWorldMut, World},
     },
-    platform::collections::{HashMap, HashSet}, reflect::Type,
+    platform::collections::{HashMap, HashSet},
+    ptr::OwningPtr,
 };
 
 use crate::{
     meta::{NonLogNow, RevDirection},
-    undo_redo::{
-        EntityRevDespawnedError, RevDespawned, RevOpInProgress
-    },
+    undo_redo::{EntityRevDespawnedError, RevDespawned, RevOpInProgress},
 };
 
-use super::{
-    BuffersUndoRedo, RevDespawnCleaner, RevWorld, Spawn, Take, UndoRedo, UndoRedoSwap,
-    rev_spawn_finish,
-};
+use super::{BuffersUndoRedo, RevDespawnCleaner, RevWorld, Take, UndoRedo};
 
 // wip, consider observer approach for to-buffer-move and linked despawn
 //pub mod relationship;
@@ -36,6 +32,7 @@ on register:
 mod test;
 
 pub trait RevEntityWorldMut<'w> {
+    // todo: mention relationship methods + out of scope
     fn redo_and_buffer(&mut self, now: NonLogNow, undo_redo: impl UndoRedo);
 
     // the methods here are purposely sorted alphabetically to make it easily comparable to bevy's docs
@@ -90,17 +87,30 @@ pub trait RevEntityWorldMut<'w> {
     /// Note that this despawns the entity not now but later when this action goes out of log.
     fn rev_despawn_single(self, now: NonLogNow);
 
+    // todo
+    fn rev_log_scope(&mut self, now: NonLogNow) -> &mut Self;
+
     /// Reversible version of [`EntityWorldMut::entry`].
     fn rev_entry<'a, T: Component>(&'a mut self) -> RevComponentEntry<'w, 'a, T>;
 
     /// Reversible version of [`EntityWorldMut::insert`].
     fn rev_insert<T: Bundle>(&mut self, now: NonLogNow, bundle: T) -> &mut Self;
 
-    // rev_insert_by_id
-    // out of scope
+    /// Reversible version of [`EntityWorldMut::insert_by_id`].
+    unsafe fn rev_insert_by_id(
+        &mut self,
+        now: NonLogNow,
+        component_id: ComponentId,
+        component: OwningPtr<'_>,
+    ) -> &mut Self;
 
-    // rev_insert_by_ids
-    // out of scope
+    /// Reversible version of [`EntityWorldMut::insert_by_ids`].
+    unsafe fn rev_insert_by_ids<'a, I: Iterator<Item = OwningPtr<'a>>>(
+        &mut self,
+        now: NonLogNow,
+        component_ids: &[ComponentId],
+        iter_components: I,
+    ) -> &mut Self;
 
     /// Reversible version of [`EntityWorldMut::insert_if_new`].
     fn rev_insert_if_new<T: Bundle>(&mut self, now: NonLogNow, bundle: T) -> &mut Self;
@@ -120,17 +130,20 @@ pub trait RevEntityWorldMut<'w> {
     /// Reversible version of [`EntityWorldMut::remove`].
     fn rev_remove<T: Bundle>(&mut self, now: NonLogNow) -> &mut Self;
 
-    // rev_remove_by_id
-    // out of scope
+    /// Reversible version of [`EntityWorldMut::remove_by_id`].
+    fn rev_remove_by_id(&mut self, now: NonLogNow, component_id: ComponentId) -> &mut Self;
 
-    // rev_remove_by_ids
-    // out of scope
+    /// Reversible version of [`EntityWorldMut::remove_by_ids`].
+    fn rev_remove_by_ids(&mut self, now: NonLogNow, component_ids: &[ComponentId]) -> &mut Self;
 
     // rev_remove_reflect
     // out of scope due complexity
 
     // rev_remove_reflect_with_registry
     // out of scope due complexity
+
+    /// Reversible version of [`EntityWorldMut::remove_with_requires`].
+    fn rev_remove_with_requires<T: Bundle>(&mut self, now: NonLogNow) -> &mut Self;
 
     /// Reversible version of [`EntityWorldMut::retain`].
     fn rev_retain<T: Bundle>(&mut self, now: NonLogNow) -> &mut Self;
@@ -145,7 +158,16 @@ pub trait RevEntityWorldMut<'w> {
 
 impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
     fn redo_and_buffer(&mut self, now: NonLogNow, undo_redo: impl UndoRedo) {
+        // todo: pass location
         self.world_scope(|world| world.redo_and_buffer(now, undo_redo))
+    }
+
+    #[track_caller]
+    fn rev_log_scope(&mut self, now: NonLogNow) -> &mut Self {
+        let entity = self.id();
+        self.resource_mut::<RevDespawnCleaner>()
+            .log_spawn(entity, MaybeLocation::caller(), now);
+        self
     }
 
     #[track_caller]
@@ -202,8 +224,45 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
     fn rev_insert<T: Bundle>(&mut self, now: NonLogNow, bundle: T) -> &mut Self {
         rev_try_insert_with_caller(
             self,
-            bundle,
+            PhantomData::<T>,
             InsertMode::Replace,
+            |entity_mut| entity_mut.insert(bundle),
+            now,
+            MaybeLocation::caller(),
+        )
+        .unwrap()
+    }
+
+    #[track_caller]
+    unsafe fn rev_insert_by_id(
+        &mut self,
+        now: NonLogNow,
+        component_id: ComponentId,
+        component: OwningPtr<'_>,
+    ) -> &mut Self {
+        rev_try_insert_with_caller(
+            self,
+            component_id,
+            InsertMode::Replace,
+            |entity_mut| unsafe { entity_mut.insert_by_id(component_id, component) },
+            now,
+            MaybeLocation::caller(),
+        )
+        .unwrap()
+    }
+
+    #[track_caller]
+    unsafe fn rev_insert_by_ids<'a, I: Iterator<Item = OwningPtr<'a>>>(
+        &mut self,
+        now: NonLogNow,
+        component_ids: &[ComponentId],
+        iter_components: I,
+    ) -> &mut Self {
+        rev_try_insert_with_caller(
+            self,
+            component_ids,
+            InsertMode::Replace,
+            |entity_mut| unsafe { entity_mut.insert_by_ids(component_ids, iter_components) },
             now,
             MaybeLocation::caller(),
         )
@@ -212,18 +271,44 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
 
     #[track_caller]
     fn rev_insert_if_new<T: Bundle>(&mut self, now: NonLogNow, bundle: T) -> &mut Self {
-        rev_try_insert_with_caller(self, bundle, InsertMode::Keep, now, MaybeLocation::caller())
-            .unwrap()
+        rev_try_insert_with_caller(
+            self,
+            PhantomData::<T>,
+            InsertMode::Keep,
+            |entity_mut| entity_mut.insert_if_new(bundle),
+            now,
+            MaybeLocation::caller(),
+        )
+        .unwrap()
     }
 
     #[track_caller]
     fn rev_remove<T: Bundle>(&mut self, now: NonLogNow) -> &mut Self {
-        rev_try_remove_with_caller::<T, false>(self, now, MaybeLocation::caller()).unwrap()
+        rev_try_remove_with_caller::<_, false>(self, PhantomData::<T>, now, MaybeLocation::caller())
+            .unwrap()
+    }
+
+    #[track_caller]
+    fn rev_remove_by_id(&mut self, now: NonLogNow, component_id: ComponentId) -> &mut Self {
+        rev_try_remove_with_caller::<_, false>(self, component_id, now, MaybeLocation::caller())
+            .unwrap()
+    }
+
+    #[track_caller]
+    fn rev_remove_by_ids(&mut self, now: NonLogNow, component_ids: &[ComponentId]) -> &mut Self {
+        rev_try_remove_with_caller::<_, false>(self, component_ids, now, MaybeLocation::caller())
+            .unwrap()
+    }
+
+    #[track_caller]
+    fn rev_remove_with_requires<T: Bundle>(&mut self, now: NonLogNow) -> &mut Self {
+        rev_try_remove_with_caller::<_, true>(self, PhantomData::<T>, now, MaybeLocation::caller())
+            .unwrap()
     }
 
     #[track_caller]
     fn rev_retain<T: Bundle>(&mut self, now: NonLogNow) -> &mut Self {
-        rev_try_retain_with_caller::<T>(self, now, MaybeLocation::caller()).unwrap()
+        rev_try_retain_with_caller(self, PhantomData::<T>, now, MaybeLocation::caller()).unwrap()
     }
 
     #[track_caller]
@@ -253,6 +338,14 @@ pub(crate) fn rev_try_clear_with_caller<'a, 'b>(
     caller: MaybeLocation,
 ) -> Result<&'a mut EntityWorldMut<'b>, EntityRevDespawnedError> {
     assert_not_rev_despawned(&*entity_mut)?;
+    Ok(rev_clear_with_caller(entity_mut, now, caller))
+}
+
+fn rev_clear_with_caller<'a, 'b>(
+    entity_mut: &'a mut EntityWorldMut<'b>,
+    now: NonLogNow,
+    caller: MaybeLocation,
+) -> &'a mut EntityWorldMut<'b> {
     let id = entity_mut.id();
     entity_mut.world_scope(|world| {
         let mut buffer = BundleBuffer::new((), id, caller);
@@ -261,7 +354,7 @@ pub(crate) fn rev_try_clear_with_caller<'a, 'b>(
         entities.move_components(world, &mut cloner, RevDirection::NOT_LOG);
         world.buffer_undo_redo(now, buffer);
     });
-    Ok(entity_mut)
+    entity_mut
 }
 
 pub(crate) fn rev_try_clone_and_spawn_with_opt_in_with_caller<'a, 'b>(
@@ -272,7 +365,9 @@ pub(crate) fn rev_try_clone_and_spawn_with_opt_in_with_caller<'a, 'b>(
 ) -> Result<Entity, EntityRevDespawnedError> {
     assert_not_rev_despawned(&*entity_mut)?;
     let clone = entity_mut.clone_and_spawn_with_opt_in(config);
-    rev_spawn_finish(entity_mut, now, clone, caller);
+    // SAFETY: cannot change entity location as DeferredWorld
+    let world = unsafe { entity_mut.world_mut().into() };
+    rev_spawn_with_caller(world, clone, now, caller);
     Ok(clone)
 }
 
@@ -284,7 +379,9 @@ pub(crate) fn rev_try_clone_and_spawn_with_opt_out_with_caller<'a, 'b>(
 ) -> Result<Entity, EntityRevDespawnedError> {
     assert_not_rev_despawned(&*entity_mut)?;
     let clone = entity_mut.clone_and_spawn_with_opt_out(config);
-    rev_spawn_finish(entity_mut, now, clone, caller);
+    // SAFETY: cannot change entity location as DeferredWorld
+    let world = unsafe { entity_mut.world_mut().into() };
+    rev_spawn_with_caller(world, clone, now, caller);
     Ok(clone)
 }
 
@@ -294,40 +391,37 @@ pub(crate) fn rev_try_despawn_single_with_caller(
     caller: MaybeLocation,
 ) -> Result<(), EntityRevDespawnedError> {
     assert_not_rev_despawned(&entity_mut)?;
-    let entity = entity_mut.id();
-    entity_mut.redo_and_buffer(
-        now,
-        UndoRedoSwap(Spawn {
-            entity,
-            location: caller,
-        }),
-    );
-    entity_mut
-        .resource_mut::<RevDespawnCleaner>()
-        .log_despawn(entity, caller, now);
+    rev_spawn_despawn_with_caller::<false>(&mut entity_mut, now, caller);
     Ok(())
 }
 
-pub(crate) fn rev_try_insert_with_caller<'a, 'b, T: Bundle>(
+pub(crate) fn rev_try_insert_with_caller<'a, 'b>(
     entity_mut: &'a mut EntityWorldMut<'b>,
-    bundle: T,
+    bundle_type_or_component_ids: impl MaybeDynamicBundle,
     mut insert_mode: InsertMode,
+    insert: impl for<'c> FnOnce(&'c mut EntityWorldMut<'b>) -> &'c mut EntityWorldMut<'b>,
     now: NonLogNow,
     caller: MaybeLocation,
 ) -> Result<&'a mut EntityWorldMut<'b>, EntityRevDespawnedError> {
     let archetype = assert_not_rev_despawned(&*entity_mut)?;
     let id = entity_mut.id();
-    entity_mut.world_scope(|world| {
+    let any_to_insert = entity_mut.world_scope(|world| {
         // todo: manually do the logic of world_scope without a closure so #[track_caller] enters below logic
         let bundle_id =
             world.resource_scope::<BundleIdOfOpCache, _>(|world, mut cache| match insert_mode {
                 InsertMode::Replace => {
-                    let (bundle_id, updated_insert_mode) = cache.get_insert::<T>(world, archetype);
+                    let (bundle_id, updated_insert_mode) =
+                        cache.get_insert(world, archetype, bundle_type_or_component_ids);
                     insert_mode = updated_insert_mode; // when there is nothing to replace, simplify to `Keep`
-                    bundle_id
+                    Some(bundle_id)
                 }
-                InsertMode::Keep => cache.get_insert_if_new::<T>(world, archetype),
+                InsertMode::Keep => {
+                    cache.get_insert_if_new(world, archetype, bundle_type_or_component_ids)
+                }
             });
+        let Some(bundle_id) = bundle_id else {
+            return false; // nothing to insert
+        };
         let cloner_builder = BundleIdCloner::<false>(bundle_id);
         let mut buffer = BundleBuffer::new(cloner_builder, id, caller);
         world
@@ -341,32 +435,44 @@ pub(crate) fn rev_try_insert_with_caller<'a, 'b, T: Bundle>(
                 let backup_buffer = entities.buffer;
                 entities.move_components(world, &mut cloner, RevDirection::NOT_LOG);
                 // ...here `buffer` becomes the buffer for the inserted components
-                buffer.state = BufferState::Unspawned(caller);
-                let buffer = BundleBufferReplace {
-                    backup_buffer,
-                    insert_buffer: buffer,
-                };
-                world.buffer_undo_redo(now, buffer);
-                world.entity_mut(id).insert(bundle); // todo: upstream a way to set the location
+                buffer.state = BufferState::Unspawned;
+                world.buffer_undo_redo(
+                    now,
+                    BundleBufferReplace {
+                        backup_buffer,
+                        insert_buffer: buffer,
+                    },
+                );
             }
             InsertMode::Keep => {
                 world.buffer_undo_redo(now, buffer);
-                world.entity_mut(id).insert_if_new(bundle); // todo: upstream a way to set the location
             }
         }
+        true
     });
+    if any_to_insert {
+        insert(entity_mut);
+        // todo: set MaybeLocation
+    }
     Ok(entity_mut)
 }
 
-pub(crate) fn rev_try_remove_with_caller<'a, 'b, T: Bundle, const WITH_REQUIRED: bool>(
+pub(crate) fn rev_try_remove_with_caller<
+    'a,
+    'b,
+    B: MaybeDynamicBundle,
+    const WITH_REQUIRED: bool,
+>(
     entity_mut: &'a mut EntityWorldMut<'b>,
+    bundle_type_or_component_ids: B,
     now: NonLogNow,
     caller: MaybeLocation,
 ) -> Result<&'a mut EntityWorldMut<'b>, EntityRevDespawnedError> {
     assert_not_rev_despawned(&*entity_mut)?;
     let id = entity_mut.id();
     entity_mut.world_scope(|world| {
-        let bundle_id = world.register_bundle::<T>().id();
+        let key = bundle_type_or_component_ids.get_key(world);
+        let bundle_id = B::to_bundle_id(key, world);
         let cloner_builder = BundleIdCloner::<WITH_REQUIRED>(bundle_id);
         let mut buffer = BundleBuffer::new(cloner_builder, id, caller);
         let mut cloner = cloner_builder.cloner(world);
@@ -377,17 +483,21 @@ pub(crate) fn rev_try_remove_with_caller<'a, 'b, T: Bundle, const WITH_REQUIRED:
     Ok(entity_mut)
 }
 
-pub(crate) fn rev_try_retain_with_caller<'a, 'b, T: Bundle>(
+pub(crate) fn rev_try_retain_with_caller<'a, 'b>(
     entity_mut: &'a mut EntityWorldMut<'b>,
+    bundle_type_or_component_ids: impl MaybeDynamicBundle,
     now: NonLogNow,
     caller: MaybeLocation,
 ) -> Result<&'a mut EntityWorldMut<'b>, EntityRevDespawnedError> {
     let archetype = assert_not_rev_despawned(&*entity_mut)?;
     let id = entity_mut.id();
-    entity_mut.world_scope(|world| {
+    let retained_any = entity_mut.world_scope(|world| {
         let bundle_id = world.resource_scope::<BundleIdOfOpCache, _>(|world, mut cache| {
-            cache.get_retain::<T>(world, archetype)
+            cache.get_retain(world, archetype, bundle_type_or_component_ids)
         });
+        let Some(bundle_id) = bundle_id else {
+            return false; // nothing to retain
+        };
         // using an opt-out cloner does not work because moving would not opt out of required but required_by components of bundle components
         let cloner_builder = BundleIdCloner::<false>(bundle_id);
         let mut buffer = BundleBuffer::new(cloner_builder, id, caller);
@@ -395,20 +505,25 @@ pub(crate) fn rev_try_retain_with_caller<'a, 'b, T: Bundle>(
         let entities = buffer.toggle_state(world);
         entities.move_components(world, &mut cloner, RevDirection::NOT_LOG);
         world.buffer_undo_redo(now, buffer);
+        true
     });
-    Ok(entity_mut)
+    if !retained_any {
+        Ok(rev_clear_with_caller(entity_mut, now, caller))
+    } else {
+        Ok(entity_mut)
+    }
 }
 
-trait MaybeDynamicBundle {
+pub(crate) trait MaybeDynamicBundle {
     fn get_key(&self, world: &mut World) -> BundleCacheKey;
-    fn to_bundle_id(self, key: BundleCacheKey, world: &mut World) -> BundleId;
+    fn to_bundle_id(key: BundleCacheKey, world: &mut World) -> BundleId;
 }
 
-impl<T: Bundle<Effect: NoBundleEffect>> MaybeDynamicBundle for PhantomData<T> {
+impl<T: Bundle> MaybeDynamicBundle for PhantomData<T> {
     fn get_key(&self, _world: &mut World) -> BundleCacheKey {
         BundleCacheKey::Typed(TypeId::of::<T>())
     }
-    fn to_bundle_id(self, _key: BundleCacheKey, world: &mut World) -> BundleId {
+    fn to_bundle_id(_key: BundleCacheKey, world: &mut World) -> BundleId {
         world.register_bundle::<T>().id()
     }
 }
@@ -417,36 +532,45 @@ impl MaybeDynamicBundle for &[ComponentId] {
     fn get_key(&self, world: &mut World) -> BundleCacheKey {
         BundleCacheKey::Dynamic(world.register_dynamic_bundle(self).id())
     }
-    fn to_bundle_id(self, key: BundleCacheKey, _world: &mut World) -> BundleId {
+    fn to_bundle_id(key: BundleCacheKey, _world: &mut World) -> BundleId {
         match key {
             BundleCacheKey::Dynamic(bundle_id) => bundle_id,
-            BundleCacheKey::Typed(_) => unreachable!() 
+            BundleCacheKey::Typed(_) => unreachable!(),
         }
     }
 }
 
+impl MaybeDynamicBundle for ComponentId {
+    fn get_key(&self, world: &mut World) -> BundleCacheKey {
+        core::slice::from_ref(self).get_key(world)
+    }
+    fn to_bundle_id(key: BundleCacheKey, world: &mut World) -> BundleId {
+        <&[ComponentId]>::to_bundle_id(key, world)
+    }
+}
+
 #[derive(Copy, Clone, Hash, PartialEq, Eq)]
-enum BundleCacheKey {
+pub(crate) enum BundleCacheKey {
     Typed(TypeId),
-    Dynamic(BundleId)
+    Dynamic(BundleId),
 }
 
 #[derive(Resource, Default)]
 pub(crate) struct BundleIdOfOpCache {
     insert: HashMap<(ArchetypeId, BundleCacheKey), (BundleId, InsertMode)>,
-    insert_if_new: HashMap<(ArchetypeId, BundleCacheKey), BundleId>,
-    retain: HashMap<(ArchetypeId, BundleCacheKey), BundleId>,
+    insert_if_new: HashMap<(ArchetypeId, BundleCacheKey), Option<BundleId>>,
+    retain: HashMap<(ArchetypeId, BundleCacheKey), Option<BundleId>>,
 }
 
 impl BundleIdOfOpCache {
-    fn get_insert<T: Bundle>(
+    fn get_insert<B: MaybeDynamicBundle>(
         &mut self,
         world: &mut World,
         archetype_id: ArchetypeId,
-        bundle: impl MaybeDynamicBundle
+        bundle_type_or_component_ids: B,
     ) -> (BundleId, InsertMode) {
-        let key = (archetype_id, bundle.get_key(world));
-        *self.insert.entry(key).or_insert_with(|| {
+        let key = (archetype_id, bundle_type_or_component_ids.get_key(world));
+        let insert = *self.insert.entry(key).or_insert_with(|| {
             // Bundle explicit:  A(2), B(2), C(2)
             // Bundle required:                    D(2), E(2)
 
@@ -458,7 +582,7 @@ impl BundleIdOfOpCache {
 
             // * = if any appear at redo, _ = unused default
 
-            let bundle_id = bundle.to_bundle_id(key.1, world);
+            let bundle_id = B::to_bundle_id(key.1, world);
             let bundle = world.bundles().get(bundle_id).unwrap();
             let archetype = world.archetypes().get(archetype_id).unwrap();
             let components: Vec<_> = bundle
@@ -482,18 +606,19 @@ impl BundleIdOfOpCache {
                 return (bundle, InsertMode::Replace);
             }
 
-            self.insert_if_new.insert(key, bundle);
+            self.insert_if_new.insert(key, Some(bundle));
             (bundle, InsertMode::Keep)
-        })
+        });
+        insert
     }
-    fn get_insert_if_new<T: Bundle>(
+    fn get_insert_if_new<B: MaybeDynamicBundle>(
         &mut self,
         world: &mut World,
         archetype_id: ArchetypeId,
-        bundle: impl MaybeDynamicBundle,
-    ) -> BundleId {
-        let key = (archetype_id, bundle.get_key(world));
-        *self.insert_if_new.entry(key).or_insert_with(|| {
+        bundle_type_or_component_ids: B,
+    ) -> Option<BundleId> {
+        let key = (archetype_id, bundle_type_or_component_ids.get_key(world));
+        let insert_if_new = *self.insert_if_new.entry(key).or_insert_with(|| {
             // Bundle explicit:  A(2), B(2), C(2)
             // Bundle required:                    D(2), E(2)
 
@@ -504,7 +629,7 @@ impl BundleIdOfOpCache {
 
             // _ = unused default
 
-            let bundle_id = bundle.to_bundle_id(key.1, world);
+            let bundle_id = B::to_bundle_id(key.1, world);
             let bundle = world.bundles().get(bundle_id).unwrap();
             let archetype = world.archetypes().get(archetype_id).unwrap();
             let components: Vec<_> = bundle
@@ -513,14 +638,23 @@ impl BundleIdOfOpCache {
                 .copied()
                 .filter(|component_id| !archetype.contains(*component_id))
                 .collect();
-            world.register_dynamic_bundle(&components).id()
-        })
+            if components.is_empty() {
+                None
+            } else {
+                Some(world.register_dynamic_bundle(&components).id())
+            }
+        });
+        insert_if_new
     }
-    fn get_retain<T: Bundle>(&mut self, world: &mut World, archetype_id: ArchetypeId,
-        bundle: impl MaybeDynamicBundle) -> BundleId {
-        let key = (archetype_id, bundle.get_key(world));
-        *self.retain.entry(key).or_insert_with(|| {
-            let bundle_id = bundle.to_bundle_id(key.1, world);
+    fn get_retain<B: MaybeDynamicBundle>(
+        &mut self,
+        world: &mut World,
+        archetype_id: ArchetypeId,
+        bundle_type_or_component_ids: B,
+    ) -> Option<BundleId> {
+        let key = (archetype_id, bundle_type_or_component_ids.get_key(world));
+        let retain = *self.retain.entry(key).or_insert_with(|| {
+            let bundle_id = B::to_bundle_id(key.1, world);
             let bundle_components: HashSet<ComponentId> = world
                 .bundles()
                 .get(bundle_id)
@@ -534,9 +668,66 @@ impl BundleIdOfOpCache {
                 .components()
                 .filter(|component_id| !bundle_components.contains(component_id))
                 .collect();
-            world.register_dynamic_bundle(&components).id()
-        })
+            if components.is_empty() {
+                None
+            } else {
+                Some(world.register_dynamic_bundle(&components).id())
+            }
+        });
+        retain
     }
+}
+
+struct SpawnDespawn<const SPAWN: bool>(BundleBuffer<()>);
+
+impl<const SPAWN: bool> SpawnDespawn<SPAWN> {
+    fn undo_redo(&mut self, world: &mut World, direction: RevDirection) {
+        self.0.undo_redo(world, direction);
+        let mut entity_mut = world.entity_mut(self.0.entity);
+        if SPAWN == direction.is_forward() {
+            entity_mut.remove::<RevDespawned>();
+        } else {
+            entity_mut.insert(RevDespawned);
+        }
+    }
+}
+
+impl<const SPAWN: bool> UndoRedo for SpawnDespawn<SPAWN> {
+    fn undo(&mut self, world: &mut World) {
+        self.undo_redo(world, RevDirection::BackwardLog);
+    }
+    fn redo(&mut self, world: &mut World) {
+        self.undo_redo(world, RevDirection::FORWARD_LOG);
+    }
+}
+
+pub(crate) fn rev_spawn_despawn_with_caller<const SPAWN: bool>(
+    entity_mut: &mut EntityWorldMut,
+    now: NonLogNow,
+    caller: MaybeLocation,
+) {
+    let entity = entity_mut.id();
+    let mut this = SpawnDespawn::<SPAWN>(BundleBuffer::new((), entity, caller));
+    let mut cleaner = entity_mut.resource_mut::<RevDespawnCleaner>();
+    if SPAWN {
+        cleaner.log_spawn(entity, caller, now);
+    } else {
+        cleaner.log_despawn(entity, caller, now);
+        entity_mut.world_scope(|world| this.undo_redo(world, RevDirection::NOT_LOG));
+    }
+    entity_mut.buffer_undo_redo(now, this);
+}
+
+pub(crate) fn rev_spawn_with_caller(
+    mut world: DeferredWorld,
+    entity: Entity,
+    now: NonLogNow,
+    caller: MaybeLocation,
+) {
+    let this = SpawnDespawn::<true>(BundleBuffer::new((), entity, caller));
+    let mut cleaner = world.resource_mut::<RevDespawnCleaner>();
+    cleaner.log_spawn(entity, caller, now);
+    world.buffer_undo_redo(now, this);
 }
 
 pub(crate) fn assert_not_rev_despawned<'a, E: 'a + Into<EntityRef<'a>>>(
@@ -554,6 +745,7 @@ struct BundleBuffer<Cloner> {
     cloner_builder: Cloner,
     entity: Entity,
     state: BufferState,
+    caller: MaybeLocation,
 }
 
 trait ClonerBuilder: Send + 'static {
@@ -566,15 +758,14 @@ struct BundleIdCloner<const WITH_REQUIRED: bool>(BundleId);
 impl<const WITH_REQUIRED: bool> ClonerBuilder for BundleIdCloner<WITH_REQUIRED> {
     fn cloner(&self, world: &mut World) -> EntityCloner {
         let mut builder = EntityCloner::build_opt_in(world);
-        builder
-            .move_components(true)
-            .without_required_components(|builder| {
-                if WITH_REQUIRED {
-                    builder.allow_by_ids(self.0);
-                } else {
-                    builder.allow_by_ids_if_new(self.0);
-                }
+        builder.move_components(true);
+        if WITH_REQUIRED {
+            builder.allow_by_ids(self.0);
+        } else {
+            builder.without_required_components(|builder| {
+                builder.allow_by_ids(self.0);
             });
+        }
         builder.finish()
     }
 }
@@ -589,7 +780,7 @@ impl ClonerBuilder for () {
 
 #[derive(Copy, Clone)]
 enum BufferState {
-    Unspawned(MaybeLocation),
+    Unspawned,
     Empty(Entity),
     Filled(Entity),
 }
@@ -618,21 +809,22 @@ impl BundleEntities {
 }
 
 impl<Cloner: ClonerBuilder> BundleBuffer<Cloner> {
-    fn new(cloner_builder: Cloner, entity: Entity, location: MaybeLocation) -> Self {
+    fn new(cloner_builder: Cloner, entity: Entity, caller: MaybeLocation) -> Self {
         Self {
             cloner_builder,
             entity,
-            state: BufferState::Unspawned(location),
+            state: BufferState::Unspawned,
+            caller,
         }
     }
     fn toggle_state(&mut self, world: &mut World) -> BundleEntities {
         match self.state {
-            BufferState::Unspawned(location) => {
+            BufferState::Unspawned => {
                 let buffer = world.spawn(RevDespawned).id();
                 // todo: set location in RevDespawned change meta https://github.com/bevyengine/bevy/issues/20494
                 world
                     .resource_mut::<RevDespawnCleaner>()
-                    .log_spawn_buffer(Some(buffer), location);
+                    .log_spawn_buffer(Some(buffer), self.caller);
                 self.state = BufferState::Filled(buffer);
                 BundleEntities {
                     target: buffer,

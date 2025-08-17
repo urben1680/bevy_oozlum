@@ -1,4 +1,6 @@
-use crate::{meta::RevMeta, panic_on_error_events, prelude::UndoRedoBuffer, undo_redo::RevIsDespawned};
+use crate::{
+    meta::RevMeta, panic_on_error_events, undo_redo::RevIsDespawned, undo_redo::UndoRedoBuffer,
+};
 
 use super::*;
 
@@ -26,7 +28,9 @@ fn rev_clear() {
     let now = world.resource::<RevMeta>().non_log_now().unwrap();
     let mut entity_mut = world.spawn(Explicit::<1>(0));
 
-    let entity = rev_try_clear_with_caller(&mut entity_mut, now, MaybeLocation::caller()).unwrap().id();
+    let entity = rev_try_clear_with_caller(&mut entity_mut, now, MaybeLocation::caller())
+        .unwrap()
+        .id();
     let mut buffer = world.remove_resource::<UndoRedoBuffer>().unwrap();
     let entity_ref = world.entity(entity);
     assert_eq!(entity_ref.get::<Explicit::<1>>(), None);
@@ -68,18 +72,11 @@ fn rev_despawn_single() {
 fn rev_insert() {
     let mut world = setup();
     let now = world.resource::<RevMeta>().non_log_now().unwrap();
-    let mut entity_mut = world.spawn((
-        Explicit::<1>(1),
-        Required::<1>(1)
-    ));
+    let mut entity_mut = world.spawn((Explicit::<1>(1), Required::<1>(1)));
 
-    let entity = rev_try_insert_with_caller(
-        &mut entity_mut, 
-        (Explicit::<1>(0), Explicit::<2>(0)),
-        InsertMode::Replace,
-        now,
-        MaybeLocation::caller()
-    ).unwrap().id();
+    let entity = entity_mut
+        .rev_insert(now, (Explicit::<1>(0), Explicit::<2>(0)))
+        .id();
     let mut buffer = world.remove_resource::<UndoRedoBuffer>().unwrap();
     let entity_ref = world.entity(entity);
     assert_eq!(entity_ref.get::<Explicit<1>>(), Some(&Explicit(0)));
@@ -106,19 +103,11 @@ fn rev_insert() {
 fn rev_insert_if_new() {
     let mut world = setup();
     let now = world.resource::<RevMeta>().non_log_now().unwrap();
-    let mut entity_mut = world.spawn((
-        Explicit::<1>(1),
-        Required::<1>(1),
-        Required::<2>(1)
-    ));
+    let mut entity_mut = world.spawn((Explicit::<1>(1), Required::<1>(1), Required::<2>(1)));
 
-    let entity = rev_try_insert_with_caller(
-        &mut entity_mut, 
-        (Explicit::<1>(0), Explicit::<2>(0), Explicit::<3>(0)),
-        InsertMode::Keep,
-        now,
-        MaybeLocation::caller()
-    ).unwrap().id();
+    let entity = entity_mut
+        .rev_insert_if_new(now, (Explicit::<1>(0), Explicit::<2>(0), Explicit::<3>(0)))
+        .id();
     let mut buffer = world.remove_resource::<UndoRedoBuffer>().unwrap();
     let entity_ref = world.entity(entity);
     assert_eq!(entity_ref.get::<Explicit<1>>(), Some(&Explicit(1)));
@@ -151,16 +140,11 @@ fn rev_insert_if_new() {
 fn rev_remove() {
     let mut world = setup();
     let now = world.resource::<RevMeta>().non_log_now().unwrap();
-    let mut entity_mut = world.spawn((
-        Explicit::<1>(0),
-        Explicit::<2>(0)
-    ));
+    let mut entity_mut = world.spawn((Explicit::<1>(0), Explicit::<2>(0)));
 
-    let entity = rev_try_remove_with_caller::<(Explicit::<2>, Explicit::<3>), false>(
-        &mut entity_mut, 
-        now, 
-        MaybeLocation::caller()
-    ).unwrap().id();
+    let entity = entity_mut
+        .rev_remove::<(Explicit<2>, Explicit<3>)>(now)
+        .id();
     let mut buffer = world.remove_resource::<UndoRedoBuffer>().unwrap();
     let entity_ref = world.entity(entity);
     assert_eq!(entity_ref.get::<Explicit<1>>(), Some(&Explicit(0)));
@@ -193,16 +177,11 @@ fn rev_remove() {
 fn rev_remove_with_requires() {
     let mut world = setup();
     let now = world.resource::<RevMeta>().non_log_now().unwrap();
-    let mut entity_mut = world.spawn((
-        Explicit::<1>(0),
-        Explicit::<2>(0)
-    ));
+    let mut entity_mut = world.spawn((Explicit::<1>(0), Explicit::<2>(0)));
 
-    let entity = rev_try_remove_with_caller::<(Explicit::<2>, Explicit::<3>), true>(
-        &mut entity_mut, 
-        now, 
-        MaybeLocation::caller()
-    ).unwrap().id();
+    let entity = entity_mut
+        .rev_remove_with_requires::<(Explicit<2>, Explicit<3>)>(now)
+        .id();
     let mut buffer = world.remove_resource::<UndoRedoBuffer>().unwrap();
     let entity_ref = world.entity(entity);
     assert_eq!(entity_ref.get::<Explicit<1>>(), Some(&Explicit(0)));
@@ -235,17 +214,11 @@ fn rev_remove_with_requires() {
 fn rev_retain() {
     let mut world = setup();
     let now = world.resource::<RevMeta>().non_log_now().unwrap();
-    let mut entity_mut = world.spawn((
-        Explicit::<1>(0),
-        Explicit::<2>(0),
-        Explicit::<3>(0)
-    ));
+    let mut entity_mut = world.spawn((Explicit::<1>(0), Explicit::<2>(0), Explicit::<3>(0)));
 
-    let entity = rev_try_retain_with_caller::<(Explicit<2>, Required<3>, Explicit<4>)>(
-        &mut entity_mut,
-        now,
-        MaybeLocation::caller()
-    ).unwrap().id();
+    let entity = entity_mut
+        .rev_retain::<(Explicit<2>, Required<3>, Explicit<4>)>(now)
+        .id();
     let mut buffer = world.remove_resource::<UndoRedoBuffer>().unwrap();
     let entity_ref = world.entity(entity);
     assert_eq!(entity_ref.get::<Explicit<1>>(), None);
@@ -279,3 +252,5 @@ fn rev_retain() {
     assert_eq!(entity_ref.get::<Explicit<4>>(), None);
     assert_eq!(entity_ref.get::<Required<4>>(), None);
 }
+
+// todo: test noop situations

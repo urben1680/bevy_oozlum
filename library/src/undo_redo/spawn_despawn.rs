@@ -17,30 +17,9 @@ use bevy::{
 use crate::{
     log::{DenseTransitionsLog, OutOfLog},
     meta::{NonLogNow, RevDirection, RevMeta},
-    undo_redo::Spawn,
 };
 
-use super::{BufferInProgressRes, BuffersUndoRedo, RevOpInProgress};
-
-pub(crate) fn rev_spawn_finish(
-    some_entity_world_mut: &mut EntityWorldMut,
-    now: NonLogNow,
-    spawned_entity: Entity,
-    caller: MaybeLocation,
-) {
-    some_entity_world_mut.world_scope(|world| {
-        world.buffer_undo_redo(
-            now,
-            Spawn {
-                entity: spawned_entity,
-                location: caller,
-            },
-        );
-        world
-            .resource_mut::<RevDespawnCleaner>()
-            .log_spawn(spawned_entity, caller, now);
-    });
-}
+use super::{BufferInProgressRes, RevOpInProgress};
 
 #[derive(Resource, Default, Reflect)]
 pub(crate) struct RevDespawnCleaner {
@@ -260,7 +239,7 @@ impl RevDespawnCleaner {
     }
 }
 
-#[derive(Component, Debug, Reflect)]
+#[derive(Component, Debug, Reflect, Clone, Copy)]
 #[component(immutable)]
 pub(crate) struct RevDespawned; // todo: store MaybeLocation in component change meta
 

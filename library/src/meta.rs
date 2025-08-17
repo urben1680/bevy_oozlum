@@ -94,7 +94,7 @@ impl RevDirection {
     pub fn is_log(self) -> bool {
         self != Self::NOT_LOG
     }
-    pub fn is_present(self, world: &World) -> bool {
+    pub fn is_running(self, world: &World) -> bool {
         world
             .get_resource::<RevMeta>()
             .and_then(RevMeta::get_running_direction)
@@ -233,6 +233,12 @@ impl InternalDirection {
 /// todo
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct NonLogNow(pub(crate) u64);
+
+impl NonLogNow {
+    pub fn get(self) -> u64 {
+        self.0
+    }
+}
 
 /// RevMeta is used to control the processing of reversible systems.
 ///
@@ -398,6 +404,7 @@ impl RevMeta {
     /// - `RevUpdate` is missing.
     /// This indicates that this system ran recursively, this schedule was never populated or it was removed. This error
     /// will cause `RevMeta` to be reverted to its state it was in before the run was attempted.
+    // todo: tests
     pub fn try_run_rev_update(world: &mut World) -> Result<(), BevyError> {
         world.try_resource_scope(|world: &mut World, mut meta: Mut<Self>| {
             world.init_resource::<RevDespawnCleaner>();
@@ -444,11 +451,10 @@ impl RevMeta {
             });
 
             match result.transpose() {
+                Ok(None) => Ok(()),
                 // remove meta as a guard against invalid insertions and to make resource_scope not panic
-                Ok(frame) => match world.remove_resource::<Self>() {
+                Ok(Some(frame)) => match world.remove_resource::<Self>() {
                     None => {
-                        // meta could not have been removed without running RevUpdate, so frame is Some
-                        let frame = frame.unwrap();
                         Err(TryRunRevUpdateError::RevMetaRemovedInSchedule { frame })?
                     }
                     Some(updated) => {

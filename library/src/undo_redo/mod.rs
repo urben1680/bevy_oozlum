@@ -7,7 +7,12 @@ use std::{
 
 use bevy::{
     ecs::{
-        bundle::{Bundle, BundleFromComponents}, change_detection::MaybeLocation, entity::{Entity, EntityDoesNotExistError}, resource::Resource, system::{Commands, EntityCommands}, world::{DeferredWorld, EntityWorldMut, FromWorld, World}
+        bundle::{Bundle, BundleFromComponents},
+        change_detection::MaybeLocation,
+        entity::{Entity, EntityDoesNotExistError},
+        resource::Resource,
+        system::{Commands, EntityCommands},
+        world::{DeferredWorld, EntityWorldMut, FromWorld, World},
     },
     platform::cell::SyncCell,
     utils::prelude::DebugName,
@@ -18,18 +23,16 @@ use crate::{
     meta::{NonLogNow, RevDirection, RevMeta},
 };
 
-//mod commands;
-mod spawn_despawn;
-//mod entity_commands;
+mod commands;
+mod entity_commands;
 mod entity_world;
-//mod relationship;
+mod spawn_despawn;
 mod world;
 
-//pub use commands::*;
-pub use spawn_despawn::*;
-//pub use entity_commands::*;
+pub use commands::*;
+pub use entity_commands::*;
 pub use entity_world::*;
-//pub(crate) use relationship::*;
+pub use spawn_despawn::*;
 pub use world::*;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -45,25 +48,6 @@ impl Display for EntityRevDespawnedError {
             "entity {} is marked as reversibly despawned",
             self.entity
         )
-        /* todo: implement with https://github.com/bevyengine/bevy/issues/20494
-        match self.location.into_option() {
-            None => write!(
-                f,
-                "entity {} is marked as reversibly despawned (enable `track_location` feature for more details)",
-                self.entity
-            ),
-            Some(BUFFER_LOCATION) => write!(
-                f,
-                "entity {} is a bundle buffer which is not intended to be manually modified",
-                self.entity
-            ),
-            Some(location) => write!(
-                f,
-                "entity {} is marked as reversibly despawned by {location}",
-                self.entity
-            ),
-        }
-        */
     }
 }
 
@@ -127,6 +111,7 @@ pub trait BuffersUndoRedo {
 }
 
 impl BuffersUndoRedo for Commands<'_, '_> {
+    #[track_caller]
     fn buffer_undo_redo(&mut self, now: NonLogNow, undo_redo: impl UndoRedo) {
         self.queue(move |world: &mut World| {
             world.buffer_undo_redo(now, undo_redo);
@@ -135,6 +120,7 @@ impl BuffersUndoRedo for Commands<'_, '_> {
 }
 
 impl BuffersUndoRedo for EntityCommands<'_> {
+    #[track_caller]
     fn buffer_undo_redo(&mut self, now: NonLogNow, undo_redo: impl UndoRedo) {
         self.queue(move |mut world: EntityWorldMut| {
             world.buffer_undo_redo(now, undo_redo);
@@ -143,12 +129,14 @@ impl BuffersUndoRedo for EntityCommands<'_> {
 }
 
 impl BuffersUndoRedo for World {
+    #[track_caller]
     fn buffer_undo_redo(&mut self, now: NonLogNow, undo_redo: impl UndoRedo) {
         DeferredWorld::buffer_undo_redo(&mut self.into(), now, undo_redo);
     }
 }
 
 impl BuffersUndoRedo for EntityWorldMut<'_> {
+    #[track_caller]
     fn buffer_undo_redo(&mut self, now: NonLogNow, undo_redo: impl UndoRedo) {
         // SAFETY: Only resources are accessed, entity location remains unchanged
         let world = unsafe { self.world_mut() };
@@ -157,26 +145,14 @@ impl BuffersUndoRedo for EntityWorldMut<'_> {
 }
 
 impl BuffersUndoRedo for DeferredWorld<'_> {
+    #[track_caller]
     fn buffer_undo_redo(&mut self, now: NonLogNow, undo_redo: impl UndoRedo) {
         debug_assert_eq!(
             self.get_resource::<RevMeta>().map(RevMeta::non_log_now),
             Some(Some(now))
         );
-        self.get_resource_mut::<UndoRedoBuffer>()
-            .expect(UndoRedoBuffer::EXPECT_IN_WORLD)
+        self.resource_mut::<UndoRedoBuffer>()
             .buffer_undo_redo(now, undo_redo);
-    }
-}
-
-impl BuffersUndoRedo for UndoRedoBuffer {
-    // an unused NonLogNow is included intentionally here to bring a type-based guarantee that this happens during the non-log direction
-    fn buffer_undo_redo(&mut self, _: NonLogNow, undo_redo: impl UndoRedo) {
-        let name = type_name_of_val(&undo_redo);
-        let boxed = BoxedUndoRedo {
-            undo_redo: SyncCell::new(Box::new(undo_redo)),
-            name,
-        };
-        self.0.push(boxed);
     }
 }
 
@@ -186,14 +162,22 @@ impl BuffersUndoRedo for UndoRedoBuffer {
 ///
 /// Do not remove or overwrite this resource.
 #[derive(Resource, Default, Debug)] // todo: wrap in private resource
-pub struct UndoRedoBuffer(Vec<BoxedUndoRedo>);
+pub(crate) struct UndoRedoBuffer(Vec<BoxedUndoRedo>);
 
 impl UndoRedoBuffer {
-    pub(crate) const EXPECT_IN_WORLD: &'static str =
-        "BuffersUndoRedo methods need the UndoRedoBuffer resource but it is missing";
     /// Returns `true` when the buffer is empty, otherwise returns `false`.
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
+    }
+    #[track_caller]
+    pub(crate) fn buffer_undo_redo(&mut self, now: NonLogNow, undo_redo: impl UndoRedo) {
+        let name = type_name_of_val(&undo_redo);
+        let boxed = BoxedUndoRedo {
+            undo_redo: SyncCell::new(Box::new(undo_redo)),
+            name,
+            caller: MaybeLocation::caller(),
+        };
+        self.0.push(boxed);
     }
 }
 
@@ -214,11 +198,12 @@ impl UndoRedo for UndoRedoBuffer {
 struct BoxedUndoRedo {
     undo_redo: SyncCell<Box<dyn UndoRedo>>,
     name: &'static str,
+    caller: MaybeLocation,
 }
 
 impl Debug for BoxedUndoRedo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.name)
+        write!(f, "{} {}", self.name, self.caller)
     }
 }
 
@@ -486,27 +471,6 @@ impl RevOpInProgress {
 #[derive(Resource)]
 pub(crate) struct BufferInProgressRes(pub(crate) RevOpInProgress);
 
-/* 
-pub(crate) fn on_rev_buffer_relationship<R: Relationship>(_: On<Add, (R, R::RelationshipTarget)>, world: DeferredWorld, mut commands: Commands) {
-    // todo: where to assert on no-extra-data?
-    if let Some(RevOpInProgress::Buffer { direction: RevDirection::NOT_LOG, buffer }) = RevOpInProgress::check(&world) {
-        // event target does not need to be checked on, during NOT_LOG and RevOpInProgress being present, this Add always targets the buffer
-
-        // todo: upstream DeferredWorld::modify_component for one less indirection via commands
-        commands.queue(move |world: &mut World| {
-            let mut buffer = world.entity_mut(buffer);
-            if let Some(relationship) = buffer.take::<R>() {
-                todo!()
-            }
-            if let Some(target) = buffer.take::<R::RelationshipTarget>() {
-                todo!()
-            }
-        })
-        // todo: in RevDespawned hook/observer linked despawn umsetzen, darauf achten das buffers auch RevDespawned haben
-    }
-}
-*/
-
 #[derive(Copy, Clone, Debug)]
 pub struct UndoRedoSwap<T: UndoRedo>(pub T);
 
@@ -562,17 +526,24 @@ impl<R: Resource> UndoRedo for ResourceSwap<R> {
     }
 }
 
-struct Spawn {
+struct SpawnEmpty {
     entity: Entity,
-    location: MaybeLocation,
+    caller: MaybeLocation,
 }
 
-impl UndoRedo for Spawn {
+impl UndoRedo for SpawnEmpty {
     fn undo(&mut self, world: &mut World) {
         world.entity_mut(self.entity).insert(RevDespawned);
-        // todo: set location of RevDespawned change meta https://github.com/bevyengine/bevy/issues/20494
     }
     fn redo(&mut self, world: &mut World) {
         world.entity_mut(self.entity).remove::<RevDespawned>();
     }
+}
+
+fn rev_spawn_empty_inner(entity_mut: &mut EntityWorldMut, now: NonLogNow, caller: MaybeLocation) {
+    let entity = entity_mut.id();
+    entity_mut.buffer_undo_redo(now, SpawnEmpty { entity, caller });
+    entity_mut
+        .resource_mut::<RevDespawnCleaner>()
+        .log_spawn(entity, caller, now);
 }

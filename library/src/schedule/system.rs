@@ -550,7 +550,7 @@ mod test {
         },
     };
 
-    use crate::{panic_on_error_events, prelude::*};
+    use crate::{panic_on_error_events, prelude::*, undo_redo::UndoRedoBuffer};
 
     fn blank_undo_redo(_: &mut World, _: UndoRedoDirection) {}
 
