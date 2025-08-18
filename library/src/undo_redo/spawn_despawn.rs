@@ -10,7 +10,7 @@ use bevy::{
             FilteredEntityMut, FilteredEntityRef, World,
         },
     },
-    log::{error, error_once, once},
+    log::{error, error_once},
     reflect::Reflect,
 };
 
@@ -21,7 +21,7 @@ use crate::{
 
 use super::{BufferInProgressRes, RevOpInProgress};
 
-#[derive(Resource, Default, Reflect)]
+#[derive(Resource, Default, Reflect, Debug)]
 pub(crate) struct RevDespawnCleaner {
     spawn: DenseTransitionsLog<Entity>,
     despawn: DenseTransitionsLog<Entity>,
@@ -59,6 +59,14 @@ impl RevDespawnCleaner {
         self.spawn_buffer_queue.push((buffer, location));
     }
 
+    pub(crate) fn log_spawn_buffer_batch_reserve(&mut self, buffers: usize, location: MaybeLocation) {
+        self.spawn_buffer_queue.extend(core::iter::repeat_n((None, location), buffers));
+    }
+
+    pub(crate) fn log_spawn_buffer_batch(&mut self, buffers: &[Entity], location: MaybeLocation) {
+        self.spawn_buffer_queue.extend(buffers.into_iter().map(|buffer| (Some(*buffer), location)));
+    }
+
     /// Despawn entities that contain [`RevDespawned`] and their relevant operation (spawn, despawn, move_components) fell out of log.
     pub(crate) fn update(&mut self, meta: &RevMeta, world: &mut World) -> Result<(), OutOfLog> {
         match meta.running_direction() {
@@ -68,7 +76,8 @@ impl RevDespawnCleaner {
         }
     }
 
-    fn forward(&mut self, world: &mut World, max_past_len: usize) {
+    pub(crate) fn forward(&mut self, world: &mut World, mut max_past_len: usize) {
+        max_past_len += 1; // compensate transition log behavior to pop transitions too early
         let progress = RevOpInProgress::FinalDespawn { buffer: false };
         progress.scope(world, |world| {
             let (despawned, _) = self.spawn.drain_future();
@@ -102,7 +111,7 @@ impl RevDespawnCleaner {
             for entity in despawned {
                 let _ = world.try_despawn(entity); // todo: upstream a way to set the location
             }
-            self.spawn_buffer
+            let despawned = self.spawn_buffer
                 .push_and_pop_past(max_past_len, |mut log| {
                     log.extend(self.spawn_buffer_queue.drain(..));
                     log.extend(
@@ -110,11 +119,17 @@ impl RevDespawnCleaner {
                             .drain(..)
                             .map(|(entity, location)| (Some(entity), location)),
                     );
-                });
+                })
+                .into_iter()
+                .flat_map(|value_entry| value_entry.value)
+                .flat_map(|(entity, _)| entity);
+            for entity in despawned {
+                let _ = world.try_despawn(entity); // todo: upstream a way to set the location
+            }
         });
     }
 
-    fn forward_log(&mut self) -> Result<(), OutOfLog> {
+    pub(crate) fn forward_log(&mut self) -> Result<(), OutOfLog> {
         self.spawn.forward_log()?;
         let _ok = self.despawn.forward_log();
         let _ok = self.spawn_buffer.forward_log();
@@ -156,7 +171,7 @@ impl RevDespawnCleaner {
         Ok(())
     }
 
-    fn backward_log(&mut self) -> Result<(), OutOfLog> {
+    pub(crate) fn backward_log(&mut self) -> Result<(), OutOfLog> {
         self.spawn.backward_log()?;
         let _ok = self.despawn.backward_log();
         let mut buffer_iter = self
@@ -210,11 +225,18 @@ impl RevDespawnCleaner {
                     "a reversible despawn was queued during the backward direction instead of the non-log direction"
                 );
             }
-            once!(if buffer_iter.any(|buffer| buffer.0.is_none()) {
-                error!(
-                    "an internal buffer entity reservation remained unclaimed during the backward direction"
-                );
-            });
+            {
+                use core::sync::atomic::{AtomicBool, Ordering};
+                static SKIP_ITER_CHECK: AtomicBool = AtomicBool::new(false);
+                if !SKIP_ITER_CHECK.load(Ordering::Relaxed) {
+                    if buffer_iter.any(|buffer| buffer.0.is_none()) {
+                        SKIP_ITER_CHECK.store(true, Ordering::Relaxed);
+                        error!(
+                            "an internal buffer entity reservation remained unclaimed during the backward direction"
+                        );
+                    }
+                }
+            }
         } else {
             for (_, location) in &self.spawn_queue {
                 error!(
@@ -298,7 +320,74 @@ impl RevIsDespawned for EntityWorldMut<'_> {
 
 #[cfg(test)]
 mod test {
+    use crate::panic_on_error_events;
+
     use super::*;
 
-    // todo
+    #[test]
+    fn log_traversal_works() {
+        panic_on_error_events();
+        let mut world = World::new();
+        let mut cleaner = RevDespawnCleaner::default();
+
+        // do 1
+        let spawn_at_1_despawn_at_2 = world.spawn_empty().id();
+        cleaner.log_spawn(spawn_at_1_despawn_at_2, MaybeLocation::caller(), NonLogNow(1));
+        cleaner.forward(&mut world, 0);
+        assert!(world.get_entity(spawn_at_1_despawn_at_2).is_ok(), "{cleaner:#?}");
+
+        // do 2
+        let spawn_at_2 = world.spawn_empty().id();
+        let spawn_buffer_at_2 = world.spawn_empty().id();
+        let reserve_buffer_at_2;
+        cleaner.log_spawn(spawn_at_2, MaybeLocation::caller(), NonLogNow(2));
+        cleaner.log_despawn(spawn_at_1_despawn_at_2, MaybeLocation::caller(), NonLogNow(2));
+        cleaner.log_spawn_buffer(Some(spawn_buffer_at_2), MaybeLocation::caller());
+        cleaner.log_spawn_buffer(None, MaybeLocation::caller());
+        cleaner.forward(&mut world, 1);
+        assert!(world.get_entity(spawn_at_1_despawn_at_2).is_ok(), "{cleaner:#?}");
+        assert!(world.get_entity(spawn_at_2).is_ok(), "{cleaner:#?}");
+        assert!(world.get_entity(spawn_buffer_at_2).is_ok(), "{cleaner:#?}");
+
+        // undo 2
+        reserve_buffer_at_2 = world.spawn_empty().id();
+        cleaner.log_spawn_buffer(Some(reserve_buffer_at_2), MaybeLocation::caller());
+        cleaner.backward_log().unwrap();
+
+        // redo 2
+        cleaner.forward_log().unwrap();
+
+        // do 3
+        let spawn_at_3 = world.spawn_empty().id();
+        cleaner.log_spawn(spawn_at_3, MaybeLocation::caller(), NonLogNow(3));
+        cleaner.forward(&mut world, 1);
+        assert!(world.get_entity(spawn_at_1_despawn_at_2).is_ok(), "{cleaner:#?}");
+        assert!(world.get_entity(spawn_at_2).is_ok(), "{cleaner:#?}");
+        assert!(world.get_entity(spawn_buffer_at_2).is_ok(), "{cleaner:#?}");
+        assert!(world.get_entity(spawn_at_3).is_ok(), "{cleaner:#?}");
+
+        // do 4
+        let spawn_at_4 = world.spawn_empty().id();
+        let spawn_buffer_at_4 = world.spawn_empty().id();
+        cleaner.log_spawn(spawn_at_4, MaybeLocation::caller(), NonLogNow(4));
+        cleaner.log_spawn_buffer(Some(spawn_buffer_at_4), MaybeLocation::caller());
+        cleaner.forward(&mut world, 1);
+        assert!(world.get_entity(spawn_at_1_despawn_at_2).is_err(), "{cleaner:#?}"); // finalized despawn_at_2
+        assert!(world.get_entity(spawn_at_2).is_ok(), "{cleaner:#?}");
+        assert!(world.get_entity(reserve_buffer_at_2).is_err(), "{cleaner:#?}"); // buffer out of log
+        assert!(world.get_entity(spawn_buffer_at_2).is_err(), "{cleaner:#?}"); // buffer out of log
+        assert!(world.get_entity(spawn_at_3).is_ok(), "{cleaner:#?}");
+        assert!(world.get_entity(spawn_at_4).is_ok(), "{cleaner:#?}");
+        assert!(world.get_entity(spawn_buffer_at_4).is_ok(), "{cleaner:#?}");
+
+        // undo 4
+        cleaner.backward_log().unwrap();
+
+        // do fresh 4
+        cleaner.forward(&mut world, 1);
+        assert!(world.get_entity(spawn_at_2).is_ok(), "{cleaner:#?}");
+        assert!(world.get_entity(spawn_at_3).is_ok(), "{cleaner:#?}");
+        assert!(world.get_entity(spawn_at_4).is_err(), "{cleaner:#?}"); // future spawn undone with forward
+        assert!(world.get_entity(spawn_buffer_at_4).is_err(), "{cleaner:#?}"); // future spawn buffer undone with forward
+    }
 }

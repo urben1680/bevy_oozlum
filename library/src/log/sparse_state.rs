@@ -1,8 +1,6 @@
 use core::fmt::Debug;
 use std::{
-    collections::{TryReserveError, VecDeque, vec_deque::Iter},
-    hash::Hash,
-    ops::Deref,
+    collections::{vec_deque::Iter, TryReserveError, VecDeque}, fmt::Display, hash::Hash, ops::Deref
 };
 
 use bevy::reflect::Reflect;
@@ -19,6 +17,12 @@ pub struct SparseStateLog<T> {
     skips: usize,
     skips_max: usize,
     past_len: usize,
+}
+
+impl<T: Display> Display for SparseStateLog<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.present.fmt(f)
+    }
 }
 
 #[cfg(feature = "serde")]

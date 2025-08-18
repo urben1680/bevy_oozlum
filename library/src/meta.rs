@@ -289,7 +289,7 @@ impl RevMeta {
         past_end: 1,
         now: 0,
         future_end: 1,
-        queue: Some(InternalDirection::Pause),
+        queue: None,
         direction: InternalDirection::RunningForward,
     };
     pub const fn new(max_world_states: Option<NonZeroU64>, now: u64, paused: bool) -> Self {

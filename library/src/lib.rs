@@ -24,6 +24,7 @@ Enhancements:
 - integrate BuffersUndoRedo in new Rev wrappers, find good way to support DeferredWorld
 - make buffer methods not-pub
 - integrate entity_log_scoped
+- Display impl of logs
 - missing apis:
 -- EntityWorldMut::clone_with
 -- EntityWorldMut::insert_reflect

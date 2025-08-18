@@ -298,9 +298,11 @@ where
             let buffers = self
                 .buffers
                 .get_or_insert_with(|| {
-                    world
+                    let buffers = world
                         .spawn_batch(core::iter::repeat_n(RevDespawned, self.entities.len()))
-                        .collect()
+                        .collect::<Box<[_]>>();
+                    world.resource_mut::<RevDespawnCleaner>().log_spawn_buffer_batch(&buffers, self.caller);
+                    buffers
                 })
                 .iter()
                 .copied();
@@ -344,9 +346,9 @@ where
         },
     );
 
-    world
-        .resource_mut::<RevDespawnCleaner>()
-        .log_spawn_batch(&entities, caller, now);
+    let mut cleaner = world.resource_mut::<RevDespawnCleaner>();
+    cleaner.log_spawn_batch(&entities, caller, now);
+    cleaner.log_spawn_buffer_batch_reserve(entities.len(), caller);
 
     entities
 }

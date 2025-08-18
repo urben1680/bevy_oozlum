@@ -1,10 +1,7 @@
 use std::{
-    collections::{
-        TryReserveError, VecDeque,
-        vec_deque::{Drain, IntoIter, Iter},
-    },
-    fmt::Debug,
-    ops::{Deref, Range},
+    any::TypeId, collections::{
+        vec_deque::{Drain, IntoIter, Iter}, TryReserveError, VecDeque
+    }, fmt::{Debug, Display}, ops::{Deref, Range}
 };
 
 use bevy::{reflect::Reflect, utils::default};
@@ -20,6 +17,30 @@ pub struct SparseStatesLog<T, U = (), const AMOUNT_BYTES: usize = USIZE_BYTES> {
     amounts: SparseStateLog<EntryAmount<U, AMOUNT_BYTES>>,
     states: VecDeque<T>,
     index: usize,
+}
+
+impl<T: Display, U: Display + 'static, const AMOUNT_BYTES: usize> Display for SparseStatesLog<T, U, AMOUNT_BYTES> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let entry_amount = &*self.amounts;
+        let range = self.index..(self.index + entry_amount.amount());
+        let write_u = TypeId::of::<U>() != TypeId::of::<()>();
+        if write_u {
+            write!(f, "({}, ", entry_amount.entry)?;
+        }
+        write!(f, "[")?;
+        let mut iter = self.states.range(range);
+        if let Some(first) = iter.next() {
+            write!(f, "{first}")?;
+        }
+        for state in iter {
+            write!(f, ", {state}")?;
+        }
+        write!(f, "]")?;
+        if write_u {
+            write!(f, ")")?;
+        }
+        Ok(())
+    }
 }
 
 #[cfg(feature = "serde")]

@@ -711,6 +711,7 @@ pub(crate) fn rev_spawn_despawn_with_caller<const SPAWN: bool>(
     let mut cleaner = entity_mut.resource_mut::<RevDespawnCleaner>();
     if SPAWN {
         cleaner.log_spawn(entity, caller, now);
+        cleaner.log_spawn_buffer(None, caller);
     } else {
         cleaner.log_despawn(entity, caller, now);
         entity_mut.world_scope(|world| this.undo_redo(world, RevDirection::NOT_LOG));
@@ -727,6 +728,7 @@ pub(crate) fn rev_spawn_with_caller(
     let this = SpawnDespawn::<true>(BundleBuffer::new((), entity, caller));
     let mut cleaner = world.resource_mut::<RevDespawnCleaner>();
     cleaner.log_spawn(entity, caller, now);
+    cleaner.log_spawn_buffer(None, caller);
     world.buffer_undo_redo(now, this);
 }
 
@@ -773,6 +775,7 @@ impl<const WITH_REQUIRED: bool> ClonerBuilder for BundleIdCloner<WITH_REQUIRED> 
 impl ClonerBuilder for () {
     fn cloner(&self, world: &mut World) -> EntityCloner {
         let mut builder = EntityCloner::build_opt_out(world);
+        builder.deny::<RevDespawned>();
         builder.move_components(true);
         builder.finish()
     }
@@ -821,7 +824,6 @@ impl<Cloner: ClonerBuilder> BundleBuffer<Cloner> {
         match self.state {
             BufferState::Unspawned => {
                 let buffer = world.spawn(RevDespawned).id();
-                // todo: set location in RevDespawned change meta https://github.com/bevyengine/bevy/issues/20494
                 world
                     .resource_mut::<RevDespawnCleaner>()
                     .log_spawn_buffer(Some(buffer), self.caller);

@@ -1,11 +1,8 @@
 use core::fmt::Debug;
 use std::{
     collections::{
-        TryReserveError, VecDeque,
-        vec_deque::{Drain, Iter},
-    },
-    hash::Hash,
-    ops::Deref,
+        vec_deque::{Drain, Iter}, TryReserveError, VecDeque
+    }, fmt::Display, hash::Hash, ops::Deref
 };
 
 use bevy::reflect::Reflect;
@@ -28,6 +25,12 @@ pub struct DenseStateLog<T> {
     ///
     /// Never larger than `self.states.len()`
     index: usize,
+}
+
+impl<T: Display> Display for DenseStateLog<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.present.fmt(f)
+    }
 }
 
 #[cfg(feature = "serde")]

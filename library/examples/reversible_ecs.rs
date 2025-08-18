@@ -51,7 +51,7 @@ fn main() {
             FixedUpdate,
             (
                 control_rev_meta.before(RevMeta::try_run_rev_update),
-                render.after(RevMeta::try_run_rev_update),
+                (despawn_waste, render).chain().after(RevMeta::try_run_rev_update),
             ),
         )
         .add_systems(RevUpdate, clear_input.after(RevSystems))
@@ -61,11 +61,29 @@ fn main() {
         .run();
 }
 
+#[derive(Resource, Default)]
+struct KeysPressed {
+    direction: Option<Direction>,
+    num1: bool,
+    num2: bool,
+    num3: bool,
+    num4: bool,
+    num5: bool,
+    num6: bool,
+    num7: bool,
+}
+
+enum Direction {
+    Forward,
+    Pause,
+    FutureEnd,
+    PastEnd,
+}
+
 #[derive(SystemSet, Copy, Clone, Debug, Hash, PartialEq, Eq)]
 pub struct Row(u8);
 
 #[derive(Component, Clone, Copy)]
-#[component(on_despawn = on_despawn)]
 struct Waste {
     tossed_at: u64,
     row: usize,
@@ -74,13 +92,32 @@ struct Waste {
 #[derive(Resource, Default)]
 struct LostWaste(usize);
 
-// If a Waste component is removed during NOT_LOG, then that only happens because the player missed
-// undoing the littering and this adds to the LostWaste penality, bringing the player closer to
-// the game-over.
-// todo: misleading comment and impl, may only need meta to be running, explain "undone" despawns
-fn on_despawn(mut world: DeferredWorld, _: HookContext) {
-    if RevDirection::NOT_LOG.is_running(&world) {
-        world.resource_mut::<LostWaste>().0 += 1;
+fn control_rev_meta(mut meta: ResMut<RevMeta>, keys: Res<KeysPressed>) {
+    match keys.direction {
+        Some(Direction::Forward) => meta.queue_not_log_forward(),
+        Some(Direction::Pause) => meta.queue_pause(),
+        Some(Direction::FutureEnd) => {
+            let to = meta.future_end();
+            let _ok = meta.queue_log(to);
+        }
+        Some(Direction::PastEnd) => {
+            let to = meta.past_end();
+            let _ok = meta.queue_log(to);
+        }
+        None => {}
+    }
+}
+
+fn despawn_waste(waste: Query<(Entity, &Waste)>, mut lost: ResMut<LostWaste>, meta: Res<RevMeta>, mut commands: Commands) {
+    if meta.get_ran_direction() == Some(RevDirection::NOT_LOG) {
+        for (entity, Waste { tossed_at, .. }) in waste {
+            if !meta.contains(*tossed_at) {
+                commands.entity(entity).despawn();
+            }
+            if *tossed_at < meta.past_end() {
+                lost.0 += 1;
+            }
+        }
     }
 }
 
@@ -284,9 +321,13 @@ fn row5(app: &mut App) {
                 // We spawn the waste entity and mark is as log scoped to be despawned when out-of-log.
                 let entity = commands.spawn(waste).rev_log_scope(now).id();
 
+                // We get the past len from the frame log instead from RevMeta.
+                // Note that here, in contrast to the previous row, we do not need to increase the past_len because
+                // we dont do anything with the entities that go out of log.
+                let past_len = frame_log.push_and_get_past_len(&meta);
+
                 // We do not use the push_and_pop_past method because, as this system does not run every frame,
                 // multiple log entries may be out of log now.
-                let past_len = frame_log.push_and_get_past_len(&meta);
                 entity_log.push_and_drain_past(past_len, entity);
             }
 
@@ -400,24 +441,9 @@ fn row7(app: &mut App) {
     }
 }
 
-#[derive(Resource, Default)]
-struct KeysPressed {
-    direction: Option<Direction>,
-    num1: bool,
-    num2: bool,
-    num3: bool,
-    num4: bool,
-    num5: bool,
-    num6: bool,
-    num7: bool,
-}
-
-enum Direction {
-    Forward,
-    Pause,
-    FutureEnd,
-    PastEnd,
-}
+/*
+    THE FOLLOWING CODE IS NOT RELEVANT TO THE REVERSIBLE ECS EXAMPLE
+*/
 
 fn map_input(mut keys: ResMut<KeysPressed>, lost: Res<LostWaste>, mut exit: EventWriter<AppExit>) {
     use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, poll, read};
@@ -468,22 +494,6 @@ fn clear_input(mut keys: ResMut<KeysPressed>) {
     *keys = default();
 }
 
-fn control_rev_meta(mut meta: ResMut<RevMeta>, keys: Res<KeysPressed>) {
-    match keys.direction {
-        Some(Direction::Forward) => meta.queue_not_log_forward(),
-        Some(Direction::Pause) => meta.queue_pause(),
-        Some(Direction::FutureEnd) => {
-            let to = meta.future_end();
-            let _ok = meta.queue_log(to);
-        }
-        Some(Direction::PastEnd) => {
-            let to = meta.past_end();
-            let _ok = meta.queue_log(to);
-        }
-        None => {}
-    }
-}
-
 struct GlobalSettings;
 
 impl GlobalSettings {
@@ -503,7 +513,9 @@ impl GlobalSettings {
         impl<S: Subscriber> Layer<S> for PanicOnError {
             fn on_event(&self, event: &Event, _ctx: Context<S>) {
                 if *event.metadata().level() == Level::ERROR {
-                    panic!("{event:#?}")
+                    // No errors should occur during this example
+                    // Cause a panic here so the example is another mean to test the current implementation
+                    panic!("{event:#?}");
                 }
             }
         }
@@ -554,7 +566,7 @@ fn render(
     let padding_cols = match *last_future_end {
         Some(frame) => {
             let mut padding = frame.wrapping_sub(meta.future_end());
-            if padding > MAX_LOG_LEN as u64 {
+            if padding > MAX_LOG_LEN {
                 padding = 0;
                 *last_future_end = Some(meta.future_end());
             }
@@ -582,6 +594,7 @@ fn render(
         println!("{padding}{row_future}{}{past_row}", i + 1);
     }
 
+    let total = waste.iter().len() + lost.0;
     let lost = lost.0.min(10);
     let lost_bar: String = "#"
         .repeat(lost)
@@ -589,22 +602,29 @@ fn render(
         .chain(wave(meta.now()).take(10 - lost))
         .collect();
 
-    println!(
-        "{}^",
-        " ".repeat(padding_cols + meta.future_len() as usize + 1)
-    );
+    let marker = "                                                             <- future ^ past ->"
+        .chars()
+        .skip(MAX_LOG_LEN as usize - (padding_cols + meta.future_len() as usize + 1))
+        .take(MAX_LOG_LEN as usize + 1)
+        .collect::<String>();
+    println!("{marker}");
     if meta.get_ran_direction() != Some(RevDirection::NOT_LOG) || lost == 10 {
-        println!("           (waste lost: {lost_bar})    ESC: close");
+        println!("                 ({total:03}, lost: {lost_bar})         ESC: close");
     } else {
-        println!(" 1-6: toss waste (lost: {lost_bar})    ESC: close");
+        println!(" 1-7: toss waste ({total:03}, lost: {lost_bar})         ESC: close");
     }
     if lost < 10 {
-        println!("LEFT: forward log, pause at end        RIGHT: backward log, pause at end");
-        println!("  UP: exit log and resume              DOWN: pause");
+        println!("LEFT: forward log, pause at end                  UP: exit log and resume");
+        println!("RIGHT: backward log, pause at end                DOWN: pause");
     } else {
         println!();
         println!("You left too much waste behind that you can no longer recover. GAME OVER");
     }
+    println!();
+    println!("meta.past_end()   == {:05}                       meta.past_len()   == {:02}", meta.past_end(), meta.past_len());
+    println!("meta.now()        == {:05}                       meta.len()        == {:02}", meta.now(), meta.len());
+    println!("meta.future_end() == {:05}                       meta.future_len() == {:02}", meta.future_end(), meta.future_len());
+    println!();
     let _ = stdout().execute(MoveTo(0, 0));
     let _ = stdout().execute(EndSynchronizedUpdate);
 }
