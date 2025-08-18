@@ -55,7 +55,7 @@ impl RevApp for App {
 }
 
 // todo: rename to crate name
-pub enum RevSystemsPlugin {
+pub enum RevPlugin {
     Minimum,
     AddMeta(RevMeta),
     AddMetaAndRunner(RevMeta, InternedScheduleLabel),
@@ -64,13 +64,13 @@ pub enum RevSystemsPlugin {
     AddRunnerInSet(InternedScheduleLabel, InternedSystemSet),
 }
 
-impl Default for RevSystemsPlugin {
+impl Default for RevPlugin {
     fn default() -> Self {
         Self::add_meta_and_runner(default(), FixedUpdate)
     }
 }
 
-impl RevSystemsPlugin {
+impl RevPlugin {
     pub const fn minimum() -> Self {
         Self::Minimum
     }
@@ -95,7 +95,7 @@ impl RevSystemsPlugin {
     }
 }
 
-impl Plugin for RevSystemsPlugin {
+impl Plugin for RevPlugin {
     fn build(&self, app: &mut App) {
         // add meta
         match self {

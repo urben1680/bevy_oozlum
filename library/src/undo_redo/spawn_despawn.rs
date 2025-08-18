@@ -19,7 +19,7 @@ use crate::{
     meta::{NonLogNow, RevDirection, RevMeta},
 };
 
-use super::{BufferInProgressRes, RevOpInProgress};
+use super::RevOp;
 
 #[derive(Resource, Default, Reflect, Debug)]
 pub(crate) struct RevDespawnCleaner {
@@ -59,12 +59,18 @@ impl RevDespawnCleaner {
         self.spawn_buffer_queue.push((buffer, location));
     }
 
-    pub(crate) fn log_spawn_buffer_batch_reserve(&mut self, buffers: usize, location: MaybeLocation) {
-        self.spawn_buffer_queue.extend(core::iter::repeat_n((None, location), buffers));
+    pub(crate) fn log_spawn_buffer_batch_reserve(
+        &mut self,
+        buffers: usize,
+        location: MaybeLocation,
+    ) {
+        self.spawn_buffer_queue
+            .extend(core::iter::repeat_n((None, location), buffers));
     }
 
     pub(crate) fn log_spawn_buffer_batch(&mut self, buffers: &[Entity], location: MaybeLocation) {
-        self.spawn_buffer_queue.extend(buffers.into_iter().map(|buffer| (Some(*buffer), location)));
+        self.spawn_buffer_queue
+            .extend(buffers.into_iter().map(|buffer| (Some(*buffer), location)));
     }
 
     /// Despawn entities that contain [`RevDespawned`] and their relevant operation (spawn, despawn, move_components) fell out of log.
@@ -78,7 +84,7 @@ impl RevDespawnCleaner {
 
     pub(crate) fn forward(&mut self, world: &mut World, mut max_past_len: usize) {
         max_past_len += 1; // compensate transition log behavior to pop transitions too early
-        let progress = RevOpInProgress::FinalDespawn { buffer: false };
+        let progress = RevOp::FinalDespawn { buffer: false };
         progress.scope(world, |world| {
             let (despawned, _) = self.spawn.drain_future();
             for entity in despawned {
@@ -99,9 +105,7 @@ impl RevDespawnCleaner {
                 let _ = world.try_despawn(entity); // todo: upstream a way to set the location
             }
 
-            world.insert_resource(BufferInProgressRes(RevOpInProgress::FinalDespawn {
-                buffer: true,
-            }));
+            world.insert_resource(RevOp::FinalDespawn { buffer: true });
 
             let despawned = self
                 .spawn_buffer
@@ -111,7 +115,8 @@ impl RevDespawnCleaner {
             for entity in despawned {
                 let _ = world.try_despawn(entity); // todo: upstream a way to set the location
             }
-            let despawned = self.spawn_buffer
+            let despawned = self
+                .spawn_buffer
                 .push_and_pop_past(max_past_len, |mut log| {
                     log.extend(self.spawn_buffer_queue.drain(..));
                     log.extend(
@@ -332,20 +337,34 @@ mod test {
 
         // do 1
         let spawn_at_1_despawn_at_2 = world.spawn_empty().id();
-        cleaner.log_spawn(spawn_at_1_despawn_at_2, MaybeLocation::caller(), NonLogNow(1));
+        cleaner.log_spawn(
+            spawn_at_1_despawn_at_2,
+            MaybeLocation::caller(),
+            NonLogNow(1),
+        );
         cleaner.forward(&mut world, 0);
-        assert!(world.get_entity(spawn_at_1_despawn_at_2).is_ok(), "{cleaner:#?}");
+        assert!(
+            world.get_entity(spawn_at_1_despawn_at_2).is_ok(),
+            "{cleaner:#?}"
+        );
 
         // do 2
         let spawn_at_2 = world.spawn_empty().id();
         let spawn_buffer_at_2 = world.spawn_empty().id();
         let reserve_buffer_at_2;
         cleaner.log_spawn(spawn_at_2, MaybeLocation::caller(), NonLogNow(2));
-        cleaner.log_despawn(spawn_at_1_despawn_at_2, MaybeLocation::caller(), NonLogNow(2));
+        cleaner.log_despawn(
+            spawn_at_1_despawn_at_2,
+            MaybeLocation::caller(),
+            NonLogNow(2),
+        );
         cleaner.log_spawn_buffer(Some(spawn_buffer_at_2), MaybeLocation::caller());
         cleaner.log_spawn_buffer(None, MaybeLocation::caller());
         cleaner.forward(&mut world, 1);
-        assert!(world.get_entity(spawn_at_1_despawn_at_2).is_ok(), "{cleaner:#?}");
+        assert!(
+            world.get_entity(spawn_at_1_despawn_at_2).is_ok(),
+            "{cleaner:#?}"
+        );
         assert!(world.get_entity(spawn_at_2).is_ok(), "{cleaner:#?}");
         assert!(world.get_entity(spawn_buffer_at_2).is_ok(), "{cleaner:#?}");
 
@@ -361,7 +380,10 @@ mod test {
         let spawn_at_3 = world.spawn_empty().id();
         cleaner.log_spawn(spawn_at_3, MaybeLocation::caller(), NonLogNow(3));
         cleaner.forward(&mut world, 1);
-        assert!(world.get_entity(spawn_at_1_despawn_at_2).is_ok(), "{cleaner:#?}");
+        assert!(
+            world.get_entity(spawn_at_1_despawn_at_2).is_ok(),
+            "{cleaner:#?}"
+        );
         assert!(world.get_entity(spawn_at_2).is_ok(), "{cleaner:#?}");
         assert!(world.get_entity(spawn_buffer_at_2).is_ok(), "{cleaner:#?}");
         assert!(world.get_entity(spawn_at_3).is_ok(), "{cleaner:#?}");
@@ -372,9 +394,15 @@ mod test {
         cleaner.log_spawn(spawn_at_4, MaybeLocation::caller(), NonLogNow(4));
         cleaner.log_spawn_buffer(Some(spawn_buffer_at_4), MaybeLocation::caller());
         cleaner.forward(&mut world, 1);
-        assert!(world.get_entity(spawn_at_1_despawn_at_2).is_err(), "{cleaner:#?}"); // finalized despawn_at_2
+        assert!(
+            world.get_entity(spawn_at_1_despawn_at_2).is_err(),
+            "{cleaner:#?}"
+        ); // finalized despawn_at_2
         assert!(world.get_entity(spawn_at_2).is_ok(), "{cleaner:#?}");
-        assert!(world.get_entity(reserve_buffer_at_2).is_err(), "{cleaner:#?}"); // buffer out of log
+        assert!(
+            world.get_entity(reserve_buffer_at_2).is_err(),
+            "{cleaner:#?}"
+        ); // buffer out of log
         assert!(world.get_entity(spawn_buffer_at_2).is_err(), "{cleaner:#?}"); // buffer out of log
         assert!(world.get_entity(spawn_at_3).is_ok(), "{cleaner:#?}");
         assert!(world.get_entity(spawn_at_4).is_ok(), "{cleaner:#?}");

@@ -16,7 +16,7 @@ use bevy::{
 
 use crate::{
     meta::{NonLogNow, RevDirection},
-    undo_redo::{EntityRevDespawnedError, RevDespawned, RevOpInProgress},
+    undo_redo::{EntityRevDespawnedError, RevDespawned, RevOp},
 };
 
 use super::{BuffersUndoRedo, RevDespawnCleaner, RevWorld, Take, UndoRedo};
@@ -801,7 +801,7 @@ impl BundleEntities {
         cloner: &mut EntityCloner,
         direction: RevDirection,
     ) {
-        let progress = RevOpInProgress::Buffer {
+        let progress = RevOp::Buffer {
             direction,
             buffer: self.buffer,
         };

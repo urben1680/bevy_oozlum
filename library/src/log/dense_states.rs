@@ -1,7 +1,11 @@
 use std::{
-    any::TypeId, collections::{
-        vec_deque::{Drain, IntoIter, Iter}, TryReserveError, VecDeque
-    }, fmt::{Debug, Display}, ops::{Deref, Range}
+    any::TypeId,
+    collections::{
+        TryReserveError, VecDeque,
+        vec_deque::{Drain, IntoIter, Iter},
+    },
+    fmt::{Debug, Display},
+    ops::{Deref, Range},
 };
 
 use bevy::reflect::Reflect;
@@ -17,7 +21,9 @@ pub struct DenseStatesLog<T, U = (), const AMOUNT_BYTES: usize = USIZE_BYTES> {
     index: usize,
 }
 
-impl<T: Display, U: Display + 'static, const AMOUNT_BYTES: usize> Display for DenseStatesLog<T, U, AMOUNT_BYTES> {
+impl<T: Display, U: Display + 'static, const AMOUNT_BYTES: usize> Display
+    for DenseStatesLog<T, U, AMOUNT_BYTES>
+{
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let entry_amount = &*self.amounts;
         let range = self.index..(self.index + entry_amount.amount());

@@ -1,6 +1,6 @@
 use std::{collections::VecDeque, num::NonZeroU64};
 
-use library::{log::*, prelude::*};
+use bevy_oozlum::{log::*, prelude::*};
 
 use serde::{Deserialize, Serialize};
 

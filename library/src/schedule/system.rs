@@ -594,7 +594,7 @@ mod test {
     fn assert_system_drains_all_undo_redo<M>(system: impl IntoSystem<(), (), M> + Copy + 'static) {
         panic_on_error_events();
         let mut app = App::new();
-        app.add_plugins(RevSystemsPlugin::add_meta_and_runner(
+        app.add_plugins(RevPlugin::add_meta_and_runner(
             RevMeta::default(),
             Update,
         ))

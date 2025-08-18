@@ -439,8 +439,8 @@ fn map_frame_log_err(
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-pub enum RevOpInProgress {
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Resource)]
+pub enum RevOp {
     Buffer {
         direction: RevDirection,
         buffer: Entity,
@@ -450,10 +450,7 @@ pub enum RevOpInProgress {
     },
 }
 
-impl RevOpInProgress {
-    pub fn check(world: &World) -> Option<Self> {
-        world.get_resource::<BufferInProgressRes>().map(|res| res.0)
-    }
+impl RevOp {
     pub fn direction(self) -> RevDirection {
         match self {
             Self::Buffer { direction, .. } => direction,
@@ -461,15 +458,12 @@ impl RevOpInProgress {
         }
     }
     pub(crate) fn scope(self, world: &mut World, c: impl FnOnce(&mut World)) {
-        let mut swap = ResourceSwap(Some(BufferInProgressRes(self)));
+        let mut swap = ResourceSwap(Some(self));
         swap.redo(world);
         c(world);
         swap.undo(world);
     }
 }
-
-#[derive(Resource)]
-pub(crate) struct BufferInProgressRes(pub(crate) RevOpInProgress);
 
 #[derive(Copy, Clone, Debug)]
 pub struct UndoRedoSwap<T: UndoRedo>(pub T);

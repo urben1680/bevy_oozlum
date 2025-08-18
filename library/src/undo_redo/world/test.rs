@@ -40,7 +40,10 @@ fn delayed_buffer_spawn() {
     buffer.undo(&mut world);
 
     // this method emits errors which cause panics if something went wrong
-    world.resource_mut::<RevDespawnCleaner>().backward_log().unwrap();
+    world
+        .resource_mut::<RevDespawnCleaner>()
+        .backward_log()
+        .unwrap();
 }
 
 #[test]

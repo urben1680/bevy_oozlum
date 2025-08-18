@@ -22,9 +22,7 @@ Enhancements:
 - track_location and bevy_reflect feature (both are not documented?), rename feature serde -> serialize
 - delete unused types
 - integrate BuffersUndoRedo in new Rev wrappers, find good way to support DeferredWorld
-- make buffer methods not-pub
-- integrate entity_log_scoped
-- Display impl of logs
+- despawn_single -> despawn
 - missing apis:
 -- EntityWorldMut::clone_with
 -- EntityWorldMut::insert_reflect
@@ -76,7 +74,7 @@ pub mod undo_redo;
 
 /// Contains all extension traits `as _` and common types.
 pub mod prelude {
-    pub use crate::app::{RevApp as _, RevSystemsPlugin};
+    pub use crate::app::{RevPlugin, RevApp as _};
     pub use crate::meta::{RevDirection, RevMeta};
     pub use crate::schedule::{
         IntoRevScheduleConfigs as _, RevSchedule as _, RevSystems, RevUpdate,
@@ -84,7 +82,7 @@ pub mod prelude {
     pub use crate::undo_redo::{
         BuffersUndoRedo as _, RevCommands as _, RevComponentEntry, RevDeferredWorld as _,
         RevEntityCommands as _, RevEntityWorldMut as _, RevIsDespawned as _, RevIsDespawned as _,
-        RevOpInProgress, RevWorld as _, UndoRedo, UndoRedoDirection,
+        RevOp, RevWorld as _, UndoRedo, UndoRedoDirection,
     };
 }
 

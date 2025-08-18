@@ -301,7 +301,9 @@ where
                     let buffers = world
                         .spawn_batch(core::iter::repeat_n(RevDespawned, self.entities.len()))
                         .collect::<Box<[_]>>();
-                    world.resource_mut::<RevDespawnCleaner>().log_spawn_buffer_batch(&buffers, self.caller);
+                    world
+                        .resource_mut::<RevDespawnCleaner>()
+                        .log_spawn_buffer_batch(&buffers, self.caller);
                     buffers
                 })
                 .iter()

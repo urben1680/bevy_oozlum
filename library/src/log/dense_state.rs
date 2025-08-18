@@ -1,8 +1,12 @@
 use core::fmt::Debug;
 use std::{
     collections::{
-        vec_deque::{Drain, Iter}, TryReserveError, VecDeque
-    }, fmt::Display, hash::Hash, ops::Deref
+        TryReserveError, VecDeque,
+        vec_deque::{Drain, Iter},
+    },
+    fmt::Display,
+    hash::Hash,
+    ops::Deref,
 };
 
 use bevy::reflect::Reflect;

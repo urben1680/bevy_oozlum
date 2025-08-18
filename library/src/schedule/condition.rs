@@ -36,7 +36,6 @@ struct RevCondition<T> {
     condition: T,
     meta_id: Option<ComponentId>,
     log: SparseTransitionLog<()>,
-
     out_of_log_err: bool,
 }
 
