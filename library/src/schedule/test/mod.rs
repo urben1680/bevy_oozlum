@@ -3,19 +3,17 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-use bevy::ecs::{
+use bevy::{app::{App, Update}, ecs::{
     change_detection::{Res, ResMut},
     component::Component,
     event::Event,
     resource::Resource,
-    system::{Commands, IntoSystem},
+    system::{Commands, IntoSystem, Local},
     world::World,
-};
+}};
 
 use crate::{
-    meta::RevDirection,
-    schedule::RevUpdate,
-    undo_redo::{BuffersUndoRedo, UndoRedo},
+    app::{RevApp, RevPlugin}, meta::RevDirection, panic_on_error_events, schedule::RevUpdate, undo_redo::{BuffersUndoRedo, RevCommands, UndoRedo}
 };
 
 use super::*;
@@ -459,4 +457,39 @@ fn duplicate_system_chain_builds() {
     let mut schedule = Schedule::new(RevUpdate);
     schedule.rev_add_systems((non_exclusive_system::<1>, non_exclusive_system::<1>).rev_chain());
     schedule.initialize(&mut World::new()).unwrap();
+}
+
+#[test]
+fn truncates_future_command_log() {
+    fn system(meta: Res<RevMeta>, mut commands: Commands, mut command_queued: Local<bool>) {
+        if !*command_queued && let Some(now) = meta.non_log_now() {
+            if now.get() == 2 {
+                commands.rev_spawn_empty(now);
+                *command_queued = true;
+            }
+        }
+    }
+
+    panic_on_error_events();
+
+    let meta = RevMeta::new(None, 0, false);
+    let mut app = App::new();
+    app
+        .add_plugins(RevPlugin::add_meta_and_runner(meta, Update))
+        .rev_add_systems(RevUpdate, system);
+
+    app.update(); // do 1
+    app.update(); // do 2, command queued
+    app.world_mut().resource_mut::<RevMeta>().queue_log(0).unwrap();
+    app.update(); // undo 2
+    app.update(); // undo 1
+    app.world_mut().resource_mut::<RevMeta>().queue_not_log_forward();
+    app.update(); // do 1, should truncate logs
+    app.update(); // do 2, no command queued
+    app.world_mut().resource_mut::<RevMeta>().queue_log(0).unwrap();
+    app.update(); // undo 2
+    app.update(); // undo 1
+    app.world_mut().resource_mut::<RevMeta>().queue_log(2).unwrap();
+    app.update(); // redo 1
+    app.update(); // redo 2, should not panic
 }

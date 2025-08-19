@@ -2,7 +2,7 @@ use std::{io::stdout, num::NonZeroU64, time::Duration};
 
 use bevy::{
     app::App,
-    ecs::{lifecycle::HookContext, world::DeferredWorld},
+    ecs::{entity::EntityHashSet, lifecycle::HookContext, world::DeferredWorld},
     prelude::*,
 };
 
@@ -16,8 +16,24 @@ use bevy_oozlum::{
 
 const MAX_LOG_LEN: u64 = 71;
 const FIXED_TIMESTEP: Duration = Duration::from_millis(100);
+const CURRENT_BEVY_VERSION: usize = 17;
 
 // todo: mention how the last column cannot be undone
+
+// todo: triggered bug:
+// message: the UndoRedo log of the reversible system reversible_ecs::row3::system (forward system)
+// ran at 222 and missed to run at 215
+// message: the UndoRedo log of the reversible system reversible_ecs::row6::system (forward system)
+// ran at 37 during Forward (log) and missed to run at 36
+// The entity with ID 12v0 does not exist
+// message: the UndoRedo log of the reversible system reversible_ecs::row3::system (forward system)
+// ran at 211 during Forward (log) and missed to run at 210
+// { location: MaybeLocation { marker: PhantomData<core::option::Option<&core::panic::location::Location>> } } }
+
+// es scheint so als würde ein truncate_future vom frametransitionlog verpasst worden sein
+// dadurch wird bei bereits vergessenen log entries erwartet das sie nochmal auftauchen
+// Source entity must exist: EntityDoesNotExistError { entity: 2v0, details: EntityDoesNotExistDetails
+// reproduzieren: waste erzeugen, rückgängig machen, log beenden, leeres wasser beim alten waste erzeugen, zurück log, vor log
 
 /*
 
@@ -43,7 +59,7 @@ meta.future_end() == 00058                       meta.future_len() == 30
 */
 
 fn main() {
-    // Ignore this, not imporant for the reversible ECS but for this app.
+    // Ignore this, not imporant for the reversible ECS showcase but for this app.
     let _scope_guard = ScopeGuard::new();
 
     let meta = RevMeta::new(NonZeroU64::new(MAX_LOG_LEN), 0, false);
@@ -71,20 +87,22 @@ fn main() {
             // You may also add them to another schedule, but that in turn should be run by a
             // reversible system itself which is put into RevUpdate.
             RevUpdate,
+
             // We dont need the rows to be ordered in a particular way, but that is possible
             // with this crate too: If system A comes before system B, during the backward
-            // run of the schedule, this order is reversed. All system configurations, including
+            // run of the schedule, this order is reversed. All known system configurations, including
             // via sets, are supported in rev_* variants.
             //
             // Under the hood, this works by having a forward set and a backward set. Each system
-            // is put into an Arc and two copies of them are added to each of the two sets.
+            // is put into an Arc and two clones of them are added to each of the two sets. That way
+            // they can each share the same system state.
             //
-            // The backward set is a bit special as well, as if a system previously issued commands
+            // The backward set is a bit special as well, as when a system previously issued commands
             // in the forward set, in the backward set the commands will be undone right before the
             // system so your backward logic sees the world like it did just when it finished running
             // forward.
             //
-            // Below you see a demonstration of the API. These may all be set configurations but they
+            // Below you see a demonstration of the API. These are all set configurations but they
             // are also available for systems. Be sure to not mix it with Bevy's regular system and
             // set configuration with these. If you must, you can order non-reversible systems and
             // sets to the RevSystems set that the crate adds all reversible systems to.
@@ -126,7 +144,7 @@ fn main() {
         .add_systems(RevUpdate, clear_input.after(RevSystems))
         // Init and insert some resources, we want the reversible systems to run every 0.1 seconds.
         .init_resource::<KeysPressed>()
-        .init_resource::<LostWaste>()
+        .init_resource::<WasteCounts>()
         .insert_resource(Time::<Fixed>::from_duration(FIXED_TIMESTEP))
         .run();
 }
@@ -160,7 +178,16 @@ struct Waste {
 }
 
 #[derive(Resource, Default)]
-struct LostWaste(usize);
+struct WasteCounts {
+    lost: usize,
+    score: EntityHashSet
+}
+
+impl WasteCounts {
+    fn score(&self) -> usize {
+        (self.score.len() + CURRENT_BEVY_VERSION).min(1000)
+    }
+}
 
 fn control_rev_meta(mut meta: ResMut<RevMeta>, keys: Res<KeysPressed>) {
     match keys.direction {
@@ -180,7 +207,7 @@ fn control_rev_meta(mut meta: ResMut<RevMeta>, keys: Res<KeysPressed>) {
 
 fn despawn_waste(
     waste: Query<(Entity, &Waste)>,
-    mut lost: ResMut<LostWaste>,
+    mut counts: ResMut<WasteCounts>,
     meta: Res<RevMeta>,
     mut commands: Commands,
 ) {
@@ -190,8 +217,9 @@ fn despawn_waste(
                 commands.entity(entity).despawn();
             }
             if *tossed_at < meta.past_end() {
-                lost.0 += 1;
+                counts.lost += 1;
             }
+            counts.score.insert(entity);
         }
     }
 }
@@ -278,7 +306,7 @@ fn row4(app: &mut App) {
     fn system(
         meta: Res<RevMeta>,
         pressed: Res<KeysPressed>,
-        mut lost: ResMut<LostWaste>,
+        mut lost: ResMut<WasteCounts>,
         mut log: Local<SparseTransitionLog<Entity>>,
         mut commands: Commands,
     ) {
@@ -328,7 +356,7 @@ fn row4(app: &mut App) {
                     commands.entity(entity).despawn();
 
                     // The player missed undoing this littering in time and the lost waste counter is increased.
-                    lost.0 += 1;
+                    lost.lost += 1;
                 }
             }
 
@@ -574,7 +602,7 @@ fn rev_log_scope_and_buffer_waste_op(
     Only input logic and console output is done below.
 */
 
-fn map_input(mut keys: ResMut<KeysPressed>, lost: Res<LostWaste>, mut exit: EventWriter<AppExit>) {
+fn map_input(mut keys: ResMut<KeysPressed>, lost: Res<WasteCounts>, mut exit: EventWriter<AppExit>) {
     use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, poll, read};
 
     let mut f = || -> std::io::Result<()> {
@@ -596,7 +624,8 @@ fn map_input(mut keys: ResMut<KeysPressed>, lost: Res<LostWaste>, mut exit: Even
                 exit.write(AppExit::Success);
             }
             // ignore any other inputs at game over
-            _ if lost.0 >= 10 => {}
+            _ if lost.lost >= 10 => {}
+            _ if lost.score() >= 1000 => {}
             KeyCode::Left => keys.direction = Some(Direction::FutureEnd),
             KeyCode::Right => keys.direction = Some(Direction::PastEnd),
             KeyCode::Up => keys.direction = Some(Direction::Forward),
@@ -673,16 +702,11 @@ impl Drop for ScopeGuard {
 fn render(
     meta: Res<RevMeta>,
     waste: Query<&Waste>,
-    lost: Res<LostWaste>,
-    mut last_future_end: Local<Option<u64>>,
+    counts: Res<WasteCounts>,
+    mut last_future_end: Local<Option<u64>>
 ) {
     let _ = stdout().execute(BeginSynchronizedUpdate);
     let _ = stdout().execute(Clear(ClearType::All));
-
-    println!();
-    println!("Let's waste the time 'til Bevy 1.0 by tossing said waste into the ocean!");
-    println!("No worry, it's okay as long you undo it. Just don't wait for too long...");
-    println!();
 
     let wave = |phase: u64| "`-._,~'".chars().cycle().skip(7 - phase as usize % 7);
 
@@ -712,23 +736,30 @@ fn render(
     };
     let padding = " ".repeat(padding_cols);
 
-    for Waste { row, tossed_at } in waste.iter().cloned() {
+    for Waste { row, tossed_at } in waste.iter().copied() {
         let index = (meta.now() - tossed_at) as usize;
-        // replace_range would panic if a waste is tossed into the water at a frame that is not the present or that is not within the past log
-        // this is ensured by reversible logic and by wastes being despawned when they go out of log
-        let str = past_rows.get_mut(row - 1).unwrap();
-        if str.len() <= index {
-            panic!("row {row} out of log");
-        }
-        str.replace_range(index..=index, "#");
+        past_rows
+            .get_mut(row - 1)
+            .unwrap()
+            .replace_range(index..=index, "#");
     }
+
+    let mut bevy_version = format!("{:04}", counts.score());
+    bevy_version.insert(1, '.');
+
+    println!();
+    println!("Let's waste the time 'til Bevy 1.0 by tossing said waste into the ocean!");
+    println!("No worry, it's okay as long you undo it. Just don't wait for too long...");
+    println!();
+    println!("                       It is Bevy {bevy_version} now!");
+    println!();
 
     for (i, past_row) in past_rows.into_iter().enumerate() {
         println!("{padding}{row_future}{}{past_row}", i + 1);
     }
 
-    let total = waste.iter().len() + lost.0;
-    let lost = lost.0.min(10);
+    let total = waste.iter().len() + counts.lost;
+    let lost = counts.lost.min(10);
     let lost_bar: String = "#"
         .repeat(lost)
         .chars()
@@ -747,11 +778,24 @@ fn render(
         println!("1-7: toss waste ({total:03}, lost: {lost_bar})          ESC: close");
     }
     if lost < 10 {
-        println!("LEFT: forward log, pause at end                  UP: exit log and resume");
-        println!("RIGHT: backward log, pause at end                DOWN: pause");
+        if counts.score.len() + CURRENT_BEVY_VERSION < 1000 {
+            println!("LEFT: forward log, pause at end                  UP: exit log and resume");
+            println!("RIGHT: backward log, pause at end                DOWN: pause");
+        } else {
+            println!();
+            if (meta.now() / 10) % 2 == 0 {
+                println!("              Yay, Bevy 1.0 is there! YOU WON!");
+            } else {
+                println!();
+            }
+        }
     } else {
         println!();
-        println!("You left too much waste behind that you can no longer recover. GAME OVER");
+        if (meta.now() / 10) % 2 == 0 {
+            println!("You left too much waste behind that you can no longer recover. GAME OVER");
+        } else {
+            println!();
+        }
     }
     println!();
     println!(

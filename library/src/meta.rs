@@ -85,6 +85,16 @@ pub enum RevDirection {
     BackwardLog,
 }
 
+impl Display for RevDirection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match *self {
+            RevDirection::NOT_LOG => write!(f, "Forward (not log)"),
+            RevDirection::FORWARD_LOG => write!(f, "Forward (log)"),
+            RevDirection::BackwardLog => write!(f, "Backward (log)")
+        }
+    }
+}
+
 impl RevDirection {
     pub const NOT_LOG: Self = Self::Forward { log: false };
     pub const FORWARD_LOG: Self = Self::Forward { log: true };

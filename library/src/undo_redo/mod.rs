@@ -283,15 +283,19 @@ pub(crate) enum UndoRedoLogError {
     },
     RevDirectionMismatch {
         now: u64,
+        expected_forward: bool,
+        direction: Option<RevDirection>,
         system_name: DebugName,
     },
     MissedFrame {
         frame: u64,
         now: u64,
+        direction: RevDirection,
         system_name: DebugName,
     },
     OutOfLog {
         now: u64,
+        direction: RevDirection,
         system_name: DebugName,
     },
 }
@@ -329,7 +333,7 @@ impl UndoRedoLog {
                 if !self
                     .frame_log
                     .try_forward_log(&meta)
-                    .map_err(map_frame_log_err(now, system_name.clone()))?
+                    .map_err(map_frame_log_err(now, RevDirection::FORWARD_LOG, system_name.clone()))?
                 {
                     return Ok(());
                 };
@@ -338,6 +342,7 @@ impl UndoRedoLog {
                     .forward_log()
                     .map_err(|_| UndoRedoLogError::OutOfLog {
                         now,
+                        direction: RevDirection::FORWARD_LOG,
                         system_name: system_name.clone(),
                     })?
                     .value
@@ -347,8 +352,10 @@ impl UndoRedoLog {
                 }
                 Ok(())
             }
-            _ => Err(UndoRedoLogError::RevDirectionMismatch {
+            direction => Err(UndoRedoLogError::RevDirectionMismatch {
                 now,
+                expected_forward: true,
+                direction,
                 system_name: system_name.clone(),
             }),
         }
@@ -365,16 +372,19 @@ impl UndoRedoLog {
             })?
             .clone();
         let now = meta.now();
-        if meta.get_running_direction() != Some(RevDirection::BackwardLog) {
+        let direction = meta.get_running_direction();
+        if direction != Some(RevDirection::BackwardLog) {
             return Err(UndoRedoLogError::RevDirectionMismatch {
                 now,
+                expected_forward: false,
+                direction,
                 system_name: system_name.to_owned(),
             });
         }
         if !self
             .frame_log
             .try_backward_log(&meta)
-            .map_err(map_frame_log_err(now, system_name.to_owned()))?
+            .map_err(map_frame_log_err(now, RevDirection::BackwardLog, system_name.to_owned()))?
         {
             return Ok(());
         };
@@ -383,6 +393,7 @@ impl UndoRedoLog {
             .backward_log()
             .map_err(|_| UndoRedoLogError::OutOfLog {
                 now,
+                direction: RevDirection::BackwardLog,
                 system_name: system_name.to_owned(),
             })?
             .value
@@ -406,21 +417,29 @@ impl Display for UndoRedoLogError {
                 f,
                 "UndoRedoBuffer was removed at frame {now} but is needed to update the UndoRedo log of reversible system {system_name}"
             ),
-            Self::RevDirectionMismatch { now, system_name } => write!(
-                f,
-                "RevDirection changed to an incorrect value at frame {now} before the update of the UndoRedo log of reversible system {system_name}"
-            ),
+            Self::RevDirectionMismatch { now, expected_forward, direction,  system_name } => {
+                let actual = match direction {
+                    Some(direction) => &format!("{direction}"),
+                    None => "none"
+                };
+                let expected = if *expected_forward { "forward" } else { "backward" };
+                write!(
+                    f,
+                    "RevDirection is {actual} when it was expected to be {expected} at frame {now} before the update of the UndoRedo log of reversible system {system_name}"
+                )
+            },
             Self::MissedFrame {
                 frame,
                 now,
+                direction,
                 system_name,
             } => write!(
                 f,
-                "the UndoRedo log of the reversible system {system_name} ran at {now} and missed to run at {frame}"
+                "the UndoRedo log of the reversible system {system_name} ran at {now} during {direction} and missed to run at {frame}"
             ),
-            Self::OutOfLog { now, system_name } => write!(
+            Self::OutOfLog { now, direction, system_name } => write!(
                 f,
-                "the UndoRedo log of the reversible system {system_name} is in an invalid state at frame {now}"
+                "the UndoRedo log of the reversible system {system_name} is in an invalid state at frame {now} during {direction}"
             ),
         }
     }
@@ -430,11 +449,13 @@ impl Error for UndoRedoLogError {}
 
 fn map_frame_log_err(
     now: u64,
+    direction: RevDirection,
     system_name: DebugName,
 ) -> impl FnOnce(MissedFrame) -> UndoRedoLogError {
     move |err| UndoRedoLogError::MissedFrame {
         frame: err.0,
         now,
+        direction,
         system_name,
     }
 }
