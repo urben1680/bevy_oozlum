@@ -266,10 +266,18 @@ impl<T: UndoRedo> UndoRedo for Box<[T]> {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub(crate) struct UndoRedoLog {
-    undo_redo_log: DenseTransitionsLog<SyncCell<Box<dyn UndoRedo>>>,
+    undo_redo_log: DenseTransitionsLog<DebugHidden>,
     frame_log: FrameTransitionLog,
+}
+
+struct DebugHidden(SyncCell<Box<dyn UndoRedo>>);
+
+impl Debug for DebugHidden {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "_")
+    }
 }
 
 #[derive(Debug)]
@@ -324,8 +332,11 @@ impl UndoRedoLog {
                 if !buffer.0.is_empty() {
                     let past_len = self.frame_log.push_and_get_past_len(&meta);
                     self.undo_redo_log.push_and_drain_past(past_len, |mut log| {
-                        log.extend(buffer.0.drain(..).map(|boxed| boxed.undo_redo))
+                        log.extend(buffer.0.drain(..).map(|boxed| DebugHidden(boxed.undo_redo)))
                     });
+                } else {
+                    self.frame_log.truncate_future();
+                    self.undo_redo_log.drain_future();
                 }
                 Ok(())
             }
@@ -346,7 +357,7 @@ impl UndoRedoLog {
                         system_name: system_name.clone(),
                     })?
                     .value
-                    .map(SyncCell::get);
+                    .map(|cell| cell.0.get());
                 for command in iter {
                     command.redo(world);
                 }
@@ -397,7 +408,7 @@ impl UndoRedoLog {
                 system_name: system_name.to_owned(),
             })?
             .value
-            .map(SyncCell::get)
+            .map(|cell| cell.0.get())
             .rev();
         for command in iter {
             command.undo(world);

@@ -247,20 +247,35 @@ fn resize_ne_bytes<const N: usize, const M: usize>(arr: [u8; N]) -> [u8; M] {
 #[derive(Debug, Clone, Reflect)]
 pub struct EntryAmount<U, const AMOUNT_BYTES: usize> {
     pub entry: U,
-    amount: [u8; AMOUNT_BYTES],
+    amount: AmountArray<AMOUNT_BYTES>,
+}
+
+#[derive(Copy, Clone, Reflect)]
+struct AmountArray<const AMOUNT_BYTES: usize>([u8; AMOUNT_BYTES]);
+
+impl<const AMOUNT_BYTES: usize> Debug for AmountArray<AMOUNT_BYTES> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self.amount())
+    }
+}
+
+impl<const AMOUNT_BYTES: usize> AmountArray<AMOUNT_BYTES> {
+    fn amount(self) -> usize {
+        usize::from_ne_bytes(resize_ne_bytes(self.0))
+    }
 }
 
 impl<U, const AMOUNT_BYTES: usize> EntryAmount<U, AMOUNT_BYTES> {
     const fn zero(entry: U) -> Self {
         Self {
             entry,
-            amount: [0; AMOUNT_BYTES],
+            amount: AmountArray([0; AMOUNT_BYTES]),
         }
     }
     fn new(entry: U, amount: usize) -> Self {
         Self {
             entry,
-            amount: resize_ne_bytes(amount.to_ne_bytes()),
+            amount: AmountArray(resize_ne_bytes(amount.to_ne_bytes())),
         }
     }
 
@@ -298,7 +313,7 @@ impl<U, const AMOUNT_BYTES: usize> EntryAmount<U, AMOUNT_BYTES> {
     /// )).collect();
     /// ```
     pub fn amount(&self) -> usize {
-        usize::from_ne_bytes(resize_ne_bytes(self.amount))
+        self.amount.amount()
     }
 }
 

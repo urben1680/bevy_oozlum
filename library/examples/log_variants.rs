@@ -129,6 +129,10 @@ impl LastFrameWhereModuloEqZero {
                         .push_and_drain_past(scoped_past_len, delta);
 
                     self.state_for_transition_logs = now;
+                } else {
+                    self.frame_transition.truncate_future();
+                    self.scoped_state.drain_future();
+                    self.scoped_transition.drain_future();
                 }
             }
             RevDirection::FORWARD_LOG => {

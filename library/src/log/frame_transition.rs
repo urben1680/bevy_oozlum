@@ -13,11 +13,116 @@ use crate::meta::RevMeta;
 use super::INDEX_OOB;
 
 // todo: mention limitations, like missing frames
+// todo: explore a variable-len integer implementation that works with frame deltas
 #[derive(Debug, Clone, Default, Reflect)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct FrameTransitionLog {
     frames: VecDeque<u64>,
     index: usize,
+}
+
+mod wip {
+    use super::*;
+
+    pub struct FrameTransitionLog {
+        offset_bytes: VecDeque<u8>, // 0b00xxxxxx = 1 byte, 0b01xxxxxx = 1+n+1 bytes where n are 0b1xxxxxxx
+        last_run: u64,
+        oldest_run: u64,
+        index: usize,
+    }
+
+    impl FrameTransitionLog {
+        fn get_offset_forward(&self, index: &mut usize) -> u64 {
+            let byte = self.offset_bytes[*index];
+            let data = byte & 0b00_111111;
+            if byte - data == 0 {
+                return data as u64;
+            }
+            let mut frame = data as u64;
+            let mut shift = 7;
+            loop {
+                *index += 1;
+                let byte = self.offset_bytes[*index];
+                if byte.leading_zeros() == 1 {
+                    return frame + (byte as u64) << shift;
+                }
+                frame += ((byte & 0b0_1111111) as u64) << shift;
+                shift += 7;
+            }           
+        }
+        fn get_offset_backward(&self, index: &mut usize) -> u64 {
+            let byte = self.offset_bytes[*index];
+            let data = byte & 0b00_111111;
+            if byte - data == 0 {
+                return data as u64;
+            }
+            let mut frame = data as u64;
+            let mut shift = 7;
+            loop {
+                *index -= 1;
+                let byte = self.offset_bytes[*index];
+                if byte.leading_zeros() == 1 {
+                    return (frame << shift) + byte as u64;
+                }
+                frame = (frame << shift) + (byte & 0b0_1111111) as u64;
+                shift += 7;
+            }
+        }
+        pub fn push_and_get_past_len(&mut self, meta: &RevMeta) -> usize {
+            /*
+            self.frames.truncate(self.index);
+            let to_drain = self
+                .frames
+                .partition_point(|frame| *frame < meta.past_end());
+            self.frames.drain(..to_drain);
+            self.frames.push_back(meta.now());
+            self.index = self.index + 1 - to_drain;
+            self.index
+            */
+            self.offset_bytes.truncate(self.index);
+            let mut to_drain = 0;
+            let mut old = self.oldest_run;
+            let mut index = 0;
+            while old < meta.past_end() {
+                old += self.get_offset_forward(&mut index); // todo: add 1 where?
+            }
+            let len = self.offset_bytes.len() - index;
+            self.offset_bytes.truncate_front()
+
+            todo!()
+        }
+        pub fn try_backward_log(&mut self, meta: &RevMeta) -> Result<bool, MissedFrame> {
+            /*
+            let Some(index) = self.index.checked_sub(1) else {
+                return Ok(false);
+            };
+            let frame = *self.frames.get(index).expect(INDEX_OOB);
+            match frame.cmp(&(meta.now() + 1)) {
+                Ordering::Less => Ok(false),
+                Ordering::Equal => {
+                    self.index = index;
+                    Ok(true)
+                }
+                Ordering::Greater => Err(MissedFrame(frame)),
+            }
+            */
+        }
+        pub fn try_forward_log(&mut self, meta: &RevMeta) -> Result<bool, MissedFrame> {
+            /*
+            let Some(&frame) = self.frames.get(self.index) else {
+                return Ok(false);
+            };
+            match frame.cmp(&meta.now()) {
+                Ordering::Greater => Ok(false),
+                Ordering::Equal => {
+                    self.index += 1;
+                    Ok(true)
+                }
+                Ordering::Less => Err(MissedFrame(frame)),
+            }
+            */
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
@@ -102,8 +207,11 @@ impl FrameTransitionLog {
     pub fn frames_shrink_to_fit(&mut self) {
         self.frames.shrink_to_fit()
     }
-    pub fn push_and_get_past_len(&mut self, meta: &RevMeta) -> usize {
+    pub fn truncate_future(&mut self) {
         self.frames.truncate(self.index);
+    }
+    pub fn push_and_get_past_len(&mut self, meta: &RevMeta) -> usize {
+        self.truncate_future();
         let to_drain = self
             .frames
             .partition_point(|frame| *frame < meta.past_end());

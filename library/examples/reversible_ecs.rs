@@ -16,29 +16,17 @@ use bevy_oozlum::{
 
 const MAX_LOG_LEN: u64 = 71;
 const FIXED_TIMESTEP: Duration = Duration::from_millis(100);
-const CURRENT_BEVY_VERSION: usize = 17;
+const CURRENT_BEVY_VERSION: usize = 0_17_0;
+const WINNING_BEVY_VERSION: usize = 1_00_0;
 
 // todo: mention how the last column cannot be undone
-
-// todo: triggered bug:
-// message: the UndoRedo log of the reversible system reversible_ecs::row3::system (forward system)
-// ran at 222 and missed to run at 215
-// message: the UndoRedo log of the reversible system reversible_ecs::row6::system (forward system)
-// ran at 37 during Forward (log) and missed to run at 36
-// The entity with ID 12v0 does not exist
-// message: the UndoRedo log of the reversible system reversible_ecs::row3::system (forward system)
-// ran at 211 during Forward (log) and missed to run at 210
-// { location: MaybeLocation { marker: PhantomData<core::option::Option<&core::panic::location::Location>> } } }
-
-// es scheint so als würde ein truncate_future vom frametransitionlog verpasst worden sein
-// dadurch wird bei bereits vergessenen log entries erwartet das sie nochmal auftauchen
-// Source entity must exist: EntityDoesNotExistError { entity: 2v0, details: EntityDoesNotExistDetails
-// reproduzieren: waste erzeugen, rückgängig machen, log beenden, leeres wasser beim alten waste erzeugen, zurück log, vor log
 
 /*
 
 Let's waste the time 'til Bevy 1.0 by tossing said waste into the ocean!
 No worry, it's okay as long you undo it. Just don't wait for too long...
+
+                         It is Bevy 0.27.3 now!
 
   ~'`-._,~'`-._,~'`-._,~'`-._,~'1`-._,~'`-._,~'`-._,~'`-._,~'`
   ~'`-._,~'`-._,~'`-._,~'`-._,~'2`-._,#'`-._,~'`-._,~'`-._,~'`
@@ -48,6 +36,7 @@ No worry, it's okay as long you undo it. Just don't wait for too long...
   ~'`-._,~'`-._,~'`-._,~'`-._,~'6`-._,~'`-._,~'`#._,~'`-._,~'`
   ~'`-._,~'`-._,~'`-._,~'`-._,~'7`-._,~'`-._,~'`-._,~'`-._,~'`
                        <- future ^ past ->
+
 1-7: toss waste (007, lost: ##._,~'`-.)          ESC: close
 LEFT: forward log, pause at end                  UP: exit log and resume
 RIGHT: backward log, pause at end                DOWN: pause
@@ -185,7 +174,13 @@ struct WasteCounts {
 
 impl WasteCounts {
     fn score(&self) -> usize {
-        (self.score.len() + CURRENT_BEVY_VERSION).min(1000)
+        (self.score.len() + CURRENT_BEVY_VERSION).min(WINNING_BEVY_VERSION)
+    }
+    fn update(&mut self, entity: Entity, waste: Waste, meta: &RevMeta) {
+        self.score.insert(entity);
+        if self.score() < WINNING_BEVY_VERSION && waste.tossed_at < meta.past_end() {
+            self.lost += 1;
+        }
     }
 }
 
@@ -212,14 +207,11 @@ fn despawn_waste(
     mut commands: Commands,
 ) {
     if meta.get_ran_direction() == Some(RevDirection::NOT_LOG) {
-        for (entity, Waste { tossed_at, .. }) in waste {
-            if !meta.contains(*tossed_at) {
+        for (entity, &waste) in waste {
+            if !meta.contains(waste.tossed_at) {
                 commands.entity(entity).despawn();
             }
-            if *tossed_at < meta.past_end() {
-                counts.lost += 1;
-            }
-            counts.score.insert(entity);
+            counts.update(entity, waste, &meta);
         }
     }
 }
@@ -306,7 +298,7 @@ fn row4(app: &mut App) {
     fn system(
         meta: Res<RevMeta>,
         pressed: Res<KeysPressed>,
-        mut lost: ResMut<WasteCounts>,
+        mut counts: ResMut<WasteCounts>,
         mut log: Local<SparseTransitionLog<Entity>>,
         mut commands: Commands,
     ) {
@@ -356,7 +348,7 @@ fn row4(app: &mut App) {
                     commands.entity(entity).despawn();
 
                     // The player missed undoing this littering in time and the lost waste counter is increased.
-                    lost.lost += 1;
+                    counts.update(entity, waste, &meta);
                 }
             }
 
@@ -410,7 +402,7 @@ fn row5(app: &mut App) {
         };
 
         match meta.running_direction() {
-            // Note that no despawns happen in this system as the it does not necessarily run when an entity
+            // Note that no despawns happen in this system as the system does not necessarily run when an entity
             // spawned from here gets out-of-log.
             // Not need to check if the key is pressed before the spawn, it is implied by the system running.
             RevDirection::NOT_LOG => {
@@ -435,15 +427,12 @@ fn row5(app: &mut App) {
                 // We also need to update the frame log. As the frame log is advanced every time this system runs,
                 // this method should always return true as well because the run condition makes sure it only runs
                 // in these frames, also during the log.
-                let expects_forward_log_run = frame_log.forward_log(&meta);
-                assert!(expects_forward_log_run);
-
+                let _true = frame_log.forward_log(&meta);
                 let entity = *entity_log.forward_log().unwrap();
                 commands.entity(entity).insert(waste);
             }
             RevDirection::BackwardLog => {
-                let expects_backward_log_run = frame_log.backward_log(&meta);
-                assert!(expects_backward_log_run);
+                let _true = frame_log.backward_log(&meta);
                 let entity = *entity_log.backward_log().unwrap();
                 commands.entity(entity).remove::<Waste>();
             }
@@ -602,7 +591,7 @@ fn rev_log_scope_and_buffer_waste_op(
     Only input logic and console output is done below.
 */
 
-fn map_input(mut keys: ResMut<KeysPressed>, lost: Res<WasteCounts>, mut exit: EventWriter<AppExit>) {
+fn map_input(mut keys: ResMut<KeysPressed>, counts: Res<WasteCounts>, mut exit: EventWriter<AppExit>) {
     use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, poll, read};
 
     let mut f = || -> std::io::Result<()> {
@@ -623,9 +612,11 @@ fn map_input(mut keys: ResMut<KeysPressed>, lost: Res<WasteCounts>, mut exit: Ev
             KeyCode::Esc => {
                 exit.write(AppExit::Success);
             }
+
             // ignore any other inputs at game over
-            _ if lost.lost >= 10 => {}
-            _ if lost.score() >= 1000 => {}
+            _ if counts.lost >= 10 => {}
+            _ if counts.score() >= WINNING_BEVY_VERSION => {}
+
             KeyCode::Left => keys.direction = Some(Direction::FutureEnd),
             KeyCode::Right => keys.direction = Some(Direction::PastEnd),
             KeyCode::Up => keys.direction = Some(Direction::Forward),
@@ -745,13 +736,14 @@ fn render(
     }
 
     let mut bevy_version = format!("{:04}", counts.score());
+    bevy_version.insert(3, '.');
     bevy_version.insert(1, '.');
 
     println!();
     println!("Let's waste the time 'til Bevy 1.0 by tossing said waste into the ocean!");
     println!("No worry, it's okay as long you undo it. Just don't wait for too long...");
     println!();
-    println!("                       It is Bevy {bevy_version} now!");
+    println!("                         It is Bevy {bevy_version} now!                         ");
     println!();
 
     for (i, past_row) in past_rows.into_iter().enumerate() {
@@ -771,32 +763,38 @@ fn render(
         .skip(MAX_LOG_LEN as usize - (padding_cols + meta.future_len() as usize + 1))
         .take(MAX_LOG_LEN as usize + 1)
         .collect::<String>();
+
     println!("{marker}");
+    println!();
+
     if meta.get_ran_direction() != Some(RevDirection::NOT_LOG) || lost == 10 {
         println!("                ({total:03}, lost: {lost_bar})          ESC: close");
     } else {
         println!("1-7: toss waste ({total:03}, lost: {lost_bar})          ESC: close");
     }
+
+    let blink = (meta.now() / 8) % 2 == 0;
     if lost < 10 {
-        if counts.score.len() + CURRENT_BEVY_VERSION < 1000 {
+        if counts.score() < WINNING_BEVY_VERSION {
             println!("LEFT: forward log, pause at end                  UP: exit log and resume");
             println!("RIGHT: backward log, pause at end                DOWN: pause");
         } else {
             println!();
-            if (meta.now() / 10) % 2 == 0 {
-                println!("              Yay, Bevy 1.0 is there! YOU WON!");
+            if blink {
+                println!("                    Yay, Bevy 1.0 is there! YOU WON!");
             } else {
                 println!();
             }
         }
     } else {
         println!();
-        if (meta.now() / 10) % 2 == 0 {
+        if blink {
             println!("You left too much waste behind that you can no longer recover. GAME OVER");
         } else {
             println!();
         }
     }
+
     println!();
     println!(
         "meta.past_end()   == {:05}                       meta.past_len()   == {:02}",
@@ -814,6 +812,7 @@ fn render(
         meta.future_len()
     );
     println!();
+
     let _ = stdout().execute(MoveTo(0, 0));
     let _ = stdout().execute(EndSynchronizedUpdate);
 }
