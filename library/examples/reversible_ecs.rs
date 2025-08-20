@@ -24,6 +24,40 @@ const WINNING_BEVY_VERSION: usize = 1_00_0;
 // todo: new bug after frame_transition rework + changes: some undos are not applied in time
 // scheint mit verfrühten truncate_past schritt von FrameTransitionLog zusammenzuhängen,
 // es passiert immer wenn dann beim letzten command das rückgängig gemacht werden soll.
+/*
+Res(
+    RevMeta {
+        max_world_states: Some(              
+            71,
+        ),
+        past_end: 21,
+        now: 75,
+        future_end: 91,
+        queue: None,
+        direction: RunningBackwardLog {
+            updates_until_pause: 55,
+        },
+    },
+)
+Local(
+    FrameTransitionLog {
+        offset_bytes: [
+            8,
+            2,
+            5,
+        ],
+        offsets(): [
+            8,
+            2,
+            5,
+        ],
+        oldest_run: 76,
+        last_run: 76,
+        index: 0,
+        past_len: 0,
+    },
+)
+*/
 
 /*
 
@@ -437,6 +471,9 @@ fn row5(app: &mut App) {
             }
             RevDirection::BackwardLog => {
                 let _true = frame_log.backward_log(&meta);
+                if !_true {
+                    panic!("{meta:#?}\n{frame_log:#?}");
+                }
                 let entity = *entity_log.backward_log().unwrap();
                 commands.entity(entity).remove::<Waste>();
             }

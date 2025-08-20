@@ -55,7 +55,7 @@ mod serde_with {
 
 impl Debug for FrameTransitionLog {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct(core::any::type_name::<Self>())
+        f.debug_struct("FrameTransitionLog")
             .field("offset_bytes", &self.offset_bytes)
             .field("offsets()", &VarLenOffsetsIter::<true> {
                 offset_bytes: &self.offset_bytes,
