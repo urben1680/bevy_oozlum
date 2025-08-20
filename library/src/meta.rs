@@ -578,7 +578,6 @@ impl RevMeta {
         self.now += 1;
         self.future_end = self.now;
         if let Some(max_world_states) = self.max_world_states.map(NonZeroU64::get) {
-            let max_world_states = max_world_states as u64;
             // past states equal to max states is too many as the present state has to be added to the comparision
             if self.past_len() >= max_world_states {
                 self.past_end = self.now + 1 - max_world_states;

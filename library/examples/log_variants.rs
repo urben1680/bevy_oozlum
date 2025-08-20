@@ -134,6 +134,8 @@ impl LastFrameWhereModuloEqZero {
                     self.scoped_state.drain_future();
                     self.scoped_transition.drain_future();
                 }
+
+                // todo: demonstrate multiple updates per call with another frame transition log
             }
             RevDirection::FORWARD_LOG => {
                 let mut equal_states = vec![];

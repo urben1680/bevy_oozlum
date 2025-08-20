@@ -344,7 +344,7 @@ impl UndoRedoLog {
                 if !self
                     .frame_log
                     .try_forward_log(&meta)
-                    .map_err(map_frame_log_err(now, RevDirection::FORWARD_LOG, system_name.clone()))?
+                    .map_err(map_frame_log_err(now, RevDirection::FORWARD_LOG, system_name))?
                 {
                     return Ok(());
                 };
@@ -395,7 +395,7 @@ impl UndoRedoLog {
         if !self
             .frame_log
             .try_backward_log(&meta)
-            .map_err(map_frame_log_err(now, RevDirection::BackwardLog, system_name.to_owned()))?
+            .map_err(map_frame_log_err(now, RevDirection::BackwardLog, system_name))?
         {
             return Ok(());
         };
@@ -461,13 +461,13 @@ impl Error for UndoRedoLogError {}
 fn map_frame_log_err(
     now: u64,
     direction: RevDirection,
-    system_name: DebugName,
+    system_name: &DebugName,
 ) -> impl FnOnce(MissedFrame) -> UndoRedoLogError {
     move |err| UndoRedoLogError::MissedFrame {
         frame: err.0,
         now,
         direction,
-        system_name,
+        system_name: system_name.to_owned(),
     }
 }
 

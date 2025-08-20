@@ -21,6 +21,10 @@ const WINNING_BEVY_VERSION: usize = 1_00_0;
 
 // todo: mention how the last column cannot be undone
 
+// todo: new bug after frame_transition rework + changes: some undos are not applied in time
+// scheint mit verfrühten truncate_past schritt von FrameTransitionLog zusammenzuhängen,
+// es passiert immer wenn dann beim letzten command das rückgängig gemacht werden soll.
+
 /*
 
 Let's waste the time 'til Bevy 1.0 by tossing said waste into the ocean!
@@ -562,7 +566,6 @@ fn rev_log_scope_and_buffer_waste_op(
     now: NonLogNow,
 ) {
     // We mark the entity as log scoped which means it will be despawned when this frame gets out of log.
-    // We mark the entity as log scoped which means it will be despawned when this frame gets out of log.
     entity_commands.rev_log_scope(now);
 
     let entity = entity_commands.id();
@@ -728,7 +731,10 @@ fn render(
     let padding = " ".repeat(padding_cols);
 
     for Waste { row, tossed_at } in waste.iter().copied() {
-        let index = (meta.now() - tossed_at) as usize;
+        let Some(index) = meta.now().checked_sub(tossed_at) else {
+            panic!("now {} < tossed_at {tossed_at} of row {row}", meta.now());
+        };
+        let index = index as usize;
         past_rows
             .get_mut(row - 1)
             .unwrap()
