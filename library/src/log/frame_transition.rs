@@ -108,7 +108,6 @@ impl Iter<'_> {
             0 => ControlFlow::Continue(()),
             1 => {
                 self.zeroes = 0;
-                self.iter.next(); // advance iter to not run into the same zeroes again
                 ControlFlow::Break(IterItem {
                     offset: 0,
                     len: 1 // now advance index
