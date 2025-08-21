@@ -90,7 +90,7 @@ impl Display for RevDirection {
         match *self {
             RevDirection::NOT_LOG => write!(f, "Forward (not log)"),
             RevDirection::FORWARD_LOG => write!(f, "Forward (log)"),
-            RevDirection::BackwardLog => write!(f, "Backward (log)")
+            RevDirection::BackwardLog => write!(f, "Backward (log)"),
         }
     }
 }

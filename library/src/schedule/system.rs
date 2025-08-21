@@ -594,16 +594,13 @@ mod test {
     fn assert_system_drains_all_undo_redo<M>(system: impl IntoSystem<(), (), M> + Copy + 'static) {
         panic_on_error_events();
         let mut app = App::new();
-        app.add_plugins(RevPlugin::add_meta_and_runner(
-            RevMeta::default(),
-            Update,
-        ))
-        // non-reversible systems should leak undo_redo into the next reversible system
-        .add_systems(RevUpdate, system.before(RevSystems))
-        .rev_add_systems(RevUpdate, system)
-        .add_observer(observer)
-        .add_observer(empty_observer)
-        .update();
+        app.add_plugins(RevPlugin::add_meta_and_runner(RevMeta::default(), Update))
+            // non-reversible systems should leak undo_redo into the next reversible system
+            .add_systems(RevUpdate, system.before(RevSystems))
+            .rev_add_systems(RevUpdate, system)
+            .add_observer(observer)
+            .add_observer(empty_observer)
+            .update();
         let buffer = app.world().resource::<UndoRedoBuffer>();
         assert!(buffer.is_empty(), "{buffer:?}");
     }

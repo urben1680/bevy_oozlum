@@ -20,45 +20,6 @@ const CURRENT_BEVY_VERSION: usize = 0_17_0;
 const WINNING_BEVY_VERSION: usize = 1_00_0;
 
 // todo: mention how the last column cannot be undone
-
-// todo: new bug after frame_transition rework + changes: some undos are not applied in time
-// scheint mit verfrühten truncate_past schritt von FrameTransitionLog zusammenzuhängen,
-// es passiert immer wenn dann beim letzten command das rückgängig gemacht werden soll.
-/*
-Res(
-    RevMeta {
-        max_world_states: Some(              
-            71,
-        ),
-        past_end: 21,
-        now: 75,
-        future_end: 91,
-        queue: None,
-        direction: RunningBackwardLog {
-            updates_until_pause: 55,
-        },
-    },
-)
-Local(
-    FrameTransitionLog {
-        offset_bytes: [
-            8,
-            2,
-            5,
-        ],
-        offsets(): [
-            8,
-            2,
-            5,
-        ],
-        oldest_run: 76,
-        last_run: 76,
-        index: 0,
-        past_len: 0,
-    },
-)
-*/
-
 /*
 
 Let's waste the time 'til Bevy 1.0 by tossing said waste into the ocean!
@@ -114,7 +75,6 @@ fn main() {
             // You may also add them to another schedule, but that in turn should be run by a
             // reversible system itself which is put into RevUpdate.
             RevUpdate,
-
             // We dont need the rows to be ordered in a particular way, but that is possible
             // with this crate too: If system A comes before system B, during the backward
             // run of the schedule, this order is reversed. All known system configurations, including
@@ -207,7 +167,7 @@ struct Waste {
 #[derive(Resource, Default)]
 struct WasteCounts {
     lost: usize,
-    score: EntityHashSet
+    score: EntityHashSet,
 }
 
 impl WasteCounts {
@@ -471,9 +431,6 @@ fn row5(app: &mut App) {
             }
             RevDirection::BackwardLog => {
                 let _true = frame_log.backward_log(&meta);
-                if !_true {
-                    panic!("{meta:#?}\n{frame_log:#?}");
-                }
                 let entity = *entity_log.backward_log().unwrap();
                 commands.entity(entity).remove::<Waste>();
             }
@@ -631,7 +588,11 @@ fn rev_log_scope_and_buffer_waste_op(
     Only input logic and console output is done below.
 */
 
-fn map_input(mut keys: ResMut<KeysPressed>, counts: Res<WasteCounts>, mut exit: EventWriter<AppExit>) {
+fn map_input(
+    mut keys: ResMut<KeysPressed>,
+    counts: Res<WasteCounts>,
+    mut exit: EventWriter<AppExit>,
+) {
     use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, poll, read};
 
     let mut f = || -> std::io::Result<()> {
@@ -734,7 +695,7 @@ fn render(
     meta: Res<RevMeta>,
     waste: Query<&Waste>,
     counts: Res<WasteCounts>,
-    mut last_future_end: Local<Option<u64>>
+    mut last_future_end: Local<Option<u64>>,
 ) {
     let _ = stdout().execute(BeginSynchronizedUpdate);
     let _ = stdout().execute(Clear(ClearType::All));

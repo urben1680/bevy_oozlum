@@ -75,7 +75,7 @@ pub mod undo_redo;
 
 /// Contains all extension traits `as _` and common types.
 pub mod prelude {
-    pub use crate::app::{RevPlugin, RevApp as _};
+    pub use crate::app::{RevApp as _, RevPlugin};
     pub use crate::meta::{RevDirection, RevMeta};
     pub use crate::schedule::{
         IntoRevScheduleConfigs as _, RevSchedule as _, RevSystems, RevUpdate,

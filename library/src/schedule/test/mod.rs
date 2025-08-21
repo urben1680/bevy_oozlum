@@ -3,17 +3,24 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-use bevy::{app::{App, Update}, ecs::{
-    change_detection::{Res, ResMut},
-    component::Component,
-    event::Event,
-    resource::Resource,
-    system::{Commands, IntoSystem, Local},
-    world::World,
-}};
+use bevy::{
+    app::{App, Update},
+    ecs::{
+        change_detection::{Res, ResMut},
+        component::Component,
+        event::Event,
+        resource::Resource,
+        system::{Commands, IntoSystem, Local},
+        world::World,
+    },
+};
 
 use crate::{
-    app::{RevApp, RevPlugin}, meta::RevDirection, panic_on_error_events, schedule::RevUpdate, undo_redo::{BuffersUndoRedo, RevCommands, UndoRedo}
+    app::{RevApp, RevPlugin},
+    meta::RevDirection,
+    panic_on_error_events,
+    schedule::RevUpdate,
+    undo_redo::{BuffersUndoRedo, RevCommands, UndoRedo},
 };
 
 use super::*;
@@ -474,22 +481,32 @@ fn truncates_future_command_log() {
 
     let meta = RevMeta::new(None, 0, false);
     let mut app = App::new();
-    app
-        .add_plugins(RevPlugin::add_meta_and_runner(meta, Update))
+    app.add_plugins(RevPlugin::add_meta_and_runner(meta, Update))
         .rev_add_systems(RevUpdate, system);
 
     app.update(); // do 1
     app.update(); // do 2, command queued
-    app.world_mut().resource_mut::<RevMeta>().queue_log(0).unwrap();
+    app.world_mut()
+        .resource_mut::<RevMeta>()
+        .queue_log(0)
+        .unwrap();
     app.update(); // undo 2
     app.update(); // undo 1
-    app.world_mut().resource_mut::<RevMeta>().queue_not_log_forward();
+    app.world_mut()
+        .resource_mut::<RevMeta>()
+        .queue_not_log_forward();
     app.update(); // do 1, should truncate logs
     app.update(); // do 2, no command queued
-    app.world_mut().resource_mut::<RevMeta>().queue_log(0).unwrap();
+    app.world_mut()
+        .resource_mut::<RevMeta>()
+        .queue_log(0)
+        .unwrap();
     app.update(); // undo 2
     app.update(); // undo 1
-    app.world_mut().resource_mut::<RevMeta>().queue_log(2).unwrap();
+    app.world_mut()
+        .resource_mut::<RevMeta>()
+        .queue_log(2)
+        .unwrap();
     app.update(); // redo 1
     app.update(); // redo 2, should not panic
 }
