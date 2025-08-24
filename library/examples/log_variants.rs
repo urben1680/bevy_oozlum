@@ -68,7 +68,7 @@ struct LastFrameWhereModuloEqZero {
     sparse_transition: SparseTransitionLog<u8>,
 
     #[serde(with = "logless_with_capacity")]
-    frame_transition: FrameTransitionLog,
+    frame_transition: PastLenLog,
 }
 
 impl LastFrameWhereModuloEqZero {
@@ -88,7 +88,7 @@ impl LastFrameWhereModuloEqZero {
             sparse_state: SparseStateLog::with_capacity(state, scoped_capacity),
             sparse_transition: SparseTransitionLog::with_capacity(scoped_capacity),
 
-            frame_transition: FrameTransitionLog::with_capacity(scoped_capacity),
+            frame_transition: PastLenLog::with_capacity(scoped_capacity),
         }
     }
     fn update_and_get(&mut self, meta: &RevMeta) -> u64 {
@@ -121,7 +121,10 @@ impl LastFrameWhereModuloEqZero {
                     .push_and_pop_past(past_len, then_delta);
 
                 if update {
-                    let scoped_past_len = self.frame_transition.push_and_get_past_len(&meta);
+                    let scoped_past_len = self
+                        .frame_transition
+                        .update_and_get_past_len(&meta)
+                        .unwrap();
                     assert_eq!(scoped_past_len, past_len / modulo as usize);
 
                     self.scoped_state.push_and_drain_past(scoped_past_len, now);
@@ -130,12 +133,10 @@ impl LastFrameWhereModuloEqZero {
 
                     self.state_for_transition_logs = now;
                 } else {
-                    self.frame_transition.truncate_future();
+                    self.frame_transition.truncate_future(&meta).unwrap();
                     self.scoped_state.drain_future();
                     self.scoped_transition.drain_future();
                 }
-
-                // todo: demonstrate multiple updates per call with another frame transition log
             }
             RevDirection::FORWARD_LOG => {
                 let mut equal_states = vec![];
@@ -146,7 +147,7 @@ impl LastFrameWhereModuloEqZero {
 
                 equal_transitions.push(*self.dense_transition.forward_log().unwrap());
 
-                let expect_forward_log = self.frame_transition.forward_log(&meta);
+                let expect_forward_log = self.frame_transition.forward_log(&meta).unwrap();
                 assert_eq!(expect_forward_log, meta.now() % modulo == 0);
 
                 let state_changed = self.sparse_state.forward_log().unwrap();
@@ -178,7 +179,7 @@ impl LastFrameWhereModuloEqZero {
 
                 equal_transitions.push(*self.dense_transition.backward_log().unwrap());
 
-                let expect_backward_log = self.frame_transition.backward_log(&meta);
+                let expect_backward_log = self.frame_transition.backward_log(&meta).unwrap();
                 assert_eq!(expect_backward_log, (meta.now() + 1) % modulo == 0);
 
                 let state_changed = self.sparse_state.backward_log().unwrap();

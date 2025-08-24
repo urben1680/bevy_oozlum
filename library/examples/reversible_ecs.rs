@@ -9,7 +9,7 @@ use bevy::{
 use crossterm::{ExecutableCommand, cursor::*, terminal::*};
 
 use bevy_oozlum::{
-    log::{DenseTransitionLog, FrameTransitionLog, SparseTransitionLog},
+    log::{DenseTransitionLog, PastLenLog, SparseTransitionLog},
     meta::NonLogNow,
     prelude::*,
 };
@@ -44,6 +44,10 @@ meta.past_end()   == 00000                       meta.past_len()   == 28
 meta.now()        == 00028                       meta.len()        == 59
 meta.future_end() == 00058                       meta.future_len() == 30
 
+*/
+
+/*
+todo: make systems fallible instead of unwrap
 */
 
 fn main() {
@@ -391,8 +395,9 @@ fn row5(app: &mut App) {
     fn spawn_and_log_system(
         meta: Res<RevMeta>,
         mut entity_log: Local<DenseTransitionLog<Entity>>,
-        mut frame_log: Local<FrameTransitionLog>,
+        mut past_len_log: Local<PastLenLog>,
         mut commands: Commands,
+        mut debug: Local<Vec<(RevMeta, PastLenLog)>>,
     ) {
         let waste = Waste {
             tossed_at: meta.now(),
@@ -407,13 +412,15 @@ fn row5(app: &mut App) {
                 // During RevDirection::NOT_LOG, this is always Some.
                 let now = meta.non_log_now().unwrap();
 
-                // We spawn the waste entity and mark is as log scoped to be despawned when out-of-log.
-                let entity = commands.spawn(waste).rev_log_scope(now).id();
-
                 // We get the past len from the frame log instead from RevMeta.
                 // Note that here, in contrast to the previous row, we do not need to increase the past_len because
                 // we dont do anything with the entities that go out of log.
-                let past_len = frame_log.push_and_get_past_len(&meta);
+                let past_len = past_len_log.update_and_get_past_len(&meta).unwrap_or_else(|err| {
+                    panic!("\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n{err}\n{meta:#?}\n{debug:#?}\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n"); // todo: bug here
+                });
+
+                // We spawn the waste entity and mark is as log scoped to be despawned when out-of-log.
+                let entity = commands.spawn(waste).rev_log_scope(now).id();
 
                 // We do not use the push_and_pop_past method because, as this system does not run every frame,
                 // multiple log entries may be out of log now.
@@ -425,16 +432,17 @@ fn row5(app: &mut App) {
                 // We also need to update the frame log. As the frame log is advanced every time this system runs,
                 // this method should always return true as well because the run condition makes sure it only runs
                 // in these frames, also during the log.
-                let _true = frame_log.forward_log(&meta);
+                let _true = past_len_log.forward_log(&meta);
                 let entity = *entity_log.forward_log().unwrap();
                 commands.entity(entity).insert(waste);
             }
             RevDirection::BackwardLog => {
-                let _true = frame_log.backward_log(&meta);
+                let _true = past_len_log.backward_log(&meta);
                 let entity = *entity_log.backward_log().unwrap();
                 commands.entity(entity).remove::<Waste>();
             }
         }
+        debug.push((meta.clone(), past_len_log.clone()));
     }
 }
 

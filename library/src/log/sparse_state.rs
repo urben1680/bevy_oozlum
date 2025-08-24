@@ -226,6 +226,7 @@ impl<T> SparseStateLog<T> {
         }
         self.skips_max = self.skips;
     }
+    // todo push_if_neq api
     pub fn push_and_pop_past(&mut self, max_past_len: usize, state: Option<T>) -> Option<T> {
         self.push(state);
         let excessive_len = self

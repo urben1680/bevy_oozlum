@@ -3,15 +3,6 @@ TODO:
 
 - add license
 -- dual license MIT/Apache-2.0 like bevy https://github.com/bevyengine/bevy/issues/2373
-- find new name
--- revy
--- brevy
--- bevyveb
--- bevy_yveb
--- bevy_revsys
--- bevy_revsched
--- bevy_smetsys
--- bevy_oozlum (mythical bird that flies backwards)
 - schedule/test
 -- reflect on fix of https://github.com/bevyengine/bevy/issues/17828
 -- test not only multi-thread executor

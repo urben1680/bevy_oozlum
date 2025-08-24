@@ -1,5 +1,5 @@
 use core::num::NonZeroU64;
-use std::{error::Error, fmt::Display};
+use std::{collections::VecDeque, error::Error, fmt::Display};
 
 use bevy::{
     ecs::{
@@ -18,7 +18,7 @@ use bevy::{
 use bevy::reflect::{ReflectDeserialize, ReflectSerialize};
 
 use crate::{
-    log::OutOfLog,
+    log::{ContinuationLog, OutOfLog},
     schedule::RevUpdate,
     undo_redo::{BundleIdOfOpCache, RevDespawnCleaner, UndoRedoBuffer},
 };
@@ -279,6 +279,7 @@ pub struct RevMeta {
     past_end: u64,
     now: u64,
     future_end: u64,
+    continuations: ContinuationLog,
     /// If Some, is either a Running* variant or Pause
     queue: Option<InternalDirection>,
     direction: InternalDirection,
@@ -299,6 +300,7 @@ impl RevMeta {
         past_end: 1,
         now: 0,
         future_end: 1,
+        continuations: ContinuationLog::new(),
         queue: None,
         direction: InternalDirection::RunningForward,
     };
@@ -308,6 +310,8 @@ impl RevMeta {
             now,
             past_end: now,
             future_end: now,
+            continuations: VecDeque::new(),
+            continuations_removed: 0,
             direction: match paused {
                 true => InternalDirection::Pause,
                 false => InternalDirection::RanForward,
@@ -356,6 +360,13 @@ impl RevMeta {
     }
     pub fn future_contains(&self, frame: u64) -> bool {
         self.future_end.wrapping_sub(frame) < (self.future_end - self.now)
+    }
+    pub(crate) fn continuations_len(&self) -> usize {
+        self.continuations_removed + self.continuations.len()
+    }
+    pub(crate) fn min_continuation(&self, mut after: usize) -> Option<u64> {
+        after = after.checked_sub(self.continuations_removed)?; // todo: richtig?
+        self.continuations.iter().copied().skip(after).min()
     }
     pub fn clear(&mut self) {
         self.past_end = self.now;
@@ -547,7 +558,22 @@ impl RevMeta {
             Some(queue) => {
                 self.direction = queue;
                 self.now = match self.get_running_direction() {
-                    Some(RevDirection::NOT_LOG) => return self.update_forward(),
+                    Some(RevDirection::NOT_LOG) => {
+                        let continuation = self.now < self.future_end;
+                        self.update_forward();
+                        if continuation {
+                            if self
+                                .continuations
+                                .front()
+                                .is_some_and(|frame| !self.contains(*frame))
+                            {
+                                //self.continuations_removed += 1;
+                                //self.continuations.pop_front();
+                            }
+                            self.continuations.push_back(self.now);
+                        }
+                        return;
+                    }
                     Some(RevDirection::FORWARD_LOG) => self.now + 1,
                     Some(RevDirection::BackwardLog) => self.now - 1,
                     None => self.now,
@@ -610,6 +636,8 @@ mod test {
             now: present,
             past_end,
             future_end,
+            continuations: VecDeque::new(),
+            continuations_removed: 0,
             direction,
             queue: None,
         };

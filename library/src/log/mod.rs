@@ -15,7 +15,7 @@ mod dense_states;
 mod dense_transition;
 mod dense_transitions;
 
-mod frame_transition;
+mod past_len;
 
 mod sparse_state;
 mod sparse_states;
@@ -30,15 +30,18 @@ pub use dense_states::DenseStatesLog;
 pub use dense_transition::DenseTransitionLog;
 pub use dense_transitions::DenseTransitionsLog;
 
-pub use frame_transition::FrameTransitionLog;
-pub use frame_transition::MissedFrame;
+pub use past_len::MissedUpdate;
+pub use past_len::PastLenBackwardError;
+pub use past_len::PastLenLog;
+pub use past_len::PastLenNotLogError;
+pub(crate) use past_len::ContinuationLog;
 
 pub use sparse_state::SparseStateLog;
 pub use sparse_states::SparseStatesLog;
 pub use sparse_transition::SparseTransitionLog;
 pub use sparse_transitions::SparseTransitionsLog;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct OutOfLog;
 
 impl Display for OutOfLog {
