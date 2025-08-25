@@ -14,7 +14,6 @@ use bevy::reflect::Reflect;
 use super::{INDEX_OOB, OutOfLog};
 
 #[derive(Debug, Default, Clone, Reflect)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DenseStateLog<T> {
     /// The log of states, with two partitions:
     /// - Past states in `..self.index`
@@ -37,51 +36,39 @@ impl<T: Display> Display for DenseStateLog<T> {
     }
 }
 
-#[cfg(feature = "serde")]
+#[cfg(feature = "serialize")]
 mod serde_with {
     use std::collections::VecDeque;
 
     use serde::{Deserialize, Serialize};
 
-    use crate::log::serde_with::{
-        LoglessState, LoglessWithCapacity, WithCapacity, WithCapacityWrapper,
-    };
+    use crate::log::serialize::WithCapacity;
 
     use super::DenseStateLog;
 
-    impl<T: Serialize + for<'de> Deserialize<'de> + 'static> LoglessState for DenseStateLog<T> {
-        type Se<'se> = &'se T;
-        type De = T;
-        fn get_logless_state(&self) -> Self::Se<'_> {
-            &self.present
+    impl<T: Serialize + for<'de> Deserialize<'de> + 'static> Serialize for DenseStateLog<T> {
+        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+            where
+                S: serde::Serializer {
+            self.present.serialize(serializer)
         }
-        fn from_logless_state(logless_state: Self::De) -> Self {
-            logless_state.into()
+    }
+
+    impl<'de, T: Serialize + Deserialize<'de> + 'static> Deserialize<'de> for DenseStateLog<T> {
+        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+            where
+                D: serde::Deserializer<'de> {
+            T::deserialize(deserializer).map(Into::into)
         }
     }
 
     impl<T: Serialize + for<'de> Deserialize<'de> + 'static> WithCapacity for DenseStateLog<T> {
-        type Se<'se> = (WithCapacityWrapper<&'se VecDeque<T>>, &'se T, usize);
-        type De = (WithCapacityWrapper<VecDeque<T>>, T, usize);
-        fn get_with_capacity(&self) -> Self::Se<'_> {
-            (WithCapacityWrapper(&self.states), &self.present, self.index)
-        }
-        fn from_with_capacity((WithCapacityWrapper(states), present, index): Self::De) -> Self {
-            Self {
-                states,
-                present,
-                index,
-            }
-        }
-    }
-
-    impl<T: Serialize + for<'de> Deserialize<'de> + 'static> LoglessWithCapacity for DenseStateLog<T> {
         type Se<'se> = (&'se T, usize);
         type De = (T, usize);
-        fn get_logless_with_capacity(&self) -> Self::Se<'_> {
+        fn get_with_capacity(&self) -> Self::Se<'_> {
             (&self.present, self.states.capacity())
         }
-        fn from_logless_with_capacity((present, capacity): Self::De) -> Self {
+        fn from_with_capacity((present, capacity): Self::De) -> Self {
             Self {
                 states: VecDeque::with_capacity(capacity),
                 present,
@@ -261,17 +248,12 @@ mod test {
     use serde::{Deserialize, Serialize};
 
     use super::*;
-
     #[test]
     fn serde_with() {
         #[derive(Serialize, Deserialize)]
         struct Logs {
-            full: DenseStateLog<char>,
-            #[serde(with = "crate::log::logless_state")]
             logless: DenseStateLog<char>,
             #[serde(with = "crate::log::with_capacity")]
-            full_with_capacity: DenseStateLog<char>,
-            #[serde(with = "crate::log::logless_with_capacity")]
             logless_with_capacity: DenseStateLog<char>,
         }
 
@@ -281,22 +263,16 @@ mod test {
         original.backward_log().expect("in log");
 
         let mut logs = Logs {
-            full: original.clone(),
             logless: original.clone(),
-            full_with_capacity: original.clone(),
             logless_with_capacity: original.clone(),
         };
 
-        logs.full.states_reserve_exact(98);
         logs.logless.states_reserve_exact(98);
-        logs.full_with_capacity.states_reserve_exact(98);
         logs.logless_with_capacity.states_reserve_exact(98);
 
         let serialized = serde_json::to_string_pretty(&logs).unwrap();
         let Logs {
-            full,
             logless,
-            full_with_capacity,
             logless_with_capacity,
         } = serde_json::from_str(&serialized).unwrap();
 
@@ -318,9 +294,7 @@ mod test {
             );
         };
 
-        test(&full, 2, false);
         test(&logless, 0, false);
-        test(&full_with_capacity, 2, true);
         test(&logless_with_capacity, 0, true);
     }
 

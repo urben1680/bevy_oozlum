@@ -5,10 +5,10 @@ use std::{
     error::Error,
     fmt::Display,
     num::NonZeroUsize,
-    ops::ControlFlow, sync::{atomic::AtomicU32, Arc, RwLock, TryLockError},
+    ops::ControlFlow, sync::{atomic::AtomicU32, Arc},
 };
 
-use bevy::{ecs::resource::Resource, reflect::Reflect, utils::Parallel};
+use bevy::{ecs::resource::Resource};
 
 use crate::{log::OutOfLog, meta::{RevDirection, RevMeta}};
 
@@ -123,8 +123,7 @@ const MAX_WRAPPING_OFFSET: u8 = 0b00_111111;
 ///
 /// [logs]: crate::log
 /// [`RevUpdate`]: crate::schedule::RevUpdate
-#[derive(Clone, Default, Reflect)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Clone, Default)]
 pub struct PastLenLog {
     /// Contains the offsets between the [frames](RevMeta::now) this log was updated at.
     ///
@@ -168,7 +167,7 @@ pub struct PastLenLog {
     /// The length of the log which is what this log is keeping track of.
     past_len: usize,
 
-    reservation: Reservation,
+    direction_changes_seen: usize,
 
     /// The current amount of sequential offsets of `0`.
     zeroes: u8,
@@ -177,79 +176,37 @@ pub struct PastLenLog {
     zeroes_max: u8,
 }
 
-#[cfg(feature = "serde")]
+#[cfg(feature = "serialize")]
 mod serde_with {
-    use std::collections::VecDeque;
+    use serde::{Deserialize, Serialize};
 
-    use crate::log::serde_with::{LoglessWithCapacity, WithCapacity, WithCapacityWrapper};
+    use crate::log::serialize::WithCapacity;
 
     use super::PastLenLog;
 
-    impl WithCapacity for PastLenLog {
-        type Se<'se> = (
-            WithCapacityWrapper<&'se VecDeque<u8>>,
-            u64,
-            u64,
-            usize,
-            usize,
-            usize,
-            u8,
-            u8,
-        );
-        type De = (
-            WithCapacityWrapper<VecDeque<u8>>,
-            u64,
-            u64,
-            usize,
-            usize,
-            usize,
-            u8,
-            u8,
-        );
-        fn get_with_capacity(&self) -> Self::Se<'_> {
-            (
-                WithCapacityWrapper(&self.offset_bytes),
-                self.out_of_or_past_end_log,
-                self.last_run,
-                self.index,
-                self.past_len,
-                self.meta_continuations,
-                self.zeroes,
-                self.zeroes_max,
-            )
-        }
-        fn from_with_capacity(
-            (
-                WithCapacityWrapper(offset_bytes),
-                out_of_or_past_end_log,
-                last_run,
-                index,
-                past_len,
-                meta_continuations,
-                zeroes,
-                zeroes_max,
-            ): Self::De,
-        ) -> Self {
-            Self {
-                offset_bytes,
-                out_of_or_past_end_log,
-                last_run,
-                index,
-                past_len,
-                meta_continuations,
-                zeroes,
-                zeroes_max,
-            }
+    impl Serialize for PastLenLog {
+        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+            where
+                S: serde::Serializer {
+            ().serialize(serializer)
         }
     }
 
-    impl LoglessWithCapacity for PastLenLog {
+    impl<'de> Deserialize<'de> for PastLenLog {
+        fn deserialize<D>(_: D) -> Result<Self, D::Error>
+            where
+                D: serde::Deserializer<'de> {
+            Ok(Self::new())
+        }
+    }
+
+    impl WithCapacity for PastLenLog {
         type Se<'se> = usize;
         type De = usize;
-        fn get_logless_with_capacity(&self) -> Self::Se<'_> {
+        fn get_with_capacity(&self) -> Self::Se<'_> {
             self.bytes_capacity()
         }
-        fn from_logless_with_capacity(logless_with_capacity: Self::De) -> Self {
+        fn from_with_capacity(logless_with_capacity: Self::De) -> Self {
             Self::with_capacity(logless_with_capacity)
         }
     }
@@ -525,7 +482,7 @@ impl PastLenLog {
             last_run: 0,
             index: 0,
             past_len: 0,
-            meta_continuations: 0,
+            direction_changes_seen: 0,
             zeroes: 0,
             zeroes_max: 0,
         }
@@ -804,7 +761,7 @@ impl PastLenLog {
     /// [type docs]: PastLenLog
     pub fn update_and_get_past_len(&mut self, meta: &RevMeta, direction_changes: &DirectionChanges) -> Result<usize, PastLenNotLogError> {
         // truncate future
-        self.truncate_future(meta)?;
+        self.truncate_future(meta, direction_changes)?;
 
         // truncate past
 
@@ -1014,125 +971,44 @@ impl PastLenLog {
     }
 }
 
-// nicht teil von meta, eigene resource
-#[derive(Resource)]
-pub struct DirectionChanges {
+#[derive(Resource, Debug)]
+pub(crate) struct DirectionChanges {
     log: VecDeque<DirectionChange>,
-    truncated: usize,
     present: DirectionChange,
-    drop_channel: DropChannel
-}
-
-impl Debug for DirectionChanges {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("DirectionChanges")
-            .field("log", &self.log)
-            .field("truncated", &self.truncated)
-            .field("present", &self.present)
-            .finish_non_exhaustive()
-    }
+    truncated: usize,
 }
 
 #[derive(Debug)]
-pub struct DirectionChange {
-    /*
-    Das + den arc in PastLenLog macht klonen, serde und reflection schwierig
-
-    Eventuell doch atomic in resource?
-
-    drop fn mit resource reference
-
-    gibt es situationen wo PastLenLog gedropt wird obwohl es eine reservierung hat?
-
-    vielleicht sollte die resource selbst in Arc sein und FromWorld liest die resource
-
-    Das klappt nicht, PastLenLog dürfte nur Weak haben und beim nächsten resource update ist es invalid
-    
-    Andorderungen:
-    - counter zum reduzieren des logs sollte keine zu klonenden Arcs sein damit resource und PastLenLog zugänglich für clone, reflect und serde sind
-    - PastLenlog sollte nicht umständlich an resource übergeben werden anstelle von drop dait ergonomie nicht fürchterlich ist
-    
-    Konsequenz: PastLogLen enthält ein Arc<Parallel<usize>> das bei drop den index sendet der bei der resource bei dessen update den counter reduziert
-
-    neues Problem: Wird die Reservierung deserialisiert ist der channel noch uninit. Ein drop ohne init erzeugt wieder ein unbegrenztes Wachstum
-    das kann durchaus passieren bei kurzen spiel sessions
-
-    weiteres Problem: Drop bedeutet nicht unbedingt dass das log aus dem savegame verschwindet?
-
-    weiteres Problem: Drop order PastLenlog <-> DiretionChanges nicht festgelegt
-
-    Wann dropt man PastLenLog?
-     */
-    reservations: AtomicU32,
+struct DirectionChange {
+    seen: AtomicU32,
     start: u64,
     direction: RevDirection
-}
-
-type DropChannel = Arc<RwLock<Parallel<Vec<usize>>>>;
-
-#[derive(Clone, Default)]
-pub struct Reservation {
-    index: usize,
-    drop_channel: DropChannel
-}
-
-impl Debug for Reservation {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Reservation")
-            .field("index", &self.index)
-            .finish_non_exhaustive()
-    }
-}
-
-impl Drop for Reservation {
-    fn drop(&mut self) {
-        self.drop_channel.read().unwrap().borrow_local_mut().push(self.index);
-    }
 }
 
 impl DirectionChanges {
     pub(crate) fn new(now: u64, direction: RevDirection) -> Self {
         Self { 
             log: VecDeque::new(),
-            truncated: 0, 
             present: DirectionChange { 
-                reservations: AtomicU32::new(0), 
+                seen: AtomicU32::new(0), 
                 start: now, 
                 direction 
             },
-            drop_channel: Default::default()
+            truncated: 0,
         }
     }
     pub(crate) fn update(&mut self, now: u64, direction: RevDirection) {
-        match self.drop_channel.try_write() {
-            Ok(mut guard) => for index in guard.drain() {
-                self.log[index - self.truncated].reservations.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
-            },
-            Err(TryLockError::WouldBlock) => {}, // update next time
-            Err(TryLockError::Poisoned(_)) => panic!("todo")
-        }
-
-        let to_truncate = self.log.iter().take_while(|change| change.reservations.load(std::sync::atomic::Ordering::Relaxed) == 1).count();
+        let to_truncate = self.log.iter().take_while(|change| change.seen.load(std::sync::atomic::Ordering::Relaxed) == 1).count();
         self.log.drain(..to_truncate);
         self.truncated += to_truncate;
 
         if direction != self.present.direction {
             let previous = core::mem::replace(&mut self.present, DirectionChange { 
-                reservations: AtomicU32::new(0), 
+                seen: AtomicU32::new(0), 
                 start: now, 
                 direction
             });
             self.log.push_back(previous)
-        }
-    }
-    pub(crate) fn update_reservation(&self, reservation: &mut Reservation) {
-        self.log[reservation.index - self.truncated].reservations.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
-        self.present.reservations.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        reservation.index = self.log.len() + self.truncated;
-
-        // set Arc which is needed because the initial reservation default is some dummy value
-        if !Arc::ptr_eq(&self.drop_channel, &reservation.drop_channel) {
-            reservation.drop_channel = self.drop_channel.clone();
         }
     }
 }

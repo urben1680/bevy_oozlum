@@ -16,7 +16,6 @@ use super::{
 };
 
 #[derive(Debug, Clone, Reflect)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SparseStatesLog<T, U = (), const AMOUNT_BYTES: usize = USIZE_BYTES> {
     amounts: SparseStateLog<EntryAmount<U, AMOUNT_BYTES>>,
     states: VecDeque<T>,
@@ -49,41 +48,52 @@ impl<T: Display, U: Display + 'static, const AMOUNT_BYTES: usize> Display
     }
 }
 
-#[cfg(feature = "serde")]
+#[cfg(feature = "serialize")]
 mod serde_with {
-    use std::collections::VecDeque;
+    use std::{collections::VecDeque, ops::Deref};
 
     use serde::{Deserialize, Serialize};
 
-    use crate::log::serde_with::{
-        LoglessState, LoglessWithCapacity, WithCapacity, WithCapacityWrapper, WithRange,
+    use crate::log::serialize::{
+        WithCapacity, WithCapacityWrapper, WithRange,
     };
 
     use super::{EntryAmount, SparseStateLog, SparseStatesLog};
 
-    impl<T, U, const AMOUNT_BYTES: usize> LoglessState for SparseStatesLog<T, U, AMOUNT_BYTES>
+    impl<T, U, const AMOUNT_BYTES: usize> Serialize for SparseStatesLog<T, U, AMOUNT_BYTES>
     where
         T: Serialize + for<'de> Deserialize<'de> + 'static,
         U: Serialize + for<'de> Deserialize<'de> + 'static,
     {
-        type Se<'se> = (&'se EntryAmount<U, AMOUNT_BYTES>, WithRange<'se, T>);
-        type De = (EntryAmount<U, AMOUNT_BYTES>, VecDeque<T>);
-        fn get_logless_state(&self) -> Self::Se<'_> {
+        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+            where
+                S: serde::Serializer {
+
             (
-                self.amounts.get_logless_state(),
+                self.deref(),
                 WithRange {
                     deque: &self.states,
-                    range: self.get_range_entry().0,
-                },
-            )
+                    range: self.get_entry_range().1,
+                }
+            ).serialize(serializer)
         }
-        fn from_logless_state((amounts, states): Self::De) -> Self {
-            let index = states.len();
-            Self {
-                amounts: amounts.into(),
+    }
+
+    impl<'de, T, U, const AMOUNT_BYTES: usize> Deserialize<'de> for SparseStatesLog<T, U, AMOUNT_BYTES>
+    where
+        T: Serialize + Deserialize<'de> + 'static,
+        U: Serialize + Deserialize<'de> + 'static,
+    {
+        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+            where
+                D: serde::Deserializer<'de> {
+            let (entry, states) = <(U, VecDeque<T>)>::deserialize(deserializer)?;
+            let entry_amount = EntryAmount::new(entry, states.len());
+            Ok(Self {
+                amounts: SparseStateLog::new(entry_amount),
                 states,
-                index,
-            }
+                index: 0
+            })
         }
     }
 
@@ -93,59 +103,31 @@ mod serde_with {
         U: Serialize + for<'de> Deserialize<'de> + 'static,
     {
         type Se<'se> = (
-            <SparseStateLog<EntryAmount<U, AMOUNT_BYTES>> as WithCapacity>::Se<'se>,
-            WithCapacityWrapper<&'se VecDeque<T>>,
+            &'se U,
             usize,
-        );
-        type De = (
-            <SparseStateLog<EntryAmount<U, AMOUNT_BYTES>> as WithCapacity>::De,
-            WithCapacityWrapper<VecDeque<T>>,
-            usize,
-        );
-        fn get_with_capacity(&self) -> Self::Se<'_> {
-            (
-                WithCapacity::get_with_capacity(&self.amounts),
-                WithCapacityWrapper(&self.states),
-                self.index,
-            )
-        }
-        fn from_with_capacity((amounts, WithCapacityWrapper(states), index): Self::De) -> Self {
-            Self {
-                amounts: WithCapacity::from_with_capacity(amounts),
-                states,
-                index,
-            }
-        }
-    }
-
-    impl<T, U, const AMOUNT_BYTES: usize> LoglessWithCapacity for SparseStatesLog<T, U, AMOUNT_BYTES>
-    where
-        T: Serialize + for<'de> Deserialize<'de> + 'static,
-        U: Serialize + for<'de> Deserialize<'de> + 'static,
-    {
-        type Se<'se> = (
-            <SparseStateLog<EntryAmount<U, AMOUNT_BYTES>> as LoglessWithCapacity>::Se<'se>,
             WithCapacityWrapper<WithRange<'se, T>>,
         );
         type De = (
-            <SparseStateLog<EntryAmount<U, AMOUNT_BYTES>> as LoglessWithCapacity>::De,
+            U,
+            usize,
             WithCapacityWrapper<VecDeque<T>>,
         );
-        fn get_logless_with_capacity(&self) -> Self::Se<'_> {
+        fn get_with_capacity(&self) -> Self::Se<'_> {
             (
-                self.amounts.get_logless_with_capacity(),
+                self.deref(),
+                self.amounts.states_capacity(),
                 WithCapacityWrapper(WithRange {
                     deque: &self.states,
-                    range: self.get_range_entry().0,
+                    range: self.get_entry_range().1,
                 }),
             )
         }
-        fn from_logless_with_capacity((amounts, WithCapacityWrapper(states)): Self::De) -> Self {
-            let index = states.len();
+        fn from_with_capacity((entry, amounts_capacity, WithCapacityWrapper(states)): Self::De) -> Self {
+            let entry_amount = EntryAmount::new(entry, states.len());
             Self {
-                amounts: SparseStateLog::from_logless_with_capacity(amounts),
+                amounts: SparseStateLog::with_capacity(entry_amount, amounts_capacity),
                 states,
-                index,
+                index: 0
             }
         }
     }
@@ -290,13 +272,13 @@ impl<T, U, const AMOUNT_BYTES: usize> SparseStatesLog<T, U, AMOUNT_BYTES> {
     pub fn states_shrink_to_fit(&mut self) {
         self.states.shrink_to_fit()
     }
-    fn get_range_entry(&self) -> (Range<usize>, &U) {
+    fn get_entry_range(&self) -> (&U, Range<usize>) {
         let amount = self.amounts.amount();
         let from = self.index - amount;
-        (from..self.index, &self.amounts.entry)
+        (&self.amounts.entry, from..self.index)
     }
     pub fn get(&self) -> (Iter<T>, &U) {
-        let (range, entry) = self.get_range_entry();
+        let (entry, range) = self.get_entry_range();
         let states = self.states.range(range);
         (states, entry)
     }
@@ -481,12 +463,8 @@ mod test {
     fn serde_with() {
         #[derive(Serialize, Deserialize)]
         struct Logs {
-            full: SparseStatesLog<char, u8>,
-            #[serde(with = "crate::log::logless_state")]
             logless: SparseStatesLog<char, u8>,
             #[serde(with = "crate::log::with_capacity")]
-            full_with_capacity: SparseStatesLog<char, u8>,
-            #[serde(with = "crate::log::logless_with_capacity")]
             logless_with_capacity: SparseStatesLog<char, u8>,
         }
 
@@ -502,27 +480,19 @@ mod test {
         original.backward_log().expect("in log");
 
         let mut logs = Logs {
-            full: original.clone(),
             logless: original.clone(),
-            full_with_capacity: original.clone(),
             logless_with_capacity: original.clone(),
         };
 
-        logs.full.entries_reserve_exact(98);
         logs.logless.entries_reserve_exact(98);
-        logs.full_with_capacity.entries_reserve_exact(98);
         logs.logless_with_capacity.entries_reserve_exact(98);
 
-        logs.full.states_reserve_exact(194);
         logs.logless.states_reserve_exact(194);
-        logs.full_with_capacity.states_reserve_exact(194);
         logs.logless_with_capacity.states_reserve_exact(194);
 
         let serialized = serde_json::to_string_pretty(&logs).unwrap();
         let Logs {
-            full,
             logless,
-            full_with_capacity,
             logless_with_capacity,
         } = serde_json::from_str(&serialized).unwrap();
 
@@ -563,9 +533,7 @@ mod test {
             );
         };
 
-        test(&full, 2, 6, false);
         test(&logless, 0, 2, false);
-        test(&full_with_capacity, 2, 6, true);
         test(&logless_with_capacity, 0, 2, true);
     }
 

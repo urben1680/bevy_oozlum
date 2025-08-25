@@ -7,6 +7,8 @@ TODO:
 -- reflect on fix of https://github.com/bevyengine/bevy/issues/17828
 -- test not only multi-thread executor
 - transition log error tests
+- serde_with tests need to be revisited
+- log reflection impls like serde
 
 Enhancements:
 - reduce todo!() and //todo and unwrap (in favor of expect)

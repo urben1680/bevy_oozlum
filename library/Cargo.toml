@@ -16,5 +16,5 @@ serde_json = "1.0"
 crossterm = "0.28"
 
 [features]
-default = ["serde"] # todo: remove line before release
-serde = ["dep:serde", "bevy/serialize"]
+default = ["serialize"] # todo: remove line before release
+serialize = ["dep:serde", "bevy/serialize"]

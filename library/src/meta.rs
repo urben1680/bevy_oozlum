@@ -14,7 +14,7 @@ use bevy::{
     reflect::{Reflect, std_traits::ReflectDefault},
 };
 
-#[cfg(feature = "serde")]
+#[cfg(feature = "serialize")]
 use bevy::reflect::{ReflectDeserialize, ReflectSerialize};
 
 use crate::{
@@ -76,7 +76,7 @@ impl Error for TryRunRevUpdateError {}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Reflect, Hash)]
 #[reflect(PartialEq)]
 #[cfg_attr(
-    feature = "serde",
+    feature = "serialize",
     derive(serde::Serialize, serde::Deserialize),
     reflect(Serialize, Deserialize)
 )]
@@ -175,7 +175,7 @@ unsafe impl ReadOnlySystemParam for RevDirection {}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Reflect)]
 #[reflect(PartialEq)]
 #[cfg_attr(
-    feature = "serde",
+    feature = "serialize",
     derive(serde::Serialize, serde::Deserialize),
     reflect(Serialize, Deserialize)
 )]
@@ -256,7 +256,7 @@ impl NonLogNow {
 #[derive(Debug, Clone, Resource, Reflect, PartialEq)]
 #[reflect(Default)]
 #[cfg_attr(
-    feature = "serde",
+    feature = "serialize",
     derive(serde::Serialize, serde::Deserialize),
     reflect(Serialize, Deserialize)
 )]

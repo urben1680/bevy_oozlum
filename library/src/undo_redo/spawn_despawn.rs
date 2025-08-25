@@ -21,7 +21,7 @@ use crate::{
 
 use super::RevOp;
 
-#[derive(Resource, Default, Reflect, Debug)]
+#[derive(Resource, Default, Debug)]
 pub(crate) struct RevDespawnCleaner {
     spawn: DenseTransitionsLog<Entity>,
     despawn: DenseTransitionsLog<Entity>,

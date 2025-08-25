@@ -6,66 +6,29 @@ use std::{
     fmt::Debug,
 };
 
-use bevy::reflect::{Reflect, std_traits::ReflectDefault};
-
 use super::{
     DenseTransitionLog, EntryAmount, LogMut, OutOfLog, PushedTooMany, USIZE_BYTES, ValueEntry,
 };
 
-#[derive(Debug, Clone, Reflect)]
-#[reflect(Default)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone)]
 pub struct DenseTransitionsLog<T, U = (), const AMOUNT_BYTES: usize = USIZE_BYTES> {
     amounts: DenseTransitionLog<EntryAmount<U, AMOUNT_BYTES>>,
     transitions: VecDeque<T>,
     index: usize,
 }
 
-#[cfg(feature = "serde")]
+#[cfg(feature = "serialize")]
 mod serde_with {
-    use std::collections::VecDeque;
-
     use serde::{Deserialize, Serialize};
 
-    use crate::log::serde_with::{LoglessWithCapacity, WithCapacity, WithCapacityWrapper};
+    use crate::log::serialize::WithCapacity;
 
-    use super::{DenseTransitionLog, DenseTransitionsLog, EntryAmount};
+    use super::DenseTransitionsLog;
 
     impl<T, U, const AMOUNT_BYTES: usize> WithCapacity for DenseTransitionsLog<T, U, AMOUNT_BYTES>
     where
         T: Serialize + for<'de> Deserialize<'de> + 'static,
         U: Serialize + for<'de> Deserialize<'de> + 'static,
-    {
-        type Se<'se> = (
-            <DenseTransitionLog<EntryAmount<U, AMOUNT_BYTES>> as WithCapacity>::Se<'se>,
-            WithCapacityWrapper<&'se VecDeque<T>>,
-            usize,
-        );
-        type De = (
-            <DenseTransitionLog<EntryAmount<U, AMOUNT_BYTES>> as WithCapacity>::De,
-            WithCapacityWrapper<VecDeque<T>>,
-            usize,
-        );
-        fn get_with_capacity(&self) -> Self::Se<'_> {
-            (
-                self.amounts.get_with_capacity(),
-                WithCapacityWrapper(&self.transitions),
-                self.index,
-            )
-        }
-        fn from_with_capacity(
-            (amounts, WithCapacityWrapper(transitions), index): Self::De,
-        ) -> Self {
-            Self {
-                amounts: DenseTransitionLog::from_with_capacity(amounts),
-                transitions,
-                index,
-            }
-        }
-    }
-
-    impl<T, U, const AMOUNT_BYTES: usize> LoglessWithCapacity
-        for DenseTransitionsLog<T, U, AMOUNT_BYTES>
     {
         type Se<'se>
             = (usize, usize)
@@ -73,10 +36,10 @@ mod serde_with {
             T: 'se,
             U: 'se;
         type De = (usize, usize);
-        fn get_logless_with_capacity(&self) -> Self::Se<'_> {
+        fn get_with_capacity(&self) -> Self::Se<'_> {
             (self.entries_capacity(), self.transitions_capacity())
         }
-        fn from_logless_with_capacity((entries_capacity, transitions_capacity): Self::De) -> Self {
+        fn from_with_capacity((entries_capacity, transitions_capacity): Self::De) -> Self {
             Self::with_capacities(entries_capacity, transitions_capacity)
         }
     }
@@ -281,10 +244,7 @@ mod test {
     fn serde_with() {
         #[derive(Serialize, Deserialize)]
         struct Logs {
-            full: DenseTransitionsLog<char, u8>,
             #[serde(with = "crate::log::with_capacity")]
-            full_with_capacity: DenseTransitionsLog<char, u8>,
-            #[serde(with = "crate::log::logless_with_capacity")]
             logless_with_capacity: DenseTransitionsLog<char, u8>,
         }
 
@@ -300,23 +260,15 @@ mod test {
         original.backward_log().expect("in log");
 
         let mut logs = Logs {
-            full: original.clone(),
-            full_with_capacity: original.clone(),
             logless_with_capacity: original.clone(),
         };
 
-        logs.full.entries_reserve_exact(98);
-        logs.full_with_capacity.entries_reserve_exact(98);
         logs.logless_with_capacity.entries_reserve_exact(98);
 
-        logs.full.transitions_reserve_exact(196);
-        logs.full_with_capacity.transitions_reserve_exact(196);
         logs.logless_with_capacity.transitions_reserve_exact(196);
 
         let serialized = serde_json::to_string_pretty(&logs).unwrap();
         let Logs {
-            full,
-            full_with_capacity,
             logless_with_capacity,
         } = serde_json::from_str(&serialized).unwrap();
 
@@ -348,8 +300,6 @@ mod test {
             );
         };
 
-        test(&full, 2, 4, false);
-        test(&full_with_capacity, 2, 4, true);
         test(&logless_with_capacity, 0, 0, true);
     }
 

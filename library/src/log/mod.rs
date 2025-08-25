@@ -7,8 +7,8 @@ use std::{
 
 use bevy::reflect::Reflect;
 
-#[cfg(feature = "serde")]
-mod serde_with;
+#[cfg(feature = "serialize")]
+mod serialize;
 
 mod dense_state;
 mod dense_states;
@@ -22,8 +22,8 @@ mod sparse_states;
 mod sparse_transition;
 mod sparse_transitions;
 
-#[cfg(feature = "serde")]
-pub use serde_with::{logless_state, logless_with_capacity, with_capacity};
+#[cfg(feature = "serialize")]
+pub use serialize::with_capacity;
 
 pub use dense_state::DenseStateLog;
 pub use dense_states::DenseStatesLog;
@@ -150,14 +150,14 @@ struct SparseValue<T> {
     skips_ne: [u8; USIZE_BYTES],
 }
 
-#[cfg(feature = "serde")]
+#[cfg(feature = "serialize")]
 impl<T: serde::Serialize> serde::Serialize for SparseValue<T> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         (&self.value, &self.skips()).serialize(serializer)
     }
 }
 
-#[cfg(feature = "serde")]
+#[cfg(feature = "serialize")]
 impl<'de, T: serde::Deserialize<'de>> serde::Deserialize<'de> for SparseValue<T> {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let (value, skips) = <(T, usize) as serde::Deserialize<'de>>::deserialize(deserializer)?;
@@ -317,30 +317,6 @@ impl<U, const AMOUNT_BYTES: usize> EntryAmount<U, AMOUNT_BYTES> {
     /// ```
     pub fn amount(&self) -> usize {
         self.amount.amount()
-    }
-}
-
-#[cfg(feature = "serde")]
-impl<U: serde::Serialize, const AMOUNT_BYTES: usize> serde::Serialize
-    for EntryAmount<U, AMOUNT_BYTES>
-{
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        (&self.entry, self.amount()).serialize(serializer)
-    }
-}
-
-#[cfg(feature = "serde")]
-impl<'de, U: serde::Deserialize<'de>, const AMOUNT_BYTES: usize> serde::Deserialize<'de>
-    for EntryAmount<U, AMOUNT_BYTES>
-{
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let (entry, amount) = <(U, usize) as serde::Deserialize<'de>>::deserialize(deserializer)?;
-        let entry_amount = Self::new(entry, amount);
-        if amount == entry_amount.amount() {
-            Ok(entry_amount)
-        } else {
-            Err(serde::de::Error::custom("todo"))
-        }
     }
 }
 
