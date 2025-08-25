@@ -5,12 +5,12 @@ use std::{
     error::Error,
     fmt::Display,
     num::NonZeroUsize,
-    ops::ControlFlow, sync::Arc,
+    ops::ControlFlow, sync::{atomic::AtomicU32, Arc, RwLock, TryLockError},
 };
 
-use bevy::reflect::Reflect;
+use bevy::{ecs::resource::Resource, reflect::Reflect, utils::Parallel};
 
-use crate::{log::OutOfLog, meta::RevMeta};
+use crate::{log::OutOfLog, meta::{RevDirection, RevMeta}};
 
 const MAX_ZEROES_PER_BYTE: u8 = 65;
 const MAX_ZEROES_AS_BYTE: u8 = 0b10_111111;
@@ -168,10 +168,7 @@ pub struct PastLenLog {
     /// The length of the log which is what this log is keeping track of.
     past_len: usize,
 
-    /// amount of times [`RevMeta`] changed to [`RevDirection::NOT_LOG`] from a log direction.
-    ///
-    /// [`RevDirection::NOT_LOG`]: crate::meta::RevDirection::NOT_LOG
-    meta_continuations: usize,
+    reservation: Reservation,
 
     /// The current amount of sequential offsets of `0`.
     zeroes: u8,
@@ -631,7 +628,7 @@ impl PastLenLog {
     ///
     /// [`RevDirection::NOT_LOG`]: crate::meta::RevDirection::NOT_LOG
     /// [type docs]: PastLenLog
-    pub fn truncate_future(&mut self, meta: &RevMeta) -> Result<(), PastLenNotLogError> {
+    pub fn truncate_future(&mut self, meta: &RevMeta, direction_changes: &DirectionChanges) -> Result<(), PastLenNotLogError> {
         if self.last_run > meta.now() {
             return Err(PastLenNotLogError::MissedUpdateBackwardLog(MissedUpdate(
                 self.last_run,
@@ -718,7 +715,7 @@ impl PastLenLog {
         eigene arc im aktuellen meta state vorkommen
 
         Neue Idee: wie continue log alle richtungswechsel loggen. Dann kann PastLenLog über den
-        letzten index an prüfen ob es verpasste updates gab
+        letzten index an prüfen ob es verpasste updates gab bis es auf ein non-log eintrag stößt
 
         Beispiele:
         Not log, Forward log, Backward log
@@ -805,7 +802,7 @@ impl PastLenLog {
     /// [missed log traversal updates]: MissedUpdate
     /// [module docs]: super
     /// [type docs]: PastLenLog
-    pub fn update_and_get_past_len(&mut self, meta: &RevMeta) -> Result<usize, PastLenNotLogError> {
+    pub fn update_and_get_past_len(&mut self, meta: &RevMeta, direction_changes: &DirectionChanges) -> Result<usize, PastLenNotLogError> {
         // truncate future
         self.truncate_future(meta)?;
 
@@ -929,7 +926,7 @@ impl PastLenLog {
     ///
     /// [`RevDirection::BackwardLog`]: crate::meta::RevDirection::BackwardLog
     /// [type docs]: PastLenLog
-    pub fn backward_log(&mut self, meta: &RevMeta) -> Result<bool, PastLenBackwardError> {
+    pub fn backward_log(&mut self, meta: &RevMeta, direction_changes: &DirectionChanges) -> Result<bool, PastLenBackwardError> {
         match self.last_run.cmp(&(meta.now() + 1)) {
             Ordering::Less => Ok(false),
             Ordering::Equal => {
@@ -973,7 +970,7 @@ impl PastLenLog {
     ///
     /// [`RevDirection::FORWARD_LOG`]: crate::meta::RevDirection::FORWARD_LOG
     /// [type docs]: PastLenLog
-    pub fn forward_log(&mut self, meta: &RevMeta) -> Result<bool, MissedUpdate> {
+    pub fn forward_log(&mut self, meta: &RevMeta, direction_changes: &DirectionChanges) -> Result<bool, MissedUpdate> {
         match OffsetIter(self.offset_bytes.range(self.index..)).next() {
             Some(IterItem { offset: 0, len }) => match self.last_run.cmp(&meta.now()) {
                 Ordering::Greater => Ok(false),
@@ -1017,37 +1014,127 @@ impl PastLenLog {
     }
 }
 
-#[derive(Default, Debug, Clone, PartialEq)]
-pub(crate) struct ContinuationLog {
+// nicht teil von meta, eigene resource
+#[derive(Resource)]
+pub struct DirectionChanges {
+    log: VecDeque<DirectionChange>,
     truncated: usize,
-    continuations: VecDeque<(u64, Arc<()>)>,
-    log_clones: Arc<()>
+    present: DirectionChange,
+    drop_channel: DropChannel
 }
 
-impl ContinuationLog {
-    pub(crate) const fn new() -> Self {
-        Self { 
-            truncated: 0, 
-            continuations: VecDeque::new()
-        }
-    }
-    pub(crate) fn push(&mut self, past_end: u64, continutation: u64) {
-        let mut to_drain = 0;
-        for (frame, reservation) in &self.continuations {
-            if *frame > past_end || Arc::strong_count(reservation) > 1 {
-                break;
-            }
-            to_drain += 1;
-        }
-        self.continuations.drain(..to_drain);
-        self.continuations.push_back((continutation, Arc::new(())));
+impl Debug for DirectionChanges {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DirectionChanges")
+            .field("log", &self.log)
+            .field("truncated", &self.truncated)
+            .field("present", &self.present)
+            .finish_non_exhaustive()
     }
 }
 
-#[derive(Default, Debug)]
-struct Reservation {
+#[derive(Debug)]
+pub struct DirectionChange {
+    /*
+    Das + den arc in PastLenLog macht klonen, serde und reflection schwierig
+
+    Eventuell doch atomic in resource?
+
+    drop fn mit resource reference
+
+    gibt es situationen wo PastLenLog gedropt wird obwohl es eine reservierung hat?
+
+    vielleicht sollte die resource selbst in Arc sein und FromWorld liest die resource
+
+    Das klappt nicht, PastLenLog dürfte nur Weak haben und beim nächsten resource update ist es invalid
+    
+    Andorderungen:
+    - counter zum reduzieren des logs sollte keine zu klonenden Arcs sein damit resource und PastLenLog zugänglich für clone, reflect und serde sind
+    - PastLenlog sollte nicht umständlich an resource übergeben werden anstelle von drop dait ergonomie nicht fürchterlich ist
+    
+    Konsequenz: PastLogLen enthält ein Arc<Parallel<usize>> das bei drop den index sendet der bei der resource bei dessen update den counter reduziert
+
+    neues Problem: Wird die Reservierung deserialisiert ist der channel noch uninit. Ein drop ohne init erzeugt wieder ein unbegrenztes Wachstum
+    das kann durchaus passieren bei kurzen spiel sessions
+
+    weiteres Problem: Drop bedeutet nicht unbedingt dass das log aus dem savegame verschwindet?
+
+    weiteres Problem: Drop order PastLenlog <-> DiretionChanges nicht festgelegt
+
+    Wann dropt man PastLenLog?
+     */
+    reservations: AtomicU32,
+    start: u64,
+    direction: RevDirection
+}
+
+type DropChannel = Arc<RwLock<Parallel<Vec<usize>>>>;
+
+#[derive(Clone, Default)]
+pub struct Reservation {
     index: usize,
-    reservation: Arc<()>
+    drop_channel: DropChannel
+}
+
+impl Debug for Reservation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Reservation")
+            .field("index", &self.index)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Drop for Reservation {
+    fn drop(&mut self) {
+        self.drop_channel.read().unwrap().borrow_local_mut().push(self.index);
+    }
+}
+
+impl DirectionChanges {
+    pub(crate) fn new(now: u64, direction: RevDirection) -> Self {
+        Self { 
+            log: VecDeque::new(),
+            truncated: 0, 
+            present: DirectionChange { 
+                reservations: AtomicU32::new(0), 
+                start: now, 
+                direction 
+            },
+            drop_channel: Default::default()
+        }
+    }
+    pub(crate) fn update(&mut self, now: u64, direction: RevDirection) {
+        match self.drop_channel.try_write() {
+            Ok(mut guard) => for index in guard.drain() {
+                self.log[index - self.truncated].reservations.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+            },
+            Err(TryLockError::WouldBlock) => {}, // update next time
+            Err(TryLockError::Poisoned(_)) => panic!("todo")
+        }
+
+        let to_truncate = self.log.iter().take_while(|change| change.reservations.load(std::sync::atomic::Ordering::Relaxed) == 1).count();
+        self.log.drain(..to_truncate);
+        self.truncated += to_truncate;
+
+        if direction != self.present.direction {
+            let previous = core::mem::replace(&mut self.present, DirectionChange { 
+                reservations: AtomicU32::new(0), 
+                start: now, 
+                direction
+            });
+            self.log.push_back(previous)
+        }
+    }
+    pub(crate) fn update_reservation(&self, reservation: &mut Reservation) {
+        self.log[reservation.index - self.truncated].reservations.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+        self.present.reservations.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        reservation.index = self.log.len() + self.truncated;
+
+        // set Arc which is needed because the initial reservation default is some dummy value
+        if !Arc::ptr_eq(&self.drop_channel, &reservation.drop_channel) {
+            reservation.drop_channel = self.drop_channel.clone();
+        }
+    }
 }
 
 #[cfg(test)]

@@ -34,7 +34,7 @@ pub use past_len::MissedUpdate;
 pub use past_len::PastLenBackwardError;
 pub use past_len::PastLenLog;
 pub use past_len::PastLenNotLogError;
-pub(crate) use past_len::ContinuationLog;
+pub(crate) use past_len::DirectionChanges;
 
 pub use sparse_state::SparseStateLog;
 pub use sparse_states::SparseStatesLog;
