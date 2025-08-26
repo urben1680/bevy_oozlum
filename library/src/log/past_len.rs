@@ -1,14 +1,9 @@
 use core::fmt::Debug;
 use std::{
-    cmp::Ordering,
-    collections::{vec_deque::Iter, TryReserveError, VecDeque},
-    error::Error,
-    fmt::Display,
-    num::NonZeroUsize,
-    ops::ControlFlow, sync::{atomic::AtomicU32, Arc},
+    cmp::Ordering as CmpOrdering, collections::{vec_deque::Iter, TryReserveError, VecDeque}, error::Error, fmt::Display, num::NonZeroUsize, ops::ControlFlow, panic::Location, sync::{atomic::{AtomicI32, AtomicPtr, AtomicU32, Ordering as AtomicOrdering}, Arc}, u32
 };
 
-use bevy::{ecs::resource::Resource};
+use bevy::ecs::{change_detection::MaybeLocation, resource::Resource};
 
 use crate::{log::OutOfLog, meta::{RevDirection, RevMeta}};
 
@@ -885,8 +880,8 @@ impl PastLenLog {
     /// [type docs]: PastLenLog
     pub fn backward_log(&mut self, meta: &RevMeta, direction_changes: &DirectionChanges) -> Result<bool, PastLenBackwardError> {
         match self.last_run.cmp(&(meta.now() + 1)) {
-            Ordering::Less => Ok(false),
-            Ordering::Equal => {
+            CmpOrdering::Less => Ok(false),
+            CmpOrdering::Equal => {
                 if self.zeroes > 0 {
                     self.zeroes -= 1;
                     self.past_len -= 1;
@@ -909,7 +904,7 @@ impl PastLenLog {
                     None => Err(OutOfLog)?,
                 }
             }
-            Ordering::Greater => Err(MissedUpdate(self.last_run))?,
+            CmpOrdering::Greater => Err(MissedUpdate(self.last_run))?,
         }
     }
 
@@ -930,8 +925,8 @@ impl PastLenLog {
     pub fn forward_log(&mut self, meta: &RevMeta, direction_changes: &DirectionChanges) -> Result<bool, MissedUpdate> {
         match OffsetIter(self.offset_bytes.range(self.index..)).next() {
             Some(IterItem { offset: 0, len }) => match self.last_run.cmp(&meta.now()) {
-                Ordering::Greater => Ok(false),
-                Ordering::Equal => {
+                CmpOrdering::Greater => Ok(false),
+                CmpOrdering::Equal => {
                     if self.zeroes < len.get() as u8 - 1 {
                         self.zeroes += 1;
                     } else {
@@ -941,30 +936,30 @@ impl PastLenLog {
                     self.past_len += 1;
                     Ok(true)
                 }
-                Ordering::Less => Err(MissedUpdate(self.last_run)),
+                CmpOrdering::Less => Err(MissedUpdate(self.last_run)),
             },
             Some(IterItem { offset, len }) => {
                 let frame = self.last_run + offset;
                 match frame.cmp(&meta.now()) {
-                    Ordering::Greater => Ok(false),
-                    Ordering::Equal => {
+                    CmpOrdering::Greater => Ok(false),
+                    CmpOrdering::Equal => {
                         self.last_run = frame;
                         self.index += len.get();
                         self.past_len += 1;
                         self.zeroes = 0;
                         Ok(true)
                     }
-                    Ordering::Less => Err(MissedUpdate(frame)),
+                    CmpOrdering::Less => Err(MissedUpdate(frame)),
                 }
             }
             None if self.zeroes < self.zeroes_max => match self.last_run.cmp(&meta.now()) {
-                Ordering::Greater => Ok(false),
-                Ordering::Equal => {
+                CmpOrdering::Greater => Ok(false),
+                CmpOrdering::Equal => {
                     self.past_len += 1;
                     self.zeroes += 1;
                     Ok(true)
                 }
-                Ordering::Less => Err(MissedUpdate(self.last_run)),
+                CmpOrdering::Less => Err(MissedUpdate(self.last_run)),
             },
             None => Ok(false),
         }
@@ -978,27 +973,80 @@ pub(crate) struct DirectionChanges {
     truncated: usize,
 }
 
+type ErrLocation = MaybeLocation<AtomicPtr<Location<'static>>>;
+
 #[derive(Debug)]
 struct DirectionChange {
-    seen: AtomicU32,
     start: u64,
-    direction: RevDirection
+    direction: RevDirection,
+    seen: AtomicU32,
+    /// Because of no general support for AtomicU64 on all possible targets, this is an offset
+    /// from [`Self::start`] instead. This also means the max global log size is
+    /// `i32::MIN.unsigned_abs() as u64 + 1`.
+    backward_err_limit_offset: AtomicI32,
+    backward_err_location: ErrLocation,
+    forward_err_limit_offset: AtomicU32,
+    forward_err_location: ErrLocation,
 }
 
 impl DirectionChanges {
     pub(crate) fn new(now: u64, direction: RevDirection) -> Self {
+        let err_location = || MaybeLocation::new_with(|| {
+            AtomicPtr::new(
+                (Location::caller() as *const Location).cast_mut()
+            )
+        });
         Self { 
             log: VecDeque::new(),
             present: DirectionChange { 
-                seen: AtomicU32::new(0), 
                 start: now, 
-                direction 
+                direction,
+                seen: AtomicU32::new(0), 
+                backward_err_limit_offset: AtomicI32::new(i32::MAX),
+                backward_err_location: err_location(),
+                forward_err_limit_offset: AtomicU32::new(u32::MIN),
+                forward_err_location: err_location()
             },
             truncated: 0,
         }
     }
-    pub(crate) fn update(&mut self, now: u64, direction: RevDirection) {
-        let to_truncate = self.log.iter().take_while(|change| change.seen.load(std::sync::atomic::Ordering::Relaxed) == 1).count();
+    pub(crate) fn update(&mut self, meta: &RevMeta) -> Result<(), ()> {
+
+        let mut to_truncate = 0;
+        for change in self.log.iter_mut() {
+            if *change.seen.get_mut() != 0 {
+                break;
+            }
+
+            let backward_err_limit_offset = *change.backward_err_limit_offset.get_mut();
+            let backward_err_limit = if backward_err_limit_offset < 0 {
+                change.start - backward_err_limit_offset.unsigned_abs() as u64
+            } else {
+                change.start + backward_err_limit_offset as u64
+            };
+
+            if meta.now() < backward_err_limit {
+                return Err(());
+            }
+            if meta.past_end() > backward_err_limit { // <= ?
+                // cannot go that far backward to trigger an error
+                to_truncate += 1;
+                continue;
+            }
+
+            if change.direction == RevDirection::NOT_LOG {
+                // no FORWARD_LOG errors can be triggered if PastLenLog s could not have a future
+                // in this change's point of time
+                break;
+            }
+
+            let forward_err_limit_offset = *change.forward_err_limit_offset.get_mut();
+            let forward_err_limit = change.start + forward_err_limit_offset as u64;
+            
+            // todo: remaining checks
+
+            to_truncate += 1;
+        }
         self.log.drain(..to_truncate);
         self.truncated += to_truncate;
 
