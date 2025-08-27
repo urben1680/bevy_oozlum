@@ -18,7 +18,7 @@ pub mod with_capacity {
     {
         this.get_with_capacity().serialize(serializer)
     }
-    
+
     #[doc(hidden)]
     #[allow(private_bounds)]
     pub fn deserialize<'de, D, T>(deserializer: D) -> Result<T, D::Error>

@@ -60,6 +60,8 @@ ISSUES/DISCUSSIONS:
 example broken, first write tests for spawn_despawn
 */
 
+use bevy::ecs::change_detection::MaybeLocation;
+
 pub mod app;
 pub mod log;
 pub mod meta;
@@ -79,6 +81,9 @@ pub mod prelude {
         RevOp, RevWorld as _, UndoRedo, UndoRedoDirection,
     };
 }
+
+pub const MAX_LOG_LEN: u64 = log::MAX_LOG_LEN;
+const USE_LOCATION: bool = size_of::<MaybeLocation>() != 0;
 
 /// Make `error!` and `error_once!` cause panics.
 #[cfg(test)]

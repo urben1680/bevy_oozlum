@@ -37,16 +37,18 @@ mod serde_with {
 
     impl<T: Serialize + for<'de> Deserialize<'de> + 'static> Serialize for SparseStateLog<T> {
         fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-            where
-                S: serde::Serializer {
+        where
+            S: serde::Serializer,
+        {
             self.present.serialize(serializer)
         }
     }
 
     impl<'de, T: Serialize + Deserialize<'de> + 'static> Deserialize<'de> for SparseStateLog<T> {
         fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-            where
-                D: serde::Deserializer<'de> {
+        where
+            D: serde::Deserializer<'de>,
+        {
             T::deserialize(deserializer).map(Into::into)
         }
     }

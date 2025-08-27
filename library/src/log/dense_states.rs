@@ -52,9 +52,7 @@ mod serde_with {
 
     use serde::{Deserialize, Serialize};
 
-    use crate::log::serialize::{
-        WithCapacity, WithCapacityWrapper, WithRange,
-    };
+    use crate::log::serialize::{WithCapacity, WithCapacityWrapper, WithRange};
 
     use super::{DenseStateLog, DenseStatesLog, EntryAmount};
 
@@ -64,16 +62,17 @@ mod serde_with {
         U: Serialize + for<'de> Deserialize<'de> + 'static,
     {
         fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-            where
-                S: serde::Serializer {
-
+        where
+            S: serde::Serializer,
+        {
             (
                 self.deref(),
                 WithRange {
                     deque: &self.states,
                     range: self.get_entry_range().1,
-                }
-            ).serialize(serializer)
+                },
+            )
+                .serialize(serializer)
         }
     }
 
@@ -83,14 +82,15 @@ mod serde_with {
         U: Serialize + Deserialize<'de> + 'static,
     {
         fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-            where
-                D: serde::Deserializer<'de> {
+        where
+            D: serde::Deserializer<'de>,
+        {
             let (entry, states) = <(U, VecDeque<T>)>::deserialize(deserializer)?;
             let entry_amount = EntryAmount::new(entry, states.len());
             Ok(Self {
                 amounts: DenseStateLog::new(entry_amount),
                 states,
-                index: 0
+                index: 0,
             })
         }
     }
@@ -100,16 +100,8 @@ mod serde_with {
         T: Serialize + for<'de> Deserialize<'de> + 'static,
         U: Serialize + for<'de> Deserialize<'de> + 'static,
     {
-        type Se<'se> = (
-            &'se U,
-            usize,
-            WithCapacityWrapper<WithRange<'se, T>>,
-        );
-        type De = (
-            U,
-            usize,
-            WithCapacityWrapper<VecDeque<T>>,
-        );
+        type Se<'se> = (&'se U, usize, WithCapacityWrapper<WithRange<'se, T>>);
+        type De = (U, usize, WithCapacityWrapper<VecDeque<T>>);
         fn get_with_capacity(&self) -> Self::Se<'_> {
             (
                 self.deref(),
@@ -120,12 +112,14 @@ mod serde_with {
                 }),
             )
         }
-        fn from_with_capacity((entry, amounts_capacity, WithCapacityWrapper(states)): Self::De) -> Self {
+        fn from_with_capacity(
+            (entry, amounts_capacity, WithCapacityWrapper(states)): Self::De,
+        ) -> Self {
             let entry_amount = EntryAmount::new(entry, states.len());
             Self {
                 amounts: DenseStateLog::with_capacity(entry_amount, amounts_capacity),
                 states,
-                index: 0
+                index: 0,
             }
         }
     }

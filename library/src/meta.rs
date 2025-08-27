@@ -443,8 +443,8 @@ impl RevMeta {
                     let now = meta.now();
                     let direction = meta.running_direction();
                     match world.get_resource_mut::<DirectionChanges>() {
-                        Some(mut direction_changes) => direction_changes.update(now, direction),
-                        None => world.insert_resource(DirectionChanges::new(now, direction)),
+                        Some(mut direction_changes) => direction_changes.update(&meta).unwrap(), // todo
+                        None => world.insert_resource(DirectionChanges::new(meta)),
                     }
                     schedule.run(world);
                 });
@@ -583,11 +583,13 @@ impl RevMeta {
     fn update_forward(&mut self) {
         self.now += 1;
         self.future_end = self.now;
-        if let Some(max_world_states) = self.max_world_states.map(NonZeroU64::get) {
-            // past states equal to max states is too many as the present state has to be added to the comparision
-            if self.past_len() >= max_world_states {
-                self.past_end = self.now + 1 - max_world_states;
-            }
+        let max_world_states = self
+            .max_world_states
+            .map(NonZeroU64::get)
+            .unwrap_or(crate::MAX_LOG_LEN);
+        // include equality here as the present state has to be added to the comparision
+        if self.past_len() >= max_world_states {
+            self.past_end = self.now + 1 - max_world_states;
         }
     }
 }
