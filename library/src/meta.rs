@@ -8,17 +8,17 @@ use bevy::{
         error::BevyError,
         resource::Resource,
         system::{ReadOnlySystemParam, Res, SystemMeta, SystemParam, SystemParamValidationError},
-        world::{World, unsafe_world_cell::UnsafeWorldCell},
+        world::{unsafe_world_cell::UnsafeWorldCell, World},
     },
     log::info,
-    reflect::{Reflect, std_traits::ReflectDefault},
+    reflect::{std_traits::ReflectDefault, Reflect},
 };
 
 #[cfg(feature = "serialize")]
 use bevy::reflect::{ReflectDeserialize, ReflectSerialize};
 
 use crate::{
-    log::{DirectionChanges, OutOfLog},
+    log::{PastLenLogs, OutOfLog},
     schedule::RevUpdate,
     undo_redo::{BundleIdOfOpCache, RevDespawnCleaner, UndoRedoBuffer},
 };
@@ -440,11 +440,10 @@ impl RevMeta {
                 // run schedule
                 let schedule_result = world.try_schedule_scope(RevUpdate, |world, schedule| {
                     world.insert_resource(meta.clone());
-                    let now = meta.now();
-                    let direction = meta.running_direction();
-                    match world.get_resource_mut::<DirectionChanges>() {
-                        Some(mut direction_changes) => direction_changes.update(&meta).unwrap(), // todo
-                        None => world.insert_resource(DirectionChanges::new(meta)),
+                    let this_run = world.change_tick();
+                    match world.get_resource_mut::<PastLenLogs>() {
+                        Some(mut direction_changes) => direction_changes.update(&meta, this_run).unwrap(), // todo
+                        None => world.insert_resource(PastLenLogs::new()),
                     }
                     schedule.run(world);
                 });
@@ -583,13 +582,11 @@ impl RevMeta {
     fn update_forward(&mut self) {
         self.now += 1;
         self.future_end = self.now;
-        let max_world_states = self
-            .max_world_states
-            .map(NonZeroU64::get)
-            .unwrap_or(crate::MAX_LOG_LEN);
-        // include equality here as the present state has to be added to the comparision
-        if self.past_len() >= max_world_states {
-            self.past_end = self.now + 1 - max_world_states;
+        if let Some(max_world_states) = self.max_world_states.map(NonZeroU64::get) {
+            // include equality here as the present state has to be added to the comparision
+            if self.past_len() >= max_world_states {
+                self.past_end = self.now + 1 - max_world_states;
+            }
         }
     }
 }

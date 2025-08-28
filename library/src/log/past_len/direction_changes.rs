@@ -1,440 +1,413 @@
-use std::{
-    collections::VecDeque,
-    panic::Location,
-    sync::atomic::{AtomicI32, AtomicPtr, AtomicU32, Ordering::SeqCst},
+use std::{num::NonZeroU64, ops::Deref, sync::atomic::AtomicU32};
+
+use bevy::{
+    ecs::{change_detection::MaybeLocation, component::{ComponentId, Tick}, query::FilteredAccessSet, resource::Resource, system::{Res, SystemChangeTick, SystemMeta, SystemParam, SystemParamValidationError}, world::{unsafe_world_cell::UnsafeWorldCell, DeferredWorld, World}},
+    log::warn,
+    utils::Parallel,
 };
 
-use bevy::ecs::{change_detection::MaybeLocation, resource::Resource};
+use crate::meta::RevMeta;
 
-use crate::meta::{RevDirection, RevMeta};
-
-const DEFAULT_LOCATION: &'static Location<'static> = Location::caller();
-const DEFAULT_MAYBE_LOCAION: MaybeLocation = MaybeLocation::new(DEFAULT_LOCATION);
-
-#[derive(Debug)]
-struct AtomicLocation(MaybeLocation<AtomicPtr<Location<'static>>>);
-
-impl Default for AtomicLocation {
-    fn default() -> Self {
-        Self(MaybeLocation::new_with(|| {
-            AtomicPtr::new((DEFAULT_LOCATION as *const Location).cast_mut())
-        }))
-    }
+#[derive(Resource)]
+pub struct PastLenLogs {
+    ids: AtomicU32,
+    updates: Parallel<Vec<Update>>,
+    limits: Vec<Limits>,
+    was_log: bool,
+    log_exits: NonZeroU64
 }
 
-impl AtomicLocation {
-    fn swap(&self, location: MaybeLocation) -> MaybeLocation {
-        location.zip(self.0.as_ref()).map(|(location, this)| {
-            let mut ptr_const = location as *const Location;
-            let mut ptr_mut = ptr_const as *mut Location;
-            ptr_mut = this.swap(ptr_mut, SeqCst);
-            ptr_const = ptr_mut as *const Location;
-            unsafe {
-                // SAFETY: contained reference came from Location::caller which is static
-                &*ptr_const
+#[derive(Copy, Clone, PartialEq)]
+struct Update {
+    tick: Tick,
+    id: u32,
+    limits: Limits,
+}
+
+#[derive(Copy, Clone, PartialEq, Debug)]
+pub(super) struct Limits {
+    backward: u64,
+    forward: u64,
+    last_update: MaybeLocation,
+}
+
+#[derive(Debug, PartialEq)]
+pub(crate) struct PastLenLogsError {
+    now: u64,
+    missed_forward: bool,
+    last_update: MaybeLocation,
+}
+
+struct UpdatesIter<'a> {
+    updates_locals: Vec<UpdatesLocal<'a>>,
+    this_run: Tick,
+}
+
+struct UpdatesLocal<'a> {
+    drain: std::vec::Drain<'a, Update>,
+    next: Update,
+}
+
+impl<'a> Iterator for UpdatesIter<'a> {
+    type Item = (usize, Limits);
+    fn next(&mut self) -> Option<Self::Item> {
+        let index = self
+            .updates_locals
+            .iter()
+            .enumerate()
+            .min_by(|(_, local1), (_, local2)| {
+                use std::cmp::Ordering;
+                if local1
+                    .next
+                    .tick
+                    .is_newer_than(local2.next.tick, self.this_run)
+                {
+                    Ordering::Greater
+                } else if local1.next.tick == local2.next.tick {
+                    Ordering::Equal
+                } else {
+                    Ordering::Less
+                }
+            })?
+            .0;
+
+        let local = &mut self.updates_locals[index];
+        let next = (local.next.id as usize, local.next.limits);
+        match local.drain.next() {
+            Some(update) => {
+                local.next = update;
             }
-        })
-    }
-    fn swap_mut(&mut self, location: MaybeLocation) -> MaybeLocation {
-        location.zip(self.0.as_mut()).map(|(location, this)| {
-            let mut ptr_const = location as *const Location;
-            let mut ptr_mut = ptr_const as *mut Location;
-            core::mem::swap(this.get_mut(), &mut ptr_mut);
-            ptr_const = ptr_mut as *const Location;
-            unsafe {
-                // SAFETY: contained reference came from Location::caller which is static
-                &*ptr_const
+            None => {
+                self.updates_locals.swap_remove(index);
             }
-        })
+        }
+
+        Some(next)
     }
-    fn get(&mut self) -> MaybeLocation {
-        self.0.as_mut().map(|ptr| {
-            let ptr_mut = *ptr.get_mut();
-            let ptr_const = ptr_mut.cast_const();
-            unsafe {
-                // SAFETY: contained reference came from Location::caller which is static
-                &*ptr_const
+}
+
+impl PastLenLogs {
+    // do not expose a pub constructor
+    pub(crate) fn new() -> Self {
+        Self { 
+            ids: AtomicU32::new(0), 
+            updates: Parallel::default(), 
+            limits: Vec::new(),
+            was_log: false,
+            log_exits: NonZeroU64::MIN
+        }
+    }
+    pub(super) fn exited_log(&self, log_exits: &mut Option<NonZeroU64>) -> bool {
+        match log_exits {
+            Some(log_exits) if log_exits.get() < self.log_exits.get() => {
+                *log_exits = self.log_exits;
+                true
+            },
+            Some(_) => false,
+            None => {
+                *log_exits = Some(self.log_exits);
+                false
             }
-        })
-    }
-}
-
-const FORWARD_OFFSET_DEFAULT: u32 = BACKWARD_OFFSET_DEFAULT.unsigned_abs();
-const BACKWARD_OFFSET_DEFAULT: i32 = i32::MIN;
-pub(crate) const MAX_LOG_LEN: u64 = FORWARD_OFFSET_DEFAULT as u64;
-
-#[derive(Debug)]
-struct DirectionChangeSwap<Offset, Location> {
-    offset: Offset,
-    location: Location,
-}
-
-impl Default for DirectionChangeSwap<u32, MaybeLocation> {
-    fn default() -> Self {
-        Self {
-            offset: FORWARD_OFFSET_DEFAULT,
-            location: DEFAULT_MAYBE_LOCAION,
         }
     }
-}
-
-impl Default for DirectionChangeSwap<i32, MaybeLocation> {
-    fn default() -> Self {
-        Self {
-            offset: BACKWARD_OFFSET_DEFAULT,
-            location: DEFAULT_MAYBE_LOCAION,
-        }
+    pub(super) fn push(&self, id: &mut Option<u32>, tick: Tick, limits: Limits) {
+        let id = *id.get_or_insert_with(|| {
+            let id = self.ids.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if id == u32::MAX {
+                warn!("todo");
+            }
+            id
+        });
+        self.updates
+            .borrow_local_mut()
+            .push(Update { tick, id, limits });
     }
-}
-
-impl Default for DirectionChangeSwap<AtomicU32, AtomicLocation> {
-    fn default() -> Self {
-        Self {
-            offset: AtomicU32::new(FORWARD_OFFSET_DEFAULT),
-            location: Default::default(),
-        }
-    }
-}
-
-impl Default for DirectionChangeSwap<AtomicI32, AtomicLocation> {
-    fn default() -> Self {
-        Self {
-            offset: AtomicI32::new(BACKWARD_OFFSET_DEFAULT),
-            location: Default::default(),
-        }
-    }
-}
-
-trait StateOption {
-    /// Does not mutate value, but enables non-atomic read.
-    fn is_default(&mut self) -> bool;
-}
-
-impl StateOption for DirectionChangeSwap<u32, MaybeLocation> {
-    fn is_default(&mut self) -> bool {
-        self.offset == FORWARD_OFFSET_DEFAULT
-    }
-}
-
-impl StateOption for DirectionChangeSwap<i32, MaybeLocation> {
-    fn is_default(&mut self) -> bool {
-        self.offset == BACKWARD_OFFSET_DEFAULT
-    }
-}
-
-impl StateOption for DirectionChangeSwap<AtomicU32, AtomicLocation> {
-    fn is_default(&mut self) -> bool {
-        *self.offset.get_mut() == FORWARD_OFFSET_DEFAULT
-    }
-}
-
-impl StateOption for DirectionChangeSwap<AtomicI32, AtomicLocation> {
-    fn is_default(&mut self) -> bool {
-        *self.offset.get_mut() == BACKWARD_OFFSET_DEFAULT
-    }
-}
-
-#[derive(Debug)]
-struct DirectionChange {
-    start: u64,
-    direction: RevDirection,
-    /// Because of no general support for AtomicU64 on all possible targets, this is an offset
-    /// from [`Self::start`] instead.
-    ///
-    /// As the limit may come before or after `start`, this needs to be an `i32`.
-    ///
-    /// This also means the max global log size is limited to `i32::MIN.unsigned_abs() + 1`.
-    /// If this limit was exceeded, frames at which an error would occur could not be expressed
-    /// here and thus not be detected.
-    backward: DirectionChangeSwap<AtomicI32, AtomicLocation>, // None: kann niemals u32::MAX haben
-    forward: DirectionChangeSwap<AtomicU32, AtomicLocation>, // None: kann niemals offset i32::MIN haben
-}
-
-impl DirectionChange {
-    fn new(meta: &RevMeta) -> Self {
-        Self {
-            start: meta.now(),
-            direction: meta.running_direction(),
-            forward: Default::default(),
-            backward: Default::default(),
-        }
+    pub(crate) fn update(
+        &mut self,
+        meta: &RevMeta,
+        this_run: Tick,
+    ) -> Result<(), PastLenLogsError> {
+        self.update_from_locals(this_run);
+        self.check_limits(meta.running_direction().is_log(), meta.now())
     }
 
-    fn check_backward(&mut self, meta: &RevMeta) -> Result<u64, MaybeLocation> {
-        let offset = *self.backward.offset.get_mut();
-        let frame = if offset < 0 {
-            self.start - offset.unsigned_abs() as u64
-        } else {
-            self.start + offset as u64
+    fn update_from_locals(&mut self, this_run: Tick) {
+        // if an error points to this, something went wrong
+        let placeholder_location = MaybeLocation::caller();
+
+        // size up self.limits if new PastLenLogs pushed one or multiple updates
+        self.limits.resize(
+            *self.ids.get_mut() as usize,
+            Limits {
+                backward: u64::MAX, // will cause error if not overwritten
+                forward: u64::MIN,  // will cause error if not overwritten
+                last_update: placeholder_location,
+            },
+        );
+
+        let iter = UpdatesIter {
+            updates_locals: self
+                .updates
+                .iter_mut()
+                .flat_map(|vec| {
+                    let mut drain = vec.drain(..);
+                    drain.next().map(|next| UpdatesLocal { drain, next })
+                })
+                .collect(),
+            this_run,
         };
-
-        if meta.now() < frame {
-            return Err(self.backward.location.get());
-        }
-
-        Ok(frame)
-    }
-
-    fn check_forward(&mut self, meta: &RevMeta) -> Result<u64, MaybeLocation> {
-        let offset = *self.forward.offset.get_mut();
-        let frame = self.start + offset as u64;
-
-        if meta.now() > frame {
-            return Err(self.forward.location.get());
-        }
-
-        Ok(frame)
-    }
-}
-
-#[derive(Resource, Debug)]
-pub struct DirectionChanges {
-    log: VecDeque<DirectionChange>,
-    present: DirectionChange,
-    truncated: usize,
-}
-
-impl DirectionChanges {
-    pub(crate) fn new(meta: &RevMeta) -> Self {
-        Self {
-            log: VecDeque::new(),
-            present: DirectionChange::new(meta),
-            truncated: 0,
+        for (index, limits) in iter {
+            // if a PastLenLog pushed more than one limit, the most recent determines the limits,
+            // so if one of the updates in a log frame was missed, this will cause an error
+            self.limits[index] = limits;
         }
     }
-    pub(crate) fn update(&mut self, meta: &RevMeta) -> Result<(), MaybeLocation> {
-        let mut to_truncate = 0;
 
-        // mutable iter items enable non-atomic reads but nothing is actually mutated
-        let mut iter = self.log.iter_mut();
-
-        // check if any offset has been breached or if they can be truncated as out-of-log
-        for change in iter.by_ref() {
-            let backward_infallible =
-                change.backward.is_default() || meta.past_end() > change.check_backward(meta)?;
-
-            // always true at change.direction == RevDirection::NOT_LOG as it remains default
-            let forward_infallible =
-                change.forward.is_default() || meta.past_end() > change.check_forward(meta)?;
-
-            // do not further inline to ensure both fallible checks always run
-            if !backward_infallible || !forward_infallible {
-                break;
+    fn check_limits(&mut self, log: bool, now: u64) -> Result<(), PastLenLogsError> {
+        if log {
+            for limits in self.limits.iter() {
+                if now < limits.backward {
+                    return Err(PastLenLogsError {
+                        now,
+                        missed_forward: false,
+                        last_update: limits.last_update,
+                    });
+                }
+                if now > limits.forward {
+                    return Err(PastLenLogsError {
+                        now,
+                        missed_forward: true,
+                        last_update: limits.last_update,
+                    });
+                }
             }
 
-            to_truncate += 1;
-        }
-
-        // check if any remaining offset has been breached
-        for change in iter {
-            if !change.backward.is_default() {
-                change.check_backward(meta)?;
+            self.was_log = true;
+        } else {
+            for limits in self.limits.iter_mut() {
+                if now < limits.backward {
+                    return Err(PastLenLogsError {
+                        now,
+                        missed_forward: false,
+                        last_update: limits.last_update,
+                    });
+                }
+                // unset future limits because logs just were or will be truncated
+                limits.forward = u64::MAX;
             }
-            if !change.forward.is_default() {
-                change.check_forward(meta)?;
+
+            if self.was_log {
+                self.was_log = false;
+                self.log_exits = self.log_exits.checked_add(1).unwrap();
             }
         }
-
-        // truncate changes that cannot have their offsets breached anymore
-        self.log.drain(..to_truncate);
-        self.truncated += to_truncate;
-
-        if self.present.start + MAX_LOG_LEN <= meta.now()
-            || meta.running_direction() != self.present.direction
-        {
-            let previous = core::mem::replace(&mut self.present, DirectionChange::new(meta));
-            self.log.push_back(previous);
-        }
-
         Ok(())
     }
 }
 
-#[derive(Debug, Default)]
-pub(super) struct DirectionChangeState {
-    index: usize,
-    backward: Option<DirectionChangeSwap<i32, MaybeLocation>>,
-    forward: Option<DirectionChangeSwap<u32, MaybeLocation>>,
+// todo: getter in RevWorld
+/// A [`SystemParam`] combining immutable access to [`RevMeta`], [`PastLenLogs`] and the present
+/// [`Tick`] needed for the [`PastLenLog`] methods.
+pub struct RevMetaPastLenLogs<'w> {
+    pub meta: &'w RevMeta,
+    pub past_len_logs: &'w PastLenLogs,
+    pub(crate) this_run: Tick
 }
 
-impl DirectionChangeState {
-    /// Only call this at offsets != 0
-    #[track_caller]
-    pub(super) fn update(
-        &mut self,
-        changes: &DirectionChanges,
-        past_limit: Option<u64>,
-        future_limit: Option<u64>)
-    {
-        if self.backward.is_some() || self.forward.is_some() {
-            let index = self
-                .index
-                .checked_sub(changes.truncated)
-                .filter(|index| *index + 1 < changes.log.len());
-            if let Some(index) = index {
-                let change = &changes.log[index];
+type ResTuple<'w> = (
+    Res<'w, RevMeta>,
+    Res<'w, PastLenLogs>
+);
 
-                if let Some(swap) = self.backward.take() {
-                    let change = &change.backward;
-                    let offset = swap.offset;
-                    if change.offset.fetch_max(offset, SeqCst) > offset {
-                        change.location.swap(swap.location);
-                    }
-                }
-                
-                if let Some(swap) = self.forward.take() {
-                    let change = &change.forward;
-                    let offset = swap.offset;
-                    if change.offset.fetch_min(offset, SeqCst) < offset {
-                        change.location.swap(swap.location);
-                    }
-                }
-            }
-        }
-
-        let start = changes.present.start;
-
-        if let Some(past_limit) = past_limit {
-            let present = &changes.present.backward;
-
-            let offset = if past_limit < start {
-                let abs = start - past_limit;
-                -(abs as i32)
-            } else {
-                let abs = past_limit - start;
-                abs as i32
-            };
-
-            let previous = present.offset.fetch_max(offset, SeqCst);
-
-            if previous < offset {
-                self.backward = Some(DirectionChangeSwap {
-                    offset: previous,
-                    location: present.location.swap(MaybeLocation::caller())
-                });
-
-                self.index = changes.log.len() + changes.truncated;
-            }
-        }
-
-        if let Some(future_limit) = future_limit {
-            let present = &changes.present.forward;
-
-            let offset = (future_limit - start) as u32;
-
-            let previous = present.offset.fetch_min(offset, SeqCst);
-
-            if previous > offset {
-                self.forward = Some(DirectionChangeSwap {
-                    offset: previous,
-                    location: present.location.swap(MaybeLocation::caller())
-                });
-
-                self.index = changes.log.len() + changes.truncated;
-            }
-        }
+// SAFETY: uses first-party derive of above struct and just maps it
+unsafe impl<'w> SystemParam for RevMetaPastLenLogs<'w> {
+    type Item<'world, 'state> = RevMetaPastLenLogs<'world>;
+    type State = <ResTuple<'w> as SystemParam>::State;
+    
+    fn init_state(world: &mut World) -> Self::State {
+        <ResTuple<'w> as SystemParam>::init_state(world)
     }
 
-    fn update_mut(
-        &mut self,
-        changes: &mut DirectionChanges,
-        past_limit: Option<u64>,
-        future_limit: Option<u64>
+    fn init_access(
+        state: &Self::State,
+        system_meta: &mut SystemMeta,
+        component_access_set: &mut FilteredAccessSet<ComponentId>,
+        world: &mut World,
     ) {
-        if self.backward.is_some() || self.forward.is_some() {
-            let index = self
-                .index
-                .checked_sub(changes.truncated)
-                .filter(|index| *index + 1 < changes.log.len());
-            if let Some(index) = index {
-                let change = &mut changes.log[index];
+        <ResTuple<'w> as SystemParam>::init_access(
+            state, 
+            system_meta, 
+            component_access_set, 
+            world
+        );
+    }
 
-                if let Some(swap) = self.backward.take() {
-                    let change = &mut change.backward;
-                    let offset = swap.offset;
-                    let previous = change.offset.get_mut();
-                    if *previous > offset {
-                        *previous = offset;
-                        change.location.swap_mut(swap.location);
-                    }
-                }
-                
-                if let Some(swap) = self.forward.take() {
-                    let change = &mut change.forward;
-                    let offset = swap.offset;
-                    let previous = change.offset.get_mut();
-                    if *previous < offset {
-                        *previous = offset;
-                        change.location.swap_mut(swap.location);
-                    }
-                }
-            }
+    fn apply(state: &mut Self::State, system_meta: &SystemMeta, world: &mut World) {
+        <ResTuple<'w> as SystemParam>::apply(state, system_meta, world);
+    }
+
+    fn queue(state: &mut Self::State, system_meta: &SystemMeta, world: DeferredWorld) {
+        <ResTuple<'w> as SystemParam>::queue(state, system_meta, world);
+    }
+
+    unsafe fn validate_param(
+        state: &mut Self::State,
+        system_meta: &SystemMeta,
+        world: UnsafeWorldCell,
+    ) -> Result<(), SystemParamValidationError> {
+        // SAFETY: RevMetaPastLenLogs uses same safety contract as ResTuple
+        unsafe {
+            <ResTuple<'w> as SystemParam>::validate_param(state, system_meta, world)
         }
+    }
 
-        let start = changes.present.start;
-
-        if let Some(past_limit) = past_limit {
-            let present = &mut changes.present.backward;
-
-            let offset = if past_limit < start {
-                let abs = start - past_limit;
-                -(abs as i32)
-            } else {
-                let abs = past_limit - start;
-                abs as i32
-            };
-
-            let previous = present.offset.get_mut();
-
-            if *previous < offset {
-                self.backward = Some(DirectionChangeSwap {
-                    offset: *previous,
-                    location: present.location.swap_mut(MaybeLocation::caller())
-                });
-
-                *previous = offset;
-
-                self.index = changes.log.len() + changes.truncated;
-            }
-        }
-
-        if let Some(future_limit) = future_limit {
-            let present = &mut changes.present.forward;
-
-            let offset = (future_limit - start) as u32;
-
-            let previous = present.offset.get_mut();
-
-            if *previous > offset {
-                self.forward = Some(DirectionChangeSwap {
-                    offset: *previous,
-                    location: present.location.swap_mut(MaybeLocation::caller())
-                });
-
-                *previous = offset;
-
-                self.index = changes.log.len() + changes.truncated;
-            }
+    unsafe fn get_param<'world, 'state>(
+        state: &'state mut Self::State,
+        system_meta: &SystemMeta,
+        world: UnsafeWorldCell<'world>,
+        change_tick: Tick,
+    ) -> Self::Item<'world, 'state> {
+        // SAFETY: RevMetaPastLenLogs uses same safety contract as ResTuple
+        let item = unsafe {
+            <ResTuple<'w> as SystemParam>::get_param(state, system_meta, world, change_tick)
+        };
+        RevMetaPastLenLogs {
+            meta: item.0.into_inner(),
+            past_len_logs: item.1.into_inner(),
+            this_run: change_tick
         }
     }
 }
 
-/*
-test Dimensionen:
+#[cfg(test)]
+mod test {
+    use std::u64;
 
-1. past_limit negativ, positiv
-2. future_limit vor wechsel, nach wechsel
+    use super::*;
 
-Problem?
+    #[test]
+    fn iter_works() {
+        fn new_limits(value: u64) -> Limits {
+            Limits {
+                backward: value, 
+                forward: value, 
+                last_update: MaybeLocation::caller() 
+            }
+        }
+    
+        fn new_update(value: u32) -> Update {
+            Update {
+                tick: Tick::new(value),
+                id: value,
+                limits: new_limits(value as u64)
+            }
+        }
 
-frame                | 1 2 
-changes future limit | 9 5
-log1 future limit    |   5
-log2 future limit    |   6
+        let mut vec1 = vec![
+            new_update(3),
+            new_update(4),
+            new_update(6)
+        ];
+        let mut vec2 = vec![
+            new_update(4),
+            new_update(5)
+        ];
+        let iter = UpdatesIter {
+            updates_locals: vec![
+                UpdatesLocal { 
+                    drain: vec1.drain(..), 
+                    next: new_update(1)
+                },
+                UpdatesLocal { 
+                    drain: vec2.drain(..), 
+                    next: new_update(2)
+                },
+            ],
+            this_run: Tick::new(7),
+        };
 
-log 1 gewinnt bei forward das rennen und führt swap aus
+        let actual: Vec<_> = iter.collect();
+        let expected = vec![
+            (1, new_limits(1)),
+            (2, new_limits(2)),
+            (3, new_limits(3)),
+            (4, new_limits(4)),
+            (4, new_limits(4)),
+            (5, new_limits(5)),
+            (6, new_limits(6)),
+        ];
 
-log 2 wird nicht geupdated aber das wird nicht erkannt weil dessen limit bei undo nicht in changes landet
+        assert_eq!(actual, expected);
+    }
 
-muss wohl doch alles geloggt werden
-*/
+    #[test]
+    fn updates_to_results() {
+        // arrange
+        let last_update = MaybeLocation::caller();
+        let two_log_exits = NonZeroU64::new(2).unwrap();
+        let mut past_len_logs = PastLenLogs {
+            was_log: true,
+            log_exits: two_log_exits,
+            ..PastLenLogs::new()
+        };
+
+        // add a backward limit of 1
+        let mut id = None;
+        past_len_logs.push(&mut id, Tick::new(0), Limits {
+            backward: 1,
+            forward: u64::MAX,
+            last_update
+        });
+        assert_eq!(id, Some(0));
+
+        // add a forward limit of 1
+        let mut id = None;
+        past_len_logs.push(&mut id, Tick::new(0), Limits {
+            backward: u64::MIN,
+            forward: 1,
+            last_update
+        });
+        assert_eq!(id, Some(1));
+
+        // apply updates
+        past_len_logs.update_from_locals(Tick::new(1));
+
+        // test exited_log
+        let mut log_exits = None;
+        assert!(!past_len_logs.exited_log(&mut log_exits));
+        assert_eq!(log_exits, Some(two_log_exits));
+
+        log_exits = Some(NonZeroU64::MIN);
+        assert!(past_len_logs.exited_log(&mut log_exits));
+        assert_eq!(log_exits, Some(two_log_exits));
+
+        log_exits = Some(two_log_exits);
+        assert!(!past_len_logs.exited_log(&mut log_exits));
+        assert_eq!(log_exits, Some(two_log_exits));
+
+        // 0 < backward of 1 results in Err
+        assert_eq!(past_len_logs.check_limits(true, 0), Err(PastLenLogsError {
+            now: 0,
+            missed_forward: false,
+            last_update
+        }));
+
+        // 2 > forward of 1 results in Err
+        assert_eq!(past_len_logs.check_limits(true, 2), Err(PastLenLogsError {
+            now: 2,
+            missed_forward: true,
+            last_update
+        }));
+
+        // forward not checked, so results in Ok
+        let mut log_exits = Some(two_log_exits);
+        assert!(!past_len_logs.exited_log(&mut log_exits));
+        assert_eq!(log_exits, Some(two_log_exits));
+        assert_eq!(past_len_logs.check_limits(false, 2), Ok(()));
+        assert!(past_len_logs.exited_log(&mut log_exits));
+        assert_eq!(log_exits, Some(NonZeroU64::new(3).unwrap()));
+
+        // forward checked but unset previously, so results in Ok
+        assert_eq!(past_len_logs.check_limits(true, 2), Ok(()));
+    }
+}

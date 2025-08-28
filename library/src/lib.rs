@@ -82,7 +82,6 @@ pub mod prelude {
     };
 }
 
-pub const MAX_LOG_LEN: u64 = log::MAX_LOG_LEN;
 const USE_LOCATION: bool = size_of::<MaybeLocation>() != 0;
 
 /// Make `error!` and `error_once!` cause panics.

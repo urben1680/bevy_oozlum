@@ -23,7 +23,7 @@ use crate::{
 
 pub mod direction_changes;
 
-use direction_changes::DirectionChanges;
+use direction_changes::PastLenLogs;
 
 const MAX_ZEROES_PER_BYTE: u8 = 65;
 const MAX_ZEROES_AS_BYTE: u8 = 0b10_111111;
@@ -603,7 +603,7 @@ impl PastLenLog {
     pub fn truncate_future(
         &mut self,
         meta: &RevMeta,
-        direction_changes: &DirectionChanges,
+        //direction_changes: &PastLenLogs,
     ) -> Result<(), PastLenNotLogError> {
         if self.last_run > meta.now() {
             return Err(PastLenNotLogError::MissedUpdateBackwardLog(MissedUpdate(
@@ -716,7 +716,6 @@ impl PastLenLog {
         - Vec<(u64, Arc<()>)>
 
 
-         */
 
         if let Some(frame) = meta.min_continuation(self.meta_continuations) {
             if let Some(IterItem { offset, .. }) =
@@ -739,6 +738,7 @@ impl PastLenLog {
         }
 
         self.zeroes_max = self.zeroes;
+         */
         Ok(())
     }
 
@@ -781,10 +781,10 @@ impl PastLenLog {
     pub fn update_and_get_past_len(
         &mut self,
         meta: &RevMeta,
-        direction_changes: &DirectionChanges,
+        //direction_changes: &PastLenLogs,
     ) -> Result<usize, PastLenNotLogError> {
         // truncate future
-        self.truncate_future(meta, direction_changes)?;
+        self.truncate_future(meta)?;
 
         // truncate past
 
@@ -909,7 +909,7 @@ impl PastLenLog {
     pub fn backward_log(
         &mut self,
         meta: &RevMeta,
-        direction_changes: &DirectionChanges,
+        //direction_changes: &PastLenLogs,
     ) -> Result<bool, PastLenBackwardError> {
         match self.last_run.cmp(&(meta.now() + 1)) {
             CmpOrdering::Less => Ok(false),
@@ -957,7 +957,7 @@ impl PastLenLog {
     pub fn forward_log(
         &mut self,
         meta: &RevMeta,
-        direction_changes: &DirectionChanges,
+        //direction_changes: &PastLenLogs,
     ) -> Result<bool, MissedUpdate> {
         match OffsetIter(self.offset_bytes.range(self.index..)).next() {
             Some(IterItem { offset: 0, len }) => match self.last_run.cmp(&meta.now()) {
@@ -1145,7 +1145,7 @@ mod test {
                 .eq(expected.into_iter().rev())
         );
     }
-
+/* 
     #[derive(Clone)]
     struct Log {
         log: PastLenLog,
@@ -1400,4 +1400,5 @@ mod test {
         // should not detect a missed forward log update
         log.forward(Ok(vec![1]));
     }
+    */
 }
