@@ -9,6 +9,7 @@ TODO:
 - transition log error tests
 - serde_with tests need to be revisited
 - log reflection impls like serde
+- OR undo changes, allow full serde/reflection again now that there are no issues with Arcs anymore
 
 Enhancements:
 - reduce todo!() and //todo and unwrap (in favor of expect)

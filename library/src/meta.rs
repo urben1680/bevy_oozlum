@@ -8,17 +8,17 @@ use bevy::{
         error::BevyError,
         resource::Resource,
         system::{ReadOnlySystemParam, Res, SystemMeta, SystemParam, SystemParamValidationError},
-        world::{unsafe_world_cell::UnsafeWorldCell, World},
+        world::{World, unsafe_world_cell::UnsafeWorldCell},
     },
     log::info,
-    reflect::{std_traits::ReflectDefault, Reflect},
+    reflect::{Reflect, std_traits::ReflectDefault},
 };
 
 #[cfg(feature = "serialize")]
 use bevy::reflect::{ReflectDeserialize, ReflectSerialize};
 
 use crate::{
-    log::{PastLenLogs, OutOfLog},
+    log::{OutOfLog, PastLenLogs},
     schedule::RevUpdate,
     undo_redo::{BundleIdOfOpCache, RevDespawnCleaner, UndoRedoBuffer},
 };
@@ -440,12 +440,15 @@ impl RevMeta {
                 // run schedule
                 let schedule_result = world.try_schedule_scope(RevUpdate, |world, schedule| {
                     world.insert_resource(meta.clone());
-                    let this_run = world.change_tick();
                     match world.get_resource_mut::<PastLenLogs>() {
-                        Some(mut direction_changes) => direction_changes.update(&meta, this_run).unwrap(), // todo
-                        None => world.insert_resource(PastLenLogs::new()),
+                        Some(mut direction_changes) => direction_changes.update_before(meta),
+                        None => world.insert_resource(PastLenLogs::new(meta)),
                     }
                     schedule.run(world);
+                    match world.get_resource_mut::<PastLenLogs>() {
+                        Some(mut direction_changes) => direction_changes.update_after(meta).unwrap(), // todo
+                        None => panic!(), //todo
+                    }
                 });
 
                 match schedule_result {

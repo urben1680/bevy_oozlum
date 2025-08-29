@@ -414,8 +414,7 @@ impl UndoRedoLog {
                     });
                 } else {
                     self.frame_log
-                        .truncate_future(&meta)
-                        .map_err(map_missed_frame)?;
+                        .truncate_future(&meta);
                     self.undo_redo_log.drain_future();
                 }
                 Ok(())

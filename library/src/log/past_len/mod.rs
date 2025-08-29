@@ -1,24 +1,15 @@
 use core::fmt::Debug;
 use std::{
-    cmp::Ordering as CmpOrdering,
+    cmp::Ordering,
     collections::{TryReserveError, VecDeque, vec_deque::Iter},
     error::Error,
     fmt::Display,
     num::NonZeroUsize,
     ops::ControlFlow,
-    panic::Location,
-    sync::{
-        Arc,
-        atomic::{AtomicI32, AtomicPtr, AtomicU32, Ordering as AtomicOrdering},
-    },
-    u32,
 };
 
-use bevy::ecs::{change_detection::MaybeLocation, resource::Resource};
-
 use crate::{
-    log::OutOfLog,
-    meta::{RevDirection, RevMeta},
+    log::{past_len::direction_changes::{Limits, StateChange, UpdateState}, OutOfLog},
 };
 
 pub mod direction_changes;
@@ -171,7 +162,7 @@ pub struct PastLenLog {
     out_of_or_past_end_log: u64,
 
     /// The chronological last time this log got updated
-    last_run: u64,
+    last_update: u64,
 
     /// The current index into [`Self::offset_bytes`]. Always points to the first byte of an
     /// offset sequence or, when at the end of the log, is equal to the `len` of `offset_bytes`.
@@ -180,13 +171,13 @@ pub struct PastLenLog {
     /// The length of the log which is what this log is keeping track of.
     past_len: usize,
 
-    direction_changes_seen: usize,
-
     /// The current amount of sequential offsets of `0`.
     zeroes: u8,
 
     /// The amount of sequential offsets of `0` at the future end of the log.
     zeroes_max: u8,
+
+    update_state: Option<UpdateState>,
 }
 
 #[cfg(feature = "serialize")]
@@ -233,11 +224,12 @@ impl Debug for PastLenLog {
             .field("offset_bytes", &self.offset_bytes)
             .field("offsets (decoded)", &OffsetIter(self.offset_bytes.iter()))
             .field("out_of_or_past_end_log", &self.out_of_or_past_end_log)
-            .field("last_run", &self.last_run)
+            .field("last_update", &self.last_update)
             .field("index", &self.index)
             .field("past_len", &self.past_len)
             .field("zeroes", &self.zeroes)
             .field("zeroes_max", &self.zeroes_max)
+            .field("update_state", &self.update_state)
             .finish()
     }
 }
@@ -394,93 +386,10 @@ impl DoubleEndedIterator for OffsetIter<'_> {
     }
 }
 
-/// [`PastLenLog`] was updated via [`forward_log`]/[`backward_log`] but expected [`RevMeta::now`] to
-/// return a frame that was missed; it is too high for `forward_log` or too low for `backward_log`.
-///
-/// Make sure use these methods at every frame the log could have been updated during
-/// [`RevDirection::NOT_LOG`]. If it can be updated multiple times per frame, call these methods in
-/// a `while` loop.
-///
-/// [`forward_log`]: PastLenLog::forward_log
-/// [`backward_log`]: PastLenLog::backward_log
-/// [`RevDirection::NOT_LOG`]: crate::meta::RevDirection::NOT_LOG
-#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
-pub struct MissedUpdate(pub u64);
-
-impl Display for MissedUpdate {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "the expected frame {} was missed", self.0)
-    }
+pub struct PastLenNotLog {
+    pub clear: bool,
+    pub past_len: usize
 }
-
-impl Error for MissedUpdate {}
-
-/// [`PastLenLog`] was updated via [`backward_log`] but returned this error. In most cases the error
-/// is the [`MissedUpdate`] variant, see its docs.
-///
-/// If this is the [`OutOfLog`] variant, this indicates [`RevMeta::past_end`] has been lowered
-/// somehow, which is not possible by usual means, or `PastLenLog` has been deserialized from an
-/// invalid state.
-///
-/// [`backward_log`]: PastLenLog::backward_log
-#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
-pub enum PastLenBackwardError {
-    MissedUpdate(MissedUpdate),
-    OutOfLog(OutOfLog),
-}
-
-impl Display for PastLenBackwardError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::MissedUpdate(err) => Display::fmt(err, f),
-            Self::OutOfLog(err) => Display::fmt(err, f),
-        }
-    }
-}
-
-impl Error for PastLenBackwardError {}
-
-impl From<MissedUpdate> for PastLenBackwardError {
-    fn from(value: MissedUpdate) -> Self {
-        Self::MissedUpdate(value)
-    }
-}
-
-impl From<OutOfLog> for PastLenBackwardError {
-    fn from(value: OutOfLog) -> Self {
-        Self::OutOfLog(value)
-    }
-}
-
-/// [`PastLenLog`] was updated via [`update_and_get_past_len`] or [`truncate_future`] but returned
-/// this error.
-///
-/// This indicates one or more [`forward_log`] or [`backward_log`] calls were missed. Make sure to
-/// call these in every frame where the log is updated during [RevDirection::NOT_LOG].
-///
-/// [`update_and_get_past_len`]: PastLenLog::update_and_get_past_len
-/// [`truncate_future`]: PastLenLog::truncate_future
-/// [`forward_log`]: PastLenLog::forward_log
-/// [`backward_log`]: PastLenLog::backward_log
-/// [`RevDirection::NOT_LOG`]: crate::meta::RevDirection::NOT_LOG
-#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
-pub enum PastLenNotLogError {
-    MissedUpdateForwardLog(MissedUpdate),
-    MissedUpdateBackwardLog(MissedUpdate),
-}
-
-impl Display for PastLenNotLogError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::MissedUpdateForwardLog(err) => write!(f, "{err} during some forward log update"),
-            Self::MissedUpdateBackwardLog(err) => {
-                write!(f, "{err} during some backward log update")
-            }
-        }
-    }
-}
-
-impl Error for PastLenNotLogError {}
 
 macro_rules! bytes_len_disclaimer {
     () => {
@@ -494,12 +403,12 @@ impl PastLenLog {
         Self {
             offset_bytes: VecDeque::new(),
             out_of_or_past_end_log: 0, // the minimum frame RevUpdate can go forward at is 1
-            last_run: 0,
+            last_update: 0,
             index: 0,
             past_len: 0,
-            direction_changes_seen: 0,
             zeroes: 0,
             zeroes_max: 0,
+            update_state: None,
         }
     }
 
@@ -602,135 +511,15 @@ impl PastLenLog {
     /// [type docs]: PastLenLog
     pub fn truncate_future(
         &mut self,
-        meta: &RevMeta,
-        //direction_changes: &PastLenLogs,
-    ) -> Result<(), PastLenNotLogError> {
-        if self.last_run > meta.now() {
-            return Err(PastLenNotLogError::MissedUpdateBackwardLog(MissedUpdate(
-                self.last_run,
-            )));
-        }
-
-        /*
-
-        F/B = non-log-forward und backward von PastLenLog
-        f = non-log-forward nur von RevMeta but maybe out of global log
-        * as f but witnessed by PastLenLog at its own F
-
-        false-positive 1:
-        --*
-        --------F
-        ----B
-        ------f
-        ----------F
-
-        false-positive 2:
-        --*
-        --------F
-        ----B
-        ------f
-        ----------f
-        ------------F
-
-        actual error 1:
-        --*
-        ------F
-        ----B
-        --------f
-        ----------F
-
-        actual error 2:
-        --*
-        --------F
-        ----B
-        ----------f
-        ------f
-        ------------F
-
-
-        der nächste frame im log für PastLen könnte global out-of-log sein, ein gesuchtes
-        log-beenden kann trotzdem einen fehler hier als false-positive erkennbar machen
-
-        RevMeta muss dazu ein log nutzen da das letzte continue nicht notwendigerweise das
-        ist was den false-positive hier erkennt.
-
-        offenbar darf RevMeta nicht aufräumen da es immer ein altes PastLen geben kann das
-        diese information braucht.
-
-        man könnte etwas sparen indem man neue continue einträge sortiert einfügt und alte
-        zukünftige entfernt. das macht es aber schwerer für PastLenLog die info zu finden
-        weil der index ungültig wird. Ein sortierter vec ist zwar mit binärsuche nutzbar,
-        das hier ist aber eine Funktion die pro frame pro log aufgerufen wird, zu teuer.
-
-        RevMeta könnte ein Vec<(u64, AtomicU32)> nutzen und RevMeta könnte sich merken mit
-        welchen index min_continuation angefragt wird und für diesen index einen counter
-        reduzieren um den zurückgegebenen zu erhöhen. Die RevMeta Funktion muss dann den
-        Fehler evaluieren um nur bei Ok die Zähler anzupassen. Dann, wenn RevMeta updated,
-        werden alle trailing entries mit counter 0 entfernt.
-        Diese Funktionalität wird besser in einem struct in diesem scope umgesetzt.
-        Wie mit drop umgehen? Self::clear mit RevMeta parameter und Drop mit assert auf
-        meta_continuations == 0. Ggf drop_command(self) -> impl Command anbieten.
-        Alternativ sind es Arc<AtomicU32> im RevMeta log und PastLenLog hält einen.
-        Dann kann man aber direkt über die Counter vom Arc gehen und () wrappen
-
-        ideal wäre auch verpasste updates zu erkennen die rein in logphasen passieren,
-        zum Beispiel wenn das log zu forward->backward jeweils geupdated worden werden sollte
-        es aber nur beim darauffolgenden update aktualisiert wird. Das könnte aber nur
-        RevMeta erkennen.
-
-        RevMeta könnte ein StatesLog enthalten mit AtomicU8 das zu einem enum übersetzt werden kann
-        LogLenLog müsste selbst ein TransitionLog haben das sich speichert unter welchem index
-        das AtomicU8 zu finden ist..
-        Gibt es einen Ansatz in dem alleine RevMeta prüft ob die logs gelaufen sind? in der
-        richtigen anzahl?
-        die logs könnten ein Arc<AtomicU32> bei NOT_LOG via Parallel an RevMeta geben
-        RevMeta enthält dann ein DenseStatesLog<Arc<AtomicU32>>
-        Die logs kümmern sich dann nur darum ihre atomics zu updaten
-        RevMeta prüft ob die anzahlen die erwartete Höhe haben
-        womöglich lassen sich loglenlogs dann anders umsetzen, keine offsets, nur prüfen ob das
-        eigene arc im aktuellen meta state vorkommen
-
-        Neue Idee: wie continue log alle richtungswechsel loggen. Dann kann PastLenLog über den
-        letzten index an prüfen ob es verpasste updates gab bis es auf ein non-log eintrag stößt
-
-        Beispiele:
-        Not log, Forward log, Backward log
-        klein = nur meta, groß = meta und log
-
-        nnNnnNnnn
-        -bBbbBbbb <- B should not cause an error because there is a n at an earlier frame below
-        -fFff <----- F was last
-        ---bb
-        ---f
-        ----nnnNn <- N is new
-
-        benutzt trotzdem arcs zum reduzieren
-
-
-
-        PastLenLog:
-        - index: usize
-        - reservation: Arc<()>
-
-        RevMeta:
-        - Vec<(u64, Arc<()>)>
-
-
-
-        if let Some(frame) = meta.min_continuation(self.meta_continuations) {
-            if let Some(IterItem { offset, .. }) =
-                OffsetIter(self.offset_bytes.range(self.index..)).next()
-            {
-                let next_frame = self.last_run + offset;
-                if next_frame < frame {
-                    return Err(PastLenNotLogError::MissedUpdateForwardLog(MissedUpdate(
-                        next_frame,
-                    )));
-                }
-            }
-        }
-
-        self.meta_continuations = meta.continuations_len();
+    ) {
+        // This does not need to push a Limits::backward_limit to PastLenLogs because this method is
+        // either:
+        // a) called at RevDirection::NOT_LOG anyway, where PastLenLogs unsets the forward limits
+        //    itself and could not rely this unset is triggered from a push of this PastLenLog as it
+        //    might not run this frame
+        // b) called at a log RevDirection because the trigger came from PastLenLogs so it would be
+        //    pointless to push the update back to it
+        // In other words, this method is at most a reacting element and not a determining.
 
         if self.offset_bytes.len() > self.index {
             self.offset_bytes.truncate(self.index);
@@ -738,19 +527,20 @@ impl PastLenLog {
         }
 
         self.zeroes_max = self.zeroes;
-         */
-        Ok(())
     }
 
     /// Clears the log.
+    /// todo: mention PastLenLogs::clear
+    #[track_caller]
     pub fn clear(&mut self) {
         self.offset_bytes.clear();
         self.out_of_or_past_end_log = 0;
-        self.last_run = 0;
+        self.last_update = 0;
         self.index = 0;
         self.past_len = 0;
         self.zeroes = 0;
         self.zeroes_max = 0;
+        self.update_state = None;
     }
 
     /// Update the log which does the following:
@@ -780,13 +570,18 @@ impl PastLenLog {
     /// [type docs]: PastLenLog
     pub fn update_and_get_past_len(
         &mut self,
-        meta: &RevMeta,
-        //direction_changes: &PastLenLogs,
-    ) -> Result<usize, PastLenNotLogError> {
-        // truncate future
-        self.truncate_future(meta)?;
+        logs: &PastLenLogs
+    ) -> PastLenNotLog {
+        let (state, change) = logs.update_state(self.update_state, self.last_update);
 
-        // truncate past
+        let clear = matches!(change, Some(StateChange::Cleared));
+        if clear {
+            self.clear();
+        } else {
+            self.truncate_future();
+        }
+
+        self.update_state = Some(state);
 
         let iter = OffsetIter(self.offset_bytes.iter());
 
@@ -805,7 +600,7 @@ impl PastLenLog {
             }
 
             let next_oldest = self.out_of_or_past_end_log + offset;
-            if next_oldest > meta.past_end() {
+            if next_oldest > logs.past_end() {
                 // next_oldest is reachable by log traversion, which is undesired because
                 // Self::backward_log stops working there
                 break;
@@ -822,9 +617,14 @@ impl PastLenLog {
         self.offset_bytes.drain(..to_drain);
 
         // push present offset
-        let mut offset = meta.now() - self.last_run;
-        self.last_run = meta.now();
+        logs.push(state, Limits::backward_limit(logs.now()));
+        let mut offset = logs.now() - self.last_update;
+        self.last_update = logs.now();
         self.past_len += 1;
+        let out = PastLenNotLog {
+            clear,
+            past_len: self.past_len
+        };
 
         if offset == 0 {
             // offsets of zero are not pushed right away unless the maximum is reached
@@ -841,7 +641,7 @@ impl PastLenLog {
             }
 
             self.zeroes_max = self.zeroes;
-            return Ok(self.past_len);
+            return out;
         } else if self.zeroes == 1 {
             // there was an offset of 0 previously, push it now that it is sure no more such offsets
             // are following it
@@ -860,7 +660,7 @@ impl PastLenLog {
 
         if offset <= MAX_SINGLE_BYTE_OFFSET as u64 {
             self.offset_bytes.push_back(offset as u8);
-            return Ok(self.past_len);
+            return out;
         }
 
         // this is a multi-byte offset
@@ -878,7 +678,7 @@ impl PastLenLog {
 
                 self.offset_bytes
                     .push_back(offset as u8 | WRAPPING_OFFSET_OR);
-                return Ok(self.past_len);
+                return out;
             }
 
             // this is a wrapped byte
@@ -908,36 +708,78 @@ impl PastLenLog {
     /// [type docs]: PastLenLog
     pub fn backward_log(
         &mut self,
-        meta: &RevMeta,
-        //direction_changes: &PastLenLogs,
-    ) -> Result<bool, PastLenBackwardError> {
-        match self.last_run.cmp(&(meta.now() + 1)) {
-            CmpOrdering::Less => Ok(false),
-            CmpOrdering::Equal => {
+        logs: &PastLenLogs,
+    ) -> bool {
+        if self.update_state.is_none() {
+            // cannot go forward in log if log is empty, do not set state here, postpone a proper
+            // initialization to RevDirection::NOT_LOG
+            return false;
+        }
+
+        // update UpdateState
+        let (state, change) = logs.update_state(self.update_state, self.last_update);
+        self.update_state = Some(state);
+
+        // react on UpdateState
+        match change {
+            Some(StateChange::Cleared) => {
+                // all PastLenLog logs should be cleared, without a past this cannot go backward
+                self.clear();
+                return false;
+            },
+            Some(StateChange::TruncateFuture) => self.truncate_future(),
+            None => {}
+        }
+
+        // set next backward_limit if this method returns true
+        let backward_limit = match self.last_update.cmp(&(logs.now() + 1)) {
+            // did not yet reach the next past frame in the log, may be at end of reachable log
+            Ordering::Less => return false,
+            Ordering::Equal => {
                 if self.zeroes > 0 {
                     self.zeroes -= 1;
                     self.past_len -= 1;
-                    return Ok(true);
+                    // self is not done going backward in this frame yet, but no need to call
+                    // PastLenLogs::push because the Limits::both_limits(logs.now(), logs.now()) was
+                    // already pushed in this frame by this log, see the IterItem { offset: 0, .. }
+                    // match arm below
+                    return true;
                 }
-                match OffsetIter(self.offset_bytes.range(..self.index)).next_back() {
+                let mut iter = OffsetIter(self.offset_bytes.range(..self.index));
+                match iter.next_back() {
                     Some(IterItem { offset: 0, len }) => {
                         self.index -= 1;
                         self.past_len -= 1;
                         self.zeroes = len.get() as u8 - 1;
-                        Ok(true)
+                        if self.zeroes == 0 {
+                            match iter.next_back() {
+                                Some(IterItem { offset, ..}) => logs.now() - offset,
+                                None => u64::MIN
+                            }
+                        } else {
+                            logs.now()
+                        }
                     }
                     Some(IterItem { offset, len }) => {
-                        self.last_run -= offset;
+                        self.last_update -= offset;
                         self.index -= len.get();
                         self.past_len -= 1;
                         self.zeroes = 0;
-                        Ok(true)
+                        match iter.next_back() {
+                            Some(IterItem { offset, ..}) => self.last_update - offset,
+                            None => u64::MIN
+                        }
                     }
-                    None => Err(OutOfLog)?,
+                    None => panic!("self.out_of_or_past_end_log should be the last, unreachable log entry"),
                 }
             }
-            CmpOrdering::Greater => Err(MissedUpdate(self.last_run))?,
-        }
+            // missed an update, should have been reported by PastLenLogs, do nothing here as the
+            // user seems to have decided against panicking in that case
+            Ordering::Greater => return false,
+        };
+
+        logs.push(state, Limits::both_limits(backward_limit, logs.now()));
+        true
     }
 
     /// Checks at [`RevDirection::FORWARD_LOG`] if this log has been updated at this frame.
@@ -956,49 +798,103 @@ impl PastLenLog {
     /// [type docs]: PastLenLog
     pub fn forward_log(
         &mut self,
-        meta: &RevMeta,
-        //direction_changes: &PastLenLogs,
-    ) -> Result<bool, MissedUpdate> {
-        match OffsetIter(self.offset_bytes.range(self.index..)).next() {
-            Some(IterItem { offset: 0, len }) => match self.last_run.cmp(&meta.now()) {
-                CmpOrdering::Greater => Ok(false),
-                CmpOrdering::Equal => {
-                    if self.zeroes < len.get() as u8 - 1 {
+        logs: &PastLenLogs
+    ) -> bool {
+        if self.update_state.is_none() {
+            // cannot go forward in log if log is empty, do not set state here, postpone a proper
+            // initialization to RevDirection::NOT_LOG
+            return false;
+        }
+
+        // update UpdateState
+        let (state, change) = logs.update_state(self.update_state, self.last_update);
+        self.update_state = Some(state);
+
+        // react on UpdateState
+        if let Some(change) = change {
+            match change {
+                StateChange::Cleared => self.clear(),
+                StateChange::TruncateFuture => self.truncate_future(),
+            }
+            // without a future this cannot go forward
+            return false;
+        }
+
+        // set next forward_limit if this method returns true
+        let mut iter = OffsetIter(self.offset_bytes.range(self.index..));
+        let forward_limit = match iter.next() {
+            Some(IterItem { offset: 0, len }) => match self.last_update.cmp(&logs.now()) {
+                // did not yet reach the next future frame in the log
+                Ordering::Greater => return false,
+                Ordering::Equal => {
+                    self.past_len += 1;
+                    if self.zeroes == 0 {
                         self.zeroes += 1;
+                        logs.now()
+                    } else if self.zeroes < len.get() as u8 - 1 {
+                        self.zeroes += 1;
+                        // self is not done going forward in this frame yet, but no need to call
+                        // PastLenLogs::push because the Limits::both_limits(logs.now(), logs.now())
+                        // was already pushed in this frame by this log, see the if case right above
+                        return true;
                     } else {
                         self.index += 1;
                         self.zeroes = 0;
+                        match iter.next() {
+                            Some(IterItem { offset, .. }) => logs.now() + offset,
+                            None => u64::MAX
+                        }
                     }
-                    self.past_len += 1;
-                    Ok(true)
                 }
-                CmpOrdering::Less => Err(MissedUpdate(self.last_run)),
+                // missed an update, should have been reported by PastLenLogs, do nothing here as
+                // the user seems to have decided against panicking in that case
+                Ordering::Less => return false,
             },
             Some(IterItem { offset, len }) => {
-                let frame = self.last_run + offset;
-                match frame.cmp(&meta.now()) {
-                    CmpOrdering::Greater => Ok(false),
-                    CmpOrdering::Equal => {
-                        self.last_run = frame;
+                let frame = self.last_update + offset;
+                match frame.cmp(&logs.now()) {
+                    // did not yet reach the next future frame in the log
+                    Ordering::Greater => return false,
+                    Ordering::Equal => {
+                        self.last_update = frame;
                         self.index += len.get();
                         self.past_len += 1;
                         self.zeroes = 0;
-                        Ok(true)
+                        match iter.next() {
+                            Some(IterItem { offset, .. }) => frame + offset,
+                            None => u64::MAX
+                        }
                     }
-                    CmpOrdering::Less => Err(MissedUpdate(frame)),
+                    // missed an update, should have been reported by PastLenLogs, do nothing here
+                    // as the user seems to have decided against panicking in that case
+                    Ordering::Less => return false,
                 }
             }
-            None if self.zeroes < self.zeroes_max => match self.last_run.cmp(&meta.now()) {
-                CmpOrdering::Greater => Ok(false),
-                CmpOrdering::Equal => {
+            None if self.zeroes < self.zeroes_max => match self.last_update.cmp(&logs.now()) {
+                // did not yet reach the next future frame in the log
+                Ordering::Greater => return false,
+                Ordering::Equal => {
                     self.past_len += 1;
                     self.zeroes += 1;
-                    Ok(true)
+                    if self.zeroes == 1 {
+                        logs.now()
+                    } else {
+                        // self is not done going forward in this frame yet, but no need to call
+                        // PastLenLogs::push because the Limits::both_limits(logs.now(), logs.now())
+                        // was already pushed in this frame by this log, see the if case right above
+                        return true;
+                    }
                 }
-                CmpOrdering::Less => Err(MissedUpdate(self.last_run)),
+                // missed an update, should have been reported by PastLenLogs, do nothing here as
+                // the user seems to have decided against panicking in that case
+                Ordering::Less => return false,
             },
-            None => Ok(false),
-        }
+            // reached end of log
+            None => return false,
+        };
+
+        logs.push(state, Limits::both_limits(logs.now(), forward_limit));
+        true
     }
 }
 
@@ -1145,7 +1041,7 @@ mod test {
                 .eq(expected.into_iter().rev())
         );
     }
-/* 
+    /*
     #[derive(Clone)]
     struct Log {
         log: PastLenLog,
