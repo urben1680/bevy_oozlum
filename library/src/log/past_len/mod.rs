@@ -2,14 +2,12 @@ use core::fmt::Debug;
 use std::{
     cmp::Ordering,
     collections::{TryReserveError, VecDeque, vec_deque::Iter},
-    error::Error,
-    fmt::Display,
     num::NonZeroUsize,
     ops::ControlFlow,
 };
 
 use crate::{
-    log::{past_len::direction_changes::{Limits, StateChange, UpdateState}, OutOfLog},
+    log::{past_len::direction_changes::{Limits, StateChange, UpdateState}},
 };
 
 pub mod direction_changes;
