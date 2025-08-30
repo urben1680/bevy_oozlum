@@ -10,10 +10,12 @@ use std::{
 
 use bevy::reflect::Reflect;
 
+use crate::log::{PastLenBackwardLog, PastLenForwardLog, PastLenSkipAnd, past_len::WithPastLenLog};
+
 use super::{DenseStateLog, EntryAmount, LogMut, OutOfLog, PushedTooMany, USIZE_BYTES, ValueEntry};
 
-#[allow(private_bounds)]
 #[derive(Debug, Clone, Reflect)]
+#[cfg_attr(feature = "serialize", derive(serde::Serialize, serde::Deserialize))]
 pub struct DenseStatesLog<T, U = (), const AMOUNT_BYTES: usize = USIZE_BYTES> {
     amounts: DenseStateLog<EntryAmount<U, AMOUNT_BYTES>>,
     states: VecDeque<T>,
@@ -47,51 +49,41 @@ impl<T: Display, U: Display + 'static, const AMOUNT_BYTES: usize> Display
 }
 
 #[cfg(feature = "serialize")]
-mod serde_with {
-    use std::{collections::VecDeque, ops::Deref};
+mod serialize {
+    use std::collections::VecDeque;
 
     use serde::{Deserialize, Serialize};
 
-    use crate::log::serialize::{WithCapacity, WithCapacityWrapper, WithRange};
+    use crate::log::serialize::{
+        LoglessState, LoglessWithCapacity, WithCapacity, WithCapacityWrapper, WithRange,
+    };
 
     use super::{DenseStateLog, DenseStatesLog, EntryAmount};
 
-    impl<T, U, const AMOUNT_BYTES: usize> Serialize for DenseStatesLog<T, U, AMOUNT_BYTES>
+    impl<T, U, const AMOUNT_BYTES: usize> LoglessState for DenseStatesLog<T, U, AMOUNT_BYTES>
     where
         T: Serialize + for<'de> Deserialize<'de> + 'static,
         U: Serialize + for<'de> Deserialize<'de> + 'static,
     {
-        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-        where
-            S: serde::Serializer,
-        {
+        type Se<'se> = (&'se EntryAmount<U, AMOUNT_BYTES>, WithRange<'se, T>);
+        type De = (EntryAmount<U, AMOUNT_BYTES>, VecDeque<T>);
+        fn get_logless_state(&self) -> Self::Se<'_> {
+            let (entry, range) = self.get_entry_range();
             (
-                self.deref(),
+                entry,
                 WithRange {
                     deque: &self.states,
-                    range: self.get_entry_range().1,
+                    range,
                 },
             )
-                .serialize(serializer)
         }
-    }
-
-    impl<'de, T, U, const AMOUNT_BYTES: usize> Deserialize<'de> for DenseStatesLog<T, U, AMOUNT_BYTES>
-    where
-        T: Serialize + Deserialize<'de> + 'static,
-        U: Serialize + Deserialize<'de> + 'static,
-    {
-        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-        where
-            D: serde::Deserializer<'de>,
-        {
-            let (entry, states) = <(U, VecDeque<T>)>::deserialize(deserializer)?;
-            let entry_amount = EntryAmount::new(entry, states.len());
-            Ok(Self {
-                amounts: DenseStateLog::new(entry_amount),
+        fn from_logless_state((entry, states): Self::De) -> Self {
+            let index = entry.amount();
+            Self {
+                amounts: entry.into(),
                 states,
-                index: 0,
-            })
+                index,
+            }
         }
     }
 
@@ -100,26 +92,61 @@ mod serde_with {
         T: Serialize + for<'de> Deserialize<'de> + 'static,
         U: Serialize + for<'de> Deserialize<'de> + 'static,
     {
-        type Se<'se> = (&'se U, usize, WithCapacityWrapper<WithRange<'se, T>>);
-        type De = (U, usize, WithCapacityWrapper<VecDeque<T>>);
+        type Se<'se> = (
+            <DenseStateLog<EntryAmount<U, AMOUNT_BYTES>> as WithCapacity>::Se<'se>,
+            WithCapacityWrapper<&'se VecDeque<T>>,
+            usize,
+        );
+        type De = (
+            <DenseStateLog<EntryAmount<U, AMOUNT_BYTES>> as WithCapacity>::De,
+            WithCapacityWrapper<VecDeque<T>>,
+            usize,
+        );
         fn get_with_capacity(&self) -> Self::Se<'_> {
             (
-                self.deref(),
-                self.amounts.states_capacity(),
+                self.amounts.get_with_capacity(),
+                WithCapacityWrapper(&self.states),
+                self.index,
+            )
+        }
+        fn from_with_capacity((amounts, WithCapacityWrapper(states), index): Self::De) -> Self {
+            Self {
+                amounts: WithCapacity::from_with_capacity(amounts),
+                states,
+                index,
+            }
+        }
+    }
+
+    impl<T, U, const AMOUNT_BYTES: usize> LoglessWithCapacity for DenseStatesLog<T, U, AMOUNT_BYTES>
+    where
+        T: Serialize + for<'de> Deserialize<'de> + 'static,
+        U: Serialize + for<'de> Deserialize<'de> + 'static,
+    {
+        type Se<'se> = (
+            <DenseStateLog<EntryAmount<U, AMOUNT_BYTES>> as LoglessWithCapacity>::Se<'se>,
+            WithCapacityWrapper<WithRange<'se, T>>,
+        );
+        type De = (
+            <DenseStateLog<EntryAmount<U, AMOUNT_BYTES>> as LoglessWithCapacity>::De,
+            WithCapacityWrapper<VecDeque<T>>,
+        );
+        fn get_logless_with_capacity(&self) -> Self::Se<'_> {
+            (
+                self.amounts.get_logless_with_capacity(),
                 WithCapacityWrapper(WithRange {
                     deque: &self.states,
                     range: self.get_entry_range().1,
                 }),
             )
         }
-        fn from_with_capacity(
-            (entry, amounts_capacity, WithCapacityWrapper(states)): Self::De,
-        ) -> Self {
-            let entry_amount = EntryAmount::new(entry, states.len());
+        fn from_logless_with_capacity((amounts, WithCapacityWrapper(states)): Self::De) -> Self {
+            let amounts = DenseStateLog::from_logless_with_capacity(amounts);
+            let index = amounts.amount();
             Self {
-                amounts: DenseStateLog::with_capacity(entry_amount, amounts_capacity),
+                amounts,
                 states,
-                index: 0,
+                index,
             }
         }
     }
@@ -347,6 +374,10 @@ impl<T, U, const AMOUNT_BYTES: usize> DenseStatesLog<T, U, AMOUNT_BYTES> {
         let states = self.states.range(range);
         (states, &entry.entry)
     }
+    pub fn truncate_future(&mut self) {
+        self.states.truncate(self.index);
+        self.amounts.truncate_future();
+    }
     pub fn drain_future(&mut self) -> (Drain<T>, Drain<EntryAmount<U, AMOUNT_BYTES>>) {
         (self.states.drain(self.index..), self.amounts.drain_future())
     }
@@ -400,6 +431,49 @@ impl<T, U, const AMOUNT_BYTES: usize> DenseStatesLog<T, U, AMOUNT_BYTES> {
     }
 }
 
+impl<T, U, const AMOUNT_BYTES: usize> WithPastLenLog for DenseStatesLog<T, U, AMOUNT_BYTES> {
+    type LogOut<'a>
+        = bool
+    where
+        Self: 'a;
+    fn backward_log_with<'a>(
+        &'a mut self,
+        past_len_result: PastLenBackwardLog,
+    ) -> Result<Self::LogOut<'a>, OutOfLog> {
+        match past_len_result {
+            PastLenBackwardLog::Skip(skip_and) => {
+                self.clear_or_truncate_future(skip_and);
+                Ok(false)
+            }
+            PastLenBackwardLog::Update { truncate_future } => {
+                if truncate_future {
+                    self.truncate_future();
+                }
+                self.backward_log().map(|()| true)
+            }
+        }
+    }
+    fn forward_log_with<'a>(
+        &'a mut self,
+        past_len_result: PastLenForwardLog,
+    ) -> Result<Self::LogOut<'a>, OutOfLog> {
+        match past_len_result {
+            PastLenForwardLog::Skip(skip_and) => {
+                self.clear_or_truncate_future(skip_and);
+                Ok(false)
+            }
+            PastLenForwardLog::Update => self.forward_log().map(|()| true),
+        }
+    }
+    fn clear_or_truncate_future(&mut self, skip_and: PastLenSkipAnd) {
+        match skip_and {
+            PastLenSkipAnd::Clear => self.clear(),
+            PastLenSkipAnd::TruncateFuture => self.truncate_future(),
+            PastLenSkipAnd::Nothing => {}
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
     use serde::{Deserialize, Serialize};
@@ -409,11 +483,15 @@ mod test {
     use crate::log::test::{collect_drain, collect_drain_result, collect_pop_result};
 
     #[test]
-    fn serde_with() {
+    fn serialize() {
         #[derive(Serialize, Deserialize)]
         struct Logs {
+            full: DenseStatesLog<char, u8>,
+            #[serde(with = "crate::log::logless_state")]
             logless: DenseStatesLog<char, u8>,
             #[serde(with = "crate::log::with_capacity")]
+            full_with_capacity: DenseStatesLog<char, u8>,
+            #[serde(with = "crate::log::logless_with_capacity")]
             logless_with_capacity: DenseStatesLog<char, u8>,
         }
 
@@ -429,19 +507,27 @@ mod test {
         original.backward_log().expect("in log");
 
         let mut logs = Logs {
+            full: original.clone(),
             logless: original.clone(),
+            full_with_capacity: original.clone(),
             logless_with_capacity: original.clone(),
         };
 
+        logs.full.entries_reserve_exact(98);
         logs.logless.entries_reserve_exact(98);
+        logs.full_with_capacity.entries_reserve_exact(98);
         logs.logless_with_capacity.entries_reserve_exact(98);
 
+        logs.full.states_reserve_exact(194);
         logs.logless.states_reserve_exact(194);
+        logs.full_with_capacity.states_reserve_exact(194);
         logs.logless_with_capacity.states_reserve_exact(194);
 
         let serialized = serde_json::to_string_pretty(&logs).unwrap();
         let Logs {
+            full,
             logless,
+            full_with_capacity,
             logless_with_capacity,
         } = serde_json::from_str(&serialized).unwrap();
 
@@ -482,7 +568,9 @@ mod test {
             );
         };
 
+        test(&full, 2, 6, false);
         test(&logless, 0, 2, false);
+        test(&full_with_capacity, 2, 6, true);
         test(&logless_with_capacity, 0, 2, true);
     }
 

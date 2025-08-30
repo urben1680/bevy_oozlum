@@ -19,9 +19,7 @@ use bevy::{
 };
 
 use crate::{
-    log::{
-        DenseTransitionsLog, MissedUpdate, PastLenBackwardError, PastLenLog, PastLenNotLogError,
-    },
+    log::{DenseTransitionsLog, PastLenLog, PastLenLogs, PastLenNotLog},
     meta::{NonLogNow, RevDirection, RevMeta},
 };
 
@@ -297,11 +295,9 @@ pub(crate) enum UndoRedoLogError {
         direction: Option<RevDirection>,
         system_name: DebugName,
     },
-    MissedUpdate {
-        frame: u64,
+    PastLenLogsMissing {
         now: u64,
-        direction_missed: RevDirection,
-        direction_now: RevDirection,
+        direction: RevDirection,
         system_name: DebugName,
     },
     OutOfLog {
@@ -342,15 +338,13 @@ impl Display for UndoRedoLogError {
                     "RevDirection is {actual} when it was expected to be {expected} at frame {now} before the update of the UndoRedo log of reversible system {system_name}"
                 )
             }
-            Self::MissedUpdate {
-                frame,
+            Self::PastLenLogsMissing {
                 now,
-                direction_missed,
-                direction_now,
+                direction,
                 system_name,
             } => write!(
                 f,
-                "the UndoRedo log of the reversible system {system_name} ran at {now} during {direction_now} and missed to run at {frame} during {direction_missed}"
+                "the PastLenLogs resource is missing while the reversible system {system_name} ran at {now} during {direction}"
             ),
             Self::OutOfLog {
                 now,
@@ -380,66 +374,56 @@ impl UndoRedoLog {
             .clone();
         let now = meta.now();
         match meta.get_running_direction() {
-            Some(RevDirection::NOT_LOG) => {
-                let mut buffer = world.get_resource_mut::<UndoRedoBuffer>().ok_or_else(|| {
-                    UndoRedoLogError::UndoRedoBufferMissing {
-                        now,
+            Some(RevDirection::NOT_LOG) => world
+                .try_resource_scope::<UndoRedoBuffer, _>(|world, mut buffer| {
+                    if !buffer.0.is_empty() {
+                        let past_len_logs =
+                            world.get_resource::<PastLenLogs>().ok_or_else(|| {
+                                UndoRedoLogError::PastLenLogsMissing {
+                                    now: meta.now(),
+                                    direction: RevDirection::NOT_LOG,
+                                    system_name: system_name.clone(),
+                                }
+                            })?;
+                        let PastLenNotLog { clear, past_len } =
+                            self.frame_log.update_and_get_past_len(past_len_logs);
+                        if clear {
+                            self.undo_redo_log.clear();
+                        }
+                        self.undo_redo_log.push_and_drain_past(past_len, |mut log| {
+                            log.extend(buffer.0.drain(..).map(|boxed| DebugHidden(boxed.undo_redo)))
+                        });
+                    } else {
+                        self.frame_log.truncate_future();
+                        self.undo_redo_log.drain_future();
+                    }
+                    Ok(())
+                })
+                .unwrap_or_else(|| {
+                    Err(UndoRedoLogError::UndoRedoBufferMissing {
+                        now: meta.now(),
+                        system_name: system_name.clone(),
+                    })
+                }),
+            Some(RevDirection::FORWARD_LOG) => {
+                let past_len_logs = world.get_resource::<PastLenLogs>().ok_or_else(|| {
+                    UndoRedoLogError::PastLenLogsMissing {
+                        now: meta.now(),
+                        direction: RevDirection::FORWARD_LOG,
                         system_name: system_name.clone(),
                     }
                 })?;
-                let map_missed_frame = |err: PastLenNotLogError| {
-                    let (frame, direction_missed) = match err {
-                        PastLenNotLogError::MissedUpdateForwardLog(MissedUpdate(frame)) => {
-                            (frame, RevDirection::FORWARD_LOG)
-                        }
-                        PastLenNotLogError::MissedUpdateBackwardLog(MissedUpdate(frame)) => {
-                            (frame, RevDirection::BackwardLog)
-                        }
-                    };
-                    UndoRedoLogError::MissedUpdate {
-                        frame,
-                        now: meta.now(),
-                        direction_missed,
-                        direction_now: RevDirection::NOT_LOG,
-                        system_name: system_name.to_owned(),
-                    }
-                };
-                if !buffer.0.is_empty() {
-                    let past_len = self
-                        .frame_log
-                        .update_and_get_past_len(&meta)
-                        .map_err(map_missed_frame)?;
-                    self.undo_redo_log.push_and_drain_past(past_len, |mut log| {
-                        log.extend(buffer.0.drain(..).map(|boxed| DebugHidden(boxed.undo_redo)))
-                    });
-                } else {
-                    self.frame_log
-                        .truncate_future(&meta);
-                    self.undo_redo_log.drain_future();
-                }
-                Ok(())
-            }
-            Some(RevDirection::FORWARD_LOG) => {
-                if !self
-                    .frame_log
-                    .forward_log(&meta)
-                    .map_err(map_frame_log_err(
-                        now,
-                        RevDirection::FORWARD_LOG,
-                        system_name,
-                    ))?
-                {
-                    return Ok(());
-                };
                 let iter = self
-                    .undo_redo_log
-                    .forward_log()
+                    .frame_log
+                    .forward_log(past_len_logs)
+                    .apply(&mut self.undo_redo_log)
                     .map_err(|_| UndoRedoLogError::OutOfLog {
                         now,
                         direction: RevDirection::FORWARD_LOG,
                         system_name: system_name.clone(),
                     })?
-                    .value
+                    .into_iter()
+                    .flat_map(|value_entry| value_entry.value)
                     .map(|cell| cell.0.get());
                 for command in iter {
                     command.redo(world);
@@ -475,53 +459,30 @@ impl UndoRedoLog {
                 system_name: system_name.to_owned(),
             });
         }
-        if !self
-            .frame_log
-            .backward_log(&meta)
-            .map_err(map_frame_log_err(
-                now,
-                RevDirection::BackwardLog,
-                system_name,
-            ))?
-        {
-            return Ok(());
-        };
+        let past_len_logs = world.get_resource::<PastLenLogs>().ok_or_else(|| {
+            UndoRedoLogError::PastLenLogsMissing {
+                now: meta.now(),
+                direction: RevDirection::BackwardLog,
+                system_name: system_name.clone(),
+            }
+        })?;
         let iter = self
-            .undo_redo_log
-            .backward_log()
+            .frame_log
+            .backward_log(past_len_logs)
+            .apply(&mut self.undo_redo_log)
             .map_err(|_| UndoRedoLogError::OutOfLog {
                 now,
                 direction: RevDirection::BackwardLog,
                 system_name: system_name.to_owned(),
             })?
-            .value
+            .into_iter()
+            .flat_map(|value_entry| value_entry.value)
             .map(|cell| cell.0.get())
             .rev();
         for command in iter {
             command.undo(world);
         }
         Ok(())
-    }
-}
-
-fn map_frame_log_err<Err: Into<PastLenBackwardError>>(
-    now: u64,
-    direction: RevDirection,
-    system_name: &DebugName,
-) -> impl FnOnce(Err) -> UndoRedoLogError {
-    move |err| match err.into() {
-        PastLenBackwardError::MissedUpdate(err) => UndoRedoLogError::MissedUpdate {
-            frame: err.0,
-            now,
-            direction_missed: direction,
-            direction_now: direction,
-            system_name: system_name.to_owned(),
-        },
-        PastLenBackwardError::OutOfLog(_) => UndoRedoLogError::OutOfLog {
-            now,
-            direction,
-            system_name: system_name.to_owned(),
-        },
     }
 }
 

@@ -3,7 +3,7 @@ use std::{error::Error, fmt::Display};
 
 use bevy::{
     ecs::{
-        change_detection::Mut,
+        change_detection::{MaybeLocation, Mut},
         component::{ComponentId, Tick},
         error::BevyError,
         resource::Resource,
@@ -25,12 +25,23 @@ use crate::{
 
 #[derive(Clone, Debug, PartialEq)]
 enum TryRunRevUpdateError {
-    RevMetaRemovedInSchedule { frame: u64 },
+    RevMetaRemovedInSchedule {
+        frame: u64,
+    },
     UnexpectedInitialRunning(RevMeta),
     RevUpdateMissing(RevMeta),
-    UndoRedoBufferNotEmptyBeforeUpdate { meta: RevMeta, buffer_types: String },
+    UndoRedoBufferNotEmptyBeforeUpdate {
+        meta: RevMeta,
+        buffer_types: String,
+    },
     SpawnDespawnRemovedInSchedule(RevMeta),
     SpawnDespawnOutOfLog(RevMeta),
+    PastLenLogsRemovedInSchedule(RevMeta),
+    PastLenLogUpdateMissed {
+        meta: RevMeta,
+        missed_forward: bool,
+        last_update: MaybeLocation,
+    },
 }
 
 impl Display for TryRunRevUpdateError {
@@ -67,6 +78,27 @@ impl Display for TryRunRevUpdateError {
                     meta.now()
                 )
             }
+            Self::PastLenLogsRemovedInSchedule(meta) => {
+                write!(
+                    f,
+                    "The PastLenLogs resource was removed at frame {}",
+                    meta.now()
+                )
+            }
+            Self::PastLenLogUpdateMissed {
+                meta, last_update, ..
+            } => match last_update.into_option() {
+                Some(location) => write!(
+                    f,
+                    "The PastLenLog last modified at {location} did not update at frame {} as it was expected to do",
+                    meta.now()
+                ),
+                None => write!(
+                    f,
+                    "A PastLenLog did not update at frame {} as it was expected to do",
+                    meta.now()
+                ),
+            },
         }
     }
 }
@@ -446,15 +478,22 @@ impl RevMeta {
                     }
                     schedule.run(world);
                     match world.get_resource_mut::<PastLenLogs>() {
-                        Some(mut direction_changes) => direction_changes.update_after(meta).unwrap(), // todo
-                        None => panic!(), //todo
+                        Some(mut direction_changes) => direction_changes
+                            .update_after(meta)
+                            .map_err(|err| TryRunRevUpdateError::PastLenLogUpdateMissed {
+                                meta: meta.clone(),
+                                missed_forward: err.missed_forward,
+                                last_update: err.last_update
+                            }),
+                        None => Err(TryRunRevUpdateError::PastLenLogsRemovedInSchedule(meta.clone())),
                     }
                 });
 
                 match schedule_result {
+                    Ok(Err(err)) => Err(err),
                     // despawn entities that are marked as reversibly despawned for long enough
                     // despawn buffer entities for operations that are out of log now
-                    Ok(()) => world
+                    Ok(Ok(())) => world
                         .try_resource_scope(|world: &mut World, mut res: Mut<RevDespawnCleaner>| {
                             res
                                 .update(meta, world)

@@ -23,6 +23,10 @@ mod sparse_transition;
 mod sparse_transitions;
 
 #[cfg(feature = "serialize")]
+pub use serialize::logless_state;
+#[cfg(feature = "serialize")]
+pub use serialize::logless_with_capacity;
+#[cfg(feature = "serialize")]
 pub use serialize::with_capacity;
 
 pub use dense_state::DenseStateLog;
@@ -30,10 +34,11 @@ pub use dense_states::DenseStatesLog;
 pub use dense_transition::DenseTransitionLog;
 pub use dense_transitions::DenseTransitionsLog;
 
-pub use past_len::MissedUpdate;
-pub use past_len::PastLenBackwardError;
+pub use past_len::PastLenBackwardLog;
+pub use past_len::PastLenForwardLog;
 pub use past_len::PastLenLog;
-pub use past_len::PastLenNotLogError;
+pub use past_len::PastLenNotLog;
+pub use past_len::PastLenSkipAnd;
 pub use past_len::direction_changes::PastLenLogs;
 pub(crate) use past_len::direction_changes::PastLenLogsError;
 
@@ -318,6 +323,30 @@ impl<U, const AMOUNT_BYTES: usize> EntryAmount<U, AMOUNT_BYTES> {
     /// ```
     pub fn amount(&self) -> usize {
         self.amount.amount()
+    }
+}
+
+#[cfg(feature = "serialize")]
+impl<U: serde::Serialize, const AMOUNT_BYTES: usize> serde::Serialize
+    for EntryAmount<U, AMOUNT_BYTES>
+{
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        (&self.entry, self.amount()).serialize(serializer)
+    }
+}
+
+#[cfg(feature = "serialize")]
+impl<'de, U: serde::Deserialize<'de>, const AMOUNT_BYTES: usize> serde::Deserialize<'de>
+    for EntryAmount<U, AMOUNT_BYTES>
+{
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let (entry, amount) = <(U, usize) as serde::Deserialize<'de>>::deserialize(deserializer)?;
+        let entry_amount = Self::new(entry, amount);
+        if amount == entry_amount.amount() {
+            Ok(entry_amount)
+        } else {
+            Err(serde::de::Error::custom("todo"))
+        }
     }
 }
 

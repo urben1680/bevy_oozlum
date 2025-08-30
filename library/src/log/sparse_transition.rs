@@ -1,9 +1,12 @@
 use core::fmt::Debug;
 use std::collections::{TryReserveError, VecDeque, vec_deque::Iter};
 
+use crate::log::{PastLenBackwardLog, PastLenForwardLog, PastLenSkipAnd, past_len::WithPastLenLog};
+
 use super::{INDEX_OOB, OutOfLog, SparseDrain, SparseValue};
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serialize", derive(serde::Serialize, serde::Deserialize))]
 pub struct SparseTransitionLog<T> {
     /// SparseValue.skips represents the number of None pushes before the transition in the struct.
     transitions: VecDeque<SparseValue<T>>,
@@ -18,23 +21,62 @@ pub struct SparseTransitionLog<T> {
 }
 
 #[cfg(feature = "serialize")]
-mod serde_with {
+mod serialize {
+    use std::collections::VecDeque;
+
     use serde::{Deserialize, Serialize};
 
-    use crate::log::serialize::WithCapacity;
+    use crate::log::serialize::{LoglessWithCapacity, WithCapacity, WithCapacityWrapper};
 
-    use super::SparseTransitionLog;
+    use super::{SparseTransitionLog, SparseValue};
 
     impl<T: Serialize + for<'de> Deserialize<'de> + 'static> WithCapacity for SparseTransitionLog<T> {
+        type Se<'se> = (
+            WithCapacityWrapper<&'se VecDeque<SparseValue<T>>>,
+            usize,
+            usize,
+            usize,
+            usize,
+        );
+        type De = (
+            WithCapacityWrapper<VecDeque<SparseValue<T>>>,
+            usize,
+            usize,
+            usize,
+            usize,
+        );
+        fn get_with_capacity(&self) -> Self::Se<'_> {
+            (
+                WithCapacityWrapper(&self.transitions),
+                self.index,
+                self.skips,
+                self.skips_max,
+                self.past_len,
+            )
+        }
+        fn from_with_capacity(
+            (WithCapacityWrapper(transitions), index, skips, skips_max, past_len): Self::De,
+        ) -> Self {
+            Self {
+                transitions,
+                index,
+                skips,
+                skips_max,
+                past_len,
+            }
+        }
+    }
+
+    impl<T> LoglessWithCapacity for SparseTransitionLog<T> {
         type Se<'se>
             = usize
         where
             T: 'se;
         type De = usize;
-        fn get_with_capacity(&self) -> Self::Se<'_> {
+        fn get_logless_with_capacity(&self) -> Self::Se<'_> {
             self.transitions.capacity()
         }
-        fn from_with_capacity(logless_with_capacity: Self::De) -> Self {
+        fn from_logless_with_capacity(logless_with_capacity: Self::De) -> Self {
             Self::with_capacity(logless_with_capacity)
         }
     }
@@ -94,6 +136,10 @@ impl<T> SparseTransitionLog<T> {
     }
     pub fn transitions_shrink_to_fit(&mut self) {
         self.transitions.shrink_to_fit()
+    }
+    pub fn truncate_future(&mut self) {
+        self.skips_max = self.skips;
+        self.transitions.truncate(self.index);
     }
     pub fn drain_future(&mut self) -> SparseDrain<T> {
         self.skips_max = self.skips;
@@ -210,6 +256,49 @@ impl<T> SparseTransitionLog<T> {
     }
 }
 
+impl<T> WithPastLenLog for SparseTransitionLog<T> {
+    type LogOut<'a>
+        = Option<&'a mut T>
+    where
+        Self: 'a;
+    fn backward_log_with<'a>(
+        &'a mut self,
+        past_len_result: PastLenBackwardLog,
+    ) -> Result<Self::LogOut<'a>, OutOfLog> {
+        match past_len_result {
+            PastLenBackwardLog::Skip(skip_and) => {
+                self.clear_or_truncate_future(skip_and);
+                Ok(None)
+            }
+            PastLenBackwardLog::Update { truncate_future } => {
+                if truncate_future {
+                    self.truncate_future();
+                }
+                self.backward_log()
+            }
+        }
+    }
+    fn forward_log_with<'a>(
+        &'a mut self,
+        past_len_result: PastLenForwardLog,
+    ) -> Result<Self::LogOut<'a>, OutOfLog> {
+        match past_len_result {
+            PastLenForwardLog::Skip(skip_and) => {
+                self.clear_or_truncate_future(skip_and);
+                Ok(None)
+            }
+            PastLenForwardLog::Update => self.forward_log(),
+        }
+    }
+    fn clear_or_truncate_future(&mut self, skip_and: PastLenSkipAnd) {
+        match skip_and {
+            PastLenSkipAnd::Clear => self.clear(),
+            PastLenSkipAnd::TruncateFuture => self.truncate_future(),
+            PastLenSkipAnd::Nothing => {}
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
     use serde::{Deserialize, Serialize};
@@ -217,10 +306,13 @@ mod test {
     use super::*;
 
     #[test]
-    fn serde_with() {
+    fn serialize() {
         #[derive(Serialize, Deserialize)]
         struct Logs {
+            full: SparseTransitionLog<char>,
             #[serde(with = "crate::log::with_capacity")]
+            full_with_capacity: SparseTransitionLog<char>,
+            #[serde(with = "crate::log::logless_with_capacity")]
             logless_with_capacity: SparseTransitionLog<char>,
         }
 
@@ -230,13 +322,19 @@ mod test {
         original.backward_log().expect("in log");
 
         let mut logs = Logs {
+            full: original.clone(),
+            full_with_capacity: original.clone(),
             logless_with_capacity: original.clone(),
         };
 
+        logs.full.transitions_reserve_exact(98);
+        logs.full_with_capacity.transitions_reserve_exact(98);
         logs.logless_with_capacity.transitions_reserve_exact(98);
 
         let serialized = serde_json::to_string_pretty(&logs).unwrap();
         let Logs {
+            full,
+            full_with_capacity,
             logless_with_capacity,
         } = serde_json::from_str(&serialized).unwrap();
 
@@ -254,6 +352,8 @@ mod test {
             );
         };
 
+        test(&full, 2, false);
+        test(&full_with_capacity, 2, true);
         test(&logless_with_capacity, 0, true);
     }
 

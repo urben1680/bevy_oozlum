@@ -6,6 +6,32 @@ use serde::{
     ser::SerializeSeq,
 };
 
+/// for state variants
+pub mod logless_state {
+    use super::*;
+
+    #[doc(hidden)]
+    #[allow(private_bounds)]
+    pub fn serialize<S, T>(this: &T, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+        T: LoglessState,
+    {
+        this.get_logless_state().serialize(serializer)
+    }
+
+    #[doc(hidden)]
+    #[allow(private_bounds)]
+    pub fn deserialize<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+    where
+        D: Deserializer<'de>,
+        T: LoglessState,
+    {
+        Deserialize::deserialize(deserializer).map(T::from_logless_state)
+    }
+}
+
+/// for all variants
 pub mod with_capacity {
     use super::*;
 
@@ -30,6 +56,40 @@ pub mod with_capacity {
     }
 }
 
+/// for all variants
+pub mod logless_with_capacity {
+    use super::*;
+
+    #[doc(hidden)]
+    #[allow(private_bounds)]
+    pub fn serialize<S, T>(this: &T, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+        T: LoglessWithCapacity,
+    {
+        this.get_logless_with_capacity().serialize(serializer)
+    }
+
+    #[doc(hidden)]
+    #[allow(private_bounds)]
+    pub fn deserialize<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+    where
+        D: Deserializer<'de>,
+        T: LoglessWithCapacity,
+    {
+        Deserialize::deserialize(deserializer).map(T::from_logless_with_capacity)
+    }
+}
+
+pub(super) trait LoglessState: Sized {
+    type Se<'se>: Serialize
+    where
+        Self: 'se;
+    type De: for<'de> Deserialize<'de>;
+    fn get_logless_state(&self) -> Self::Se<'_>;
+    fn from_logless_state(logless_state: Self::De) -> Self;
+}
+
 pub(super) trait WithCapacity: Sized {
     type Se<'se>: Serialize
     where
@@ -37,6 +97,15 @@ pub(super) trait WithCapacity: Sized {
     type De: for<'de> Deserialize<'de>;
     fn get_with_capacity(&self) -> Self::Se<'_>;
     fn from_with_capacity(with_capacity: Self::De) -> Self;
+}
+
+pub(super) trait LoglessWithCapacity: Sized {
+    type Se<'se>: Serialize
+    where
+        Self: 'se;
+    type De: for<'de> Deserialize<'de>;
+    fn get_logless_with_capacity(&self) -> Self::Se<'_>;
+    fn from_logless_with_capacity(logless_with_capacity: Self::De) -> Self;
 }
 
 /// Serializes to a sequence.

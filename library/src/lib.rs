@@ -83,8 +83,6 @@ pub mod prelude {
     };
 }
 
-const USE_LOCATION: bool = size_of::<MaybeLocation>() != 0;
-
 /// Make `error!` and `error_once!` cause panics.
 #[cfg(test)]
 fn panic_on_error_events() {

@@ -30,10 +30,12 @@ struct Update {
 }
 
 #[derive(Copy, Clone, PartialEq, Debug)]
-pub(super) struct UpdateState {
+#[cfg_attr(feature = "serialize", derive(serde::Serialize, serde::Deserialize))]
+#[doc(hidden)]
+pub struct UpdateState {
     id: u64,
     updates_this_frame: NonZeroU32,
-    log_exits: u64
+    log_exits: u64,
 }
 
 #[derive(Copy, Clone, PartialEq, Debug)]
@@ -45,44 +47,27 @@ pub(super) struct Limits {
 
 impl Limits {
     #[track_caller]
-    pub(super) fn none() -> Self {
-        Self { 
-            backward: u64::MIN, 
-            forward: u64::MAX, 
-            last_update: MaybeLocation::caller() 
+    pub(super) fn not_log_limit(backward: u64) -> Self {
+        Self {
+            backward,
+            forward: u64::MAX,
+            last_update: MaybeLocation::caller(),
         }
     }
     #[track_caller]
-    pub(super) fn backward_limit(limit: u64) -> Self {
-        Self { 
-            backward: limit, 
-            forward: u64::MAX, 
-            last_update: MaybeLocation::caller() 
-        }
-    }
-    #[track_caller]
-    pub(super) fn forward_limit(limit: u64) -> Self {
-        Self { 
-            backward: u64::MIN, 
-            forward: limit, 
-            last_update: MaybeLocation::caller() 
-        }
-    }
-    #[track_caller]
-    pub(super) fn both_limits(backward: u64, forward: u64) -> Self {
-        Self { 
-            backward, 
-            forward, 
-            last_update: MaybeLocation::caller() 
+    pub(super) fn log_limits(backward: u64, forward: u64) -> Self {
+        Self {
+            backward,
+            forward,
+            last_update: MaybeLocation::caller(),
         }
     }
 }
 
 #[derive(Debug, PartialEq)]
 pub(crate) struct PastLenLogsError {
-    now: u64,
-    missed_forward: bool,
-    last_update: MaybeLocation,
+    pub(crate) missed_forward: bool,
+    pub(crate) last_update: MaybeLocation,
 }
 
 struct UpdatesIter<'a>(Vec<UpdatesLocal<'a>>);
@@ -102,6 +87,7 @@ impl<'a> Iterator for UpdatesIter<'a> {
             .min_by_key(|(_, local)| local.next.state.updates_this_frame)?;
 
         let next = (local.next.state.id as usize, local.next.limits);
+
         match local.drain.next() {
             Some(update) => {
                 local.next = update;
@@ -117,7 +103,7 @@ impl<'a> Iterator for UpdatesIter<'a> {
 
 pub(super) enum StateChange {
     Cleared,
-    TruncateFuture
+    TruncateFuture,
 }
 
 impl PastLenLogs {
@@ -151,7 +137,11 @@ impl PastLenLogs {
         self.was_log = false;
         self.log_exits = 0;
     }
-    pub(super) fn update_state(&self, state: Option<UpdateState>, last_update: u64) -> (UpdateState, Option<StateChange>) {
+    pub(super) fn update_state(
+        &self,
+        state: Option<UpdateState>,
+        last_update: u64,
+    ) -> (UpdateState, Option<StateChange>) {
         let new_state = || {
             let id = self.ids.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             if id == u32::MAX {
@@ -160,7 +150,7 @@ impl PastLenLogs {
             UpdateState {
                 id: id as u64 + self.cleared_ids,
                 updates_this_frame: NonZeroU32::MIN,
-                log_exits: self.log_exits
+                log_exits: self.log_exits,
             }
         };
         match state {
@@ -178,7 +168,7 @@ impl PastLenLogs {
                     (state, None)
                 }
             }
-            None => (new_state(), None)
+            None => (new_state(), None),
         }
     }
     pub(super) fn push(&self, state: UpdateState, limits: Limits) {
@@ -230,14 +220,12 @@ impl PastLenLogs {
             for limits in self.limits.iter() {
                 if now < limits.backward {
                     return Err(PastLenLogsError {
-                        now,
                         missed_forward: false,
                         last_update: limits.last_update,
                     });
                 }
                 if now > limits.forward {
                     return Err(PastLenLogsError {
-                        now,
                         missed_forward: true,
                         last_update: limits.last_update,
                     });
@@ -249,7 +237,6 @@ impl PastLenLogs {
             for limits in self.limits.iter_mut() {
                 if now < limits.backward {
                     return Err(PastLenLogsError {
-                        now,
                         missed_forward: false,
                         last_update: limits.last_update,
                     });
