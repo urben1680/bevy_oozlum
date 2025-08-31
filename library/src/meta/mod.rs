@@ -14,6 +14,8 @@ use bevy::{
     reflect::{Reflect, std_traits::ReflectDefault},
 };
 
+mod wip;
+
 #[cfg(feature = "serialize")]
 use bevy::reflect::{ReflectDeserialize, ReflectSerialize};
 

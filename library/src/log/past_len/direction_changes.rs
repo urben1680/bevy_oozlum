@@ -33,7 +33,7 @@ struct Update {
 #[cfg_attr(feature = "serialize", derive(serde::Serialize, serde::Deserialize))]
 #[doc(hidden)]
 pub struct UpdateState {
-    id: u64,
+    internal_id: u64,
     updates_this_frame: NonZeroU32,
     log_exits: u64,
 }
@@ -86,7 +86,7 @@ impl<'a> Iterator for UpdatesIter<'a> {
             .enumerate()
             .min_by_key(|(_, local)| local.next.state.updates_this_frame)?;
 
-        let next = (local.next.state.id as usize, local.next.limits);
+        let next = (local.next.state.internal_id as usize, local.next.limits);
 
         match local.drain.next() {
             Some(update) => {
@@ -148,14 +148,14 @@ impl PastLenLogs {
                 warn!("todo");
             }
             UpdateState {
-                id: id as u64 + self.cleared_ids,
+                internal_id: id as u64 + self.cleared_ids,
                 updates_this_frame: NonZeroU32::MIN,
                 log_exits: self.log_exits,
             }
         };
         match state {
             Some(mut state) => {
-                if state.id < self.cleared_ids {
+                if state.internal_id < self.cleared_ids {
                     (new_state(), Some(StateChange::Cleared))
                 } else if state.log_exits < self.log_exits {
                     state.log_exits = self.log_exits;
