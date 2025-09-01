@@ -41,7 +41,7 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
     // set up world
     let mut world = World::new();
     world.init_resource::<TestLog>();
-    world.insert_resource(RevMeta::new(None, 0, false));
+    world.insert_resource(RevMeta::new(None, false));
 
     // set up schedules
     let mut schedule = Schedule::new(FixedUpdate);
@@ -203,7 +203,7 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
     // run tests backward log
     let mut meta = world.resource_mut::<RevMeta>();
     let end_frame = meta.now();
-    assert!(meta.queue_log(0).is_ok(), "{meta:#?}");
+    meta.queue(RevDirection::BackwardLog);
     for (step, expected) in expected.iter().enumerate().rev() {
         test_step(
             &mut world,
@@ -218,7 +218,7 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
 
     // run tests forward log
     let mut meta = world.resource_mut::<RevMeta>();
-    assert!(meta.queue_log(end_frame).is_ok(), "{meta:#?}");
+    meta.queue(RevDirection::FORWARD_LOG);
     for (step, expected) in expected.iter().enumerate() {
         test_step(
             &mut world,

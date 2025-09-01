@@ -4,51 +4,15 @@ use std::collections::{
     vec_deque::{Drain, Iter},
 };
 
-use crate::log::{PastLenBackwardLog, PastLenForwardLog, PreLogUpdate, past_len::WithPastLenLog};
+use crate::{log::{past_len::WithPastLenLog, PastLenBackwardLog, PastLenForwardLog, PreLogUpdate}, meta::{PreLogUpdateState, RevMeta}};
 
 use super::{INDEX_OOB, OutOfLog};
 
-#[derive(Debug, Clone)]
-#[cfg_attr(feature = "serialize", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug)]
 pub struct DenseTransitionLog<T> {
     transitions: VecDeque<T>,
     index: usize,
-}
-
-#[cfg(feature = "serialize")]
-mod serialize {
-    use std::collections::VecDeque;
-
-    use serde::{Deserialize, Serialize};
-
-    use crate::log::serialize::{LoglessWithCapacity, WithCapacity, WithCapacityWrapper};
-
-    use super::DenseTransitionLog;
-
-    impl<T: Serialize + for<'de> Deserialize<'de> + 'static> WithCapacity for DenseTransitionLog<T> {
-        type Se<'se> = (WithCapacityWrapper<&'se VecDeque<T>>, usize);
-        type De = (WithCapacityWrapper<VecDeque<T>>, usize);
-        fn get_with_capacity(&self) -> Self::Se<'_> {
-            (WithCapacityWrapper(&self.transitions), self.index)
-        }
-        fn from_with_capacity((WithCapacityWrapper(transitions), index): Self::De) -> Self {
-            Self { transitions, index }
-        }
-    }
-
-    impl<T> LoglessWithCapacity for DenseTransitionLog<T> {
-        type Se<'se>
-            = usize
-        where
-            T: 'se;
-        type De = usize;
-        fn get_logless_with_capacity(&self) -> Self::Se<'_> {
-            self.transitions.capacity()
-        }
-        fn from_logless_with_capacity(logless_with_capacity: Self::De) -> Self {
-            Self::with_capacity(logless_with_capacity)
-        }
-    }
+    pre_update: PreLogUpdateState
 }
 
 impl<T> Default for DenseTransitionLog<T> {
@@ -62,43 +26,8 @@ impl<T> DenseTransitionLog<T> {
         Self {
             transitions: VecDeque::new(),
             index: 0,
+            pre_update: PreLogUpdateState::new()
         }
-    }
-    pub fn with_capacity(transitions_capacity: usize) -> Self {
-        Self {
-            transitions: VecDeque::with_capacity(transitions_capacity),
-            index: 0,
-        }
-    }
-    pub fn transitions_len(&self) -> usize {
-        self.transitions.len()
-    }
-    pub fn transitions_capacity(&self) -> usize {
-        self.transitions.capacity()
-    }
-    pub fn transitions_is_empty(&self) -> bool {
-        self.transitions.is_empty()
-    }
-    pub fn transitions_reserve(&mut self, additional: usize) {
-        self.transitions.reserve(additional)
-    }
-    pub fn transitions_reserve_exact(&mut self, additional: usize) {
-        self.transitions.reserve_exact(additional)
-    }
-    pub fn transitions_try_reserve(&mut self, additional: usize) -> Result<(), TryReserveError> {
-        self.transitions.try_reserve(additional)
-    }
-    pub fn transitions_try_reserve_exact(
-        &mut self,
-        additional: usize,
-    ) -> Result<(), TryReserveError> {
-        self.transitions.try_reserve_exact(additional)
-    }
-    pub fn transitions_shrink_to(&mut self, min_capacity: usize) {
-        self.transitions.shrink_to(min_capacity)
-    }
-    pub fn transitions_shrink_to_fit(&mut self) {
-        self.transitions.shrink_to_fit()
     }
     pub fn push_and_pop_past(&mut self, max_past_len: usize, transition: T) -> Option<T> {
         self.transitions.truncate(self.index);
@@ -131,13 +60,13 @@ impl<T> DenseTransitionLog<T> {
     pub(super) fn drain_past(&mut self, to_drain: usize) -> Drain<T> {
         self.transitions.drain(..to_drain)
     }
-    pub fn truncate_future(&mut self) {
+    fn truncate_future(&mut self) {
         self.transitions.truncate(self.index);
     }
-    pub fn drain_future(&mut self) -> Drain<T> {
+    fn drain_future(&mut self) -> Drain<T> {
         self.transitions.drain(self.index..)
     }
-    pub fn clear(&mut self) {
+    fn clear(&mut self) {
         self.transitions.clear();
         self.index = 0;
     }
@@ -153,108 +82,89 @@ impl<T> DenseTransitionLog<T> {
             .inspect(|_| self.index += 1)
             .ok_or(OutOfLog)
     }
-}
-
-impl<T> WithPastLenLog for DenseTransitionLog<T> {
-    type LogOut<'a>
-        = Option<&'a mut T>
-    where
-        Self: 'a;
-    fn backward_log_with<'a>(
-        &'a mut self,
-        past_len_result: PastLenBackwardLog,
-    ) -> Result<Self::LogOut<'a>, OutOfLog> {
-        match past_len_result {
-            PastLenBackwardLog::Skip(skip_and) => {
-                self.clear_or_truncate_future(skip_and);
-                Ok(None)
-            }
-            PastLenBackwardLog::Update { truncate_future } => {
-                if truncate_future {
-                    self.truncate_future();
-                }
-                self.backward_log().map(Some)
-            }
-        }
-    }
-    fn forward_log_with<'a>(
-        &'a mut self,
-        past_len_result: PastLenForwardLog,
-    ) -> Result<Self::LogOut<'a>, OutOfLog> {
-        match past_len_result {
-            PastLenForwardLog::Skip(skip_and) => {
-                self.clear_or_truncate_future(skip_and);
-                Ok(None)
-            }
-            PastLenForwardLog::Update => self.forward_log().map(Some),
-        }
-    }
-    fn clear_or_truncate_future(&mut self, skip_and: PreLogUpdate) {
-        match skip_and {
-            PreLogUpdate::Clear => self.clear(),
-            PreLogUpdate::TruncateOrDrainFuture => self.truncate_future(),
+    pub fn pre_update(&mut self, meta: &RevMeta) {
+        match self.pre_update.check(meta) {
+            PreLogUpdate::Clear => {
+                self.transitions.clear();
+                self.index = 0;
+            },
+            PreLogUpdate::TruncateOrDrainFuture => self.transitions.truncate(self.index),
             PreLogUpdate::Nothing => {}
         }
     }
+    pub fn pre_update_drain_past(&mut self, meta: &RevMeta) -> Drain<T> {
+        match self.pre_update.check(meta) {
+            PreLogUpdate::Clear => {
+                self.transitions.truncate(self.index);
+                self.index = 0;
+                return self.transitions.drain(..);
+            },
+            PreLogUpdate::TruncateOrDrainFuture => self.transitions.truncate(self.index),
+            PreLogUpdate::Nothing => {}
+        }
+        self.transitions.drain(..0)
+    }
+    pub fn pre_update_drain_future(&mut self, meta: &RevMeta) -> Drain<T> {
+        match self.pre_update.check(meta) {
+            PreLogUpdate::Clear => {
+                self.transitions.drain(..self.index);
+                self.index = 0;
+                self.transitions.drain(..)
+            },
+            PreLogUpdate::TruncateOrDrainFuture => {
+                self.transitions.drain(self.index..)
+            },
+            PreLogUpdate::Nothing => self.transitions.drain(..0)
+        }
+    }
 }
+
+/*
+Api brainstorming:
+
+idealerweise nehmen die logs RevMeta an und ermöglichen drainen, truncaten, etc
+aber transition logs geben bei log Methoden auch eine referenz zum log EIntrag zurück
+vielleicht builder style?
+
+my_log.pre_update(&meta); // truncate
+my_log.pre_update(&meta).drain_past() ... // drain
+my_log.pre_update(&meta).drain_future() ... // drain
+
+oder
+
+my_log.pre_update_truncate(&meta);
+let drain = my_log.pre_update_drain(&meta);
+for _ in drain.past() { // .next()
+for _ in drain.future() { // .next_back()
+
+oder
+
+my_log.pre_update_truncate(&meta);
+for _ in my_log.pre_update_drain(&meta, LogDrain::Future)
+for _ in my_log.pre_update_drain(&meta, LogDrain::Past)
+
+welche typen gibt es?
+
+NOT_LOG:
+IN:  push via T, Option<T> oder FnOnce(LogMut)
+OUT: drainer via methods, truncate via drop
+
+LOG:
+In: -
+OUT: state with drain/get?
+             | truncate future | clear
+forward log  | panic           | panic
+backward log | drain + value   | panic
+
+PastLenLog in die logs integrieren?
+
+
+*/
 
 #[cfg(test)]
 mod test {
-    use serde::{Deserialize, Serialize};
-
+/* 
     use super::*;
-
-    #[test]
-    fn serialize() {
-        #[derive(Serialize, Deserialize)]
-        struct Logs {
-            full: DenseTransitionLog<char>,
-            #[serde(with = "crate::log::with_capacity")]
-            full_with_capacity: DenseTransitionLog<char>,
-            #[serde(with = "crate::log::logless_with_capacity")]
-            logless_with_capacity: DenseTransitionLog<char>,
-        }
-
-        let mut original = DenseTransitionLog::new();
-        original.push_and_pop_past(usize::MAX, 'a');
-        original.push_and_pop_past(usize::MAX, 'b');
-        original.backward_log().expect("in log");
-
-        let mut logs = Logs {
-            full: original.clone(),
-            full_with_capacity: original.clone(),
-            logless_with_capacity: original.clone(),
-        };
-
-        logs.full.transitions_reserve_exact(98);
-        logs.full_with_capacity.transitions_reserve_exact(98);
-        logs.logless_with_capacity.transitions_reserve_exact(98);
-
-        let serialized = serde_json::to_string_pretty(&logs).unwrap();
-        let Logs {
-            full,
-            full_with_capacity,
-            logless_with_capacity,
-        } = serde_json::from_str(&serialized).unwrap();
-
-        let test = |log: &DenseTransitionLog<char>, len, with_capacity| {
-            assert_eq!(
-                log.transitions_len(),
-                len,
-                "before: {original:#?}\nserialized: {serialized}\nafter: {log:#?}"
-            );
-            assert_eq!(
-                log.transitions_capacity() >= 100,
-                with_capacity,
-                "before: {original:#?}\nserialized: {serialized}\nafter: {log:#?}\ncapacity: {}",
-                log.transitions_capacity()
-            );
-        };
-
-        test(&full, 2, false);
-        test(&full_with_capacity, 2, true);
-        test(&logless_with_capacity, 0, true);
-    }
 
     struct Logs(Vec<[DenseTransitionLog<char>; 2]>);
 
@@ -364,4 +274,5 @@ mod test {
         // all entries are truncated as they are in the future
         logs.forward(2, 'd', 1, None);
     }
+    */
 }

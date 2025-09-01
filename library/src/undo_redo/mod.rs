@@ -377,7 +377,7 @@ impl UndoRedoLog {
             .clone();
         let now = meta.now();
         match meta.get_running_direction() {
-            Some(RevDirection::NOT_LOG) => world
+            Some(RevDirection::NOT_LOG) => Ok(())/*world
                 .try_resource_scope::<UndoRedoBuffer, _>(|world, mut buffer| {
                     if !buffer.0.is_empty() {
                         let past_len_logs =
@@ -407,7 +407,7 @@ impl UndoRedoLog {
                         now: meta.now(),
                         system_name: system_name.clone(),
                     })
-                }),
+                })*/,
             Some(RevDirection::FORWARD_LOG) => {
                 let past_len_logs = world.get_resource::<PastLenLogs>().ok_or_else(|| {
                     UndoRedoLogError::PastLenLogsMissing {

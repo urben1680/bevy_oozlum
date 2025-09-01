@@ -103,13 +103,13 @@ impl Plugin for RevPlugin {
             | Self::AddMetaAndRunner(meta, ..)
             | Self::AddMetaAndRunnerInSet(meta, ..) => {
                 if let Some(existing) = app.world().get_resource::<RevMeta>() {
-                    if existing != meta {
+                    if /*existing != meta*/ false {
                         bevy::log::warn!(
                             "`RevSystemsPlugin::build` overwrote {existing:?} with {meta:?}"
                         );
                     }
                 }
-                app.insert_resource(meta.clone());
+                //app.insert_resource(meta.clone()); todo
             }
             _ => {}
         };

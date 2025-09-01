@@ -10,15 +10,15 @@ use bevy::reflect::Reflect;
 #[cfg(feature = "serialize")]
 mod serialize;
 
-mod dense_state;
-mod dense_states;
+//mod dense_state;
+//mod dense_states;
 mod dense_transition;
 mod dense_transitions;
 
 mod past_len;
 
-mod sparse_state;
-mod sparse_states;
+//mod sparse_state;
+//mod sparse_states;
 mod sparse_transition;
 mod sparse_transitions;
 
@@ -29,8 +29,8 @@ pub use serialize::logless_with_capacity;
 #[cfg(feature = "serialize")]
 pub use serialize::with_capacity;
 
-pub use dense_state::DenseStateLog;
-pub use dense_states::DenseStatesLog;
+//pub use dense_state::DenseStateLog;
+//pub use dense_states::DenseStatesLog;
 pub use dense_transition::DenseTransitionLog;
 pub use dense_transitions::DenseTransitionsLog;
 
@@ -42,8 +42,8 @@ pub use past_len::PreLogUpdate;
 pub use past_len::direction_changes::PastLenLogs;
 pub(crate) use past_len::direction_changes::PastLenLogsError;
 
-pub use sparse_state::SparseStateLog;
-pub use sparse_states::SparseStatesLog;
+//pub use sparse_state::SparseStateLog;
+//pub use sparse_states::SparseStatesLog;
 pub use sparse_transition::SparseTransitionLog;
 pub use sparse_transitions::SparseTransitionsLog;
 
