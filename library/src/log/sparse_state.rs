@@ -8,7 +8,7 @@ use std::{
 
 use bevy::reflect::Reflect;
 
-use crate::log::{PastLenBackwardLog, PastLenForwardLog, PastLenSkipAnd, past_len::WithPastLenLog};
+use crate::log::{PastLenBackwardLog, PastLenForwardLog, PreLogUpdate, past_len::WithPastLenLog};
 
 use super::{INDEX_OOB, OutOfLog, SparseDrain, SparseValue};
 
@@ -359,11 +359,11 @@ impl<T> WithPastLenLog for SparseStateLog<T> {
             PastLenForwardLog::Update => self.forward_log(),
         }
     }
-    fn clear_or_truncate_future(&mut self, skip_and: PastLenSkipAnd) {
+    fn clear_or_truncate_future(&mut self, skip_and: PreLogUpdate) {
         match skip_and {
-            PastLenSkipAnd::Clear => self.clear(),
-            PastLenSkipAnd::TruncateFuture => self.truncate_future(),
-            PastLenSkipAnd::Nothing => {}
+            PreLogUpdate::Clear => self.clear(),
+            PreLogUpdate::TruncateOrDrainFuture => self.truncate_future(),
+            PreLogUpdate::Nothing => {}
         }
     }
 }

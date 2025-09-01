@@ -9,7 +9,7 @@ use bevy::{
     reflect::{std_traits::ReflectDefault, Reflect}, utils::Parallel,
 };
 
-use crate::{prelude::RevUpdate, undo_redo::{BundleIdOfOpCache, RevDespawnCleaner, UndoRedoBuffer}};
+use crate::{log::PreLogUpdate, prelude::RevUpdate, undo_redo::{BundleIdOfOpCache, RevDespawnCleaner, UndoRedoBuffer}};
 
 /*
 task:
@@ -37,7 +37,7 @@ struct RevMeta {
     now: u64,
     future_end: u64,
     max_world_states: Option<NonZeroU64>,
-    direction: Option<RunningOrRan>,
+    direction: RunningOrRan,
     queue: Option<Queue>,
     log_exits: u64,
     past_len_ids: AtomicU32,
@@ -92,6 +92,9 @@ enum Direction {
 enum RunningOrRan {
     Running(Direction),
     Ran(Direction),
+    Pause {
+        after_log: bool
+    }
 }
 
 #[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq)]
@@ -102,7 +105,7 @@ enum RunningOrRan {
 enum Queue {
     Run(Direction),
     Pause,
-    ClearThenRun(Direction),
+    ClearThenRun,
     ClearThenPause
 }
 
@@ -162,14 +165,49 @@ impl NonLogNow {
     }
 }
 
+// todo: make PreLogUpdate a systemparam with this as the state and a resource to compare from
+// so RevMeta may be used mutably
+// todo: does PastLenLog still need to offer this?
+// todo: if not with PastLenLog, how do other logs get this outside systems?
+// integrate in every log, but then needs meta in any case
+// integrated does not play well when you need to drain, especially if you need a past_len offset
+// does not play well for local rollback
+// idea: logs have an extra method taking RevMeta to do the pre-update ops
+// variants: truncate, drain future, drain past
+#[derive(Debug)]
+pub struct PreLogUpdateState {
+    past_len_ids_cleared: u64,
+    log_exits: u64,
+}
+
+impl PreLogUpdateState {
+    fn check(&mut self, meta: &RevMeta) -> PreLogUpdate {
+        if self.past_len_ids_cleared < meta.past_len_ids_cleared {
+            self.past_len_ids_cleared = meta.past_len_ids_cleared;
+            self.log_exits = meta.log_exits;
+            PreLogUpdate::Clear
+        } else if self.log_exits < meta.log_exits {
+            self.log_exits = meta.log_exits;
+            PreLogUpdate::TruncateOrDrainFuture
+        } else {
+            PreLogUpdate::Nothing
+        }
+    }
+}
+
 impl RevMeta {
     pub fn new(max_world_states: Option<NonZeroU64>, paused: bool) -> Self {
+        let direction = if paused {
+            RunningOrRan::Pause { after_log: false }
+        } else {
+            RunningOrRan::Ran(Direction::NOT_LOG)
+        };
         Self {
             past_end: 0,
             now: 0,
             future_end: 0,
             max_world_states,
-            direction: (!paused).then_some(RunningOrRan::Ran(Direction::NOT_LOG)),
+            direction,
             queue: None,
             log_exits: 0,
             past_len_ids: AtomicU32::new(0),
@@ -183,18 +221,18 @@ impl RevMeta {
     }
     pub fn get_running_direction(&self) -> Option<Direction> {
         match self.direction {
-            Some(RunningOrRan::Running(direction)) => Some(direction),
+            RunningOrRan::Running(direction) => Some(direction),
             _ => None
         }
     }
     pub fn get_ran_direction(&self) -> Option<Direction> {
         match self.direction {
-            Some(RunningOrRan::Ran(direction)) => Some(direction),
+            RunningOrRan::Ran(direction) => Some(direction),
             _ => None
         }
     }
     pub fn paused(&self) -> bool {
-        self.direction.is_none()
+        matches!(self.direction, RunningOrRan::Pause { .. })
     }
     pub fn future_end(&self) -> u64 {
         self.future_end
@@ -203,7 +241,7 @@ impl RevMeta {
         self.now
     }
     pub fn non_log_now(&self) -> Option<NonLogNow> {
-        matches!(self.direction, Some(RunningOrRan::Running(Direction::NOT_LOG)))
+        matches!(self.direction, RunningOrRan::Running(Direction::NOT_LOG))
             .then_some(NonLogNow(self.now))
     }
     pub fn past_end(&self) -> u64 {
@@ -227,8 +265,8 @@ impl RevMeta {
     pub fn future_contains(&self, frame: u64) -> bool {
         self.future_end.wrapping_sub(frame) < (self.future_end - self.now)
     }
-    pub fn clear(&mut self) {
-        assert!(!matches!(self.direction, Some(RunningOrRan::Running(_))));
+    fn clear(&mut self) {
+        assert!(!matches!(self.direction, RunningOrRan::Running(_)));
         self.past_end = 0;
         self.now = 0;
         self.future_end = 0;
@@ -244,234 +282,132 @@ impl RevMeta {
     pub fn queue_pause(&mut self) {
         self.queue = Some(Queue::Pause);
     }
-    pub fn queue_clear_then(&mut self, direction: Direction) {
-        self.queue = Some(Queue::ClearThenRun(direction));
+    pub fn queue_clear_then_run(&mut self) {
+        self.queue = Some(Queue::ClearThenRun);
     }
     pub fn queue_clear_then_pause(&mut self) {
         self.queue = Some(Queue::ClearThenPause);
     }
-    pub fn try_run_rev_update(world: &mut World) -> Result<(), TryRunRevUpdateError> {
-        fn info_missing_meta_or_schedule<const MISSING_META: bool>(world: &mut World) {
-            /// Use a Resource instead of Local so this system can be added multiple times and keeps track globally
-            #[derive(Resource, Clone, Copy)]
-            struct Existed<const MISSING_META: bool>(bool);
-
-            let existed = world.remove_resource::<Existed::<MISSING_META>>();
-            world.insert_resource(Existed::<MISSING_META>(false));
-            match existed {
-                None if MISSING_META => info!(
-                    "resource RevMeta does not exist yet, schedule RevUpdate will not be run until it is inserted"
-                ),
-                None => info!(
-                    "schedule RevUpdate does not exist yet, it will not be run until it is inserted"
-                ),
-                Some(Existed(true)) if MISSING_META => info!(
-                    "resource RevMeta was removed, reversible schedule RevUpdate will not be run until it is inserted again"
-                ),
-                Some(Existed(true)) => info!(
-                    "schedule RevUpdate was removed, it will not be run until it is inserted again"
-                ),
-                Some(Existed(false)) => {}
-            };
-        }
-
+    pub fn try_run_rev_update(world: &mut World) -> Result<(), BevyError> {
+        Self::try_run_rev_update_typed_err(world).map_err(Into::into)
+    }
+    fn try_run_rev_update_typed_err(world: &mut World) -> Result<(), TryRunRevUpdateError> {
         world.try_schedule_scope(RevUpdate, |world, schedule| {
-            let Some(mut meta) = world.remove_resource::<Self>() else {
-                info_missing_meta_or_schedule::<true>(world);
-                // RevMeta missing is not an error but a valid way to make RevUpdate not run
+            let meta = world.remove_resource::<Self>();
+            meta_or_schedule_presence::<false>(world, true);
+            meta_or_schedule_presence::<true>(world, meta.is_some());
+            let Some(meta) = meta else {
                 return Ok(());
             };
 
+            // init other resources
             world.init_resource::<RevDespawnCleaner>();
             world.init_resource::<BundleIdOfOpCache>();
+            let buffer = world.get_resource_or_init::<UndoRedoBuffer>();
+            if !buffer.is_empty() {
+                return Err(TryRunRevUpdateError::UndoRedoBufferNotEmptyBeforeUpdate {
+                    meta,
+                    buffer: world.remove_resource::<UndoRedoBuffer>().unwrap(),
+                })?;
+            }
 
-            let update_result = meta.update(|meta, direction| {
+            // update RevMeta
+            let mut pre_log_update = PreLogUpdate::Nothing;
+            let update_result = meta.update(|meta, pre_log_update1, _| {
+                pre_log_update = pre_log_update1;
                 world.insert_resource(meta);
                 schedule.run(world);
                 world.remove_resource::<Self>()
             });
-            
-            fn rev_despawn_cleaner_result(
-                world: &mut World, meta: RevMeta, past_len_logs_missed: Vec<PastLenLogMissed>
-            ) -> Result<RevMeta, TryRunRevUpdateError> {
-                let ok_if_present = world.try_resource_scope::<RevDespawnCleaner, _>(|world, mut rev_despawn_cleaner| {
-                    rev_despawn_cleaner.update(&meta, world).is_ok()
-                });
-                match ok_if_present {
-                    Some(true) if past_len_logs_missed.is_empty() => Ok(meta),
-                    Some(true) => Err(TryRunRevUpdateError::AfterRunErrors { 
-                        meta, 
-                        past_len_logs_missed, 
-                        rev_despawn_cleaner_out_of_log: false, 
-                        rev_despawn_cleaner_removed: false 
-                    }),
-                    Some(false) => Err(TryRunRevUpdateError::AfterRunErrors { 
-                        meta,
-                        past_len_logs_missed,
-                        rev_despawn_cleaner_out_of_log: true,
-                        rev_despawn_cleaner_removed: false 
-                    }),
-                    None => Err(TryRunRevUpdateError::AfterRunErrors { 
-                        meta,
-                        past_len_logs_missed,
-                        rev_despawn_cleaner_out_of_log: false,
-                        rev_despawn_cleaner_removed: true 
-                    })
-                }
-            }
 
+            // finalize reversibly despawned entities
             match update_result {
-                Ok(meta) => {
-                    let Some(mut rev_despawn_cleaner) = world.get_resource_mut::<RevDespawnCleaner>() {
-
-                    }
-
-                    let mut rev_despawn_cleaner_out_of_log = false;
-                    let mut rev_despawn_cleaner_removed = true;
-                    if let Some(mut rev_despawn_cleaner) = world.get_resource_mut::<RevDespawnCleaner>() {
-                        rev_despawn_cleaner_out_of_log = rev_despawn_cleaner.update(meta, world).is_err();
-                    }
-
-                    todo!()
-                },
+                Ok(meta) => meta.rev_despawn_cleaner_update_and_meta_insert(world, pre_log_update, Vec::new()),
                 Err(RevMetaUpdateErr::AlreadyRunning { meta, direction }) => Err(
                     TryRunRevUpdateError::AlreadyRunning { meta, direction }
                 ),
                 Err(RevMetaUpdateErr::RevMetaNotReturned) => Err(
-                    TryRunRevUpdateError::AfterRunErrors { 
-                        meta_if_not_removed: None, 
-                        past_len_logs_missed: Vec::new(), 
-                        rev_despawn_cleaner_out_of_log: todo!(), 
-                        rev_despawn_cleaner_removed: todo!()
-                    }
-                )
+                    TryRunRevUpdateError::RevMetaRemovedAfterRun
+                ),
+                Err(RevMetaUpdateErr::PastLenLogsMissed { meta, past_len_logs_missed }) => {
+                    meta.rev_despawn_cleaner_update_and_meta_insert(world, pre_log_update, past_len_logs_missed)
+                }
             }
         }).unwrap_or_else(|_| {
-            info_missing_meta_or_schedule::<false>(world);
-            // RevUpdate missing is not an error but a valid way to make it not run
-            return Ok(());
+            let meta_exists = world.contains_resource::<RevMeta>();
+            meta_or_schedule_presence::<false>(world, false);
+            meta_or_schedule_presence::<true>(world, meta_exists);
+            Ok(())
         })
-
-
-
-/* 
-        // replace method with manual check as meta cannot be cloned
-        world.try_resource_scope(|world: &mut World, mut meta: Mut<Self>| {
-            world.init_resource::<RevDespawnCleaner>();
-            world.init_resource::<BundleIdOfOpCache>();
-
-            let buffer = world.get_resource_or_init::<UndoRedoBuffer>();
-            if !buffer.is_empty() {
-                Err(TryRunRevUpdateError::UndoRedoBufferNotEmptyBeforeUpdate {
-                    meta: meta.clone(),
-                    buffer_types: format!("{buffer:?}"),
-                })?;
-            }
-
-            if meta.get_running_direction().is_some() {
-                Err(TryRunRevUpdateError::UnexpectedInitialRunning(meta.clone()))?;
-            }
-
-            // revert to previous state in case the schedule could not be run
-            let previous = meta.clone();
-
-            // update meta here
-            let result = meta.update(|meta| {
-                // run schedule
-                let schedule_result = world.try_schedule_scope(RevUpdate, |world, schedule| {
-                    world.insert_resource(meta.clone());
-                    schedule.run(world);
-                });
-
-                match schedule_result {
-                    // despawn entities that are marked as reversibly despawned for long enough
-                    // despawn buffer entities for operations that are out of log now
-                    Ok(()) => world
-                        .try_resource_scope(|world: &mut World, mut res: Mut<RevDespawnCleaner>| {
-                            res
-                                .update(meta, world)
-                                .map(|()| meta.now())
-                                .map_err(|OutOfLog| TryRunRevUpdateError::SpawnDespawnOutOfLog(meta.clone()))
-                        })
-                        .unwrap_or_else(|| {
-                            Err(TryRunRevUpdateError::SpawnDespawnRemovedInSchedule(meta.clone()))
-                        }),
-                    Err(_) => Err(TryRunRevUpdateError::RevUpdateMissing(meta.clone())),
-                }
-            });
-
-            match result.transpose() {
-                Ok(None) => Ok(()),
-                // remove meta as a guard against invalid insertions and to make resource_scope not panic
-                Ok(Some(frame)) => match world.remove_resource::<Self>() {
-                    None => {
-                        Err(TryRunRevUpdateError::RevMetaRemovedInSchedule { frame })?
-                    }
-                    Some(updated) => {
-                        // updates to these fields are valid changes to meta, keep them
-                        meta.max_world_states = updated.max_world_states;
-                        meta.queue = updated.queue;
-                        Ok(())
-                    }
-                },
-                Err(err) => {
-                    world.remove_resource::<Self>();
-                    *meta = previous;
-                    Err(err)?
-                }
-            }
-        }).unwrap_or_else(|| {
-            /// Use a Resource instead of Local so this system can be added multiple times and keeps track globally
-            #[derive(Resource, Clone, Copy)]
-            struct Existed(bool);
-
-            let existed = world.remove_resource::<Existed>();
-            world.insert_resource(Existed(false));
-            match existed {
-                None => info!(
-                    "RevMeta does not exist yet, reversible schedule RevUpdate will not be called until it is inserted"
-                ),
-                Some(Existed(true)) => info!(
-                    "RevMeta was removed, reversible schedule RevUpdate will not be called until it is inserted again"
-                ),
-                Some(Existed(false)) => {}
-            };
-
-            // `RevMeta` missing is not an error but a valid way to make `RevUpdate` not run
-            return Ok(());
-        })
-        */
     }
 
-    pub fn update(mut self, c: impl FnOnce(Self, Direction) -> Option<Self>)
-     -> Result<Self, RevMetaUpdateErr> {
-        let mut was_log = false;
-
-        // get direction that ran previously
-        let ran = match self.direction {
-            Some(RunningOrRan::Ran(direction)) => {
-                was_log = direction.is_log();
-                Some(direction)
+    fn rev_despawn_cleaner_update_and_meta_insert(
+        self, 
+        world: &mut World,
+        pre_log_update: PreLogUpdate,
+        past_len_logs_missed: Vec<PastLenLogMissed>
+    ) -> Result<(), TryRunRevUpdateError> {
+        let ok_if_present = world.try_resource_scope::<RevDespawnCleaner, _>(|world, mut rev_despawn_cleaner| {
+            rev_despawn_cleaner.update(&self, world, pre_log_update).is_ok()
+        });
+        match ok_if_present {
+            Some(true) if past_len_logs_missed.is_empty() => {
+                world.insert_resource(self);
+                Ok(())
             },
-            Some(RunningOrRan::Running(direction)) => return Err(
+            Some(true) => Err(TryRunRevUpdateError::AfterRunErrors { 
+                meta: self, 
+                past_len_logs_missed, 
+                rev_despawn_cleaner_out_of_log: false, 
+                rev_despawn_cleaner_removed: false 
+            }),
+            Some(false) => Err(TryRunRevUpdateError::AfterRunErrors { 
+                meta: self,
+                past_len_logs_missed,
+                rev_despawn_cleaner_out_of_log: true,
+                rev_despawn_cleaner_removed: false 
+            }),
+            None => Err(TryRunRevUpdateError::AfterRunErrors { 
+                meta: self,
+                past_len_logs_missed,
+                rev_despawn_cleaner_out_of_log: false,
+                rev_despawn_cleaner_removed: true 
+            })
+        }
+    }
+
+    pub fn update(mut self, c: impl FnOnce(Self, PreLogUpdate, Direction) -> Option<Self>)
+     -> Result<Self, RevMetaUpdateErr> {
+        // get direction that ran previously
+        let (ran, was_log) = match self.direction {
+            RunningOrRan::Ran(direction) => {
+                (Some(direction), direction.is_log())
+            },
+            RunningOrRan::Pause { after_log } => {
+                (None, after_log)
+            },
+            RunningOrRan::Running(direction) => return Err(
                 RevMetaUpdateErr::AlreadyRunning { meta: self, direction }
-            ),
-            None => None
+            )
         };
 
         // get queued direction
-        let queue = match self.queue.take() {
-            Some(Queue::Run(direction)) => Some(direction),
-            Some(Queue::Pause) => None,
-            Some(Queue::ClearThenRun(direction)) => {
+        let (queue, pre_log_update) = match self.queue.take() {
+            Some(Queue::Run(Direction::NOT_LOG)) if was_log => {
+                self.log_exits = self.log_exits.checked_add(1).unwrap();
+                (Some(Direction::NOT_LOG), PreLogUpdate::TruncateOrDrainFuture)
+            }
+            Some(Queue::Run(direction)) => (Some(direction), PreLogUpdate::Nothing),
+            Some(Queue::Pause) => (None, PreLogUpdate::Nothing),
+            Some(Queue::ClearThenRun) => {
                 self.clear();
-                Some(direction)
+                (Some(Direction::NOT_LOG), PreLogUpdate::Clear)
             },
             Some(Queue::ClearThenPause) => {
                 self.clear();
-                None
+                (None, PreLogUpdate::Clear)
             },
-            None => None
+            None => (None, PreLogUpdate::Clear)
         };
 
         // take queue or fall back to previous direction, return None if no direction from both
@@ -484,9 +420,6 @@ impl RevMeta {
             Direction::NOT_LOG => {
                 self.now += 1;
                 self.future_end = self.now;
-                if was_log {
-                    self.log_exits = self.log_exits.checked_add(1).unwrap();
-                }
                 if let Some(max_world_states) = self.max_world_states.map(NonZeroU64::get) {
                     // include equality here as the present state has to be added to the comparision
                     if self.past_len() >= max_world_states {
@@ -504,17 +437,17 @@ impl RevMeta {
                 Direction::BackwardLog
             },
             _ => {
-                self.direction = None;
+                self.direction = RunningOrRan::Pause { after_log: true };
                 return Ok(self);
             }
         };
 
         // set running direction, call closure, set ran direction
-        self.direction = Some(RunningOrRan::Running(direction));
-        let Some(mut meta) = c(self, direction) else {
+        self.direction = RunningOrRan::Running(direction);
+        let Some(mut meta) = c(self, pre_log_update, direction) else {
             return Err(RevMetaUpdateErr::RevMetaNotReturned);
         };
-        meta.direction = Some(RunningOrRan::Ran(direction));
+        meta.direction = RunningOrRan::Ran(direction);
 
         // size up self.past_len_limits if new PastLenLogs updated in the closure
         meta.past_len_limits.resize(
@@ -630,6 +563,34 @@ impl RevMeta {
     }
 }
 
+fn meta_or_schedule_presence<const META: bool>(world: &mut World, exists: bool) {
+    #[derive(Resource, Clone, Copy)]
+    struct Existed<const META: bool>(bool);
+
+    if exists {
+        world.insert_resource(Existed::<META>(true));
+        return;
+    }
+
+    let existed = world.remove_resource::<Existed::<META>>();
+    world.insert_resource(Existed::<META>(false));
+    match existed {
+        None if META => info!(
+            "resource RevMeta does not exist yet, schedule RevUpdate will not be run until it is inserted"
+        ),
+        None => info!(
+            "schedule RevUpdate does not exist yet, it will not be run until it is inserted"
+        ),
+        Some(Existed(true)) if META => info!(
+            "resource RevMeta was removed, reversible schedule RevUpdate will not be run until it is inserted again"
+        ),
+        Some(Existed(true)) => info!(
+            "schedule RevUpdate was removed, it will not be run until it is inserted again"
+        ),
+        Some(Existed(false)) => {}
+    };
+}
+
 pub enum RevMetaUpdateErr {
     AlreadyRunning {
         meta: RevMeta,
@@ -642,33 +603,24 @@ pub enum RevMetaUpdateErr {
     }
 }
 
+#[derive(Debug)]
 pub struct PastLenLogMissed {
     internal_id: u64,
     missed_forward: bool,
     last_update: MaybeLocation,
 }
-/*
-errors:
 
-- UndoRedoBufferNotEmptyBeforeUpdate
-- UnexpectedInitialRunning
-- RevUpdateMissing
-- multiple at once:
-  - PastLenLogsMissed
-  - SpawnDespawnOutOfLog or SpawnDespawnRemovedInSchedule
-  - RevMetaRemovedInSchedule
- */
-
-pub enum TryRunRevUpdateError {
+#[derive(Debug)]
+enum TryRunRevUpdateError {
     UndoRedoBufferNotEmptyBeforeUpdate {
         meta: RevMeta,
-        buffer_types: String,
+        buffer: UndoRedoBuffer,
     },
     AlreadyRunning {
         meta: RevMeta,
         direction: Direction,
     },
-    RevMetaRemovedAfterRun,
+    RevMetaRemovedAfterRun, // todo: MaybeLocation when that is tracked by bevy
     AfterRunErrors {
         meta: RevMeta,
         past_len_logs_missed: Vec<PastLenLogMissed>,
@@ -676,6 +628,51 @@ pub enum TryRunRevUpdateError {
         rev_despawn_cleaner_removed: bool
     }
 }
+
+impl Display for TryRunRevUpdateError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UndoRedoBufferNotEmptyBeforeUpdate { meta, buffer } => write!(
+                f,
+                "the resource containing buffered UndoRedo implementors was not empty, it contained the following types:\n{buffer:?}\n{meta:?}"
+            ),
+            Self::AlreadyRunning { meta, direction } => write!(
+                f,
+                "RevMeta is already running at {direction:?}\n{meta:?}"
+            ),
+            Self::RevMetaRemovedAfterRun => write!(
+                f,
+                "RevMeta was removed while running"
+            ),
+            Self::AfterRunErrors { meta, past_len_logs_missed, rev_despawn_cleaner_out_of_log, rev_despawn_cleaner_removed } => {
+                if !past_len_logs_missed.is_empty() {
+                    write!(
+                        f,
+                        "PastLenLog instances did not run when they were expected to:\n{past_len_logs_missed:?}\n"
+                    )?;
+                }
+                if *rev_despawn_cleaner_out_of_log {
+                    write!(
+                        f,
+                        "The resource that finally despawns entities that were reversibly marked for despawn unexpectedly went out-of-log\n"
+                    )?;
+                }
+                if *rev_despawn_cleaner_removed {
+                    write!(
+                        f,
+                        "The resource that finally despawns entities that were reversibly marked for despawn was removed\n"
+                    )?;
+                }
+                write!(
+                    f,
+                    "{meta:?}"
+                )
+            }
+        }
+    }
+}
+
+impl Error for TryRunRevUpdateError {}
 
 struct UpdatesIter<'a>(Vec<UpdatesLocal<'a>>);
 

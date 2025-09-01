@@ -203,7 +203,10 @@ struct BoxedUndoRedo {
 
 impl Debug for BoxedUndoRedo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} {}", self.name, self.caller)
+        match self.caller.into_option() {
+            Some(location) => write!(f, "{} from {location}", self.name),
+            None => write!(f, "{}", self.name)
+        }        
     }
 }
 

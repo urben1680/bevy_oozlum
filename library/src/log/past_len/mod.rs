@@ -438,19 +438,19 @@ pub struct PastLenNotLog {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum PastLenForwardLog {
     Update,
-    Skip(PastLenSkipAnd),
+    Skip(PreLogUpdate),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum PastLenBackwardLog {
     Update { truncate_future: bool },
-    Skip(PastLenSkipAnd),
+    Skip(PreLogUpdate),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum PastLenSkipAnd {
+pub enum PreLogUpdate {
     Nothing,
-    TruncateFuture,
+    TruncateOrDrainFuture,
     Clear,
 }
 
@@ -466,7 +466,7 @@ pub trait WithPastLenLog {
         &'a mut self,
         past_len_result: PastLenBackwardLog,
     ) -> Result<Self::LogOut<'a>, OutOfLog>;
-    fn clear_or_truncate_future(&mut self, skip_and: PastLenSkipAnd);
+    fn clear_or_truncate_future(&mut self, skip_and: PreLogUpdate);
 }
 
 impl PastLenBackwardLog {
@@ -481,7 +481,7 @@ impl PastLenForwardLog {
     }
 }
 
-impl PastLenSkipAnd {
+impl PreLogUpdate {
     pub fn apply(self, log: &mut impl WithPastLenLog) {
         log.clear_or_truncate_future(self);
     }
@@ -800,7 +800,7 @@ impl PastLenLog {
         if self.update_state.is_none() {
             // cannot go forward in log if log is empty, do not set state here, postpone a proper
             // initialization to RevDirection::NOT_LOG
-            return PastLenBackwardLog::Skip(PastLenSkipAnd::Nothing);
+            return PastLenBackwardLog::Skip(PreLogUpdate::Nothing);
         }
 
         // update UpdateState
@@ -812,7 +812,7 @@ impl PastLenLog {
             Some(StateChange::Cleared) => {
                 // all PastLenLog logs should be cleared, without a past this cannot go backward
                 self.clear();
-                return PastLenBackwardLog::Skip(PastLenSkipAnd::Clear);
+                return PastLenBackwardLog::Skip(PreLogUpdate::Clear);
             }
             Some(StateChange::TruncateFuture) => {
                 self.truncate_future();
@@ -826,9 +826,9 @@ impl PastLenLog {
             // did not yet reach the next past frame in the log, may be at end of reachable log
             Ordering::Less => {
                 return PastLenBackwardLog::Skip(if truncate_future {
-                    PastLenSkipAnd::TruncateFuture
+                    PreLogUpdate::TruncateOrDrainFuture
                 } else {
-                    PastLenSkipAnd::Nothing
+                    PreLogUpdate::Nothing
                 });
             }
             Ordering::Equal => {
@@ -875,9 +875,9 @@ impl PastLenLog {
             // user seems to have decided against panicking in that case
             Ordering::Greater => {
                 return PastLenBackwardLog::Skip(if truncate_future {
-                    PastLenSkipAnd::TruncateFuture
+                    PreLogUpdate::TruncateOrDrainFuture
                 } else {
-                    PastLenSkipAnd::Nothing
+                    PreLogUpdate::Nothing
                 });
             }
         };
@@ -905,7 +905,7 @@ impl PastLenLog {
         if self.update_state.is_none() {
             // cannot go forward in log if log is empty, do not set state here, postpone a proper
             // initialization to RevDirection::NOT_LOG
-            return PastLenForwardLog::Skip(PastLenSkipAnd::Nothing);
+            return PastLenForwardLog::Skip(PreLogUpdate::Nothing);
         }
 
         // update UpdateState
@@ -918,11 +918,11 @@ impl PastLenLog {
             return match change {
                 StateChange::Cleared => {
                     self.clear();
-                    PastLenForwardLog::Skip(PastLenSkipAnd::Clear)
+                    PastLenForwardLog::Skip(PreLogUpdate::Clear)
                 }
                 StateChange::TruncateFuture => {
                     self.truncate_future();
-                    PastLenForwardLog::Skip(PastLenSkipAnd::TruncateFuture)
+                    PastLenForwardLog::Skip(PreLogUpdate::TruncateOrDrainFuture)
                 }
             };
         }
@@ -932,7 +932,7 @@ impl PastLenLog {
         let forward_limit = match iter.next() {
             Some(IterItem { offset: 0, len }) => match self.last_update.cmp(&logs.now()) {
                 // did not yet reach the next future frame in the log
-                Ordering::Greater => return PastLenForwardLog::Skip(PastLenSkipAnd::Nothing),
+                Ordering::Greater => return PastLenForwardLog::Skip(PreLogUpdate::Nothing),
                 Ordering::Equal => {
                     self.past_len += 1;
                     if self.zeroes == 0 {
@@ -955,13 +955,13 @@ impl PastLenLog {
                 }
                 // missed an update, should have been reported by PastLenLogs, do nothing here as
                 // the user seems to have decided against panicking in that case
-                Ordering::Less => return PastLenForwardLog::Skip(PastLenSkipAnd::Nothing),
+                Ordering::Less => return PastLenForwardLog::Skip(PreLogUpdate::Nothing),
             },
             Some(IterItem { offset, len }) => {
                 let frame = self.last_update + offset;
                 match frame.cmp(&logs.now()) {
                     // did not yet reach the next future frame in the log
-                    Ordering::Greater => return PastLenForwardLog::Skip(PastLenSkipAnd::Nothing),
+                    Ordering::Greater => return PastLenForwardLog::Skip(PreLogUpdate::Nothing),
                     Ordering::Equal => {
                         self.last_update = frame;
                         self.index += len.get();
@@ -974,12 +974,12 @@ impl PastLenLog {
                     }
                     // missed an update, should have been reported by PastLenLogs, do nothing here
                     // as the user seems to have decided against panicking in that case
-                    Ordering::Less => return PastLenForwardLog::Skip(PastLenSkipAnd::Nothing),
+                    Ordering::Less => return PastLenForwardLog::Skip(PreLogUpdate::Nothing),
                 }
             }
             None if self.zeroes < self.zeroes_max => match self.last_update.cmp(&logs.now()) {
                 // did not yet reach the next future frame in the log
-                Ordering::Greater => return PastLenForwardLog::Skip(PastLenSkipAnd::Nothing),
+                Ordering::Greater => return PastLenForwardLog::Skip(PreLogUpdate::Nothing),
                 Ordering::Equal => {
                     self.past_len += 1;
                     self.zeroes += 1;
@@ -994,10 +994,10 @@ impl PastLenLog {
                 }
                 // missed an update, should have been reported by PastLenLogs, do nothing here as
                 // the user seems to have decided against panicking in that case
-                Ordering::Less => return PastLenForwardLog::Skip(PastLenSkipAnd::Nothing),
+                Ordering::Less => return PastLenForwardLog::Skip(PreLogUpdate::Nothing),
             },
             // reached end of log
-            None => return PastLenForwardLog::Skip(PastLenSkipAnd::Nothing),
+            None => return PastLenForwardLog::Skip(PreLogUpdate::Nothing),
         };
 
         logs.push(state, Limits::log_limits(logs.now(), forward_limit));

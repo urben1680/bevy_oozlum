@@ -10,7 +10,7 @@ use std::{
 
 use bevy::{reflect::Reflect, utils::default};
 
-use crate::log::{PastLenBackwardLog, PastLenForwardLog, PastLenSkipAnd, past_len::WithPastLenLog};
+use crate::log::{PastLenBackwardLog, PastLenForwardLog, PreLogUpdate, past_len::WithPastLenLog};
 
 use super::{
     EntryAmount, LogMut, OutOfLog, PushedTooMany, SparseDrain, SparseStateLog, USIZE_BYTES,
@@ -507,11 +507,11 @@ impl<T, U, const AMOUNT_BYTES: usize> WithPastLenLog for SparseStatesLog<T, U, A
             PastLenForwardLog::Update => self.forward_log(),
         }
     }
-    fn clear_or_truncate_future(&mut self, skip_and: PastLenSkipAnd) {
+    fn clear_or_truncate_future(&mut self, skip_and: PreLogUpdate) {
         match skip_and {
-            PastLenSkipAnd::Clear => self.clear(),
-            PastLenSkipAnd::TruncateFuture => self.truncate_future(),
-            PastLenSkipAnd::Nothing => {}
+            PreLogUpdate::Clear => self.clear(),
+            PreLogUpdate::TruncateOrDrainFuture => self.truncate_future(),
+            PreLogUpdate::Nothing => {}
         }
     }
 }

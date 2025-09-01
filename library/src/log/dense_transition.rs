@@ -4,7 +4,7 @@ use std::collections::{
     vec_deque::{Drain, Iter},
 };
 
-use crate::log::{PastLenBackwardLog, PastLenForwardLog, PastLenSkipAnd, past_len::WithPastLenLog};
+use crate::log::{PastLenBackwardLog, PastLenForwardLog, PreLogUpdate, past_len::WithPastLenLog};
 
 use super::{INDEX_OOB, OutOfLog};
 
@@ -189,11 +189,11 @@ impl<T> WithPastLenLog for DenseTransitionLog<T> {
             PastLenForwardLog::Update => self.forward_log().map(Some),
         }
     }
-    fn clear_or_truncate_future(&mut self, skip_and: PastLenSkipAnd) {
+    fn clear_or_truncate_future(&mut self, skip_and: PreLogUpdate) {
         match skip_and {
-            PastLenSkipAnd::Clear => self.clear(),
-            PastLenSkipAnd::TruncateFuture => self.truncate_future(),
-            PastLenSkipAnd::Nothing => {}
+            PreLogUpdate::Clear => self.clear(),
+            PreLogUpdate::TruncateOrDrainFuture => self.truncate_future(),
+            PreLogUpdate::Nothing => {}
         }
     }
 }

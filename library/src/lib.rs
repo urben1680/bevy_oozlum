@@ -10,6 +10,10 @@ TODO:
 - serde_with tests need to be revisited
 - log reflection impls like serde
 - OR undo changes, allow full serde/reflection again now that there are no issues with Arcs anymore
+- deprecate state logs and serde, encourage local logs entirely
+-- all logs can work with meta to check for clear/truncate/drain
+--- first rework PastLenLog to not have these checks anymore except for itself
+-- make transition logs keep an additional entry so the values are drained out of log
 
 Enhancements:
 - reduce todo!() and //todo and unwrap (in favor of expect)
