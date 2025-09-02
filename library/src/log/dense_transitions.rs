@@ -1,12 +1,12 @@
 use std::{
     collections::{
-        TryReserveError, VecDeque,
+        VecDeque,
         vec_deque::{Drain, IterMut},
     },
     fmt::Debug,
 };
 
-use crate::{log::{past_len::WithPastLenLog, PastLenBackwardLog, PastLenForwardLog, PreLogUpdate}, meta::PreLogUpdateState};
+use crate::{log::PreUpdateVariant, meta::{PreUpdateState, RevMeta}};
 
 use super::{
     DenseTransitionLog, EntryAmount, LogMut, OutOfLog, PushedTooMany, USIZE_BYTES, ValueEntry,
@@ -17,7 +17,6 @@ pub struct DenseTransitionsLog<T, U = (), const AMOUNT_BYTES: usize = USIZE_BYTE
     amounts: DenseTransitionLog<EntryAmount<U, AMOUNT_BYTES>>,
     transitions: VecDeque<T>,
     index: usize,
-    pre_update: PreLogUpdateState
 }
 
 impl<T, U, const AMOUNT_BYTES: usize> Default for DenseTransitionsLog<T, U, AMOUNT_BYTES> {
@@ -32,45 +31,7 @@ impl<T, U, const AMOUNT_BYTES: usize> DenseTransitionsLog<T, U, AMOUNT_BYTES> {
             amounts: DenseTransitionLog::new(),
             transitions: VecDeque::new(),
             index: 0,
-            pre_update: PreLogUpdateState::new()
         }
-    }
-    pub fn push_and_pop_past<Out: Into<U>>(
-        &mut self,
-        max_past_len: usize,
-        c: impl FnOnce(LogMut<T>) -> Out,
-    ) -> Option<ValueEntry<Drain<T>, U>> {
-        self.try_push_and_pop_past(max_past_len, c)
-            .unwrap_or_else(|err| panic!("{err}"))
-    }
-    pub fn try_push_and_pop_past<Out: Into<U>>(
-        &mut self,
-        max_past_len: usize,
-        c: impl FnOnce(LogMut<T>) -> Out,
-    ) -> Result<Option<ValueEntry<Drain<T>, U>>, PushedTooMany<Drain<T>, U, AMOUNT_BYTES>> {
-        self.transitions.truncate(self.index);
-        let entry = c(LogMut(&mut self.transitions)).into();
-        let pushed_amount = self.transitions.len() - self.index;
-        let entry_amount = EntryAmount::new(entry, pushed_amount);
-        if AMOUNT_BYTES < USIZE_BYTES && pushed_amount != entry_amount.amount() {
-            let values = self.transitions.drain(self.index..);
-            return Err(PushedTooMany {
-                values,
-                entry: entry_amount.entry,
-            });
-        }
-        self.index = self.transitions.len();
-        Ok(self
-            .amounts
-            .push_and_pop_past(max_past_len, entry_amount)
-            .map(|entry_amount| {
-                let amount = entry_amount.amount();
-                self.index -= amount;
-                ValueEntry {
-                    value: self.transitions.drain(..amount),
-                    entry: entry_amount.entry,
-                }
-            }))
     }
     pub fn push_and_drain_past<Out: Into<U>>(
         &mut self,
@@ -111,20 +72,32 @@ impl<T, U, const AMOUNT_BYTES: usize> DenseTransitionsLog<T, U, AMOUNT_BYTES> {
             self.amounts.drain_past(to_drain_len),
         ))
     }
-    pub fn truncate_future(&mut self) {
+    fn truncate_future(&mut self) {
         self.transitions.truncate(self.index);
         self.amounts.truncate_future();
     }
-    pub fn drain_future(&mut self) -> (Drain<T>, Drain<EntryAmount<U, AMOUNT_BYTES>>) {
+    fn truncate_past(&mut self) {
+        // todo: truncate_front https://github.com/rust-lang/rust/issues/140667
+        self.transitions.drain(..self.index);
+        self.index = 0;
+        self.amounts.truncate_past();
+    }
+    fn drain_future(&mut self) -> (Drain<T>, Drain<EntryAmount<U, AMOUNT_BYTES>>) {
         (
             self.transitions.drain(self.index..),
             self.amounts.drain_future(),
         )
     }
-    pub fn clear(&mut self) {
+    fn clear(&mut self) {
         self.transitions.clear();
         self.amounts.clear();
         self.index = 0;
+    }
+    fn empty_drain(&mut self) -> (Drain<T>, Drain<EntryAmount<U, AMOUNT_BYTES>>) {
+        (
+            self.transitions.drain(..0),
+            self.amounts.empty_drain()
+        )
     }
     pub fn backward_log(&mut self) -> Result<ValueEntry<IterMut<T>, &mut U>, OutOfLog> {
         let old_index = self.index;
@@ -147,35 +120,51 @@ impl<T, U, const AMOUNT_BYTES: usize> DenseTransitionsLog<T, U, AMOUNT_BYTES> {
         })
     }
     pub fn pre_update(&mut self, meta: &RevMeta) {
-        match self.pre_update.check(meta) {
-            PreLogUpdate::Clear => self.clear(),
-            PreLogUpdate::TruncateOrDrainFuture => self.truncate_future(),
-            PreLogUpdate::Nothing => {}
+        match self.amounts.pre_update_state().check(meta) {
+            PreUpdateVariant::DropLog => self.clear(),
+            PreUpdateVariant::DropFuture => self.truncate_future(),
+            PreUpdateVariant::Nothing => {}
         }
     }
-    pub fn pre_update_drain_past(&mut self, meta: &RevMeta) -> Drain<T> {
-        match self.pre_update.check(meta) {
-            PreLogUpdate::Clear => {
+    pub fn pre_update_drain_past(&mut self, meta: &RevMeta) -> (Drain<T>, Drain<EntryAmount<U, AMOUNT_BYTES>>) {
+        match self.amounts.pre_update_state().check(meta) {
+            PreUpdateVariant::DropLog => {
                 self.truncate_future();
+                let past_len = self.index;
                 self.index = 0;
-                return self.transitions.drain(..);
+                return (
+                    self.transitions.drain(..),
+                    self.amounts.drain_past(past_len),
+                );
             },
-            PreLogUpdate::TruncateOrDrainFuture => self.truncate_future(),
-            PreLogUpdate::Nothing => {}
+            PreUpdateVariant::DropFuture => self.truncate_future(),
+            PreUpdateVariant::Nothing => {}
         }
-        self.transitions.drain(..0)
+        self.empty_drain()
     }
-    pub fn pre_update_drain_future(&mut self, meta: &RevMeta) -> Drain<T> {
-        match self.pre_update.check(meta) {
-            PreLogUpdate::Clear => {
-                self.transitions.drain(..self.index);
+    pub fn pre_update_drain_future(&mut self, meta: &RevMeta) -> (Drain<T>, Drain<EntryAmount<U, AMOUNT_BYTES>>) {
+        match self.amounts.pre_update_state().check(meta) {
+            PreUpdateVariant::DropLog => self.truncate_past(),
+            PreUpdateVariant::DropFuture => {},
+            PreUpdateVariant::Nothing => return self.empty_drain()
+        }
+        self.drain_future()
+    }
+    pub fn pre_update_drain(&mut self, meta: &RevMeta) -> (Drain<T>, Drain<EntryAmount<U, AMOUNT_BYTES>>, usize) {
+        match self.amounts.pre_update_state().check(meta) {
+            PreUpdateVariant::DropLog => {
+                let (entry_amounts, past_len) = self.amounts.full_drain();
                 self.index = 0;
-                self.transitions.drain(..)
+                (self.transitions.drain(..), entry_amounts, past_len)
             },
-            PreLogUpdate::TruncateOrDrainFuture => {
-                self.transitions.drain(self.index..)
+            PreUpdateVariant::DropFuture => {
+                let (transitions, entry_amounts) = self.drain_future();
+                (transitions, entry_amounts, 0)
             },
-            PreLogUpdate::Nothing => self.transitions.drain(..0)
+            PreUpdateVariant::Nothing => {
+                let (transitions, entry_amounts) = self.empty_drain();
+                (transitions, entry_amounts, 0)
+            }
         }
     }
 }

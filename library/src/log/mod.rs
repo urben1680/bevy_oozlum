@@ -38,7 +38,7 @@ pub use past_len::PastLenBackwardLog;
 pub use past_len::PastLenForwardLog;
 pub use past_len::PastLenLog;
 pub use past_len::PastLenNotLog;
-pub use past_len::PreLogUpdate;
+pub use past_len::PreUpdateVariant;
 pub use past_len::direction_changes::PastLenLogs;
 pub(crate) use past_len::direction_changes::PastLenLogsError;
 

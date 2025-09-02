@@ -1,7 +1,7 @@
 use core::fmt::Debug;
 use std::collections::{TryReserveError, VecDeque, vec_deque::Iter};
 
-use crate::log::{PastLenBackwardLog, PastLenForwardLog, PreLogUpdate, past_len::WithPastLenLog};
+use crate::log::{PastLenBackwardLog, PastLenForwardLog, PreUpdateVariant, past_len::WithPastLenLog};
 
 use super::{INDEX_OOB, OutOfLog, SparseDrain, SparseValue};
 
@@ -290,11 +290,11 @@ impl<T> WithPastLenLog for SparseTransitionLog<T> {
             PastLenForwardLog::Update => self.forward_log(),
         }
     }
-    fn clear_or_truncate_future(&mut self, skip_and: PreLogUpdate) {
+    fn clear_or_truncate_future(&mut self, skip_and: PreUpdateVariant) {
         match skip_and {
-            PreLogUpdate::Clear => self.clear(),
-            PreLogUpdate::TruncateOrDrainFuture => self.truncate_future(),
-            PreLogUpdate::Nothing => {}
+            PreUpdateVariant::DropLog => self.clear(),
+            PreUpdateVariant::DropFuture => self.truncate_future(),
+            PreUpdateVariant::Nothing => {}
         }
     }
 }

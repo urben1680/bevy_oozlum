@@ -9,7 +9,7 @@ use bevy::{
     reflect::{std_traits::ReflectDefault, Reflect}, utils::Parallel,
 };
 
-use crate::{log::PreLogUpdate, prelude::RevUpdate, undo_redo::{BundleIdOfOpCache, RevDespawnCleaner, UndoRedoBuffer}};
+use crate::{log::PreUpdateVariant, prelude::RevUpdate, undo_redo::{BundleIdOfOpCache, RevDespawnCleaner, UndoRedoBuffer}};
 
 /*
 task:
@@ -245,25 +245,27 @@ impl NonLogNow {
 // idea: logs have an extra method taking RevMeta to do the pre-update ops
 // variants: truncate, drain future, drain past
 #[derive(Debug, Default)]
-pub struct PreLogUpdateState {
+pub struct PreUpdateState {
     past_len_ids_cleared: u64,
     log_exits: u64,
 }
 
-impl PreLogUpdateState {
+impl PreUpdateState {
     pub(crate) const fn new() -> Self {
         Self { past_len_ids_cleared: 0, log_exits: 0 }
     }
-    pub(crate) fn check(&mut self, meta: &RevMeta) -> PreLogUpdate {
+    pub(crate) fn check(&mut self, meta: &RevMeta) -> PreUpdateVariant {
         if self.past_len_ids_cleared < meta.past_len_ids_cleared {
             self.past_len_ids_cleared = meta.past_len_ids_cleared;
             self.log_exits = meta.log_exits;
-            PreLogUpdate::Clear
-        } else if self.log_exits < meta.log_exits {
+            PreUpdateVariant::DropLog
+        } else if meta.direction == RunningOrRan::Running(RevDirection::NOT_LOG) 
+            || self.log_exits < meta.log_exits
+        {
             self.log_exits = meta.log_exits;
-            PreLogUpdate::TruncateOrDrainFuture
+            PreUpdateVariant::DropFuture
         } else {
-            PreLogUpdate::Nothing
+            PreUpdateVariant::Nothing
         }
     }
 }
@@ -357,11 +359,9 @@ impl RevMeta {
     pub fn queue_pause(&mut self) {
         self.queue = Some(Queue::Pause);
     }
-    pub fn queue_clear_then_run(&mut self) {
-        self.queue = Some(Queue::ClearThenRun);
-    }
-    pub fn queue_clear_then_pause(&mut self) {
-        self.queue = Some(Queue::ClearThenPause);
+    pub fn queue_clear(&mut self, then_pause: bool) {
+        let queue = if then_pause { Queue::ClearThenPause } else { Queue::ClearThenRun };
+        self.queue = Some(queue);
     }
     pub fn try_run_rev_update(world: &mut World) -> Result<(), BevyError> {
         Self::try_run_rev_update_typed_err(world).map_err(Into::into)
@@ -387,7 +387,7 @@ impl RevMeta {
             }
 
             // update RevMeta
-            let mut pre_log_update = PreLogUpdate::Nothing;
+            let mut pre_log_update = PreUpdateVariant::Nothing;
             let update_result = meta.update(|meta, pre_log_update1, _| {
                 pre_log_update = pre_log_update1;
                 world.insert_resource(meta);
@@ -419,7 +419,7 @@ impl RevMeta {
     fn rev_despawn_cleaner_update_and_meta_insert(
         self, 
         world: &mut World,
-        pre_log_update: PreLogUpdate,
+        pre_log_update: PreUpdateVariant,
         past_len_logs_missed: Vec<PastLenLogMissed>
     ) -> Result<(), TryRunRevUpdateError> {
         let ok_if_present = world.try_resource_scope::<RevDespawnCleaner, _>(|world, mut rev_despawn_cleaner| {
@@ -451,7 +451,7 @@ impl RevMeta {
         }
     }
 
-    pub fn update(mut self, c: impl FnOnce(Self, PreLogUpdate, RevDirection) -> Option<Self>)
+    pub fn update(mut self, c: impl FnOnce(Self, PreUpdateVariant, RevDirection) -> Option<Self>)
      -> Result<Self, RevMetaUpdateErr> {
         // get direction that ran previously
         let (ran, was_log) = match self.direction {
@@ -470,19 +470,19 @@ impl RevMeta {
         let (queue, pre_log_update) = match self.queue.take() {
             Some(Queue::Run(RevDirection::NOT_LOG)) if was_log => {
                 self.log_exits = self.log_exits.checked_add(1).unwrap();
-                (Some(RevDirection::NOT_LOG), PreLogUpdate::TruncateOrDrainFuture)
+                (Some(RevDirection::NOT_LOG), PreUpdateVariant::DropFuture)
             }
-            Some(Queue::Run(direction)) => (Some(direction), PreLogUpdate::Nothing),
-            Some(Queue::Pause) => (None, PreLogUpdate::Nothing),
+            Some(Queue::Run(direction)) => (Some(direction), PreUpdateVariant::Nothing),
+            Some(Queue::Pause) => (None, PreUpdateVariant::Nothing),
             Some(Queue::ClearThenRun) => {
                 self.clear();
-                (Some(RevDirection::NOT_LOG), PreLogUpdate::Clear)
+                (Some(RevDirection::NOT_LOG), PreUpdateVariant::DropLog)
             },
             Some(Queue::ClearThenPause) => {
                 self.clear();
-                (None, PreLogUpdate::Clear)
+                (None, PreUpdateVariant::DropLog)
             },
-            None => (None, PreLogUpdate::Clear)
+            None => (None, PreUpdateVariant::DropLog)
         };
 
         // take queue or fall back to previous direction, return None if no direction from both

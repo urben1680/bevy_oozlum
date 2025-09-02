@@ -15,7 +15,7 @@ use bevy::{
 };
 
 use crate::{
-    log::{DenseTransitionsLog, OutOfLog, PreLogUpdate},
+    log::{DenseTransitionsLog, OutOfLog, PreUpdateVariant},
     meta::{NonLogNow, RevDirection, RevMeta},
 };
 
@@ -74,10 +74,10 @@ impl RevDespawnCleaner {
     }
 
     /// Despawn entities that contain [`RevDespawned`] and their relevant operation (spawn, despawn, move_components) fell out of log.
-    pub(crate) fn update(&mut self, meta: &RevMeta, world: &mut World, pre_log_update: PreLogUpdate) -> Result<(), OutOfLog> {
+    pub(crate) fn update(&mut self, meta: &RevMeta, world: &mut World, pre_log_update: PreUpdateVariant) -> Result<(), OutOfLog> {
         match pre_log_update {
-            PreLogUpdate::Nothing => {}
-            PreLogUpdate::Clear => {
+            PreUpdateVariant::Nothing => {}
+            PreUpdateVariant::DropLog => {
                 self.drain_future(world);
                 self.spawn.clear();
                 let (despawned, _) = self.despawn.push_and_drain_past(0, |_|());
@@ -86,7 +86,7 @@ impl RevDespawnCleaner {
                 }
                 self.spawn_buffer.clear();
             },
-            PreLogUpdate::TruncateOrDrainFuture => {
+            PreUpdateVariant::DropFuture => {
                 self.drain_future(world);
             }
         }
