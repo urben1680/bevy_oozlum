@@ -58,9 +58,9 @@ struct LastFrameWhereModuloEqZero {
     scoped_state: DenseStateLog<u64>,
 
     #[serde(with = "logless_with_capacity")]
-    dense_transition: DenseTransitionLog<u8>,
+    dense_transition: TransitionLog<u8>,
     #[serde(with = "logless_with_capacity")]
-    scoped_transition: DenseTransitionLog<u8>,
+    scoped_transition: TransitionLog<u8>,
 
     #[serde(with = "logless_with_capacity")]
     sparse_state: SparseStateLog<u64>,
@@ -82,8 +82,8 @@ impl LastFrameWhereModuloEqZero {
             dense_state: DenseStateLog::with_capacity(state, capacity),
             scoped_state: DenseStateLog::with_capacity(state, scoped_capacity),
 
-            dense_transition: DenseTransitionLog::with_capacity(capacity),
-            scoped_transition: DenseTransitionLog::with_capacity(scoped_capacity),
+            dense_transition: TransitionLog::with_capacity(capacity),
+            scoped_transition: TransitionLog::with_capacity(scoped_capacity),
 
             sparse_state: SparseStateLog::with_capacity(state, scoped_capacity),
             sparse_transition: SparseTransitionLog::with_capacity(scoped_capacity),

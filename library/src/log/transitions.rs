@@ -9,26 +9,26 @@ use std::{
 use crate::{log::PreUpdateVariant, meta::{PreUpdateState, RevMeta}};
 
 use super::{
-    DenseTransitionLog, EntryAmount, LogMut, OutOfLog, PushedTooMany, USIZE_BYTES, ValueEntry,
+    TransitionLog, EntryAmount, LogMut, OutOfLog, PushedTooMany, USIZE_BYTES, ValueEntry,
 };
 
 #[derive(Debug)]
-pub struct DenseTransitionsLog<T, U = (), const AMOUNT_BYTES: usize = USIZE_BYTES> {
-    amounts: DenseTransitionLog<EntryAmount<U, AMOUNT_BYTES>>,
+pub struct TransitionsLog<T, U = (), const AMOUNT_BYTES: usize = USIZE_BYTES> {
+    amounts: TransitionLog<EntryAmount<U, AMOUNT_BYTES>>,
     transitions: VecDeque<T>,
     index: usize,
 }
 
-impl<T, U, const AMOUNT_BYTES: usize> Default for DenseTransitionsLog<T, U, AMOUNT_BYTES> {
+impl<T, U, const AMOUNT_BYTES: usize> Default for TransitionsLog<T, U, AMOUNT_BYTES> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<T, U, const AMOUNT_BYTES: usize> DenseTransitionsLog<T, U, AMOUNT_BYTES> {
+impl<T, U, const AMOUNT_BYTES: usize> TransitionsLog<T, U, AMOUNT_BYTES> {
     pub const fn new() -> Self {
         Self {
-            amounts: DenseTransitionLog::new(),
+            amounts: TransitionLog::new(),
             transitions: VecDeque::new(),
             index: 0,
         }

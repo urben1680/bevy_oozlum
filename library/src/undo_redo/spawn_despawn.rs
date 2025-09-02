@@ -15,7 +15,7 @@ use bevy::{
 };
 
 use crate::{
-    log::{DenseTransitionsLog, OutOfLog, PreUpdateVariant},
+    log::{TransitionsLog, OutOfLog, PreUpdateVariant},
     meta::{NonLogNow, RevDirection, RevMeta},
 };
 
@@ -23,9 +23,9 @@ use super::RevOp;
 
 #[derive(Resource, Default, Debug)]
 pub(crate) struct RevDespawnCleaner {
-    spawn: DenseTransitionsLog<Entity>,
-    despawn: DenseTransitionsLog<Entity>,
-    spawn_buffer: DenseTransitionsLog<(Option<Entity>, MaybeLocation)>,
+    spawn: TransitionsLog<Entity>,
+    despawn: TransitionsLog<Entity>,
+    spawn_buffer: TransitionsLog<(Option<Entity>, MaybeLocation)>,
     spawn_queue: Vec<(Entity, MaybeLocation)>,
     despawn_queue: Vec<(Entity, MaybeLocation)>,
     spawn_buffer_queue: Vec<(Option<Entity>, MaybeLocation)>,

@@ -200,19 +200,19 @@ use super::{INDEX_OOB, OutOfLog};
 /// }
 /// ```
 #[derive(Debug)]
-pub struct DenseTransitionLog<T> {
+pub struct TransitionLog<T> {
     transitions: VecDeque<T>,
     index: usize,
     pre_update_state: PreUpdateState
 }
 
-impl<T> Default for DenseTransitionLog<T> {
+impl<T> Default for TransitionLog<T> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<T> DenseTransitionLog<T> {
+impl<T> TransitionLog<T> {
     pub const fn new() -> Self {
         Self {
             transitions: VecDeque::new(),

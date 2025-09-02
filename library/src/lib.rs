@@ -16,6 +16,7 @@ TODO:
 -- make transition logs keep an additional entry so the values are drained out of log
 - idea: only offer DenseTransitionLog and PastLenLog
 -- explore how api would look like
+-- 
 
 Enhancements:
 - reduce todo!() and //todo and unwrap (in favor of expect)

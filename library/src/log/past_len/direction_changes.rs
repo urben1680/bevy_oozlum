@@ -30,7 +30,6 @@ struct Update {
 }
 
 #[derive(Copy, Clone, PartialEq, Debug)]
-#[cfg_attr(feature = "serialize", derive(serde::Serialize, serde::Deserialize))]
 #[doc(hidden)]
 pub struct UpdateState {
     internal_id: u64,
@@ -139,7 +138,7 @@ impl PastLenLogs {
     }
     pub(super) fn update_state(
         &self,
-        state: Option<UpdateState>,
+        state: &mut Option<UpdateState>,
         last_update: u64,
     ) -> (UpdateState, Option<StateChange>) {
         let new_state = || {

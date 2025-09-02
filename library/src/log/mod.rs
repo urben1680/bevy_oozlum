@@ -5,47 +5,18 @@ use std::{
     iter::FusedIterator,
 };
 
-use bevy::reflect::Reflect;
-
-#[cfg(feature = "serialize")]
-mod serialize;
-
-//mod dense_state;
-//mod dense_states;
-mod dense_transition;
-mod dense_transitions;
-
+mod transition;
+mod transitions;
 mod past_len;
 
-//mod sparse_state;
-//mod sparse_states;
-mod sparse_transition;
-mod sparse_transitions;
-
-#[cfg(feature = "serialize")]
-pub use serialize::logless_state;
-#[cfg(feature = "serialize")]
-pub use serialize::logless_with_capacity;
-#[cfg(feature = "serialize")]
-pub use serialize::with_capacity;
-
-//pub use dense_state::DenseStateLog;
-//pub use dense_states::DenseStatesLog;
-pub use dense_transition::DenseTransitionLog;
-pub use dense_transitions::DenseTransitionsLog;
+pub use transition::TransitionLog;
+pub use transitions::TransitionsLog;
 
 pub use past_len::PastLenBackwardLog;
 pub use past_len::PastLenForwardLog;
 pub use past_len::PastLenLog;
 pub use past_len::PastLenNotLog;
 pub use past_len::PreUpdateVariant;
-pub use past_len::direction_changes::PastLenLogs;
-pub(crate) use past_len::direction_changes::PastLenLogsError;
-
-//pub use sparse_state::SparseStateLog;
-//pub use sparse_states::SparseStatesLog;
-pub use sparse_transition::SparseTransitionLog;
-pub use sparse_transitions::SparseTransitionsLog;
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct OutOfLog;
@@ -147,31 +118,13 @@ impl<'a, T: Iterator, U> IntoIterator for &'a mut ValueEntry<T, U> {
 
 const USIZE_BYTES: usize = usize::BITS as usize / 8;
 
-#[derive(Clone, PartialEq, Reflect)]
+#[derive(Clone, PartialEq)]
 struct SparseValue<T> {
     value: T,
     /// If `T` is a state, then these are the skips _after_ the state.
     ///
     /// If `T` is a transiton, then these are the skips _before_ the transition.
     skips_ne: [u8; USIZE_BYTES],
-}
-
-#[cfg(feature = "serialize")]
-impl<T: serde::Serialize> serde::Serialize for SparseValue<T> {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        (&self.value, &self.skips()).serialize(serializer)
-    }
-}
-
-#[cfg(feature = "serialize")]
-impl<'de, T: serde::Deserialize<'de>> serde::Deserialize<'de> for SparseValue<T> {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let (value, skips) = <(T, usize) as serde::Deserialize<'de>>::deserialize(deserializer)?;
-        let rare_value = Self::new(value, skips);
-        // skips == rare_value.skips() is always true, if this platform's usize lacks the bytes to store the
-        // serialized value, that information was lost at usize::deserialize already and needs to be handled by serde
-        Ok(rare_value)
-    }
 }
 
 impl<T: Debug> Debug for SparseValue<T> {
@@ -253,13 +206,13 @@ fn resize_ne_bytes<const N: usize, const M: usize>(arr: [u8; N]) -> [u8; M] {
 /// These methods return two draining iterators, the first with the states/transitions of all updates that are
 /// drained, and the second with `EntryAmount`, containing the entry type `U` of the log (if specified) and the
 /// amount of states/transitions per update, returned by the [`amount`](Self::amount) method.
-#[derive(Debug, Clone, Reflect)]
+#[derive(Debug, Clone)]
 pub struct EntryAmount<U, const AMOUNT_BYTES: usize> {
     pub entry: U,
     amount: AmountArray<AMOUNT_BYTES>,
 }
 
-#[derive(Copy, Clone, Reflect)]
+#[derive(Copy, Clone)]
 struct AmountArray<const AMOUNT_BYTES: usize>([u8; AMOUNT_BYTES]);
 
 impl<const AMOUNT_BYTES: usize> Debug for AmountArray<AMOUNT_BYTES> {
@@ -323,30 +276,6 @@ impl<U, const AMOUNT_BYTES: usize> EntryAmount<U, AMOUNT_BYTES> {
     /// ```
     pub fn amount(&self) -> usize {
         self.amount.amount()
-    }
-}
-
-#[cfg(feature = "serialize")]
-impl<U: serde::Serialize, const AMOUNT_BYTES: usize> serde::Serialize
-    for EntryAmount<U, AMOUNT_BYTES>
-{
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        (&self.entry, self.amount()).serialize(serializer)
-    }
-}
-
-#[cfg(feature = "serialize")]
-impl<'de, U: serde::Deserialize<'de>, const AMOUNT_BYTES: usize> serde::Deserialize<'de>
-    for EntryAmount<U, AMOUNT_BYTES>
-{
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let (entry, amount) = <(U, usize) as serde::Deserialize<'de>>::deserialize(deserializer)?;
-        let entry_amount = Self::new(entry, amount);
-        if amount == entry_amount.amount() {
-            Ok(entry_amount)
-        } else {
-            Err(serde::de::Error::custom("todo"))
-        }
     }
 }
 

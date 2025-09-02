@@ -15,9 +15,8 @@ use bevy::{
 };
 
 use crate::{
-    log::{OutOfLog, SparseTransitionLog},
+    log::{OutOfLog, PastLenLog, TransitionLog},
     meta::{RevDirection, RevMeta},
-    schedule::error_per_flag,
 };
 
 pub(super) fn into_rev_condition<Marker>(
@@ -26,7 +25,8 @@ pub(super) fn into_rev_condition<Marker>(
     let condition = RevCondition {
         condition: IntoSystem::into_system(condition),
         meta_id: default(),
-        log: default(),
+        run_log: default(),
+        run_or_err_log: default(),
         out_of_log_err: false,
     };
     Box::new(condition)
@@ -35,8 +35,15 @@ pub(super) fn into_rev_condition<Marker>(
 struct RevCondition<T> {
     condition: T,
     meta_id: Option<ComponentId>,
-    log: SparseTransitionLog<()>,
+    run_log: PastLenLog,
+    run_or_err_log: TransitionLog<Result<(), Box<RevRunSystemError>>>,
     out_of_log_err: bool,
+}
+
+#[derive(Clone)]
+enum RevRunSystemError {
+    Skipped(SystemParamValidationError),
+    Failed(String),
 }
 
 impl<T: ReadOnlySystem<In = (), Out = bool>> System for RevCondition<T> {
@@ -109,44 +116,79 @@ impl<T: ReadOnlySystem<In = (), Out = bool>> System for RevCondition<T> {
                     RevMeta::EXPECT_RUNNING,
                 ))?;
 
+        self.run_log.pre_update(meta);
+        self.run_or_err_log.pre_update(meta);
+
         match direction {
             RevDirection::NOT_LOG => {
-                let out = unsafe {
+                let result = unsafe {
                     // SAFETY: condition is readonly so meta reference is allowed to exist while condition runs
                     // todo: other safety comments
                     self.condition.run_unsafe((), world)
                 };
-                let transition = match out {
-                    Ok(true) => Some(()),
-                    _ => None,
-                };
-                self.log
-                    .push_and_pop_past(meta.past_len() as usize, transition);
-                out
+
+                match result {
+                    Ok(false) => Ok(false),
+                    Ok(true) => {
+                        let past_len = self.run_log.update_and_get_past_len(meta);
+                        self.run_or_err_log.push_and_truncate_past(past_len, Ok(()));
+                        Ok(true)
+                    },
+                    Err(RunSystemError::Skipped(skipped)) => {
+                        let past_len = self.run_log.update_and_get_past_len(meta);
+                        self.run_or_err_log.push_and_truncate_past(
+                            past_len,
+                            Err(Box::new(RevRunSystemError::Skipped(skipped.clone())))
+                        );
+                        Err(RunSystemError::Skipped(skipped))
+                    },
+                    Err(RunSystemError::Failed(failed)) => {
+                        let past_len = self.run_log.update_and_get_past_len(meta);
+                        self.run_or_err_log.push_and_truncate_past(
+                            past_len,
+                            Err(Box::new(RevRunSystemError::Failed(format!("{failed}"))))
+                        );
+                        Err(RunSystemError::Failed(failed))
+                    }
+                }
             }
             // todo: simplify error msg, can only be internal bug
             // todo: upstream systems returning Result<bool, BevyError> be valid conditions
-            RevDirection::FORWARD_LOG => match self.log.forward_log() {
-                Ok(option) => Ok(option.is_some()),
-                Err(OutOfLog) => Ok(error_per_flag!(
-                    &mut self.out_of_log_err,
-                    "Reversible condition {} got out of log. \
-                        Make sure the reversible schedule this condition is in is correctly called in both the forward and backward direction. \
-                        It seems that one or more backward schedule calls were missed. \
-                        If this condition is in the RevUpdate schedule, this is likely a crate bug.\n{meta:?}",
-                    self.name()
-                )),
+            RevDirection::FORWARD_LOG => if self.run_log.forward_log(meta) {
+                match self.run_or_err_log.forward_log() {
+                    Ok(Ok(_)) => Ok(true),
+                    Ok(Err(err)) => {
+                        match &**err {
+                            RevRunSystemError::Skipped(skipped) => Err(
+                                RunSystemError::Skipped(skipped.clone())
+                            ),
+                            RevRunSystemError::Failed(failed) => Err(
+                                RunSystemError::Failed(failed.as_str().into())
+                            )
+                        }
+                    },
+                    Err(OutOfLog) => panic!("todo")
+                }
+            } else {
+                Ok(false)
             },
-            RevDirection::BackwardLog => match self.log.backward_log() {
-                Ok(option) => Ok(option.is_some()),
-                Err(OutOfLog) => Ok(error_per_flag!(
-                    &mut self.out_of_log_err,
-                    "Reversible condition {} got out of log. \
-                        Make sure the reversible schedule this condition is in is correctly called in both the forward and backward direction. \
-                        It seems that one or more forward schedule calls were missed. \
-                        If this condition is in the RevUpdate schedule, this is likely a crate bug.\n{meta:?}",
-                    self.name()
-                )),
+            RevDirection::BackwardLog => if self.run_log.backward_log(meta) {
+                match self.run_or_err_log.backward_log() {
+                    Ok(Ok(_)) => Ok(true),
+                    Ok(Err(err)) => {
+                        match &**err {
+                            RevRunSystemError::Skipped(skipped) => Err(
+                                RunSystemError::Skipped(skipped.clone())
+                            ),
+                            RevRunSystemError::Failed(failed) => Err(
+                                RunSystemError::Failed(failed.as_str().into())
+                            )
+                        }
+                    },
+                    Err(OutOfLog) => panic!("todo")
+                }
+            } else {
+                Ok(false)
             },
         }
     }

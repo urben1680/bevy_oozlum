@@ -9,7 +9,7 @@ use bevy::{
 use crossterm::{ExecutableCommand, cursor::*, terminal::*};
 
 use bevy_oozlum::{
-    log::{DenseTransitionLog, PastLenLog, SparseTransitionLog},
+    log::{TransitionLog, PastLenLog, SparseTransitionLog},
     meta::NonLogNow,
     prelude::*,
 };
@@ -394,7 +394,7 @@ fn row5(app: &mut App) {
     // entity log length here, then the RevMeta::past_len is fine. We do it here for demonstration purpose.
     fn spawn_and_log_system(
         meta: Res<RevMeta>,
-        mut entity_log: Local<DenseTransitionLog<Entity>>,
+        mut entity_log: Local<TransitionLog<Entity>>,
         mut past_len_log: Local<PastLenLog>,
         mut commands: Commands,
         mut debug: Local<Vec<(RevMeta, PastLenLog)>>,

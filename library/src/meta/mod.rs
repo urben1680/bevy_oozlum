@@ -27,10 +27,6 @@ task:
 */
 
 #[derive(Reflect, Resource)]
-#[cfg_attr(
-    feature = "serialize",
-    derive(serde::Serialize, serde::Deserialize)
-)]
 pub struct RevMeta {
     #[reflect(skip_serializing)]
     past_end: u64,
@@ -42,10 +38,6 @@ pub struct RevMeta {
     log_exits: u64,
     past_len_ids: AtomicU32,
     past_len_ids_cleared: u64,
-    #[cfg_attr(
-        feature = "serialize",
-        serde(skip)
-    )]
     #[reflect(ignore)]
     past_len_updates: Parallel<Vec<PastLenUpdate>>,
     past_len_limits: Vec<PastLenLimits>,
@@ -155,10 +147,6 @@ impl Display for RevDirection {
 }
 
 #[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(
-    feature = "serialize",
-    derive(serde::Serialize, serde::Deserialize)
-)]
 enum RunningOrRan {
     Running(RevDirection),
     Ran(RevDirection),
@@ -168,10 +156,6 @@ enum RunningOrRan {
 }
 
 #[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(
-    feature = "serialize",
-    derive(serde::Serialize, serde::Deserialize)
-)]
 enum Queue {
     Run(RevDirection),
     Pause,
@@ -180,50 +164,42 @@ enum Queue {
 }
 
 #[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(
-    feature = "serialize",
-    derive(serde::Serialize, serde::Deserialize)
-)]
 struct PastLenUpdate {
     state: PastLenState,
     limits: PastLenLimits,
 }
 
 #[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(
-    feature = "serialize",
-    derive(serde::Serialize, serde::Deserialize)
-)]
-struct PastLenState {
+pub struct PastLenState {
     id: u64,
     updates_this_frame: NonZeroU32,
     log_exits: u64,
 }
 
 #[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(
-    feature = "serialize",
-    derive(serde::Serialize, serde::Deserialize)
-)]
-struct PastLenLimits {
+pub struct PastLenLimits {
     backward: u64,
     forward: u64,
-    #[cfg_attr(
-        feature = "serialize",
-        serde(
-            skip_serializing,
-            deserialize_with = "maybe_location_deserialize"
-        )
-    )]
     last_update: MaybeLocation,
 }
 
-#[cfg(feature = "serialize")]
-fn maybe_location_deserialize<'de, D: serde::Deserializer<'de>>(
-    _: D
-) -> Result<MaybeLocation, D::Error> {
-    // location information cannot be deserialized
-    Ok(MaybeLocation::caller())
+impl PastLenLimits {
+    #[track_caller]
+    pub(crate) fn not_log_limit(backward: u64) -> Self {
+        Self {
+            backward,
+            forward: u64::MAX,
+            last_update: MaybeLocation::caller(),
+        }
+    }
+    #[track_caller]
+    pub(crate) fn log_limits(backward: u64, forward: u64) -> Self {
+        Self {
+            backward,
+            forward,
+            last_update: MaybeLocation::caller(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -244,8 +220,8 @@ impl NonLogNow {
 // does not play well for local rollback
 // idea: logs have an extra method taking RevMeta to do the pre-update ops
 // variants: truncate, drain future, drain past
-#[derive(Debug, Default)]
-pub struct PreUpdateState {
+#[derive(Copy, Clone, Debug, Default, PartialEq)]
+pub(crate) struct PreUpdateState {
     past_len_ids_cleared: u64,
     log_exits: u64,
 }
@@ -599,9 +575,9 @@ impl RevMeta {
     }
     pub(super) fn update_past_len_state(
         &self,
-        state: Option<PastLenState>,
+        state: &mut Option<PastLenState>,
         last_update: u64,
-    ) -> (PastLenState, Option<StateChange>) {
+    ) -> PreUpdateVariant {
         let new_state = || {
             let id = self.past_len_ids.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             if id == u32::MAX {
@@ -614,21 +590,25 @@ impl RevMeta {
             }
         };
         match state {
-            Some(mut state) => {
+            Some(state) => {
                 if state.id < self.past_len_ids_cleared {
-                    (new_state(), Some(StateChange::Cleared))
+                    *state = new_state();
+                    PreUpdateVariant::DropLog
                 } else if state.log_exits < self.log_exits {
                     state.log_exits = self.log_exits;
-                    (state, Some(StateChange::TruncateFuture))
+                    PreUpdateVariant::DropFuture
                 } else if last_update == self.now {
                     state.updates_this_frame = state.updates_this_frame.checked_add(1).unwrap();
-                    (state, None)
+                    PreUpdateVariant::Nothing
                 } else {
                     state.updates_this_frame = NonZeroU32::MIN;
-                    (state, None)
+                    PreUpdateVariant::Nothing
                 }
             }
-            None => (new_state(), None),
+            None => {
+                *state = Some(new_state());
+                PreUpdateVariant::Nothing
+            },
         }
     }
     pub(super) fn push_past_len_update(&self, state: PastLenState, limits: PastLenLimits) {

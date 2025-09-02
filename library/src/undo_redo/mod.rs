@@ -19,7 +19,7 @@ use bevy::{
 };
 
 use crate::{
-    log::{DenseTransitionsLog, PastLenLog, PastLenLogs, PastLenNotLog},
+    log::{TransitionsLog, PastLenLog, PastLenLogs, PastLenNotLog},
     meta::{NonLogNow, RevDirection, RevMeta},
 };
 
@@ -271,7 +271,7 @@ impl<T: UndoRedo> UndoRedo for Box<[T]> {
 
 #[derive(Default, Debug)]
 pub(crate) struct UndoRedoLog {
-    undo_redo_log: DenseTransitionsLog<DebugHidden>,
+    undo_redo_log: TransitionsLog<DebugHidden>,
     frame_log: PastLenLog,
 }
 
