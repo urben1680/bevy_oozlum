@@ -32,6 +32,12 @@ pub(crate) struct RevDespawnCleaner {
     spawn_buffer_queue_fallback: Vec<(Entity, MaybeLocation)>,
 }
 
+pub(crate) enum RevDespawnCleanerErr {
+    OutOfLog(RevMeta),
+    RevMetaMissing,
+    RevMetaNotRunning(RevMeta)
+}
+
 impl RevDespawnCleaner {
     pub(crate) fn log_spawn(&mut self, entity: Entity, location: MaybeLocation, _: NonLogNow) {
         self.spawn_queue.push((entity, location));
@@ -74,73 +80,59 @@ impl RevDespawnCleaner {
     }
 
     /// Despawn entities that contain [`RevDespawned`] and their relevant operation (spawn, despawn, move_components) fell out of log.
-    pub(crate) fn update(&mut self, meta: &RevMeta, world: &mut World, pre_log_update: PreUpdateVariant) -> Result<(), OutOfLog> {
-        match pre_log_update {
-            PreUpdateVariant::Nothing => {}
-            PreUpdateVariant::DropLog => {
-                self.drain_future(world);
-                self.spawn.clear();
-                let (despawned, _) = self.despawn.push_and_drain_past(0, |_|());
-                for entity in despawned {
-                    let _ = world.try_despawn(entity); // todo: upstream a way to set the location
-                }
-                self.spawn_buffer.clear();
-            },
-            PreUpdateVariant::DropFuture => {
-                self.drain_future(world);
+    pub(crate) fn update_get_meta(&mut self, world: &mut World, not_running: &mut bool, out_of_log: &mut bool) -> Option<RevMeta> {
+        let meta = world.remove_resource::<RevMeta>()?;
+        let direction = match meta.get_running_direction() {
+            Some(direction) => direction,
+            None => {
+                *not_running = true;
+                return Some(meta);
             }
+        };
+        let past_len = meta.past_len() as usize;
+        let iter = self
+            .spawn_buffer
+            .pre_update_drain(&meta)
+            .0
+            .flat_map(|buffer| buffer.0)
+            .chain(self.spawn.pre_update_drain_future(&meta).0)
+            .chain(self.despawn.pre_update_drain_past(&meta).0);
+
+        for entity in iter {
+            let _ = world.try_despawn(entity); // todo: upstream a way to set the location
         }
-        match meta.running_direction() {
-            RevDirection::NOT_LOG => Ok(self.forward(world, meta.past_len() as usize)),
+        
+        let log_result = match direction {
+            RevDirection::NOT_LOG => Ok(self.forward(world, past_len)),
             RevDirection::FORWARD_LOG => self.forward_log(),
             RevDirection::BackwardLog => self.backward_log(),
-        }
+        };
+        *out_of_log = log_result.is_err();
+        Some(meta)
     }
 
-    fn drain_future(&mut self, world: &mut World) {
-        let (despawned, _) = self.spawn.drain_future();
-        for entity in despawned {
-            let _ = world.try_despawn(entity); // todo: upstream a way to set the location
-        }
-
-        self.despawn.truncate_future();
-
-        let despawned = self
-            .spawn_buffer
-            .drain_future()
-            .0
-            .flat_map(|(entity, _)| entity);
-        for entity in despawned {
-            let _ = world.try_despawn(entity); // todo: upstream a way to set the location
-        }
-    }
-
-    pub(crate) fn forward(&mut self, world: &mut World, mut max_past_len: usize) {
-        max_past_len += 1; // compensate transition log behavior to pop transitions too early
+    pub(crate) fn forward(&mut self, world: &mut World, max_past_len: usize) {
         let progress = RevOp::FinalDespawn { buffer: false };
         progress.scope(world, |world| {
-            self.drain_future(world);
-
-            self.spawn.push_and_pop_past(max_past_len, |mut log| {
+            self.spawn.push_and_truncate_past(max_past_len, |mut log| {
                 log.extend(self.spawn_queue.drain(..).map(|(entity, _)| entity));
             });
 
             let despawned = self
                 .despawn
-                .push_and_pop_past(max_past_len, |mut log| {
+                .push_and_drain_past(max_past_len, |mut log| {
                     log.extend(self.despawn_queue.drain(..).map(|(entity, _)| entity));
                 })
-                .into_iter()
-                .flat_map(|value_entry| value_entry.value);
+                .0;
             for entity in despawned {
                 let _ = world.try_despawn(entity); // todo: upstream a way to set the location
             }
 
             world.insert_resource(RevOp::FinalDespawn { buffer: true });
 
-            let despawned = self
+            let buffer = self
                 .spawn_buffer
-                .push_and_pop_past(max_past_len, |mut log| {
+                .push_and_drain_past(max_past_len, |mut log| {
                     log.extend(self.spawn_buffer_queue.drain(..));
                     log.extend(
                         self.spawn_buffer_queue_fallback
@@ -148,10 +140,9 @@ impl RevDespawnCleaner {
                             .map(|(entity, location)| (Some(entity), location)),
                     );
                 })
-                .into_iter()
-                .flat_map(|value_entry| value_entry.value)
-                .flat_map(|(entity, _)| entity);
-            for entity in despawned {
+                .0
+                .flat_map(|buffer| buffer.0);
+            for entity in buffer {
                 let _ = world.try_despawn(entity); // todo: upstream a way to set the location
             }
         });

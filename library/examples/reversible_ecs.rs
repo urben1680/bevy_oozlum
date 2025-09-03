@@ -9,7 +9,7 @@ use bevy::{
 use crossterm::{ExecutableCommand, cursor::*, terminal::*};
 
 use bevy_oozlum::{
-    log::{TransitionLog, PastLenLog, SparseTransitionLog},
+    log::{TransitionLog, PastLenLog},
     meta::NonLogNow,
     prelude::*,
 };
@@ -54,8 +54,9 @@ fn main() {
     // Ignore this, not imporant for the reversible ECS showcase but for this app.
     let _scope_guard = ScopeGuard::new();
 
-    let meta = RevMeta::new(NonZeroU64::new(MAX_LOG_LEN), 0, false);
+    let meta = RevMeta::new(NonZeroU64::new(MAX_LOG_LEN), false);
     App::new()
+        .insert_resource(RevMeta::new(NonZeroU64::new(MAX_LOG_LEN), false)) // todo fix plugin
         .add_plugins((
             // Add Bevy's MinimalPlugins for this example.
             MinimalPlugins,
@@ -122,7 +123,7 @@ fn main() {
                 // after the runner so reversible systems get to influence the presence of these
                 // entities.
                 // After that, the console output should happen.
-                (despawn_waste, render)
+                (despawn_waste/*, render*/)
                     .chain()
                     .after(RevMeta::try_run_rev_update),
             ),
@@ -142,7 +143,10 @@ fn main() {
 
 #[derive(Resource, Default)]
 struct KeysPressed {
-    direction: Option<Direction>,
+    /// - `None`: no direction change
+    /// - `Some(None)`: change to pause
+    /// - `Some(Some(direction))`: change to [`RevDirection`] `direction`
+    direction: Option<Option<RevDirection>>,
     num1: bool,
     num2: bool,
     num3: bool,
@@ -150,13 +154,6 @@ struct KeysPressed {
     num5: bool,
     num6: bool,
     num7: bool,
-}
-
-enum Direction {
-    Forward,
-    Pause,
-    FutureEnd,
-    PastEnd,
 }
 
 #[derive(SystemSet, Copy, Clone, Debug, Hash, PartialEq, Eq)]
@@ -188,16 +185,8 @@ impl WasteCounts {
 
 fn control_rev_meta(mut meta: ResMut<RevMeta>, keys: Res<KeysPressed>) {
     match keys.direction {
-        Some(Direction::Forward) => meta.queue_not_log_forward(),
-        Some(Direction::Pause) => meta.queue_pause(),
-        Some(Direction::FutureEnd) => {
-            let to = meta.future_end();
-            let _ok = meta.queue_log(to);
-        }
-        Some(Direction::PastEnd) => {
-            let to = meta.past_end();
-            let _ok = meta.queue_log(to);
-        }
+        Some(Some(direction)) => meta.queue(direction),
+        Some(None) => meta.queue_pause(),
         None => {}
     }
 }
@@ -294,14 +283,14 @@ fn row3(app: &mut App) {
 fn row4(app: &mut App) {
     app.rev_add_systems(RevUpdate, system.rev_in_set(Row(4)));
 
-    // We choose a SparseTransitionLog as we understand pressing of a key and the resulting spawn as a
+    // We choose a TransitionLog as we understand pressing of a key and the resulting spawn as a
     // transition between a state where a new Waste entity does not exist to the state where it does.
     // It also has to be a sparse log because not every frame the key is pressed.
     fn system(
         meta: Res<RevMeta>,
         pressed: Res<KeysPressed>,
         mut counts: ResMut<WasteCounts>,
-        mut log: Local<SparseTransitionLog<Entity>>,
+        mut log: Local<TransitionLog<Option<Entity>>>,
         mut commands: Commands,
     ) {
         let waste = Waste {
@@ -309,21 +298,21 @@ fn row4(app: &mut App) {
             row: 4,
         };
 
+        // Any logs in the future of the log, for example after going backward in time and resuming
+        // the NOT_LOG phase, should be despawned as they are no longer part of our reality as we
+        // rewrite the future now! (TODO: rewrite, was in NOT_LOG match previously)
+        for entity in log.pre_update_drain_future(&meta).flatten() {
+            commands.entity(entity).despawn();
+        }
+
         // Depending on the current RevDirection, the system has different behavior
         match meta.running_direction() {
             // During NOT_LOG we want to react on the pressed keys to spawn Waste entities and to log that.
             RevDirection::NOT_LOG => {
                 // Note that, while the despawn_waste system further above already deals with despawning
                 // waste entities that are out of log, this system does that itself. This is done because
-                // there is a detail about SparseTransitionLog one should be aware of if the popped log
+                // there is a detail about TransitionLog one should be aware of if the popped log
                 // entries are used and not just ignored.
-
-                // Any logs in the future of the log, for example after going backward in time and resuming
-                // the NOT_LOG phase, should be despawned as they are no longer part of our reality as we
-                // rewrite the future now!
-                for entity in log.drain_future() {
-                    commands.entity(entity).despawn();
-                }
 
                 // A quirk of Transition logs is that they need one less log entry compared to State logs.
                 // For example if the global log can be up to 3 states, then...
@@ -346,7 +335,7 @@ fn row4(app: &mut App) {
 
                 // Pushing potential Waste entities may also pop an entity that got out-of-log now.
                 // These need to be despawned as they are now past the edge of the screen and cannot come back.
-                if let Some(entity) = log.push_and_pop_past(past_len as usize, entity) {
+                for entity in log.push_and_drain_past(past_len as usize, entity).flatten() {
                     commands.entity(entity).despawn();
 
                     // The player missed undoing this littering in time and the lost waste counter is increased.
@@ -394,8 +383,8 @@ fn row5(app: &mut App) {
     // entity log length here, then the RevMeta::past_len is fine. We do it here for demonstration purpose.
     fn spawn_and_log_system(
         meta: Res<RevMeta>,
-        mut entity_log: Local<TransitionLog<Entity>>,
         mut past_len_log: Local<PastLenLog>,
+        mut entity_log: Local<TransitionLog<Entity>>,
         mut commands: Commands,
         mut debug: Local<Vec<(RevMeta, PastLenLog)>>,
     ) {
@@ -403,6 +392,11 @@ fn row5(app: &mut App) {
             tossed_at: meta.now(),
             row: 5,
         };
+
+        past_len_log.pre_update(&meta);
+        for entity in entity_log.pre_update_drain_future(&meta) {
+            commands.entity(entity).despawn();
+        }
 
         match meta.running_direction() {
             // Note that no despawns happen in this system as the system does not necessarily run when an entity
@@ -415,9 +409,7 @@ fn row5(app: &mut App) {
                 // We get the past len from the frame log instead from RevMeta.
                 // Note that here, in contrast to the previous row, we do not need to increase the past_len because
                 // we dont do anything with the entities that go out of log.
-                let past_len = past_len_log.update_and_get_past_len(&meta).unwrap_or_else(|err| {
-                    panic!("\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n{err}\n{meta:#?}\n{debug:#?}\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n"); // todo: bug here
-                });
+                let past_len = past_len_log.update_and_get_past_len(&meta);
 
                 // We spawn the waste entity and mark is as log scoped to be despawned when out-of-log.
                 let entity = commands.spawn(waste).rev_log_scope(now).id();
@@ -442,7 +434,7 @@ fn row5(app: &mut App) {
                 commands.entity(entity).remove::<Waste>();
             }
         }
-        debug.push((meta.clone(), past_len_log.clone()));
+        //debug.push((meta.clone(), past_len_log.clone()));
     }
 }
 
@@ -626,10 +618,10 @@ fn map_input(
             _ if counts.lost >= 10 => {}
             _ if counts.score() >= WINNING_BEVY_VERSION => {}
 
-            KeyCode::Left => keys.direction = Some(Direction::FutureEnd),
-            KeyCode::Right => keys.direction = Some(Direction::PastEnd),
-            KeyCode::Up => keys.direction = Some(Direction::Forward),
-            KeyCode::Down => keys.direction = Some(Direction::Pause),
+            KeyCode::Left => keys.direction = Some(Some(RevDirection::FORWARD_LOG)),
+            KeyCode::Right => keys.direction = Some(Some(RevDirection::BackwardLog)),
+            KeyCode::Up => keys.direction = Some(Some(RevDirection::NOT_LOG)),
+            KeyCode::Down => keys.direction = Some(None),
             KeyCode::Char('1') => keys.num1 = true,
             KeyCode::Char('2') => keys.num2 = true,
             KeyCode::Char('3') => keys.num3 = true,
@@ -686,8 +678,8 @@ impl ScopeGuard {
             })
         }
 
-        let _ = stdout().execute(SetSize(MAX_LOG_LEN as u16 + 2, 13));
-        let _ = stdout().execute(Hide);
+        //let _ = stdout().execute(SetSize(MAX_LOG_LEN as u16 + 2, 13));
+        //let _ = stdout().execute(Hide);
         Self
     }
 }

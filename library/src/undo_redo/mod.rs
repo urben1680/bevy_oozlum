@@ -19,7 +19,7 @@ use bevy::{
 };
 
 use crate::{
-    log::{TransitionsLog, PastLenLog, PastLenLogs, PastLenNotLog},
+    log::{TransitionsLog, PastLenLog},
     meta::{NonLogNow, RevDirection, RevMeta},
 };
 
@@ -170,7 +170,7 @@ impl UndoRedoBuffer {
         self.0.is_empty()
     }
     #[track_caller]
-    pub(crate) fn buffer_undo_redo(&mut self, now: NonLogNow, undo_redo: impl UndoRedo) {
+    pub(crate) fn buffer_undo_redo(&mut self, _: NonLogNow, undo_redo: impl UndoRedo) {
         let name = type_name_of_val(&undo_redo);
         let boxed = BoxedUndoRedo {
             undo_redo: SyncCell::new(Box::new(undo_redo)),
@@ -272,7 +272,7 @@ impl<T: UndoRedo> UndoRedo for Box<[T]> {
 #[derive(Default, Debug)]
 pub(crate) struct UndoRedoLog {
     undo_redo_log: TransitionsLog<DebugHidden>,
-    frame_log: PastLenLog,
+    past_len_log: PastLenLog,
 }
 
 struct DebugHidden(SyncCell<Box<dyn UndoRedo>>);
@@ -373,66 +373,45 @@ impl UndoRedoLog {
             .get_resource::<RevMeta>()
             .ok_or_else(|| UndoRedoLogError::RevMetaMissing {
                 system_name: system_name.clone(),
-            })?
-            .clone();
+            })?;
+
+        self.past_len_log.pre_update(meta);
+        self.undo_redo_log.pre_update(meta);
+
         let now = meta.now();
-        match meta.get_running_direction() {
-            Some(RevDirection::NOT_LOG) => Ok(())/*world
-                .try_resource_scope::<UndoRedoBuffer, _>(|world, mut buffer| {
+        match meta.get_ran_direction() {
+            Some(RevDirection::NOT_LOG) => {
+                world.try_resource_scope::<UndoRedoBuffer, _>(|world, mut buffer| {
                     if !buffer.0.is_empty() {
-                        let past_len_logs =
-                            world.get_resource::<PastLenLogs>().ok_or_else(|| {
-                                UndoRedoLogError::PastLenLogsMissing {
-                                    now: meta.now(),
-                                    direction: RevDirection::NOT_LOG,
-                                    system_name: system_name.clone(),
-                                }
-                            })?;
-                        let PastLenNotLog { clear, past_len } =
-                            self.frame_log.update_and_get_past_len(past_len_logs);
-                        if clear {
-                            self.undo_redo_log.clear();
-                        }
-                        self.undo_redo_log.push_and_drain_past(past_len, |mut log| {
+                        let meta = world.resource::<RevMeta>();
+                        let past_len = self.past_len_log.update_and_get_past_len(meta);
+                        self.undo_redo_log.push_and_truncate_past(past_len, |mut log| {
                             log.extend(buffer.0.drain(..).map(|boxed| DebugHidden(boxed.undo_redo)))
                         });
-                    } else {
-                        self.frame_log.truncate_future();
-                        self.undo_redo_log.drain_future();
                     }
-                    Ok(())
+                }).ok_or_else(|| UndoRedoLogError::UndoRedoBufferMissing {
+                    now,
+                    system_name: system_name.clone(),
                 })
-                .unwrap_or_else(|| {
-                    Err(UndoRedoLogError::UndoRedoBufferMissing {
-                        now: meta.now(),
-                        system_name: system_name.clone(),
-                    })
-                })*/,
+            }
             Some(RevDirection::FORWARD_LOG) => {
-                let past_len_logs = world.get_resource::<PastLenLogs>().ok_or_else(|| {
-                    UndoRedoLogError::PastLenLogsMissing {
-                        now: meta.now(),
-                        direction: RevDirection::FORWARD_LOG,
-                        system_name: system_name.clone(),
+                if self.past_len_log.forward_log(meta) {
+                    let iter = self
+                        .undo_redo_log
+                        .forward_log()
+                        .map_err(|_| UndoRedoLogError::OutOfLog {
+                            now,
+                            direction: RevDirection::FORWARD_LOG,
+                            system_name: system_name.clone(),
+                        })?
+                        .value
+                        .map(|cell| cell.0.get());
+                    for command in iter {
+                        command.redo(world);
                     }
-                })?;
-                let iter = self
-                    .frame_log
-                    .forward_log(past_len_logs)
-                    .apply(&mut self.undo_redo_log)
-                    .map_err(|_| UndoRedoLogError::OutOfLog {
-                        now,
-                        direction: RevDirection::FORWARD_LOG,
-                        system_name: system_name.clone(),
-                    })?
-                    .into_iter()
-                    .flat_map(|value_entry| value_entry.value)
-                    .map(|cell| cell.0.get());
-                for command in iter {
-                    command.redo(world);
                 }
                 Ok(())
-            }
+            },
             direction => Err(UndoRedoLogError::RevDirectionMismatch {
                 now,
                 expected_forward: true,
@@ -450,8 +429,11 @@ impl UndoRedoLog {
             .get_resource::<RevMeta>()
             .ok_or_else(|| UndoRedoLogError::RevMetaMissing {
                 system_name: system_name.to_owned(),
-            })?
-            .clone();
+            })?;
+
+        self.past_len_log.pre_update(meta);
+        self.undo_redo_log.pre_update(meta);
+
         let now = meta.now();
         let direction = meta.get_running_direction();
         if direction != Some(RevDirection::BackwardLog) {
@@ -462,29 +444,23 @@ impl UndoRedoLog {
                 system_name: system_name.to_owned(),
             });
         }
-        let past_len_logs = world.get_resource::<PastLenLogs>().ok_or_else(|| {
-            UndoRedoLogError::PastLenLogsMissing {
-                now: meta.now(),
-                direction: RevDirection::BackwardLog,
-                system_name: system_name.clone(),
-            }
-        })?;
-        let iter = self
-            .frame_log
-            .backward_log(past_len_logs)
-            .apply(&mut self.undo_redo_log)
-            .map_err(|_| UndoRedoLogError::OutOfLog {
-                now,
-                direction: RevDirection::BackwardLog,
-                system_name: system_name.to_owned(),
-            })?
-            .into_iter()
-            .flat_map(|value_entry| value_entry.value)
-            .map(|cell| cell.0.get())
-            .rev();
-        for command in iter {
-            command.undo(world);
+
+        if self.past_len_log.backward_log(meta) {
+            let iter = self
+                .undo_redo_log
+                .backward_log()
+                .map_err(|_| UndoRedoLogError::OutOfLog {
+                    now,
+                    direction: RevDirection::BackwardLog,
+                    system_name: system_name.clone(),
+                })?
+                .value
+                .map(|cell| cell.0.get());
+            for command in iter {
+                command.undo(world);
+            }            
         }
+
         Ok(())
     }
 }

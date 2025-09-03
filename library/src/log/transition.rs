@@ -4,7 +4,7 @@ use std::collections::{
     vec_deque::{Drain, Iter},
 };
 
-use crate::{log::PreUpdateVariant, meta::{PreUpdateState, RevMeta}};
+use crate::{log::PreUpdateVariant, meta::{RevDirection, RevMeta}};
 
 use super::{INDEX_OOB, OutOfLog};
 
@@ -111,9 +111,6 @@ use super::{INDEX_OOB, OutOfLog};
 /// of the two could happen in isolation, the first because [`RevMeta::queue_clear`] has been used
 /// and the second because the log reached [`RevMeta::past_len`].
 /// 
-/// Note that we add `+ 1` to the first parameter of [DenseTransitionLog::push_and_drain_past]. See
-/// its documentation for an explaination why this may be desired.
-/// 
 /// ```
 /// # use bevy::prelude::*;
 /// # use bevy_oozlum::prelude::*;
@@ -133,7 +130,7 @@ use super::{INDEX_OOB, OutOfLog};
 ///             // mutate some state with the new transition
 /// 
 ///             // push transition to the log
-///             let iter = log.push_and_drain_past(meta.past_len() + 1, new_transition);
+///             let iter = log.push_and_drain_past(meta.past_len(), new_transition);
 /// 
 ///             for past_transition in iter {
 ///                 // do cleanup tasks with past transitions
@@ -182,7 +179,7 @@ use super::{INDEX_OOB, OutOfLog};
 ///             // mutate some state with the new transition
 /// 
 ///             // push transition to the log
-///             let iter = log.push_and_drain_past(meta.past_len() + 1, new_transition);
+///             let iter = log.push_and_drain_past(meta.past_len(), new_transition);
 /// 
 ///             for past_transition in iter {
 ///                 // do cleanup tasks with past transitions
@@ -203,7 +200,8 @@ use super::{INDEX_OOB, OutOfLog};
 pub struct TransitionLog<T> {
     transitions: VecDeque<T>,
     index: usize,
-    pre_update_state: PreUpdateState
+    global_log_clears: u64,
+    global_log_exits: u64,
 }
 
 impl<T> Default for TransitionLog<T> {
@@ -217,11 +215,9 @@ impl<T> TransitionLog<T> {
         Self {
             transitions: VecDeque::new(),
             index: 0,
-            pre_update_state: PreUpdateState::new()
+            global_log_clears: 0,
+            global_log_exits: 0
         }
-    }
-    pub(super) fn pre_update_state(&mut self) -> &mut PreUpdateState {
-        &mut self.pre_update_state
     }
     pub fn push_and_truncate_past(&mut self, max_past_len: usize, transition: T) {
         // todo: truncate_front https://github.com/rust-lang/rust/issues/140667
@@ -230,7 +226,8 @@ impl<T> TransitionLog<T> {
     pub fn push_and_drain_past(&mut self, max_past_len: usize, transition: T) -> Drain<T> {
         self.transitions.truncate(self.index);
         self.transitions.push_back(transition);
-        let to_drain = self.transitions.len().saturating_sub(max_past_len);
+        // todo: explain + 1 in regard of footgun for usecase
+        let to_drain = self.transitions.len().saturating_sub(max_past_len + 1);
         self.index = self.transitions.len() - to_drain;
         self.transitions.drain(..to_drain)
     }
@@ -241,7 +238,7 @@ impl<T> TransitionLog<T> {
     ) -> Iter<T> {
         self.transitions.truncate(self.index);
         self.transitions.push_back(transition);
-        let to_drain = self.transitions.len().saturating_sub(max_past_len);
+        let to_drain = self.transitions.len().saturating_sub(max_past_len + 1);
         self.index = self.transitions.len() - to_drain;
         self.transitions.range(..to_drain)
     }
@@ -282,13 +279,27 @@ impl<T> TransitionLog<T> {
             .get_mut(self.index)
             .inspect(|_| self.index += 1)
             .ok_or(OutOfLog)
+    }   
+    pub(super) fn pre_update_check(&mut self, meta: &RevMeta) -> PreUpdateVariant {
+        if self.global_log_clears < meta.log_clears() {
+            self.global_log_clears = meta.log_clears();
+            self.global_log_exits = meta.log_exits();
+            PreUpdateVariant::DropLog
+        } else if self.global_log_exits < meta.log_exits() {
+            self.global_log_exits = meta.log_exits();
+            PreUpdateVariant::DropFuture
+        } else if meta.get_running_direction().is_some_and(RevDirection::is_not_log) {
+            PreUpdateVariant::DropFuture
+        } else {
+            PreUpdateVariant::Nothing
+        }
     }
     /// Call this method once per frame before every other mutation. It may be skipped if:
     /// 
     /// 1. This log is updated every time [`RevUpdate`](crate::schedule::RevUpdate) runs **and**
     /// 2. [`RevMeta::queue_clear`] is not used
     pub fn pre_update(&mut self, meta: &RevMeta) {
-        match self.pre_update_state.check(meta) {
+        match self.pre_update_check(meta) {
             PreUpdateVariant::DropLog => self.clear(),
             PreUpdateVariant::DropFuture => self.truncate_future(),
             PreUpdateVariant::Nothing => {}
@@ -298,8 +309,8 @@ impl<T> TransitionLog<T> {
     /// 
     /// 1. This log is updated every time [`RevUpdate`](crate::schedule::RevUpdate) runs **and**
     /// 2. [`RevMeta::queue_clear`] is not used
-    pub fn pre_update_drain_past(&mut self, meta: &RevMeta) -> Drain<T> {
-        match self.pre_update_state.check(meta) {
+    pub fn pre_update_drain_past<'a, 'm>(&'a mut self, meta: &'m RevMeta) -> Drain<'a, T> {
+        match self.pre_update_check(meta) {
             PreUpdateVariant::DropLog => {
                 self.truncate_future();
                 self.index = 0;
@@ -314,8 +325,8 @@ impl<T> TransitionLog<T> {
     /// 
     /// 1. This log is updated every time [`RevUpdate`](crate::schedule::RevUpdate) runs **and**
     /// 2. [`RevMeta::queue_clear`] is not used
-    pub fn pre_update_drain_future(&mut self, meta: &RevMeta) -> Drain<T> {
-        match self.pre_update_state.check(meta) {
+    pub fn pre_update_drain_future<'a, 'm>(&'a mut self, meta: &'m RevMeta) -> Drain<'a, T> {
+        match self.pre_update_check(meta) {
             PreUpdateVariant::DropLog => {
                 self.truncate_past();
                 self.transitions.drain(..)
@@ -330,8 +341,8 @@ impl<T> TransitionLog<T> {
     /// 
     /// 1. This log is updated every time [`RevUpdate`](crate::schedule::RevUpdate) runs **and**
     /// 2. [`RevMeta::queue_clear`] is not used
-    pub fn pre_update_drain(&mut self, meta: &RevMeta) -> (Drain<T>, usize) {
-        match self.pre_update_state.check(meta) {
+    pub fn pre_update_drain<'a, 'm>(&'a mut self, meta: &'m RevMeta) -> (Drain<'a, T>, usize) {
+        match self.pre_update_check(meta) {
             PreUpdateVariant::DropLog => self.full_drain(),
             PreUpdateVariant::DropFuture => {
                 (self.drain_future(), 0)

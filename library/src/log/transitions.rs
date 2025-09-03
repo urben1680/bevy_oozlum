@@ -6,26 +6,26 @@ use std::{
     fmt::Debug,
 };
 
-use crate::{log::PreUpdateVariant, meta::{PreUpdateState, RevMeta}};
+use crate::{log::PreUpdateVariant, meta::RevMeta};
 
 use super::{
-    TransitionLog, EntryAmount, LogMut, OutOfLog, PushedTooMany, USIZE_BYTES, ValueEntry,
+    TransitionLog, EntryAmount, LogMut, OutOfLog, ValueEntry,
 };
 
 #[derive(Debug)]
-pub struct TransitionsLog<T, U = (), const AMOUNT_BYTES: usize = USIZE_BYTES> {
-    amounts: TransitionLog<EntryAmount<U, AMOUNT_BYTES>>,
+pub struct TransitionsLog<T, U = ()> {
+    amounts: TransitionLog<EntryAmount<U>>,
     transitions: VecDeque<T>,
     index: usize,
 }
 
-impl<T, U, const AMOUNT_BYTES: usize> Default for TransitionsLog<T, U, AMOUNT_BYTES> {
+impl<T, U> Default for TransitionsLog<T, U> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<T, U, const AMOUNT_BYTES: usize> TransitionsLog<T, U, AMOUNT_BYTES> {
+impl<T, U> TransitionsLog<T, U> {
     pub const fn new() -> Self {
         Self {
             amounts: TransitionLog::new(),
@@ -33,44 +33,45 @@ impl<T, U, const AMOUNT_BYTES: usize> TransitionsLog<T, U, AMOUNT_BYTES> {
             index: 0,
         }
     }
-    pub fn push_and_drain_past<Out: Into<U>>(
+    pub fn push_and_truncate_past<IntoU: Into<U>>(
         &mut self,
         max_past_len: usize,
-        c: impl FnOnce(LogMut<T>) -> Out,
-    ) -> (Drain<T>, Drain<EntryAmount<U, AMOUNT_BYTES>>) {
-        self.try_push_and_drain_past(max_past_len, c)
-            .unwrap_or_else(|err| panic!("{err}"))
+        c: impl FnOnce(LogMut<T>) -> IntoU,
+    ) {
+        let (transition_drain, amount_drain) = self.push_and_get_transition_and_amount_drain(max_past_len, c);
+        // todo: truncate_front https://github.com/rust-lang/rust/issues/140667
+        self.transitions.drain(..transition_drain);
+        self.amounts.drain_past(amount_drain);
     }
-    pub fn try_push_and_drain_past<Out: Into<U>>(
+    pub fn push_and_drain_past<IntoU: Into<U>>(
         &mut self,
         max_past_len: usize,
-        c: impl FnOnce(LogMut<T>) -> Out,
-    ) -> Result<
-        (Drain<T>, Drain<EntryAmount<U, AMOUNT_BYTES>>),
-        PushedTooMany<Drain<T>, U, AMOUNT_BYTES>,
-    > {
+        c: impl FnOnce(LogMut<T>) -> IntoU,
+    ) -> (Drain<T>, Drain<EntryAmount<U>>) {
+        // for the + 1, see the comment in TransitionLog::push_and_drain_past
+        let (transition_drain, amount_drain) = self.push_and_get_transition_and_amount_drain(max_past_len + 1, c);
+        (
+            self.transitions.drain(..transition_drain),
+            self.amounts.drain_past(amount_drain),
+        )
+    }
+    fn push_and_get_transition_and_amount_drain<IntoU: Into<U>>(
+        &mut self,
+        max_past_len: usize,
+        c: impl FnOnce(LogMut<T>) -> IntoU,
+    ) -> (usize, usize) {
         self.transitions.truncate(self.index);
         let entry = c(LogMut(&mut self.transitions)).into();
         let pushed_amount = self.transitions.len() - self.index;
         let entry_amount = EntryAmount::new(entry, pushed_amount);
-        if AMOUNT_BYTES < USIZE_BYTES && pushed_amount != entry_amount.amount() {
-            let values = self.transitions.drain(self.index..);
-            return Err(PushedTooMany {
-                values,
-                entry: entry_amount.entry,
-            });
-        }
         self.index = self.transitions.len();
         let to_drain = self
             .amounts
             .push_and_iter_to_drain_past(max_past_len, entry_amount);
-        let to_drain_len = to_drain.len();
-        let amount: usize = to_drain.map(|entry_amount| entry_amount.amount()).sum();
-        self.index -= amount;
-        Ok((
-            self.transitions.drain(..amount),
-            self.amounts.drain_past(to_drain_len),
-        ))
+        let amount_drain = to_drain.len();
+        let transition_drain: usize = to_drain.map(|entry_amount| entry_amount.amount).sum();
+        self.index -= transition_drain;
+        (transition_drain, amount_drain)
     }
     fn truncate_future(&mut self) {
         self.transitions.truncate(self.index);
@@ -82,7 +83,7 @@ impl<T, U, const AMOUNT_BYTES: usize> TransitionsLog<T, U, AMOUNT_BYTES> {
         self.index = 0;
         self.amounts.truncate_past();
     }
-    fn drain_future(&mut self) -> (Drain<T>, Drain<EntryAmount<U, AMOUNT_BYTES>>) {
+    fn drain_future(&mut self) -> (Drain<T>, Drain<EntryAmount<U>>) {
         (
             self.transitions.drain(self.index..),
             self.amounts.drain_future(),
@@ -93,7 +94,7 @@ impl<T, U, const AMOUNT_BYTES: usize> TransitionsLog<T, U, AMOUNT_BYTES> {
         self.amounts.clear();
         self.index = 0;
     }
-    fn empty_drain(&mut self) -> (Drain<T>, Drain<EntryAmount<U, AMOUNT_BYTES>>) {
+    fn empty_drain(&mut self) -> (Drain<T>, Drain<EntryAmount<U>>) {
         (
             self.transitions.drain(..0),
             self.amounts.empty_drain()
@@ -102,7 +103,7 @@ impl<T, U, const AMOUNT_BYTES: usize> TransitionsLog<T, U, AMOUNT_BYTES> {
     pub fn backward_log(&mut self) -> Result<ValueEntry<IterMut<T>, &mut U>, OutOfLog> {
         let old_index = self.index;
         let entry_amount = self.amounts.backward_log()?;
-        self.index -= entry_amount.amount();
+        self.index -= entry_amount.amount;
         let iter = self.transitions.range_mut(self.index..old_index);
         Ok(ValueEntry {
             value: iter,
@@ -112,7 +113,7 @@ impl<T, U, const AMOUNT_BYTES: usize> TransitionsLog<T, U, AMOUNT_BYTES> {
     pub fn forward_log(&mut self) -> Result<ValueEntry<IterMut<T>, &mut U>, OutOfLog> {
         let old_index = self.index;
         let entry_amount = self.amounts.forward_log()?;
-        self.index += entry_amount.amount();
+        self.index += entry_amount.amount;
         let iter = self.transitions.range_mut(old_index..self.index);
         Ok(ValueEntry {
             value: iter,
@@ -120,14 +121,14 @@ impl<T, U, const AMOUNT_BYTES: usize> TransitionsLog<T, U, AMOUNT_BYTES> {
         })
     }
     pub fn pre_update(&mut self, meta: &RevMeta) {
-        match self.amounts.pre_update_state().check(meta) {
+        match self.amounts.pre_update_check(meta) {
             PreUpdateVariant::DropLog => self.clear(),
             PreUpdateVariant::DropFuture => self.truncate_future(),
             PreUpdateVariant::Nothing => {}
         }
     }
-    pub fn pre_update_drain_past(&mut self, meta: &RevMeta) -> (Drain<T>, Drain<EntryAmount<U, AMOUNT_BYTES>>) {
-        match self.amounts.pre_update_state().check(meta) {
+    pub fn pre_update_drain_past<'a, 'm>(&'a mut self, meta: &'m RevMeta) -> (Drain<'a, T>, Drain<'a, EntryAmount<U>>) {
+        match self.amounts.pre_update_check(meta) {
             PreUpdateVariant::DropLog => {
                 self.truncate_future();
                 let past_len = self.index;
@@ -142,16 +143,16 @@ impl<T, U, const AMOUNT_BYTES: usize> TransitionsLog<T, U, AMOUNT_BYTES> {
         }
         self.empty_drain()
     }
-    pub fn pre_update_drain_future(&mut self, meta: &RevMeta) -> (Drain<T>, Drain<EntryAmount<U, AMOUNT_BYTES>>) {
-        match self.amounts.pre_update_state().check(meta) {
+    pub fn pre_update_drain_future<'a, 'm>(&'a mut self, meta: &'m RevMeta) -> (Drain<'a, T>, Drain<'a, EntryAmount<U>>) {
+        match self.amounts.pre_update_check(meta) {
             PreUpdateVariant::DropLog => self.truncate_past(),
             PreUpdateVariant::DropFuture => {},
             PreUpdateVariant::Nothing => return self.empty_drain()
         }
         self.drain_future()
     }
-    pub fn pre_update_drain(&mut self, meta: &RevMeta) -> (Drain<T>, Drain<EntryAmount<U, AMOUNT_BYTES>>, usize) {
-        match self.amounts.pre_update_state().check(meta) {
+    pub fn pre_update_drain<'a, 'm>(&'a mut self, meta: &'m RevMeta) -> (Drain<'a, T>, Drain<'a, EntryAmount<U>>, usize) {
+        match self.amounts.pre_update_check(meta) {
             PreUpdateVariant::DropLog => {
                 let (entry_amounts, past_len) = self.amounts.full_drain();
                 self.index = 0;
@@ -175,6 +176,50 @@ mod test {
     use super::*;
 
     use crate::log::test::{collect_drain, collect_drain_result, collect_pop_result};
+
+    pub(super) fn collect_pop_result<
+        I1: Iterator<Item = char>,
+        I2: ExactSizeIterator<Item = char>,
+    >(
+        actual_pop: Result<Option<ValueEntry<I1, char>>, PushedTooMany<I2, char>>,
+    ) -> Result<Option<(Vec<char>, char)>, (Vec<char>, char)> {
+        match actual_pop {
+            Ok(None) => Ok(None),
+            Ok(Some(value_entry)) => Ok(Some((value_entry.value.collect(), value_entry.entry))),
+            Err(err) => Err((err.values.collect(), err.entry)),
+        }
+    }
+
+    pub(super) fn collect_drain_result<
+        I1: ExactSizeIterator<Item = char>,
+        I2: Iterator<Item = EntryAmount<char>>,
+        I3: ExactSizeIterator<Item = char>,
+    >(
+        actual_drain: Result<(I1, I2), PushedTooMany<I3, char>>,
+    ) -> Result<Vec<(Vec<char>, char)>, (Vec<char>, char)> {
+        match actual_drain {
+            Ok(ok) => Ok(collect_drain(ok)),
+            Err(err) => Err((err.values.collect(), err.entry)),
+        }
+    }
+
+    pub(super) fn collect_drain<
+        I1: ExactSizeIterator<Item = char>,
+        I2: Iterator<Item = EntryAmount<char>>,
+    >(
+        (mut values, entry_amounts): (I1, I2),
+    ) -> Vec<(Vec<char>, char)> {
+        let collected = entry_amounts
+            .map(|entry_amount| {
+                let amount = entry_amount.amount;
+                let values: Vec<_> = values.by_ref().take(amount).collect();
+                assert_eq!(values.len(), amount);
+                (values, entry_amount.entry)
+            })
+            .collect();
+        assert_eq!(values.len(), 0);
+        collected
+    }
 
     #[test]
     fn serialize() {

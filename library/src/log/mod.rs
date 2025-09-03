@@ -32,49 +32,6 @@ impl Display for OutOfLog {
 
 impl Error for OutOfLog {}
 
-pub struct PushedTooMany<I: ExactSizeIterator, U, const AMOUNT_BYTES: usize> {
-    pub values: I,
-    pub entry: U,
-}
-
-impl<I: ExactSizeIterator, U, const AMOUNT_BYTES: usize> PushedTooMany<I, U, AMOUNT_BYTES> {
-    pub const MAX_AMOUNT: usize = usize::MAX >> ((USIZE_BYTES - AMOUNT_BYTES) * 8);
-    // easier to call with &self during error handling
-    pub fn max_amount(&self) -> usize {
-        Self::MAX_AMOUNT
-    }
-}
-
-// makes unwrap possible without requiring additional Debug bounds everywhere
-impl<I: ExactSizeIterator, U, const AMOUNT_BYTES: usize> Debug
-    for PushedTooMany<I, U, AMOUNT_BYTES>
-{
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct(std::any::type_name::<Self>())
-            .field("pushed_amount", &self.values.len())
-            .field("max_amount", &self.max_amount())
-            .finish_non_exhaustive()
-    }
-}
-
-impl<I: ExactSizeIterator, U, const AMOUNT_BYTES: usize> Display
-    for PushedTooMany<I, U, AMOUNT_BYTES>
-{
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "attempted to push {} values into a log that support only {} values per update",
-            self.values.len(),
-            Self::MAX_AMOUNT
-        )
-    }
-}
-
-impl<I: ExactSizeIterator, U, const AMOUNT_BYTES: usize> Error
-    for PushedTooMany<I, U, AMOUNT_BYTES>
-{
-}
-
 /// A `&mut VecDeque<T>` wrapper that does not expose methods which remove from the deque.
 pub struct LogMut<'a, T>(&'a mut VecDeque<T>);
 
@@ -207,41 +164,10 @@ fn resize_ne_bytes<const N: usize, const M: usize>(arr: [u8; N]) -> [u8; M] {
 /// drained, and the second with `EntryAmount`, containing the entry type `U` of the log (if specified) and the
 /// amount of states/transitions per update, returned by the [`amount`](Self::amount) method.
 #[derive(Debug, Clone)]
-pub struct EntryAmount<U, const AMOUNT_BYTES: usize> {
+pub struct EntryAmount<U> {
     pub entry: U,
-    amount: AmountArray<AMOUNT_BYTES>,
-}
 
-#[derive(Copy, Clone)]
-struct AmountArray<const AMOUNT_BYTES: usize>([u8; AMOUNT_BYTES]);
-
-impl<const AMOUNT_BYTES: usize> Debug for AmountArray<AMOUNT_BYTES> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}", self.amount())
-    }
-}
-
-impl<const AMOUNT_BYTES: usize> AmountArray<AMOUNT_BYTES> {
-    fn amount(self) -> usize {
-        usize::from_ne_bytes(resize_ne_bytes(self.0))
-    }
-}
-
-impl<U, const AMOUNT_BYTES: usize> EntryAmount<U, AMOUNT_BYTES> {
-    const fn zero(entry: U) -> Self {
-        Self {
-            entry,
-            amount: AmountArray([0; AMOUNT_BYTES]),
-        }
-    }
-    fn new(entry: U, amount: usize) -> Self {
-        Self {
-            entry,
-            amount: AmountArray(resize_ne_bytes(amount.to_ne_bytes())),
-        }
-    }
-
-    /// Returns the amount of states/transitions of an update. This can be useful to chunk them.
+    /// The amount of transitions of an update. This can be useful to chunk them.
     ///
     /// # Examples
     ///
@@ -274,8 +200,24 @@ impl<U, const AMOUNT_BYTES: usize> EntryAmount<U, AMOUNT_BYTES> {
     ///     entry_amount.entry
     /// )).collect();
     /// ```
-    pub fn amount(&self) -> usize {
-        self.amount.amount()
+    pub amount: usize,
+}
+
+#[derive(Copy, Clone)]
+struct AmountArray<const AMOUNT_BYTES: usize>([u8; AMOUNT_BYTES]);
+
+impl<U> EntryAmount<U> {
+    const fn zero(entry: U) -> Self {
+        Self {
+            entry,
+            amount: 0,
+        }
+    }
+    fn new(entry: U, amount: usize) -> Self {
+        Self {
+            entry,
+            amount,
+        }
     }
 }
 
@@ -283,52 +225,3 @@ const INDEX_OOB: &'static str = "self.index should always be <= the deque len, s
     it without underflow is expected to result in a valid index into the log but this is not the case here, \
     the log was in an invalid state before calling the current method, this is a crate bug or the log was \
     deserialized with invalid data";
-
-#[cfg(test)]
-mod test {
-    use super::{EntryAmount, PushedTooMany, ValueEntry};
-
-    pub(super) fn collect_pop_result<
-        I1: Iterator<Item = char>,
-        I2: ExactSizeIterator<Item = char>,
-    >(
-        actual_pop: Result<Option<ValueEntry<I1, char>>, PushedTooMany<I2, char, 1>>,
-    ) -> Result<Option<(Vec<char>, char)>, (Vec<char>, char)> {
-        match actual_pop {
-            Ok(None) => Ok(None),
-            Ok(Some(value_entry)) => Ok(Some((value_entry.value.collect(), value_entry.entry))),
-            Err(err) => Err((err.values.collect(), err.entry)),
-        }
-    }
-
-    pub(super) fn collect_drain_result<
-        I1: ExactSizeIterator<Item = char>,
-        I2: Iterator<Item = EntryAmount<char, 1>>,
-        I3: ExactSizeIterator<Item = char>,
-    >(
-        actual_drain: Result<(I1, I2), PushedTooMany<I3, char, 1>>,
-    ) -> Result<Vec<(Vec<char>, char)>, (Vec<char>, char)> {
-        match actual_drain {
-            Ok(ok) => Ok(collect_drain(ok)),
-            Err(err) => Err((err.values.collect(), err.entry)),
-        }
-    }
-
-    pub(super) fn collect_drain<
-        I1: ExactSizeIterator<Item = char>,
-        I2: Iterator<Item = EntryAmount<char, 1>>,
-    >(
-        (mut values, entry_amounts): (I1, I2),
-    ) -> Vec<(Vec<char>, char)> {
-        let collected = entry_amounts
-            .map(|entry_amount| {
-                let amount = entry_amount.amount();
-                let values: Vec<_> = values.by_ref().take(amount).collect();
-                assert_eq!(values.len(), amount);
-                (values, entry_amount.entry)
-            })
-            .collect();
-        assert_eq!(values.len(), 0);
-        collected
-    }
-}
