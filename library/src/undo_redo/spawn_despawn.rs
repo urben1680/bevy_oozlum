@@ -15,7 +15,7 @@ use bevy::{
 };
 
 use crate::{
-    log::{TransitionsLog, OutOfLog, PreUpdateVariant},
+    log::{OutOfLog, TransitionsLog},
     meta::{NonLogNow, RevDirection, RevMeta},
 };
 
@@ -30,12 +30,6 @@ pub(crate) struct RevDespawnCleaner {
     despawn_queue: Vec<(Entity, MaybeLocation)>,
     spawn_buffer_queue: Vec<(Option<Entity>, MaybeLocation)>,
     spawn_buffer_queue_fallback: Vec<(Entity, MaybeLocation)>,
-}
-
-pub(crate) enum RevDespawnCleanerErr {
-    OutOfLog(RevMeta),
-    RevMetaMissing,
-    RevMetaNotRunning(RevMeta)
 }
 
 impl RevDespawnCleaner {
@@ -80,7 +74,12 @@ impl RevDespawnCleaner {
     }
 
     /// Despawn entities that contain [`RevDespawned`] and their relevant operation (spawn, despawn, move_components) fell out of log.
-    pub(crate) fn update_get_meta(&mut self, world: &mut World, not_running: &mut bool, out_of_log: &mut bool) -> Option<RevMeta> {
+    pub(crate) fn update_get_meta(
+        &mut self,
+        world: &mut World,
+        not_running: &mut bool,
+        out_of_log: &mut bool,
+    ) -> Option<RevMeta> {
         let meta = world.remove_resource::<RevMeta>()?;
         let direction = match meta.get_running_direction() {
             Some(direction) => direction,
@@ -98,17 +97,20 @@ impl RevDespawnCleaner {
             .chain(self.spawn.pre_update_drain_future(&meta).0)
             .chain(self.despawn.pre_update_drain_past(&meta).0);
 
+        world.insert_resource(meta);
+
         for entity in iter {
             let _ = world.try_despawn(entity); // todo: upstream a way to set the location
         }
-        
+
         let log_result = match direction {
             RevDirection::NOT_LOG => Ok(self.forward(world, past_len)),
             RevDirection::FORWARD_LOG => self.forward_log(),
             RevDirection::BackwardLog => self.backward_log(),
         };
         *out_of_log = log_result.is_err();
-        Some(meta)
+
+        world.remove_resource::<RevMeta>()
     }
 
     pub(crate) fn forward(&mut self, world: &mut World, max_past_len: usize) {

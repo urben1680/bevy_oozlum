@@ -17,7 +17,7 @@ fn setup() -> World {
     world.init_resource::<RevDespawnCleaner>();
     world.init_resource::<UndoRedoBuffer>();
     world.init_resource::<BundleIdOfOpCache>();
-    //world.insert_resource(RevMeta::RUNNING_TEST_SETUP); todo
+    world.insert_resource(RevMeta::running_new());
     world.register_disabling_component::<RevDespawned>();
     world
 }

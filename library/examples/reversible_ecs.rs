@@ -9,7 +9,7 @@ use bevy::{
 use crossterm::{ExecutableCommand, cursor::*, terminal::*};
 
 use bevy_oozlum::{
-    log::{TransitionLog, PastLenLog},
+    log::{PastLenLog, TransitionLog},
     meta::NonLogNow,
     prelude::*,
 };
@@ -54,7 +54,6 @@ fn main() {
     // Ignore this, not imporant for the reversible ECS showcase but for this app.
     let _scope_guard = ScopeGuard::new();
 
-    let meta = RevMeta::new(NonZeroU64::new(MAX_LOG_LEN), false);
     App::new()
         .insert_resource(RevMeta::new(NonZeroU64::new(MAX_LOG_LEN), false)) // todo fix plugin
         .add_plugins((
@@ -64,7 +63,7 @@ fn main() {
             // This one here adds the given RevMeta and adds its runner system, which calls
             // RevUpdate, in FixedUpdate. You most likely want to pick this schedule, or another
             // one which is called in FixedUpdate.
-            RevPlugin::add_meta_and_runner(meta, FixedUpdate),
+            RevPlugin::default(),
             // This example game consists of seven rows you can toss Waste in by pressing 1 to 7.
             // Each row is implemented as a plugin here that adds its system and other things if
             // needed. It makes no sense to give each row a different logic, but they shall show

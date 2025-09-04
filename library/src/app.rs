@@ -1,3 +1,5 @@
+use std::num::NonZeroU64;
+
 use bevy::{
     app::{App, FixedUpdate, Plugin},
     ecs::{
@@ -7,7 +9,6 @@ use bevy::{
         },
         system::ScheduleSystem,
     },
-    utils::default,
 };
 
 use crate::{
@@ -54,19 +55,39 @@ impl RevApp for App {
     }
 }
 
-// todo: rename to crate name
 pub enum RevPlugin {
     Minimum,
-    AddMeta(RevMeta),
-    AddMetaAndRunner(RevMeta, InternedScheduleLabel),
-    AddMetaAndRunnerInSet(RevMeta, InternedScheduleLabel, InternedSystemSet),
-    AddRunner(InternedScheduleLabel),
-    AddRunnerInSet(InternedScheduleLabel, InternedSystemSet),
+    AddMeta {
+        max_world_states: Option<NonZeroU64>,
+        paused: bool,
+    },
+    AddMetaAndRunner {
+        max_world_states: Option<NonZeroU64>,
+        paused: bool,
+        in_schedule: InternedScheduleLabel,
+    },
+    AddMetaAndRunnerInSet {
+        max_world_states: Option<NonZeroU64>,
+        paused: bool,
+        in_schedule: InternedScheduleLabel,
+        in_set: InternedSystemSet,
+    },
+    AddRunner {
+        in_schedule: InternedScheduleLabel,
+    },
+    AddRunnerInSet {
+        in_schedule: InternedScheduleLabel,
+        in_set: InternedSystemSet,
+    },
 }
 
 impl Default for RevPlugin {
     fn default() -> Self {
-        Self::add_meta_and_runner(default(), FixedUpdate)
+        Self::add_meta_and_runner(
+            RevMeta::DEFAULT_MAX_WORLD_STATES,
+            RevMeta::DEFAULT_PAUSED,
+            FixedUpdate,
+        )
     }
 }
 
@@ -74,24 +95,46 @@ impl RevPlugin {
     pub const fn minimum() -> Self {
         Self::Minimum
     }
-    pub const fn add_meta(meta: RevMeta) -> Self {
-        Self::AddMeta(meta)
+    pub const fn add_meta(max_world_states: Option<NonZeroU64>, paused: bool) -> Self {
+        Self::AddMeta {
+            max_world_states,
+            paused,
+        }
     }
-    pub fn add_meta_and_runner(meta: RevMeta, schedule: impl ScheduleLabel) -> Self {
-        Self::AddMetaAndRunner(meta, schedule.intern())
+    pub fn add_meta_and_runner(
+        max_world_states: Option<NonZeroU64>,
+        paused: bool,
+        in_schedule: impl ScheduleLabel,
+    ) -> Self {
+        Self::AddMetaAndRunner {
+            max_world_states,
+            paused,
+            in_schedule: in_schedule.intern(),
+        }
     }
     pub fn add_meta_and_runner_in_set(
-        meta: RevMeta,
-        schedule: impl ScheduleLabel,
-        set: impl SystemSet,
+        max_world_states: Option<NonZeroU64>,
+        paused: bool,
+        in_schedule: impl ScheduleLabel,
+        in_set: impl SystemSet,
     ) -> Self {
-        Self::AddMetaAndRunnerInSet(meta, schedule.intern(), set.intern())
+        Self::AddMetaAndRunnerInSet {
+            max_world_states,
+            paused,
+            in_schedule: in_schedule.intern(),
+            in_set: in_set.intern(),
+        }
     }
-    pub fn add_runner(schedule: impl ScheduleLabel) -> Self {
-        Self::AddRunner(schedule.intern())
+    pub fn add_runner(in_schedule: impl ScheduleLabel) -> Self {
+        Self::AddRunner {
+            in_schedule: in_schedule.intern(),
+        }
     }
-    pub fn add_runner_in_set(schedule: impl ScheduleLabel, set: impl SystemSet) -> Self {
-        Self::AddRunnerInSet(schedule.intern(), set.intern())
+    pub fn add_runner_in_set(in_schedule: impl ScheduleLabel, in_set: impl SystemSet) -> Self {
+        Self::AddRunnerInSet {
+            in_schedule: in_schedule.intern(),
+            in_set: in_set.intern(),
+        }
     }
 }
 
@@ -99,28 +142,45 @@ impl Plugin for RevPlugin {
     fn build(&self, app: &mut App) {
         // add meta
         match self {
-            Self::AddMeta(meta, ..)
-            | Self::AddMetaAndRunner(meta, ..)
-            | Self::AddMetaAndRunnerInSet(meta, ..) => {
+            Self::AddMeta {
+                max_world_states,
+                paused,
+                ..
+            }
+            | Self::AddMetaAndRunner {
+                max_world_states,
+                paused,
+                ..
+            }
+            | Self::AddMetaAndRunnerInSet {
+                max_world_states,
+                paused,
+                ..
+            } => {
+                let meta = RevMeta::new(*max_world_states, *paused);
                 if let Some(existing) = app.world().get_resource::<RevMeta>() {
-                    if /*existing != meta*/ false {
-                        bevy::log::warn!(
-                            "`RevSystemsPlugin::build` overwrote {existing:?} with {meta:?}"
-                        );
-                    }
+                    bevy::log::warn!("`RevPlugin::build` overwrote {existing:?} with {meta:?}");
                 }
-                //app.insert_resource(meta.clone()); todo
+                app.insert_resource(meta);
             }
             _ => {}
         };
 
         // add runner
         match self {
-            Self::AddMetaAndRunner(_, schedule) | Self::AddRunner(schedule) => {
-                app.add_systems(*schedule, RevMeta::try_run_rev_update);
+            Self::AddMetaAndRunner { in_schedule, .. } | Self::AddRunner { in_schedule } => {
+                app.add_systems(*in_schedule, RevMeta::try_run_rev_update);
             }
-            Self::AddMetaAndRunnerInSet(_, schedule, set) | Self::AddRunnerInSet(schedule, set) => {
-                app.add_systems(*schedule, RevMeta::try_run_rev_update.in_set(*set));
+            Self::AddMetaAndRunnerInSet {
+                in_schedule,
+                in_set,
+                ..
+            }
+            | Self::AddRunnerInSet {
+                in_schedule,
+                in_set,
+            } => {
+                app.add_systems(*in_schedule, RevMeta::try_run_rev_update.in_set(*in_set));
             }
             _ => {}
         }

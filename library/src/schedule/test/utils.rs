@@ -202,7 +202,6 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
 
     // run tests backward log
     let mut meta = world.resource_mut::<RevMeta>();
-    let end_frame = meta.now();
     meta.queue(RevDirection::BackwardLog);
     for (step, expected) in expected.iter().enumerate().rev() {
         test_step(

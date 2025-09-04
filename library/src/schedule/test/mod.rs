@@ -479,9 +479,8 @@ fn truncates_future_command_log() {
 
     panic_on_error_events();
 
-    let meta = RevMeta::new(None, false);
     let mut app = App::new();
-    app.add_plugins(RevPlugin::add_meta_and_runner(meta, Update))
+    app.add_plugins(RevPlugin::add_meta_and_runner(None, false, Update))
         .rev_add_systems(RevUpdate, system);
 
     app.update(); // do 1

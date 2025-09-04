@@ -19,7 +19,7 @@ use bevy::{
 };
 
 use crate::{
-    log::{TransitionsLog, PastLenLog},
+    log::{PastLenLog, TransitionsLog},
     meta::{NonLogNow, RevDirection, RevMeta},
 };
 
@@ -205,8 +205,8 @@ impl Debug for BoxedUndoRedo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.caller.into_option() {
             Some(location) => write!(f, "{} from {location}", self.name),
-            None => write!(f, "{}", self.name)
-        }        
+            None => write!(f, "{}", self.name),
+        }
     }
 }
 
@@ -298,11 +298,6 @@ pub(crate) enum UndoRedoLogError {
         direction: Option<RevDirection>,
         system_name: DebugName,
     },
-    PastLenLogsMissing {
-        now: u64,
-        direction: RevDirection,
-        system_name: DebugName,
-    },
     OutOfLog {
         now: u64,
         direction: RevDirection,
@@ -341,14 +336,6 @@ impl Display for UndoRedoLogError {
                     "RevDirection is {actual} when it was expected to be {expected} at frame {now} before the update of the UndoRedo log of reversible system {system_name}"
                 )
             }
-            Self::PastLenLogsMissing {
-                now,
-                direction,
-                system_name,
-            } => write!(
-                f,
-                "the PastLenLogs resource is missing while the reversible system {system_name} ran at {now} during {direction}"
-            ),
             Self::OutOfLog {
                 now,
                 direction,
@@ -369,31 +356,35 @@ impl UndoRedoLog {
         world: &mut World,
         system_name: &DebugName,
     ) -> Result<(), UndoRedoLogError> {
-        let meta = world
-            .get_resource::<RevMeta>()
-            .ok_or_else(|| UndoRedoLogError::RevMetaMissing {
-                system_name: system_name.clone(),
-            })?;
+        let meta =
+            world
+                .get_resource::<RevMeta>()
+                .ok_or_else(|| UndoRedoLogError::RevMetaMissing {
+                    system_name: system_name.clone(),
+                })?;
 
         self.past_len_log.pre_update(meta);
         self.undo_redo_log.pre_update(meta);
 
         let now = meta.now();
         match meta.get_ran_direction() {
-            Some(RevDirection::NOT_LOG) => {
-                world.try_resource_scope::<UndoRedoBuffer, _>(|world, mut buffer| {
+            Some(RevDirection::NOT_LOG) => world
+                .try_resource_scope::<UndoRedoBuffer, _>(|world, mut buffer| {
                     if !buffer.0.is_empty() {
                         let meta = world.resource::<RevMeta>();
                         let past_len = self.past_len_log.update_and_get_past_len(meta);
-                        self.undo_redo_log.push_and_truncate_past(past_len, |mut log| {
-                            log.extend(buffer.0.drain(..).map(|boxed| DebugHidden(boxed.undo_redo)))
-                        });
+                        self.undo_redo_log
+                            .push_and_truncate_past(past_len, |mut log| {
+                                log.extend(
+                                    buffer.0.drain(..).map(|boxed| DebugHidden(boxed.undo_redo)),
+                                )
+                            });
                     }
-                }).ok_or_else(|| UndoRedoLogError::UndoRedoBufferMissing {
+                })
+                .ok_or_else(|| UndoRedoLogError::UndoRedoBufferMissing {
                     now,
                     system_name: system_name.clone(),
-                })
-            }
+                }),
             Some(RevDirection::FORWARD_LOG) => {
                 if self.past_len_log.forward_log(meta) {
                     let iter = self
@@ -411,7 +402,7 @@ impl UndoRedoLog {
                     }
                 }
                 Ok(())
-            },
+            }
             direction => Err(UndoRedoLogError::RevDirectionMismatch {
                 now,
                 expected_forward: true,
@@ -425,11 +416,12 @@ impl UndoRedoLog {
         world: &mut World,
         system_name: &DebugName,
     ) -> Result<(), UndoRedoLogError> {
-        let meta = world
-            .get_resource::<RevMeta>()
-            .ok_or_else(|| UndoRedoLogError::RevMetaMissing {
-                system_name: system_name.to_owned(),
-            })?;
+        let meta =
+            world
+                .get_resource::<RevMeta>()
+                .ok_or_else(|| UndoRedoLogError::RevMetaMissing {
+                    system_name: system_name.to_owned(),
+                })?;
 
         self.past_len_log.pre_update(meta);
         self.undo_redo_log.pre_update(meta);
@@ -458,7 +450,7 @@ impl UndoRedoLog {
                 .map(|cell| cell.0.get());
             for command in iter {
                 command.undo(world);
-            }            
+            }
         }
 
         Ok(())

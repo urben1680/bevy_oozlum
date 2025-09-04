@@ -8,9 +8,7 @@ use std::{
 
 use crate::{log::PreUpdateVariant, meta::RevMeta};
 
-use super::{
-    TransitionLog, EntryAmount, LogMut, OutOfLog, ValueEntry,
-};
+use super::{OutOfLog, TransitionLog};
 
 #[derive(Debug)]
 pub struct TransitionsLog<T, U = ()> {
@@ -38,7 +36,8 @@ impl<T, U> TransitionsLog<T, U> {
         max_past_len: usize,
         c: impl FnOnce(LogMut<T>) -> IntoU,
     ) {
-        let (transition_drain, amount_drain) = self.push_and_get_transition_and_amount_drain(max_past_len, c);
+        let (transition_drain, amount_drain) =
+            self.push_and_get_transition_and_amount_drain(max_past_len, c);
         // todo: truncate_front https://github.com/rust-lang/rust/issues/140667
         self.transitions.drain(..transition_drain);
         self.amounts.drain_past(amount_drain);
@@ -49,7 +48,8 @@ impl<T, U> TransitionsLog<T, U> {
         c: impl FnOnce(LogMut<T>) -> IntoU,
     ) -> (Drain<T>, Drain<EntryAmount<U>>) {
         // for the + 1, see the comment in TransitionLog::push_and_drain_past
-        let (transition_drain, amount_drain) = self.push_and_get_transition_and_amount_drain(max_past_len + 1, c);
+        let (transition_drain, amount_drain) =
+            self.push_and_get_transition_and_amount_drain(max_past_len + 1, c);
         (
             self.transitions.drain(..transition_drain),
             self.amounts.drain_past(amount_drain),
@@ -63,7 +63,10 @@ impl<T, U> TransitionsLog<T, U> {
         self.transitions.truncate(self.index);
         let entry = c(LogMut(&mut self.transitions)).into();
         let pushed_amount = self.transitions.len() - self.index;
-        let entry_amount = EntryAmount::new(entry, pushed_amount);
+        let entry_amount = EntryAmount {
+            entry,
+            amount: pushed_amount,
+        };
         self.index = self.transitions.len();
         let to_drain = self
             .amounts
@@ -95,10 +98,7 @@ impl<T, U> TransitionsLog<T, U> {
         self.index = 0;
     }
     fn empty_drain(&mut self) -> (Drain<T>, Drain<EntryAmount<U>>) {
-        (
-            self.transitions.drain(..0),
-            self.amounts.empty_drain()
-        )
+        (self.transitions.drain(..0), self.amounts.empty_drain())
     }
     pub fn backward_log(&mut self) -> Result<ValueEntry<IterMut<T>, &mut U>, OutOfLog> {
         let old_index = self.index;
@@ -127,7 +127,10 @@ impl<T, U> TransitionsLog<T, U> {
             PreUpdateVariant::Nothing => {}
         }
     }
-    pub fn pre_update_drain_past<'a, 'm>(&'a mut self, meta: &'m RevMeta) -> (Drain<'a, T>, Drain<'a, EntryAmount<U>>) {
+    pub fn pre_update_drain_past<'a, 'm>(
+        &'a mut self,
+        meta: &'m RevMeta,
+    ) -> (Drain<'a, T>, Drain<'a, EntryAmount<U>>) {
         match self.amounts.pre_update_check(meta) {
             PreUpdateVariant::DropLog => {
                 self.truncate_future();
@@ -137,37 +140,130 @@ impl<T, U> TransitionsLog<T, U> {
                     self.transitions.drain(..),
                     self.amounts.drain_past(past_len),
                 );
-            },
+            }
             PreUpdateVariant::DropFuture => self.truncate_future(),
             PreUpdateVariant::Nothing => {}
         }
         self.empty_drain()
     }
-    pub fn pre_update_drain_future<'a, 'm>(&'a mut self, meta: &'m RevMeta) -> (Drain<'a, T>, Drain<'a, EntryAmount<U>>) {
+    pub fn pre_update_drain_future<'a, 'm>(
+        &'a mut self,
+        meta: &'m RevMeta,
+    ) -> (Drain<'a, T>, Drain<'a, EntryAmount<U>>) {
         match self.amounts.pre_update_check(meta) {
             PreUpdateVariant::DropLog => self.truncate_past(),
-            PreUpdateVariant::DropFuture => {},
-            PreUpdateVariant::Nothing => return self.empty_drain()
+            PreUpdateVariant::DropFuture => {}
+            PreUpdateVariant::Nothing => return self.empty_drain(),
         }
         self.drain_future()
     }
-    pub fn pre_update_drain<'a, 'm>(&'a mut self, meta: &'m RevMeta) -> (Drain<'a, T>, Drain<'a, EntryAmount<U>>, usize) {
+    pub fn pre_update_drain<'a, 'm>(
+        &'a mut self,
+        meta: &'m RevMeta,
+    ) -> (Drain<'a, T>, Drain<'a, EntryAmount<U>>, usize) {
         match self.amounts.pre_update_check(meta) {
             PreUpdateVariant::DropLog => {
                 let (entry_amounts, past_len) = self.amounts.full_drain();
                 self.index = 0;
                 (self.transitions.drain(..), entry_amounts, past_len)
-            },
+            }
             PreUpdateVariant::DropFuture => {
                 let (transitions, entry_amounts) = self.drain_future();
                 (transitions, entry_amounts, 0)
-            },
+            }
             PreUpdateVariant::Nothing => {
                 let (transitions, entry_amounts) = self.empty_drain();
                 (transitions, entry_amounts, 0)
             }
         }
     }
+}
+
+/// A `&mut VecDeque<T>` wrapper that does not expose methods which remove from the deque.
+pub struct LogMut<'a, T>(&'a mut VecDeque<T>);
+
+impl<'a, T> LogMut<'a, T> {
+    pub fn append(&mut self, other: &mut VecDeque<T>) {
+        self.0.append(other);
+    }
+    pub fn push(&mut self, value: T) {
+        self.0.push_back(value);
+    }
+}
+
+impl<'a, T> Extend<T> for LogMut<'a, T> {
+    fn extend<I: IntoIterator<Item = T>>(&mut self, iter: I) {
+        self.0.extend(iter);
+    }
+}
+
+impl<'a, T> Extend<&'a T> for LogMut<'a, T>
+where
+    T: 'a + Copy,
+{
+    fn extend<I: IntoIterator<Item = &'a T>>(&mut self, iter: I) {
+        self.0.extend(iter);
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ValueEntry<T, U> {
+    pub value: T,
+    pub entry: U,
+}
+
+impl<'a, T: Iterator, U> IntoIterator for &'a mut ValueEntry<T, U> {
+    type IntoIter = &'a mut T;
+    type Item = T::Item;
+    fn into_iter(self) -> Self::IntoIter {
+        &mut self.value
+    }
+}
+
+/// `EntryAmount` is usually encountered in draining methods of logs with multiple states/transitions per update,
+/// for example [`DenseStatesLog`] which will be behind the `log` variable in the following code snippets.
+///
+/// These methods return two draining iterators, the first with the states/transitions of all updates that are
+/// drained, and the second with `EntryAmount`, containing the entry type `U` of the log (if specified) and the
+/// amount of states/transitions per update, returned by the [`amount`](Self::amount) method.
+#[derive(Debug, Clone)]
+pub struct EntryAmount<U> {
+    pub entry: U,
+
+    /// The amount of transitions of an update. This can be useful to chunk them.
+    ///
+    /// # Examples
+    ///
+    /// With `log` being [`&mut DenseStatesLog`](DenseStatesLog) and [`DenseStatesLog::drain_future`] returning the
+    /// draining iterators, do this to chunk them by updates:
+    ///
+    /// ```
+    /// # let mut log = library::log::DenseStatesLog::<i32, (), 1>::new([0], ());
+    /// let (mut future_states, future_entry_amounts) = log.drain_future();
+    /// ```
+    ///
+    /// Now iterate...
+    /// ```
+    /// # let mut log = library::log::DenseStatesLog::<i32, (), 1>::new([0], ());
+    /// # let (mut future_states, future_entry_amounts) = log.drain_future();
+    /// for entry_amount in future_entry_amounts {
+    ///     let entry = entry_amount.entry;
+    ///     for future_states in future_states.by_ref().take(entry_amount.amount()) {
+    ///         // logic
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// ...or collect them:
+    /// ```
+    /// # let mut log = library::log::DenseStatesLog::<i32, (), 1>::new([0], ());
+    /// # let (mut future_states, future_entry_amounts) = log.drain_future();
+    /// let updates: Vec<(Vec<_>, _)> = future_entry_amounts.map(|entry_amount| (
+    ///     future_states.by_ref().take(entry_amount.amount()).collect(),
+    ///     entry_amount.entry
+    /// )).collect();
+    /// ```
+    pub amount: usize,
 }
 
 #[cfg(test)]

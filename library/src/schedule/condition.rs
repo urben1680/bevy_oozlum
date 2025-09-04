@@ -27,7 +27,6 @@ pub(super) fn into_rev_condition<Marker>(
         meta_id: default(),
         run_log: default(),
         run_or_err_log: default(),
-        out_of_log_err: false,
     };
     Box::new(condition)
 }
@@ -37,7 +36,6 @@ struct RevCondition<T> {
     meta_id: Option<ComponentId>,
     run_log: PastLenLog,
     run_or_err_log: TransitionLog<Result<(), Box<RevRunSystemError>>>,
-    out_of_log_err: bool,
 }
 
 #[derive(Clone)]
@@ -133,20 +131,20 @@ impl<T: ReadOnlySystem<In = (), Out = bool>> System for RevCondition<T> {
                         let past_len = self.run_log.update_and_get_past_len(meta);
                         self.run_or_err_log.push_and_truncate_past(past_len, Ok(()));
                         Ok(true)
-                    },
+                    }
                     Err(RunSystemError::Skipped(skipped)) => {
                         let past_len = self.run_log.update_and_get_past_len(meta);
                         self.run_or_err_log.push_and_truncate_past(
                             past_len,
-                            Err(Box::new(RevRunSystemError::Skipped(skipped.clone())))
+                            Err(Box::new(RevRunSystemError::Skipped(skipped.clone()))),
                         );
                         Err(RunSystemError::Skipped(skipped))
-                    },
+                    }
                     Err(RunSystemError::Failed(failed)) => {
                         let past_len = self.run_log.update_and_get_past_len(meta);
                         self.run_or_err_log.push_and_truncate_past(
                             past_len,
-                            Err(Box::new(RevRunSystemError::Failed(format!("{failed}"))))
+                            Err(Box::new(RevRunSystemError::Failed(format!("{failed}")))),
                         );
                         Err(RunSystemError::Failed(failed))
                     }
@@ -154,42 +152,42 @@ impl<T: ReadOnlySystem<In = (), Out = bool>> System for RevCondition<T> {
             }
             // todo: simplify error msg, can only be internal bug
             // todo: upstream systems returning Result<bool, BevyError> be valid conditions
-            RevDirection::FORWARD_LOG => if self.run_log.forward_log(meta) {
-                match self.run_or_err_log.forward_log() {
-                    Ok(Ok(_)) => Ok(true),
-                    Ok(Err(err)) => {
-                        match &**err {
-                            RevRunSystemError::Skipped(skipped) => Err(
-                                RunSystemError::Skipped(skipped.clone())
-                            ),
-                            RevRunSystemError::Failed(failed) => Err(
-                                RunSystemError::Failed(failed.as_str().into())
-                            )
-                        }
-                    },
-                    Err(OutOfLog) => panic!("todo")
+            RevDirection::FORWARD_LOG => {
+                if self.run_log.forward_log(meta) {
+                    match self.run_or_err_log.forward_log() {
+                        Ok(Ok(_)) => Ok(true),
+                        Ok(Err(err)) => match &**err {
+                            RevRunSystemError::Skipped(skipped) => {
+                                Err(RunSystemError::Skipped(skipped.clone()))
+                            }
+                            RevRunSystemError::Failed(failed) => {
+                                Err(RunSystemError::Failed(failed.as_str().into()))
+                            }
+                        },
+                        Err(OutOfLog) => panic!("todo"),
+                    }
+                } else {
+                    Ok(false)
                 }
-            } else {
-                Ok(false)
-            },
-            RevDirection::BackwardLog => if self.run_log.backward_log(meta) {
-                match self.run_or_err_log.backward_log() {
-                    Ok(Ok(_)) => Ok(true),
-                    Ok(Err(err)) => {
-                        match &**err {
-                            RevRunSystemError::Skipped(skipped) => Err(
-                                RunSystemError::Skipped(skipped.clone())
-                            ),
-                            RevRunSystemError::Failed(failed) => Err(
-                                RunSystemError::Failed(failed.as_str().into())
-                            )
-                        }
-                    },
-                    Err(OutOfLog) => panic!("todo")
+            }
+            RevDirection::BackwardLog => {
+                if self.run_log.backward_log(meta) {
+                    match self.run_or_err_log.backward_log() {
+                        Ok(Ok(_)) => Ok(true),
+                        Ok(Err(err)) => match &**err {
+                            RevRunSystemError::Skipped(skipped) => {
+                                Err(RunSystemError::Skipped(skipped.clone()))
+                            }
+                            RevRunSystemError::Failed(failed) => {
+                                Err(RunSystemError::Failed(failed.as_str().into()))
+                            }
+                        },
+                        Err(OutOfLog) => panic!("todo"),
+                    }
+                } else {
+                    Ok(false)
                 }
-            } else {
-                Ok(false)
-            },
+            }
         }
     }
     fn apply_deferred(&mut self, _world: &mut World) {}

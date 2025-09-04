@@ -1,3 +1,4 @@
+use crate::{log::PreUpdateVariant, meta::RevMeta};
 use core::fmt::Debug;
 use std::{
     cmp::Ordering,
@@ -6,9 +7,9 @@ use std::{
     ops::ControlFlow,
 };
 
-use crate::{log::{
-    OutOfLog
-}, meta::{PastLenLimits, PastLenState, RevMeta}};
+pub(crate) mod limits;
+
+use limits::*;
 
 const MAX_ZEROES_PER_BYTE: u8 = 65;
 const MAX_ZEROES_AS_BYTE: u8 = 0b10_111111;
@@ -342,64 +343,6 @@ impl DoubleEndedIterator for OffsetIter<'_> {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct PastLenNotLog {
-    pub clear: bool,
-    pub past_len: usize,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum PastLenForwardLog {
-    Update,
-    Skip(PreUpdateVariant),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum PastLenBackwardLog {
-    Update { truncate_future: bool },
-    Skip(PreUpdateVariant),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum PreUpdateVariant {
-    Nothing,
-    DropFuture,
-    DropLog,
-}
-
-pub trait WithPastLenLog {
-    type LogOut<'a>
-    where
-        Self: 'a;
-    fn forward_log_with<'a>(
-        &'a mut self,
-        past_len_result: PastLenForwardLog,
-    ) -> Result<Self::LogOut<'a>, OutOfLog>;
-    fn backward_log_with<'a>(
-        &'a mut self,
-        past_len_result: PastLenBackwardLog,
-    ) -> Result<Self::LogOut<'a>, OutOfLog>;
-    fn clear_or_truncate_future(&mut self, skip_and: PreUpdateVariant);
-}
-
-impl PastLenBackwardLog {
-    pub fn apply<'a, T: WithPastLenLog>(self, log: &'a mut T) -> Result<T::LogOut<'a>, OutOfLog> {
-        log.backward_log_with(self)
-    }
-}
-
-impl PastLenForwardLog {
-    pub fn apply<'a, T: WithPastLenLog>(self, log: &'a mut T) -> Result<T::LogOut<'a>, OutOfLog> {
-        log.forward_log_with(self)
-    }
-}
-
-impl PreUpdateVariant {
-    pub fn apply(self, log: &mut impl WithPastLenLog) {
-        log.clear_or_truncate_future(self);
-    }
-}
-
 macro_rules! bytes_len_disclaimer {
     () => {
         "\nNote that the number of bytes have no relation to the length of the log."
@@ -611,7 +554,10 @@ impl PastLenLog {
         self.offset_bytes.drain(..to_drain);
 
         // push present offset
-        meta.push_past_len_update(self.update_state.expect("todo"), PastLenLimits::not_log_limit(meta.now()));
+        meta.past_len_limits().push_past_len_update(
+            self.update_state.expect("todo"),
+            PastLenLimit::not_log_limit(meta.now()),
+        );
         let mut offset = meta.now() - self.last_update;
         self.last_update = meta.now();
         self.past_len += 1;
@@ -746,7 +692,10 @@ impl PastLenLog {
             Ordering::Greater => return false,
         };
 
-        meta.push_past_len_update(self.update_state.expect("todo"), PastLenLimits::log_limits(backward_limit, meta.now()));
+        meta.past_len_limits().push_past_len_update(
+            self.update_state.expect("todo"),
+            PastLenLimit::log_limits(backward_limit, meta.now()),
+        );
 
         true
     }
@@ -839,7 +788,10 @@ impl PastLenLog {
             None => return false,
         };
 
-        meta.push_past_len_update(self.update_state.expect("todo"), PastLenLimits::log_limits(meta.now(), forward_limit));
+        meta.past_len_limits().push_past_len_update(
+            self.update_state.expect("todo"),
+            PastLenLimit::log_limits(meta.now(), forward_limit),
+        );
         true
     }
 
@@ -854,8 +806,6 @@ impl PastLenLog {
 
 #[cfg(test)]
 mod test {
-    use std::num::NonZeroU64;
-
     use super::*;
 
     #[test]
