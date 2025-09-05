@@ -1,12 +1,11 @@
 use std::{
     collections::{
-        VecDeque,
-        vec_deque::{Drain, IterMut},
+        vec_deque::{Drain, IterMut}, VecDeque
     },
-    fmt::Debug,
+    fmt::Debug, marker::PhantomData, ops::{Deref, DerefMut},
 };
 
-use crate::{log::PreUpdateVariant, meta::RevMeta};
+use crate::{log::{transition::TransitionDrains, PreUpdateVariant, TransitionDrain, TransitionDrainFuture, TransitionDrainPast}, meta::RevMeta};
 
 use super::{OutOfLog, TransitionLog};
 
@@ -15,6 +14,61 @@ pub struct TransitionsLog<T, U = ()> {
     amounts: TransitionLog<EntryAmount<U>>,
     transitions: VecDeque<T>,
     index: usize,
+}
+
+pub struct TransitionsDrains<'log, T, U> {
+    transitions: Drain<'log, T>,
+    past_len: usize,
+    entry_amounts: TransitionDrains<'log, EntryAmount<U>>
+}
+
+pub type TransitionsDrainPast<'a, 'log, T, U> = TransitionsDrainChunkable<TransitionDrainPast<'a, 'log, T>, TransitionDrainPast<'a, 'log, EntryAmount<U>>, U>;
+pub type TransitionsDrainFuture<'log, T, U> = TransitionsDrainChunkable<TransitionDrainFuture<'log, T>, TransitionDrainFuture<'log, EntryAmount<U>>, U>;
+pub type TransitionsDrain<'log, T, U> = TransitionsDrainChunkable<TransitionDrain<'log, T>, TransitionDrain<'log, EntryAmount<U>>, U>;
+
+impl<'log, T, U> TransitionsDrains<'log, T, U> {
+    pub fn past<'a>(&'a mut self) -> TransitionsDrainPast<'a, 'log, T, U> {
+        let past_len = self.past_len;
+        self.past_len = 0;
+        TransitionsDrainChunkable {
+            transitions: self.transitions.by_ref().take(past_len),
+            entry_amounts: self.entry_amounts.past(),
+            _p: PhantomData
+        }
+    }
+    pub fn future(self) -> TransitionsDrainFuture<'log, T, U> {
+        TransitionsDrainChunkable {
+            transitions: self.transitions.skip(self.past_len),
+            entry_amounts: self.entry_amounts.future(),
+            _p: PhantomData
+        }
+    }
+    pub fn all(self) -> TransitionsDrain<'log, T, U> {
+        TransitionsDrainChunkable {
+            transitions: self.transitions,
+            entry_amounts: self.entry_amounts.all(),
+            _p: PhantomData
+        }
+    }
+}
+
+pub struct TransitionsDrainChunkable<TI, UI, U> {
+    pub transitions: TI,
+    pub entry_amounts: UI,
+    _p: PhantomData<fn(UI) -> U>
+}
+
+impl<TI, UI, U> TransitionsDrainChunkable<TI, UI, U>
+where
+    TI: Iterator,
+    UI: Iterator<Item = EntryAmount<U>>
+{
+    pub fn next_chunk<'a>(&'a mut self) -> Option<(core::iter::Take<&'a mut TI>, U)> {
+        self.entry_amounts.next().map(|entry_amount| (
+            self.transitions.by_ref().take(entry_amount.amount),
+            entry_amount.entry
+        ))
+    }
 }
 
 impl<T, U> Default for TransitionsLog<T, U> {
@@ -33,7 +87,7 @@ impl<T, U> TransitionsLog<T, U> {
     }
     pub fn push_and_truncate_past<IntoU: Into<U>>(
         &mut self,
-        max_past_len: usize,
+        max_past_len: u64,
         c: impl FnOnce(LogMut<T>) -> IntoU,
     ) {
         let (transition_drain, amount_drain) =
@@ -44,23 +98,24 @@ impl<T, U> TransitionsLog<T, U> {
     }
     pub fn push_and_drain_past<IntoU: Into<U>>(
         &mut self,
-        max_past_len: usize,
+        max_past_len: u64,
         c: impl FnOnce(LogMut<T>) -> IntoU,
-    ) -> (Drain<T>, Drain<EntryAmount<U>>) {
-        // for the + 1, see the comment in TransitionLog::push_and_drain_past
+    ) -> TransitionsDrain<T, U> {
+        // for the + 1, see the comment in TransitionLog::push_and_get_drain
         let (transition_drain, amount_drain) =
             self.push_and_get_transition_and_amount_drain(max_past_len + 1, c);
-        (
-            self.transitions.drain(..transition_drain),
-            self.amounts.drain_past(amount_drain),
-        )
+        TransitionsDrainChunkable {
+            transitions: self.transitions.drain(..transition_drain),
+            entry_amounts: self.amounts.drain_past(amount_drain),
+            _p: PhantomData
+        }
     }
     fn push_and_get_transition_and_amount_drain<IntoU: Into<U>>(
         &mut self,
-        max_past_len: usize,
+        max_past_len: u64,
         c: impl FnOnce(LogMut<T>) -> IntoU,
     ) -> (usize, usize) {
-        self.transitions.truncate(self.index);
+        assert_eq!(self.index, self.transitions.len()); // do not truncate here, call pre_update!
         let entry = c(LogMut(&mut self.transitions)).into();
         let pushed_amount = self.transitions.len() - self.index;
         let entry_amount = EntryAmount {
@@ -75,30 +130,6 @@ impl<T, U> TransitionsLog<T, U> {
         let transition_drain: usize = to_drain.map(|entry_amount| entry_amount.amount).sum();
         self.index -= transition_drain;
         (transition_drain, amount_drain)
-    }
-    fn truncate_future(&mut self) {
-        self.transitions.truncate(self.index);
-        self.amounts.truncate_future();
-    }
-    fn truncate_past(&mut self) {
-        // todo: truncate_front https://github.com/rust-lang/rust/issues/140667
-        self.transitions.drain(..self.index);
-        self.index = 0;
-        self.amounts.truncate_past();
-    }
-    fn drain_future(&mut self) -> (Drain<T>, Drain<EntryAmount<U>>) {
-        (
-            self.transitions.drain(self.index..),
-            self.amounts.drain_future(),
-        )
-    }
-    fn clear(&mut self) {
-        self.transitions.clear();
-        self.amounts.clear();
-        self.index = 0;
-    }
-    fn empty_drain(&mut self) -> (Drain<T>, Drain<EntryAmount<U>>) {
-        (self.transitions.drain(..0), self.amounts.empty_drain())
     }
     pub fn backward_log(&mut self) -> Result<ValueEntry<IterMut<T>, &mut U>, OutOfLog> {
         let old_index = self.index;
@@ -122,58 +153,45 @@ impl<T, U> TransitionsLog<T, U> {
     }
     pub fn pre_update(&mut self, meta: &RevMeta) {
         match self.amounts.pre_update_check(meta) {
-            PreUpdateVariant::DropLog => self.clear(),
-            PreUpdateVariant::DropFuture => self.truncate_future(),
+            PreUpdateVariant::DropLog => {
+                self.transitions.clear();
+                self.amounts.clear();
+                self.index = 0;
+            },
+            PreUpdateVariant::DropFuture => {
+                self.transitions.truncate(self.index);
+                self.amounts.truncate_future();
+            },
             PreUpdateVariant::Nothing => {}
         }
     }
-    pub fn pre_update_drain_past<'a, 'm>(
-        &'a mut self,
+    pub fn pre_update_drain<'log, 'm>(
+        &'log mut self,
         meta: &'m RevMeta,
-    ) -> (Drain<'a, T>, Drain<'a, EntryAmount<U>>) {
+    ) -> TransitionsDrains<'log, T, U> {
         match self.amounts.pre_update_check(meta) {
             PreUpdateVariant::DropLog => {
-                self.truncate_future();
                 let past_len = self.index;
                 self.index = 0;
-                return (
-                    self.transitions.drain(..),
-                    self.amounts.drain_past(past_len),
-                );
-            }
-            PreUpdateVariant::DropFuture => self.truncate_future(),
-            PreUpdateVariant::Nothing => {}
-        }
-        self.empty_drain()
-    }
-    pub fn pre_update_drain_future<'a, 'm>(
-        &'a mut self,
-        meta: &'m RevMeta,
-    ) -> (Drain<'a, T>, Drain<'a, EntryAmount<U>>) {
-        match self.amounts.pre_update_check(meta) {
-            PreUpdateVariant::DropLog => self.truncate_past(),
-            PreUpdateVariant::DropFuture => {}
-            PreUpdateVariant::Nothing => return self.empty_drain(),
-        }
-        self.drain_future()
-    }
-    pub fn pre_update_drain<'a, 'm>(
-        &'a mut self,
-        meta: &'m RevMeta,
-    ) -> (Drain<'a, T>, Drain<'a, EntryAmount<U>>, usize) {
-        match self.amounts.pre_update_check(meta) {
-            PreUpdateVariant::DropLog => {
-                let (entry_amounts, past_len) = self.amounts.full_drain();
-                self.index = 0;
-                (self.transitions.drain(..), entry_amounts, past_len)
+                TransitionsDrains {
+                    transitions: self.transitions.drain(..),
+                    past_len,
+                    entry_amounts: self.amounts.full_drain()
+                }
             }
             PreUpdateVariant::DropFuture => {
-                let (transitions, entry_amounts) = self.drain_future();
-                (transitions, entry_amounts, 0)
+                TransitionsDrains {
+                    transitions: self.transitions.drain(self.index..),
+                    past_len: 0,
+                    entry_amounts: self.amounts.drain_future(),
+                }
             }
             PreUpdateVariant::Nothing => {
-                let (transitions, entry_amounts) = self.empty_drain();
-                (transitions, entry_amounts, 0)
+                TransitionsDrains {
+                    transitions: self.transitions.drain(..0),
+                    past_len: 0,
+                    entry_amounts: self.amounts.empty_drain(),
+                }
             }
         }
     }
@@ -266,289 +284,266 @@ pub struct EntryAmount<U> {
     pub amount: usize,
 }
 
-#[cfg(test)]
+#[cfg(testa)]
 mod test {
-    /*
+    use std::num::NonZeroU64;
+
+    use crate::meta::{RevDirection, RevQueue};
+
     use super::*;
 
-    use crate::log::test::{collect_drain, collect_drain_result, collect_pop_result};
-
-    pub(super) fn collect_pop_result<
-        I1: Iterator<Item = char>,
-        I2: ExactSizeIterator<Item = char>,
-    >(
-        actual_pop: Result<Option<ValueEntry<I1, char>>, PushedTooMany<I2, char>>,
-    ) -> Result<Option<(Vec<char>, char)>, (Vec<char>, char)> {
-        match actual_pop {
-            Ok(None) => Ok(None),
-            Ok(Some(value_entry)) => Ok(Some((value_entry.value.collect(), value_entry.entry))),
-            Err(err) => Err((err.values.collect(), err.entry)),
-        }
+    struct MetaAndLogs {
+        meta: RevMeta,
+        with_past_drain: TransitionsLog<char, char>,
+        without_past_drain: TransitionsLog<char, char>,
     }
 
-    pub(super) fn collect_drain_result<
-        I1: ExactSizeIterator<Item = char>,
-        I2: Iterator<Item = EntryAmount<char>>,
-        I3: ExactSizeIterator<Item = char>,
-    >(
-        actual_drain: Result<(I1, I2), PushedTooMany<I3, char>>,
-    ) -> Result<Vec<(Vec<char>, char)>, (Vec<char>, char)> {
-        match actual_drain {
-            Ok(ok) => Ok(collect_drain(ok)),
-            Err(err) => Err((err.values.collect(), err.entry)),
-        }
-    }
-
-    pub(super) fn collect_drain<
-        I1: ExactSizeIterator<Item = char>,
-        I2: Iterator<Item = EntryAmount<char>>,
-    >(
-        (mut values, entry_amounts): (I1, I2),
-    ) -> Vec<(Vec<char>, char)> {
-        let collected = entry_amounts
+    fn collect_drain(
+        mut iter_t: impl Iterator<Item = char>,
+        iter_u: impl Iterator<Item = EntryAmount<char>>,
+    ) -> Vec<(String, char)> {
+        iter_u
             .map(|entry_amount| {
-                let amount = entry_amount.amount;
-                let values: Vec<_> = values.by_ref().take(amount).collect();
-                assert_eq!(values.len(), amount);
-                (values, entry_amount.entry)
+                (
+                    iter_t.by_ref().take(entry_amount.amount).collect(),
+                    entry_amount.entry,
+                )
             })
-            .collect();
-        assert_eq!(values.len(), 0);
-        collected
+            .collect()
     }
 
-    #[test]
-    fn serialize() {
-        #[derive(Serialize, Deserialize)]
-        struct Logs {
-            full: DenseTransitionsLog<char, u8>,
-            #[serde(with = "crate::log::with_capacity")]
-            full_with_capacity: DenseTransitionsLog<char, u8>,
-            #[serde(with = "crate::log::logless_with_capacity")]
-            logless_with_capacity: DenseTransitionsLog<char, u8>,
-        }
-
-        let mut original = DenseTransitionsLog::new();
-        original.push_and_pop_past(usize::MAX, |mut log| {
-            log.extend(['a', 'b']);
-            1
-        });
-        original.push_and_pop_past(usize::MAX, |mut log| {
-            log.extend(['c', 'd']);
-            2
-        });
-        original.backward_log().expect("in log");
-
-        let mut logs = Logs {
-            full: original.clone(),
-            full_with_capacity: original.clone(),
-            logless_with_capacity: original.clone(),
-        };
-
-        logs.full.entries_reserve_exact(98);
-        logs.full_with_capacity.entries_reserve_exact(98);
-        logs.logless_with_capacity.entries_reserve_exact(98);
-
-        logs.full.transitions_reserve_exact(196);
-        logs.full_with_capacity.transitions_reserve_exact(196);
-        logs.logless_with_capacity.transitions_reserve_exact(196);
-
-        let serialized = serde_json::to_string_pretty(&logs).unwrap();
-        let Logs {
-            full,
-            full_with_capacity,
-            logless_with_capacity,
-        } = serde_json::from_str(&serialized).unwrap();
-
-        let test = |log: &DenseTransitionsLog<char, u8>,
-                    entries_len,
-                    transitions_len,
-                    with_capacity| {
-            assert_eq!(
-                log.entries_len(),
-                entries_len,
-                "before: {original:#?}\nserialized: {serialized}\nafter: {log:#?}"
-            );
-            assert_eq!(
-                log.transitions_len(),
-                transitions_len,
-                "before: {original:#?}\nserialized: {serialized}\nafter: {log:#?}"
-            );
-            assert_eq!(
-                log.entries_capacity() >= 100,
-                with_capacity,
-                "before: {original:#?}\nserialized: {serialized}\nafter: {log:#?}\ncapacity: {}",
-                log.entries_capacity()
-            );
-            assert_eq!(
-                log.transitions_capacity() >= 200,
-                with_capacity,
-                "before: {original:#?}\nserialized: {serialized}\nafter: {log:#?}\ncapacity: {}",
-                log.transitions_capacity()
-            );
-        };
-
-        test(&full, 2, 4, false);
-        test(&full_with_capacity, 2, 4, true);
-        test(&logless_with_capacity, 0, 0, true);
+    fn value_entry_to_tuple(value_entry: ValueEntry<IterMut<char>, &mut char>) -> (String, char) {
+        (
+            value_entry.value.map(|char| *char).collect(),
+            *value_entry.entry,
+        )
     }
 
-    struct Logs(Vec<[DenseTransitionsLog<char, char, 1>; 2]>);
-
-    impl Logs {
-        fn new() -> Self {
-            Self(vec![Default::default()])
+    impl MetaAndLogs {
+        fn new(max_world_states: u64) -> Self {
+            Self {
+                meta: RevMeta::new(NonZeroU64::new(max_world_states), false),
+                with_past_drain: TransitionsLog::new(),
+                without_past_drain: TransitionsLog::new(),
+            }
         }
-        fn forward(
+        fn forward<const N: usize, const M: usize>(
             &mut self,
-            max_past_len: usize,
-            push_transitions: Vec<char>,
-            push_entry: char,
-            expected_transitions_len: usize,
-            expected_entries_len: usize,
-            expected_pop_or_amount_err: Result<Option<(Vec<char>, char)>, ()>,
+            past_drain: [(String, char); N],
+            future_drain: [(String, char); M],
+            push: (String, char),
+            clear: bool,
         ) {
-            let expected_pop_or_amount_err =
-                expected_pop_or_amount_err.map_err(|()| (push_transitions.clone(), push_entry));
-            let expected_drained_or_amount_err = expected_pop_or_amount_err
-                .clone()
-                .map(|expected_drained| expected_drained.into_iter().collect::<Vec<_>>());
-            for [log1, log2] in self.0.iter_mut() {
-                let before = log1.clone();
-                let actual_pop = log1.try_push_and_pop_past(max_past_len, |mut logs| {
-                    logs.extend(push_transitions.clone());
-                    push_entry
-                });
-                let actual_pop = collect_pop_result(actual_pop);
-                assert_eq!(
-                    actual_pop,
-                    expected_pop_or_amount_err.clone(),
-                    "\nbefore: {before:#?}\nafter: {log1:#?}"
-                );
-                assert_eq!(
-                    log1.transitions_len(),
-                    expected_transitions_len,
-                    "\nbefore: {before:#?}\nafter: {log1:#?}"
-                );
-                assert_eq!(
-                    log1.entries_len(),
-                    expected_entries_len,
-                    "\nbefore: {before:#?}\nafter: {log1:#?}"
-                );
+            let queue = if clear {
+                RevQueue::CLEAR_THEN_RUN
+            } else {
+                RevQueue::RUN_NOT_LOG
+            };
+            self.meta.set_queue(queue);
+            self.meta.update_ref(true, |meta, direction| {
+                assert_eq!(direction, RevDirection::NOT_LOG);
 
-                let before = log2.clone();
-                let actual_drain = log2.try_push_and_drain_past(max_past_len, |mut log| {
-                    log.extend(push_transitions.clone());
-                    push_entry
-                });
-                let actual_drain = collect_drain_result(actual_drain);
-                assert_eq!(
-                    actual_drain,
-                    expected_drained_or_amount_err.clone(),
-                    "\nbefore: {before:#?}\nafter: {log2:#?}"
-                );
-                assert_eq!(
-                    log2.transitions_len(),
-                    expected_transitions_len,
-                    "\nbefore: {before:#?}\nafter: {log2:#?}"
-                );
-                assert_eq!(
-                    log2.entries_len(),
-                    expected_entries_len,
-                    "\nbefore: {before:#?}\nafter: {log2:#?}"
-                );
-            }
-        }
-        fn forward_log(&mut self, expected_transitions: Result<(Vec<char>, char), OutOfLog>) {
-            for log in self.0.iter_mut().flatten() {
-                let before = log.clone();
-                let actual_transitions = log.forward_log().map(|value_entry| {
-                    (
-                        value_entry.value.map(|state| *state).collect::<Vec<_>>(),
-                        *value_entry.entry,
-                    )
-                });
-                assert_eq!(
-                    actual_transitions, expected_transitions,
-                    "\nbefore: {before:#?}\nafter: {log:#?}"
-                );
-            }
-        }
-        fn backward_log(&mut self, expected_transitions: Result<(Vec<char>, char), OutOfLog>) {
-            for log in self.0.iter_mut().flatten() {
-                let before = log.clone();
-                let actual_transitions = log.backward_log().map(|value_entry| {
-                    (
-                        value_entry.value.map(|state| *state).collect::<Vec<_>>(),
-                        *value_entry.entry,
-                    )
-                });
-                assert_eq!(
-                    actual_transitions, expected_transitions,
-                    "\nbefore: {before:#?}\nafter: {log:#?}"
-                );
-            }
-        }
-        fn drain_future(
-            &mut self,
-            expected_future: Vec<(Vec<char>, char)>,
-            expected_transitions_len: usize,
-            expected_entries_len: usize,
-        ) {
-            self.0 = std::mem::take(&mut self.0)
-                .into_iter()
-                .flatten()
-                .map(|mut log| {
-                    let before = log.clone();
-                    let actual_future = collect_drain(log.drain_future());
+                // with_past_drain
+                let (mut iter_t, mut iter_u, past_len) =
+                    self.with_past_drain.pre_update_drain(meta);
+                if clear {
                     assert_eq!(
-                        log.transitions_len(),
-                        expected_transitions_len,
-                        "\nbefore: {before:#?}\nafter: {log:#?}"
+                        collect_drain(iter_t.by_ref(), iter_u.by_ref().take(past_len)),
+                        past_drain
+                    );
+                } else {
+                    assert_eq!(past_len, 0);
+                }
+                assert_eq!(collect_drain(iter_t, iter_u), future_drain);
+                let (iter_t, iter_u) =
+                    self.with_past_drain
+                        .push_and_drain_past(meta.past_len(), |mut log| {
+                            log.extend(push.0.chars());
+                            push.1
+                        });
+                let drained = collect_drain(iter_t, iter_u);
+                if clear {
+                    assert_eq!(drained, []);
+                } else {
+                    assert_eq!(drained, past_drain)
+                }
+
+                // without_past_drain
+                let (iter_t, iter_u) = self.without_past_drain.pre_update_drain_future(meta);
+                assert_eq!(collect_drain(iter_t, iter_u), future_drain);
+                self.without_past_drain
+                    .push_and_truncate_past(meta.past_len(), |mut log| {
+                        log.extend(push.0.chars());
+                        push.1
+                    });
+            });
+        }
+        fn forward_log(&mut self, get: Result<(String, char), OutOfLog>) {
+            self.meta.set_queue(RevQueue::RUN_FORWARD_LOG);
+            match get {
+                Ok(get) => {
+                    self.meta.update_ref(true, |meta, direction| {
+                        assert_eq!(direction, RevDirection::FORWARD_LOG);
+
+                        // with_past_drain
+                        let (iter_t, iter_u, past_len) =
+                            self.with_past_drain.pre_update_drain(meta);
+                        assert_eq!(collect_drain(iter_t, iter_u), []);
+                        assert_eq!(past_len, 0);
+                        assert_eq!(
+                            self.with_past_drain.forward_log().map(value_entry_to_tuple),
+                            Ok(get.clone())
+                        );
+
+                        // without_past_drain
+                        let (iter_t, iter_u) =
+                            self.without_past_drain.pre_update_drain_future(meta);
+                        assert_eq!(collect_drain(iter_t, iter_u), []);
+                        assert_eq!(
+                            self.without_past_drain
+                                .forward_log()
+                                .map(value_entry_to_tuple),
+                            Ok(get)
+                        );
+                    });
+                }
+                Err(OutOfLog) => {
+                    self.meta.update_ref(false, |_, _| ());
+                    assert_eq!(
+                        self.with_past_drain.forward_log().map(value_entry_to_tuple),
+                        Err(OutOfLog)
                     );
                     assert_eq!(
-                        log.entries_len(),
-                        expected_entries_len,
-                        "\nbefore: {before:#?}\nafter: {log:#?}"
+                        self.without_past_drain
+                            .forward_log()
+                            .map(value_entry_to_tuple),
+                        Err(OutOfLog)
                     );
+                }
+            }
+        }
+        fn backward_log(&mut self, get: Result<(String, char), OutOfLog>) {
+            self.meta.set_queue(RevQueue::RUN_BACKWARD_LOG);
+            match get {
+                Ok(get) => {
+                    self.meta.update_ref(true, |meta, direction| {
+                        assert_eq!(direction, RevDirection::BackwardLog);
+
+                        // with_past_drain
+                        let (iter_t, iter_u, past_len) =
+                            self.with_past_drain.pre_update_drain(meta);
+                        assert_eq!(collect_drain(iter_t, iter_u), []);
+                        assert_eq!(past_len, 0);
+                        assert_eq!(
+                            self.with_past_drain
+                                .backward_log()
+                                .map(value_entry_to_tuple),
+                            Ok(get.clone())
+                        );
+
+                        // without_past_drain
+                        let (iter_t, iter_u) =
+                            self.without_past_drain.pre_update_drain_future(meta);
+                        assert_eq!(collect_drain(iter_t, iter_u), []);
+                        assert_eq!(
+                            self.without_past_drain
+                                .backward_log()
+                                .map(value_entry_to_tuple),
+                            Ok(get)
+                        );
+                    });
+                }
+                Err(OutOfLog) => {
+                    self.meta.update_ref(false, |_, _| ());
+
+                    // with_past_drain
+                    if self.with_past_drain.backward_log().is_ok() {
+                        // Because this past-draining log secretly keeps one more transition than
+                        // needed, OutOfLog will only be triggered if going backward twice past what
+                        // the user might suspect to be in log.
+                        // This is not true when clearing is involved however, which is why the
+                        // first backward_log is not asserted to be Ok here.
+
+                        // test again
+                        assert_eq!(
+                            self.with_past_drain
+                                .backward_log()
+                                .map(value_entry_to_tuple),
+                            Err(OutOfLog)
+                        );
+
+                        // undoing first backward_log
+                        assert!(self.with_past_drain.forward_log().is_ok());
+                    }
+
+                    // without_past_drain
                     assert_eq!(
-                        actual_future, expected_future,
-                        "\nbefore: {before:#?}\nafter: {log:#?}"
+                        self.without_past_drain
+                            .backward_log()
+                            .map(value_entry_to_tuple),
+                        Err(OutOfLog)
                     );
-                    [before, log]
-                })
-                .collect();
+                }
+            }
         }
     }
 
     #[test]
-    fn log_traversal_works() {
-        let mut logs = Logs::new();
-        logs.forward(2, vec!['a'; 2], 'A', 2, 1, Ok(None));
-        logs.forward(2, vec!['b'; 3], 'B', 5, 2, Ok(None));
-        // shortened log
-        logs.forward(2, vec!['c'; 4], 'C', 7, 2, Ok(Some((vec!['a'; 2], 'A'))));
+    fn traverses_log() {
+        let mut meta_and_logs = MetaAndLogs::new(5);
 
-        logs.backward_log(Ok((vec!['c'; 4], 'C')));
-        logs.backward_log(Ok((vec!['b'; 3], 'B')));
-        // out of log, no mutations happend to the logs here
-        logs.backward_log(Err(OutOfLog));
+        let a = || ("a".repeat(1 << 0), 'A');
+        let b = || ("b".repeat(1 << 1), 'B');
+        let c = || ("c".repeat(1 << 2), 'C');
+        let d = || ("d".repeat(1 << 3), 'D');
+        let e = || ("e".repeat(1 << 4), 'E');
+        let f = || ("f".repeat(1 << 5), 'F');
+        let g = || ("g".repeat(1 << 6), 'G');
+        let h = || ("h".repeat(1 << 7), 'H');
 
-        logs.forward_log(Ok((vec!['b'; 3], 'B')));
-        logs.forward_log(Ok((vec!['c'; 4], 'C')));
-        // nothing ever logged past 'c', no mutations happend to the logs here
-        logs.forward_log(Err(OutOfLog));
+        meta_and_logs.forward([], [], a(), false);
+        meta_and_logs.forward([], [], b(), false);
+        meta_and_logs.forward([], [], c(), false);
+        meta_and_logs.forward([], [], d(), false);
+        meta_and_logs.forward([], [], e(), false);
+        meta_and_logs.forward([a()], [], f(), false);
 
-        logs.backward_log(Ok((vec!['c'; 4], 'C')));
-        logs.backward_log(Ok((vec!['b'; 3], 'B')));
+        meta_and_logs.backward_log(Ok(f()));
+        meta_and_logs.backward_log(Ok(e()));
+        meta_and_logs.backward_log(Ok(d()));
+        meta_and_logs.backward_log(Ok(c()));
+        meta_and_logs.backward_log(Err(OutOfLog)); // b() is unreachable but not yet drained
 
-        logs.drain_future(vec![(vec!['b'; 3], 'B'), (vec!['c'; 4], 'C')], 0, 0);
+        meta_and_logs.forward_log(Ok(c()));
+        meta_and_logs.forward_log(Ok(d()));
+        meta_and_logs.forward_log(Ok(e()));
+        meta_and_logs.forward_log(Ok(f()));
+        meta_and_logs.forward_log(Err(OutOfLog));
 
-        // all entries are truncated as they are in the future
-        logs.forward(2, vec!['d'; 5], 'D', 5, 1, Ok(None));
+        meta_and_logs.backward_log(Ok(f()));
+        meta_and_logs.backward_log(Ok(e()));
 
-        // storing too many transitions fails
-        logs.forward(2, vec!['e'; 256], 'E', 5, 1, Err(()));
+        meta_and_logs.forward([], [e(), f()], g(), false);
+
+        meta_and_logs.backward_log(Ok(g()));
+        meta_and_logs.backward_log(Ok(d()));
+        meta_and_logs.backward_log(Ok(c()));
+        meta_and_logs.backward_log(Err(OutOfLog));
+
+        meta_and_logs.forward_log(Ok(c()));
+        meta_and_logs.forward_log(Ok(d()));
+        meta_and_logs.forward_log(Ok(g()));
+        meta_and_logs.forward_log(Err(OutOfLog));
+
+        meta_and_logs.backward_log(Ok(g()));
+        meta_and_logs.backward_log(Ok(d()));
+
+        meta_and_logs.forward([b(), c()], [d(), g()], h(), true);
+
+        meta_and_logs.backward_log(Ok(h()));
+        meta_and_logs.backward_log(Err(OutOfLog));
+
+        meta_and_logs.forward_log(Ok(h()));
+        meta_and_logs.forward_log(Err(OutOfLog));
     }
-    */
 }

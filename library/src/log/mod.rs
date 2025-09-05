@@ -9,7 +9,13 @@ mod transitions;
 
 pub use past_len::PastLenLog;
 pub(crate) use past_len::limits::{PastLenLogLimits, PastLenLogMissed, PastLenState};
-pub use transition::TransitionLog;
+pub use transition::{
+    TransitionLog,
+    TransitionDrains,
+    TransitionDrain,
+    TransitionDrainFuture,
+    TransitionDrainPast
+};
 pub use transitions::{EntryAmount, LogMut, TransitionsLog, ValueEntry};
 
 #[derive(Debug, Clone, Copy, PartialEq)]

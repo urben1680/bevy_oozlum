@@ -88,7 +88,7 @@ impl RevDespawnCleaner {
                 return Some(meta);
             }
         };
-        let past_len = meta.past_len() as usize;
+        let past_len = meta.past_len();
         let iter = self
             .spawn_buffer
             .pre_update_drain(&meta)
@@ -113,7 +113,7 @@ impl RevDespawnCleaner {
         world.remove_resource::<RevMeta>()
     }
 
-    pub(crate) fn forward(&mut self, world: &mut World, max_past_len: usize) {
+    pub(crate) fn forward(&mut self, world: &mut World, max_past_len: u64) {
         let progress = RevOp::FinalDespawn { buffer: false };
         progress.scope(world, |world| {
             self.spawn.push_and_truncate_past(max_past_len, |mut log| {

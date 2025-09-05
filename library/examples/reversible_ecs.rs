@@ -142,10 +142,7 @@ fn main() {
 
 #[derive(Resource, Default)]
 struct KeysPressed {
-    /// - `None`: no direction change
-    /// - `Some(None)`: change to pause
-    /// - `Some(Some(direction))`: change to [`RevDirection`] `direction`
-    direction: Option<Option<RevDirection>>,
+    direction: Option<RevQueue>,
     num1: bool,
     num2: bool,
     num3: bool,
@@ -184,8 +181,7 @@ impl WasteCounts {
 
 fn control_rev_meta(mut meta: ResMut<RevMeta>, keys: Res<KeysPressed>) {
     match keys.direction {
-        Some(Some(direction)) => meta.queue(direction),
-        Some(None) => meta.queue_pause(),
+        Some(queue) => meta.set_queue(queue),
         None => {}
     }
 }
@@ -326,6 +322,7 @@ fn row4(app: &mut App) {
                 // the right edge of the water.
                 //
                 // That is why we add a + 1 here to compensate that behavior.
+                // TODO: remove this
                 let past_len = meta.past_len() + 1;
 
                 // If the key is pressed, we spawn another Waste entity.
@@ -334,7 +331,7 @@ fn row4(app: &mut App) {
 
                 // Pushing potential Waste entities may also pop an entity that got out-of-log now.
                 // These need to be despawned as they are now past the edge of the screen and cannot come back.
-                for entity in log.push_and_drain_past(past_len as usize, entity).flatten() {
+                for entity in log.push_and_drain_past(past_len, entity).flatten() {
                     commands.entity(entity).despawn();
 
                     // The player missed undoing this littering in time and the lost waste counter is increased.
@@ -617,10 +614,10 @@ fn map_input(
             _ if counts.lost >= 10 => {}
             _ if counts.score() >= WINNING_BEVY_VERSION => {}
 
-            KeyCode::Left => keys.direction = Some(Some(RevDirection::FORWARD_LOG)),
-            KeyCode::Right => keys.direction = Some(Some(RevDirection::BackwardLog)),
-            KeyCode::Up => keys.direction = Some(Some(RevDirection::NOT_LOG)),
-            KeyCode::Down => keys.direction = Some(None),
+            KeyCode::Left => keys.direction = Some(RevQueue::Run(RevDirection::FORWARD_LOG)),
+            KeyCode::Right => keys.direction = Some(RevQueue::Run(RevDirection::BackwardLog)),
+            KeyCode::Up => keys.direction = Some(RevQueue::Run(RevDirection::NOT_LOG)),
+            KeyCode::Down => keys.direction = Some(RevQueue::Pause),
             KeyCode::Char('1') => keys.num1 = true,
             KeyCode::Char('2') => keys.num2 = true,
             KeyCode::Char('3') => keys.num3 = true,

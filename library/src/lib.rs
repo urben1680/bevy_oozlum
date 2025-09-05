@@ -43,6 +43,7 @@ Docs
 -- docs for private UndoRedo types
 -- point out additional conditions to not panic/return err and how some are only needed in observers/hooks
 -- remind in Apis with HasEffect bound to use App::register_non_entity_buffer
+- discourage deserialization
 
 ISSUES/DISCUSSIONS:
 - reversible change detection (copy over to new repo)
@@ -77,7 +78,7 @@ pub mod undo_redo;
 /// Contains all extension traits `as _` and common types.
 pub mod prelude {
     pub use crate::app::{RevApp as _, RevPlugin};
-    pub use crate::meta::{RevDirection, RevMeta};
+    pub use crate::meta::{RevDirection, RevMeta, RevQueue};
     pub use crate::schedule::{
         IntoRevScheduleConfigs as _, RevSchedule as _, RevSystems, RevUpdate,
     };

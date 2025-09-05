@@ -202,7 +202,7 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
 
     // run tests backward log
     let mut meta = world.resource_mut::<RevMeta>();
-    meta.queue(RevDirection::BackwardLog);
+    meta.set_queue(RevQueue::Run(RevDirection::BackwardLog));
     for (step, expected) in expected.iter().enumerate().rev() {
         test_step(
             &mut world,
@@ -217,7 +217,7 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
 
     // run tests forward log
     let mut meta = world.resource_mut::<RevMeta>();
-    meta.queue(RevDirection::FORWARD_LOG);
+    meta.set_queue(RevQueue::Run(RevDirection::FORWARD_LOG));
     for (step, expected) in expected.iter().enumerate() {
         test_step(
             &mut world,

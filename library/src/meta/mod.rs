@@ -24,13 +24,12 @@ use crate::{
 
 #[derive(Reflect, Resource, Debug)]
 pub struct RevMeta {
-    #[reflect(skip_serializing)]
     past_end: u64,
     now: u64,
     future_end: u64,
-    pub max_world_states: Option<NonZeroU64>,
+    max_world_states: Option<NonZeroU64>,
     direction: RunningOrRan,
-    queue: Option<Queue>,
+    queue: Option<RevQueue>,
     log_exits: u64,
     log_clears: u64,
     past_len_limits: PastLenLogLimits,
@@ -69,6 +68,7 @@ impl RevDirection {
 }
 
 // SAFETY: todo
+// todo: deprecate, one should use revmeta
 unsafe impl SystemParam for RevDirection {
     type Item<'world, 'state> = Self;
     type State = ComponentId;
@@ -146,11 +146,24 @@ enum RunningOrRan {
 }
 
 #[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq)]
-enum Queue {
+pub enum RevQueue {
     Run(RevDirection),
     Pause,
-    ClearThenRun,
-    ClearThenPause,
+    Clear {
+        /// If `true`, this clear is followed by an [`RevDirection::NOT_LOG`] update.
+        /// Otherwise, no update will follow this clear and [`RevMeta`] will be in a paused state.
+        then_run: bool,
+    },
+}
+
+impl RevQueue {
+    pub const RUN_NOT_LOG: Self = Self::Run(RevDirection::NOT_LOG);
+    pub const RUN_FORWARD_LOG: Self = Self::Run(RevDirection::FORWARD_LOG);
+    pub const RUN_BACKWARD_LOG: Self = Self::Run(RevDirection::BackwardLog);
+    /// This clear is followed by an [`RevDirection::NOT_LOG`] update
+    pub const CLEAR_THEN_RUN: Self = Self::Clear { then_run: true };
+    /// No update will follow this clear and [`RevMeta`] will be in a paused state.
+    pub const CLEAR_THEN_PAUSE: Self = Self::Clear { then_run: false };
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -198,6 +211,24 @@ impl RevMeta {
             log_clears: 0,
             past_len_limits: PastLenLogLimits::new(),
         }
+    }
+    pub fn set_queue(&mut self, queue: RevQueue) {
+        self.queue = Some(queue);
+    }
+    pub fn unset_queue(&mut self) {
+        self.queue = None;
+    }
+    pub fn get_queue(&self) -> Option<RevQueue> {
+        self.queue
+    }
+    pub fn set_max_world_states(&mut self, max_world_states: NonZeroU64) {
+        self.max_world_states = Some(max_world_states);
+    }
+    pub fn unset_max_world_states(&mut self) {
+        self.max_world_states = None;
+    }
+    pub fn get_max_world_states(&self) -> Option<NonZeroU64> {
+        self.max_world_states
     }
     pub fn running_direction(&self) -> RevDirection {
         self.get_running_direction().unwrap()
@@ -267,20 +298,6 @@ impl RevMeta {
         self.log_clears += 1;
         self.past_len_limits.clear();
         self.log_exits = 0;
-    }
-    pub fn queue(&mut self, direction: RevDirection) {
-        self.queue = Some(Queue::Run(direction));
-    }
-    pub fn queue_pause(&mut self) {
-        self.queue = Some(Queue::Pause);
-    }
-    pub fn queue_clear(&mut self, then_pause: bool) {
-        let queue = if then_pause {
-            Queue::ClearThenPause
-        } else {
-            Queue::ClearThenRun
-        };
-        self.queue = Some(queue);
     }
     pub fn try_run_rev_update(world: &mut World) -> Result<(), BevyError> {
         Self::try_run_rev_update_typed_err(world).map_err(Into::into)
@@ -403,29 +420,29 @@ impl RevMeta {
         // get queued direction
         let queue = match self.queue.take() {
             None => None,
-            Some(Queue::Run(RevDirection::NOT_LOG)) => {
+            Some(RevQueue::RUN_NOT_LOG) => {
                 if after_log {
                     self.log_exits = self.log_exits.checked_add(1).unwrap();
                 }
                 Some(RevDirection::NOT_LOG)
             }
-            Some(Queue::Run(RevDirection::FORWARD_LOG)) if !self.end_of_log_forward() => {
+            Some(RevQueue::RUN_FORWARD_LOG) if !self.end_of_log_forward() => {
                 Some(RevDirection::FORWARD_LOG)
             }
-            Some(Queue::Run(RevDirection::BackwardLog)) if !self.end_of_log_backward() => {
+            Some(RevQueue::RUN_BACKWARD_LOG) if !self.end_of_log_backward() => {
                 Some(RevDirection::BackwardLog)
             }
-            Some(Queue::ClearThenRun) => {
+            Some(RevQueue::CLEAR_THEN_RUN) => {
                 self.clear();
                 Some(RevDirection::NOT_LOG)
             }
-            Some(Queue::ClearThenPause) => {
+            Some(RevQueue::CLEAR_THEN_PAUSE) => {
                 self.clear();
                 self.direction = RunningOrRan::Pause { after_log: false };
                 return Ok(self);
             }
             _ => {
-                // queued log direction at end of log behaves like Queue::Pause which is matched
+                // queued log direction at end of log behaves like Some(RevQueue::Pause) which is matched
                 // here as well
                 self.direction = RunningOrRan::Pause { after_log };
                 return Ok(self);
@@ -478,6 +495,19 @@ impl RevMeta {
                 past_len_logs_missed,
             }),
         }
+    }
+    #[cfg(test)]
+    pub(crate) fn update_ref(&mut self, should_run: bool, c: impl FnOnce(&mut Self, RevDirection)) {
+        let meta = core::mem::replace(self, RevMeta::new(None, true));
+        let mut ran = false;
+        *self = meta
+            .update(|mut meta, direction| {
+                ran = true;
+                c(&mut meta, direction);
+                Some(meta)
+            })
+            .unwrap();
+        assert_eq!(ran, should_run);
     }
     pub(super) fn update_past_len_state(
         &self,
@@ -612,16 +642,6 @@ impl Error for TryRunRevUpdateError {}
 mod test {
     use super::*;
 
-    enum Queue {
-        None,
-        Pause,
-        NotLog,
-        ForwardLog,
-        BackwardLog,
-        ClearThenPause,
-        ClearThenRun,
-    }
-
     struct RunValues {
         past_end: u64,
         now: u64,
@@ -632,33 +652,20 @@ mod test {
     }
 
     impl RevMeta {
-        fn update_assert(&mut self, queue: Queue, values: Option<RunValues>) {
+        fn update_assert(&mut self, queue: Option<RevQueue>, values: Option<RunValues>) {
             match queue {
-                Queue::None => {}
-                Queue::Pause => self.queue_pause(),
-                Queue::NotLog => self.queue(RevDirection::NOT_LOG),
-                Queue::ForwardLog => self.queue(RevDirection::FORWARD_LOG),
-                Queue::BackwardLog => self.queue(RevDirection::BackwardLog),
-                Queue::ClearThenPause => self.queue_clear(true),
-                Queue::ClearThenRun => self.queue_clear(false),
+                None => assert_eq!(self.get_queue(), None),
+                Some(queue) => self.set_queue(queue),
             }
-            let mut ran = false;
-            let values_is_some = values.is_some();
-            let meta = core::mem::replace(self, RevMeta::new(None, true));
-            *self = meta
-                .update(|meta, direction| {
-                    ran = true;
-                    let values = values.unwrap();
-                    assert_eq!(meta.past_end(), values.past_end);
-                    assert_eq!(meta.now(), values.now);
-                    assert_eq!(meta.future_end(), values.future_end);
-                    assert_eq!(meta.log_exits(), values.log_exits);
-                    assert_eq!(meta.log_clears(), values.log_clears);
-                    assert_eq!(direction, values.direction);
-                    Some(meta)
-                })
-                .unwrap();
-            assert_eq!(ran, values_is_some);
+            self.update_ref(values.is_some(), |meta, direction| {
+                let values = values.unwrap();
+                assert_eq!(meta.past_end(), values.past_end);
+                assert_eq!(meta.now(), values.now);
+                assert_eq!(meta.future_end(), values.future_end);
+                assert_eq!(meta.log_exits(), values.log_exits);
+                assert_eq!(meta.log_clears(), values.log_clears);
+                assert_eq!(direction, values.direction);
+            });
         }
     }
 
@@ -666,7 +673,7 @@ mod test {
     fn traverses_log() {
         let mut meta = RevMeta::new(NonZeroU64::new(5), false);
         meta.update_assert(
-            Queue::None,
+            None,
             Some(RunValues {
                 past_end: 0,
                 now: 1,
@@ -677,7 +684,7 @@ mod test {
             }),
         );
         meta.update_assert(
-            Queue::NotLog,
+            Some(RevQueue::RUN_NOT_LOG),
             Some(RunValues {
                 past_end: 0,
                 now: 2,
@@ -688,7 +695,7 @@ mod test {
             }),
         );
         meta.update_assert(
-            Queue::None,
+            None,
             Some(RunValues {
                 past_end: 0,
                 now: 3,
@@ -699,7 +706,7 @@ mod test {
             }),
         );
         meta.update_assert(
-            Queue::None,
+            None,
             Some(RunValues {
                 past_end: 0,
                 now: 4,
@@ -710,7 +717,7 @@ mod test {
             }),
         );
         meta.update_assert(
-            Queue::None,
+            None,
             Some(RunValues {
                 past_end: 1,
                 now: 5,
@@ -721,7 +728,7 @@ mod test {
             }),
         );
         meta.update_assert(
-            Queue::BackwardLog,
+            Some(RevQueue::RUN_BACKWARD_LOG),
             Some(RunValues {
                 past_end: 1,
                 now: 4,
@@ -732,7 +739,7 @@ mod test {
             }),
         );
         meta.update_assert(
-            Queue::None,
+            None,
             Some(RunValues {
                 past_end: 1,
                 now: 3,
@@ -743,7 +750,7 @@ mod test {
             }),
         );
         meta.update_assert(
-            Queue::BackwardLog,
+            Some(RevQueue::RUN_BACKWARD_LOG),
             Some(RunValues {
                 past_end: 1,
                 now: 2,
@@ -754,7 +761,7 @@ mod test {
             }),
         );
         meta.update_assert(
-            Queue::None,
+            None,
             Some(RunValues {
                 past_end: 1,
                 now: 1,
@@ -764,10 +771,10 @@ mod test {
                 direction: RevDirection::BackwardLog,
             }),
         );
-        meta.update_assert(Queue::None, None);
-        meta.update_assert(Queue::BackwardLog, None);
+        meta.update_assert(None, None);
+        meta.update_assert(Some(RevQueue::RUN_BACKWARD_LOG), None);
         meta.update_assert(
-            Queue::ForwardLog,
+            Some(RevQueue::RUN_FORWARD_LOG),
             Some(RunValues {
                 past_end: 1,
                 now: 2,
@@ -778,7 +785,7 @@ mod test {
             }),
         );
         meta.update_assert(
-            Queue::None,
+            None,
             Some(RunValues {
                 past_end: 1,
                 now: 3,
@@ -789,7 +796,7 @@ mod test {
             }),
         );
         meta.update_assert(
-            Queue::ForwardLog,
+            Some(RevQueue::RUN_FORWARD_LOG),
             Some(RunValues {
                 past_end: 1,
                 now: 4,
@@ -800,7 +807,7 @@ mod test {
             }),
         );
         meta.update_assert(
-            Queue::None,
+            None,
             Some(RunValues {
                 past_end: 1,
                 now: 5,
@@ -810,10 +817,10 @@ mod test {
                 direction: RevDirection::FORWARD_LOG,
             }),
         );
-        meta.update_assert(Queue::None, None);
-        meta.update_assert(Queue::ForwardLog, None);
+        meta.update_assert(None, None);
+        meta.update_assert(Some(RevQueue::RUN_FORWARD_LOG), None);
         meta.update_assert(
-            Queue::BackwardLog,
+            Some(RevQueue::RUN_BACKWARD_LOG),
             Some(RunValues {
                 past_end: 1,
                 now: 4,
@@ -824,7 +831,7 @@ mod test {
             }),
         );
         meta.update_assert(
-            Queue::None,
+            None,
             Some(RunValues {
                 past_end: 1,
                 now: 3,
@@ -834,9 +841,9 @@ mod test {
                 direction: RevDirection::BackwardLog,
             }),
         );
-        meta.update_assert(Queue::Pause, None);
+        meta.update_assert(Some(RevQueue::Pause), None);
         meta.update_assert(
-            Queue::NotLog,
+            Some(RevQueue::RUN_NOT_LOG),
             Some(RunValues {
                 past_end: 1,
                 now: 4,
@@ -847,7 +854,7 @@ mod test {
             }),
         );
         meta.update_assert(
-            Queue::BackwardLog,
+            Some(RevQueue::RUN_BACKWARD_LOG),
             Some(RunValues {
                 past_end: 1,
                 now: 3,
@@ -858,7 +865,7 @@ mod test {
             }),
         );
         meta.update_assert(
-            Queue::None,
+            None,
             Some(RunValues {
                 past_end: 1,
                 now: 2,
@@ -868,9 +875,9 @@ mod test {
                 direction: RevDirection::BackwardLog,
             }),
         );
-        meta.update_assert(Queue::ClearThenPause, None);
+        meta.update_assert(Some(RevQueue::CLEAR_THEN_PAUSE), None);
         meta.update_assert(
-            Queue::NotLog,
+            Some(RevQueue::RUN_NOT_LOG),
             Some(RunValues {
                 past_end: 0,
                 now: 1,
@@ -881,7 +888,7 @@ mod test {
             }),
         );
         meta.update_assert(
-            Queue::None,
+            None,
             Some(RunValues {
                 past_end: 0,
                 now: 2,
@@ -892,7 +899,7 @@ mod test {
             }),
         );
         meta.update_assert(
-            Queue::None,
+            None,
             Some(RunValues {
                 past_end: 0,
                 now: 3,
@@ -903,7 +910,7 @@ mod test {
             }),
         );
         meta.update_assert(
-            Queue::BackwardLog,
+            Some(RevQueue::RUN_BACKWARD_LOG),
             Some(RunValues {
                 past_end: 0,
                 now: 2,
@@ -914,7 +921,7 @@ mod test {
             }),
         );
         meta.update_assert(
-            Queue::None,
+            None,
             Some(RunValues {
                 past_end: 0,
                 now: 1,
@@ -925,7 +932,7 @@ mod test {
             }),
         );
         meta.update_assert(
-            Queue::ClearThenRun,
+            Some(RevQueue::CLEAR_THEN_RUN),
             Some(RunValues {
                 past_end: 0,
                 now: 1,

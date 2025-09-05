@@ -3,7 +3,7 @@ use core::fmt::Debug;
 use std::{
     cmp::Ordering,
     collections::{TryReserveError, VecDeque, vec_deque::Iter},
-    num::NonZeroUsize,
+    num::NonZeroU64,
     ops::ControlFlow,
 };
 
@@ -164,7 +164,7 @@ pub struct PastLenLog {
     index: usize,
 
     /// The length of the log which is what this log is keeping track of.
-    past_len: usize,
+    past_len: u64,
 
     /// The current amount of sequential offsets of `0`.
     zeroes: u8,
@@ -204,7 +204,7 @@ struct IterItem {
 
     /// The amount of bytes this offset is made of to update [`PastLenLog::index`] correctly.
     /// If [Self::offset] == `0`, this is the amount of `0` offsets in this byte instead.
-    len: NonZeroUsize,
+    len: NonZeroU64,
 }
 
 impl Debug for OffsetIter<'_> {
@@ -212,7 +212,7 @@ impl Debug for OffsetIter<'_> {
         f.debug_list()
             .entries(self.clone().flat_map(|IterItem { offset, len }| {
                 let count = if offset == 0 { len.get() } else { 1 };
-                core::iter::repeat_n(offset, count)
+                core::iter::repeat_n(offset, count as usize)
             }))
             .finish()
     }
@@ -227,7 +227,7 @@ fn check_first_byte(byte: u8) -> ControlFlow<IterItem, u64> {
         // 0b0_xxxxxxx => a single-byte offset
         0 => ControlFlow::Break(IterItem {
             offset: byte as u64,
-            len: NonZeroUsize::MIN,
+            len: NonZeroU64::MIN,
         }),
         // 0b10_xxxxxx => sequence of offsets of 0 in a single byte
         1 => {
@@ -238,7 +238,7 @@ fn check_first_byte(byte: u8) -> ControlFlow<IterItem, u64> {
             ControlFlow::Break(IterItem {
                 offset: 0,
                 // SAFETY: `zeroes` cannot be zero, +2 could not overflow with MSBs masked away
-                len: unsafe { NonZeroUsize::new_unchecked(zeroes as usize) },
+                len: unsafe { NonZeroU64::new_unchecked(zeroes as u64) },
             })
         }
         // 0b11_xxxxxx => wrapping byte of a multi-byte offset
@@ -276,7 +276,7 @@ impl Iterator for OffsetIter<'_> {
                 return Some(IterItem {
                     offset,
                     // SAFETY: len started with 1, could be at most 10, never overflows
-                    len: unsafe { NonZeroUsize::new_unchecked(len) },
+                    len: unsafe { NonZeroU64::new_unchecked(len) },
                 });
             }
 
@@ -330,7 +330,7 @@ impl DoubleEndedIterator for OffsetIter<'_> {
                 return Some(IterItem {
                     offset,
                     // SAFETY: len started with 1, could be at most 10, never overflows
-                    len: unsafe { NonZeroUsize::new_unchecked(len) },
+                    len: unsafe { NonZeroU64::new_unchecked(len) },
                 });
             }
 
@@ -518,7 +518,7 @@ impl PastLenLog {
     /// [missed log traversal updates]: MissedUpdate
     /// [module docs]: super
     /// [type docs]: PastLenLog
-    pub fn update_and_get_past_len(&mut self, meta: &RevMeta) -> usize {
+    pub fn update_and_get_past_len(&mut self, meta: &RevMeta) -> u64 {
         assert_eq!(self.index, self.offset_bytes.len(), "todo");
 
         let iter = OffsetIter(self.offset_bytes.iter());
@@ -544,7 +544,7 @@ impl PastLenLog {
                 break;
             }
 
-            to_drain += len.get();
+            to_drain += len.get() as usize;
             self.out_of_or_past_end_log = next_oldest;
             self.past_len -= 1;
         }
@@ -674,7 +674,7 @@ impl PastLenLog {
                     }
                     Some(IterItem { offset, len }) => {
                         self.last_update -= offset;
-                        self.index -= len.get();
+                        self.index -= len.get() as usize;
                         self.past_len -= 1;
                         self.zeroes = 0;
                         match iter.next_back() {
@@ -752,7 +752,7 @@ impl PastLenLog {
                     Ordering::Greater => return false,
                     Ordering::Equal => {
                         self.last_update = frame;
-                        self.index += len.get();
+                        self.index += len.get() as usize;
                         self.past_len += 1;
                         self.zeroes = 0;
                         match iter.next() {
@@ -911,10 +911,10 @@ mod test {
         ]
         .into();
 
-        fn item(offset: u64, len: usize) -> IterItem {
+        fn item(offset: u64, len: u64) -> IterItem {
             IterItem {
                 offset,
-                len: NonZeroUsize::new(len).unwrap(),
+                len: NonZeroU64::new(len).unwrap(),
             }
         }
 
@@ -934,7 +934,7 @@ mod test {
             // 2 zeroes in a byte
             item(0, 2),
             // 65 zeroes in a byte
-            item(0, MAX_ZEROES_PER_BYTE as usize),
+            item(0, MAX_ZEROES_PER_BYTE as u64),
         ];
 
         assert!(OffsetIter(deque.iter()).eq(expected.iter().cloned()));

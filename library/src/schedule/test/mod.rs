@@ -17,7 +17,7 @@ use bevy::{
 
 use crate::{
     app::{RevApp, RevPlugin},
-    meta::RevDirection,
+    meta::{RevDirection, RevQueue},
     panic_on_error_events,
     schedule::RevUpdate,
     undo_redo::{BuffersUndoRedo, RevCommands, UndoRedo},
@@ -487,22 +487,22 @@ fn truncates_future_command_log() {
     app.update(); // do 2, command queued
     app.world_mut()
         .resource_mut::<RevMeta>()
-        .queue(RevDirection::BackwardLog);
+        .set_queue(RevQueue::Run(RevDirection::BackwardLog));
     app.update(); // undo 2
     app.update(); // undo 1
     app.world_mut()
         .resource_mut::<RevMeta>()
-        .queue(RevDirection::FORWARD_LOG);
+        .set_queue(RevQueue::Run(RevDirection::FORWARD_LOG));
     app.update(); // do 1, should truncate logs
     app.update(); // do 2, no command queued
     app.world_mut()
         .resource_mut::<RevMeta>()
-        .queue(RevDirection::BackwardLog);
+        .set_queue(RevQueue::Run(RevDirection::BackwardLog));
     app.update(); // undo 2
     app.update(); // undo 1
     app.world_mut()
         .resource_mut::<RevMeta>()
-        .queue(RevDirection::FORWARD_LOG);
+        .set_queue(RevQueue::Run(RevDirection::FORWARD_LOG));
     app.update(); // redo 1
     app.update(); // redo 2, should not panic
 }
