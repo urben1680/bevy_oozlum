@@ -3,6 +3,7 @@ use core::fmt::Debug;
 use std::{
     cmp::Ordering,
     collections::{TryReserveError, VecDeque, vec_deque::Iter},
+    fmt::Display,
     num::NonZeroU64,
     ops::ControlFlow,
 };
@@ -188,6 +189,15 @@ impl Debug for PastLenLog {
             .field("zeroes_max", &self.zeroes_max)
             .field("update_state", &self.update_state)
             .finish()
+    }
+}
+
+impl Display for PastLenLog {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.update_state {
+            None => write!(f, "PastLenLog #Uninit"),
+            Some(update_state) => write!(f, "PastLenLog #{}", update_state.id),
+        }
     }
 }
 
@@ -509,6 +519,7 @@ impl PastLenLog {
         self.offset_bytes.drain(..to_drain);
 
         // push present offset
+        println!("not-log limits {} to {}", meta.now(), u64::MAX);
         meta.past_len_limits().push_past_len_update(
             self.update_state.expect("todo"),
             PastLenLimit::not_log_limit(meta.now()),
@@ -604,6 +615,10 @@ impl PastLenLog {
         let backward_limit = match self.last_update.cmp(&now) {
             // did not yet reach the next past frame in the log, may be at end of reachable log
             Ordering::Less => return false,
+            Ordering::Equal if self.zeroes > 0 => {
+                self.zeroes -= 1;
+                now
+            }
             Ordering::Equal => {
                 let mut iter = OffsetIter(self.offset_bytes.range(..self.index));
                 match iter.next_back() {
@@ -611,24 +626,14 @@ impl PastLenLog {
                         self.index -= 1;
                         self.past_len -= 1;
                         self.zeroes = len.get() as u8 - 1;
-                        if self.zeroes == 0 {
-                            match iter.next_back() {
-                                Some(IterItem { offset, .. }) => now - offset,
-                                None => u64::MIN,
-                            }
-                        } else {
-                            now
-                        }
+                        now
                     }
                     Some(IterItem { offset, len }) => {
                         self.last_update -= offset;
                         self.index -= len.get() as usize;
                         self.past_len -= 1;
                         self.zeroes = 0;
-                        match iter.next_back() {
-                            Some(IterItem { offset, .. }) => self.last_update - offset,
-                            None => u64::MIN,
-                        }
+                        self.last_update
                     }
                     None => panic!(
                         "self.out_of_or_past_end_log should be the last, unreachable log entry"
@@ -639,10 +644,10 @@ impl PastLenLog {
             // user seems to have decided against panicking in that case
             Ordering::Greater => return false,
         };
-
+        println!("backward limits {backward_limit} to {now}");
         meta.past_len_limits().push_past_len_update(
             self.update_state.expect("todo"),
-            PastLenLimit::log_limits(backward_limit, meta.now()),
+            PastLenLimit::log_limits(backward_limit, now),
         );
 
         true
@@ -723,7 +728,7 @@ impl PastLenLog {
             // reached end of log
             None => return false,
         };
-
+        println!("backward limits {forward_limit} to {}", meta.now());
         meta.past_len_limits().push_past_len_update(
             self.update_state.expect("todo"),
             PastLenLimit::log_limits(meta.now(), forward_limit),
@@ -996,9 +1001,9 @@ mod test {
             if updates > 0 {
                 let missed = self.new_missed();
 
-                println!("BEFORE: {:#?}", self.meta);
+                //println!("BEFORE: {:#?}", self.meta);
                 for insufficient_updates in 0..updates {
-                    println!("{insufficient_updates}");
+                    //println!("{insufficient_updates}");
                     self.meta.set_queue(RevQueue::RUN_BACKWARD_LOG);
                     self.meta.update_ref(Err(missed), |meta, direction| {
                         assert_eq!(direction, RevDirection::BackwardLog);
@@ -1019,7 +1024,7 @@ mod test {
                         // assert no more updates would run
                         assert_eq!(self.past_len_log.backward_log(meta), false);
                     });
-                    println!("AFTER: {:#?}", self.meta);
+                    //println!("AFTER: {:#?}", self.meta);
                 }
             }
 

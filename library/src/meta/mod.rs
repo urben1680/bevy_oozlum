@@ -530,10 +530,9 @@ impl RevMeta {
                         past_len_logs_missed,
                     }) => {
                         *self = meta;
-                        println!("ERR {self:#?}");
                         assert_eq!(past_len_logs_missed, [missed]);
                     }
-                    other => panic!("OK {other:#?}"),
+                    other => panic!("{other:#?}"),
                 }
             }
         }
