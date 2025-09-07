@@ -1,8 +1,5 @@
 use core::fmt::Debug;
-use std::collections::{
-    VecDeque,
-    vec_deque::{Drain, Iter},
-};
+use std::collections::{VecDeque, vec_deque::Iter};
 
 use crate::{
     log::PreUpdateVariant,
@@ -212,8 +209,8 @@ pub struct TransitionDrains<'log, T> {
     pub(super) past_len: usize,
 }
 
-pub type TransitionDrainPast<'a, 'log, T> = core::iter::Take<&'a mut Drain<'log, T>>;
-pub type TransitionDrainFuture<'log, T> = core::iter::Skip<Drain<'log, T>>;
+pub type TransitionDrainPast<'a, 'log, T> = core::iter::Take<&'a mut TransitionDrain<'log, T>>;
+pub type TransitionDrainFuture<'log, T> = core::iter::Skip<TransitionDrain<'log, T>>;
 pub type TransitionDrain<'log, T> = std::collections::vec_deque::Drain<'log, T>;
 
 impl<'log, T> TransitionDrains<'log, T> {
@@ -270,29 +267,21 @@ impl<T> TransitionLog<T> {
     ) -> Iter<T> {
         assert_eq!(self.index, self.transitions.len()); // do not truncate here, call pre_update!
         self.transitions.push_back(transition);
-        let to_drain = self
-            .transitions
-            .len()
-            .saturating_sub(max_past_len as usize);
+        let to_drain = self.transitions.len().saturating_sub(max_past_len as usize);
         self.index = self.transitions.len() - to_drain;
         self.transitions.range(..to_drain)
     }
     pub(super) fn drain_future(&mut self) -> TransitionDrains<T> {
         TransitionDrains {
             transitions: self.transitions.drain(self.index..),
-            past_len: 0
-        }        
+            past_len: 0,
+        }
     }
-    pub(super) fn drain_past(&mut self, to_drain: usize) -> Drain<T> {
+    pub(super) fn drain_past(&mut self, to_drain: usize) -> TransitionDrain<T> {
         self.transitions.drain(..to_drain)
     }
     pub(super) fn truncate_future(&mut self) {
         self.transitions.truncate(self.index);
-    }
-    pub(super) fn truncate_past(&mut self) {
-        // todo: truncate_front https://github.com/rust-lang/rust/issues/140667
-        self.transitions.drain(..self.index);
-        self.index = 0;
     }
     pub(super) fn clear(&mut self) {
         self.transitions.clear();
@@ -301,15 +290,15 @@ impl<T> TransitionLog<T> {
     pub(super) fn empty_drain(&mut self) -> TransitionDrains<T> {
         TransitionDrains {
             transitions: self.transitions.drain(..0),
-            past_len: 0
-        }        
+            past_len: 0,
+        }
     }
     pub(super) fn full_drain(&mut self) -> TransitionDrains<T> {
         let past_len = self.index;
         self.index = 0;
         TransitionDrains {
             transitions: self.transitions.drain(..),
-            past_len
+            past_len,
         }
     }
     // todo: mention in docs that OutOfLog is not reliable but instead that the log is in-log
@@ -330,15 +319,15 @@ impl<T> TransitionLog<T> {
         if self.global_log_clears < meta.log_clears() {
             self.global_log_clears = meta.log_clears();
             self.global_log_exits = meta.log_exits();
-            PreUpdateVariant::DropLog
+            PreUpdateVariant::RemoveLog
         } else if self.global_log_exits < meta.log_exits() {
             self.global_log_exits = meta.log_exits();
-            PreUpdateVariant::DropFuture
+            PreUpdateVariant::RemoveFuture
         } else if meta
             .get_running_direction()
             .is_some_and(RevDirection::is_not_log)
         {
-            PreUpdateVariant::DropFuture
+            PreUpdateVariant::RemoveFuture
         } else {
             PreUpdateVariant::Nothing
         }
@@ -349,8 +338,8 @@ impl<T> TransitionLog<T> {
     /// 2. [`RevMeta::queue_clear`] is not used
     pub fn pre_update(&mut self, meta: &RevMeta) {
         match self.pre_update_check(meta) {
-            PreUpdateVariant::DropLog => self.clear(),
-            PreUpdateVariant::DropFuture => self.truncate_future(),
+            PreUpdateVariant::RemoveLog => self.clear(),
+            PreUpdateVariant::RemoveFuture => self.truncate_future(),
             PreUpdateVariant::Nothing => {}
         }
     }
@@ -358,10 +347,13 @@ impl<T> TransitionLog<T> {
     ///
     /// 1. This log is updated every time [`RevUpdate`](crate::schedule::RevUpdate) runs **and**
     /// 2. [`RevMeta::queue_clear`] is not used
-    pub fn pre_update_drain<'log, 'm>(&'log mut self, meta: &'m RevMeta) -> TransitionDrains<'log, T> {
+    pub fn pre_update_drain<'log, 'm>(
+        &'log mut self,
+        meta: &'m RevMeta,
+    ) -> TransitionDrains<'log, T> {
         match self.pre_update_check(meta) {
-            PreUpdateVariant::DropLog => self.full_drain(),
-            PreUpdateVariant::DropFuture => self.drain_future(),
+            PreUpdateVariant::RemoveLog => self.full_drain(),
+            PreUpdateVariant::RemoveFuture => self.drain_future(),
             PreUpdateVariant::Nothing => self.empty_drain(),
         }
     }
@@ -402,18 +394,15 @@ mod test {
                 RevQueue::RUN_NOT_LOG
             };
             self.meta.set_queue(queue);
-            self.meta.update_ref(true, |meta, direction| {
+            self.meta.update_ref(Ok(true), |meta, direction| {
                 assert_eq!(direction, RevDirection::NOT_LOG);
 
                 // with_past_drain
                 let mut drain = self.with_past_drain.pre_update_drain(meta);
                 if clear {
-                    assert_eq!(
-                        drain.past().collect::<Vec<char>>(),
-                        past_drain
-                    );
+                    assert_eq!(drain.past().collect::<Vec<char>>(), past_drain);
                 } else {
-                    assert_eq!(drain.past_len, 0);
+                    assert_eq!(drain.past().collect::<Vec<char>>(), []);
                 }
                 assert_eq!(drain.future().collect::<Vec<char>>(), future_drain);
                 let drained = self
@@ -427,31 +416,36 @@ mod test {
                 }
 
                 // without_past_drain
-                let mut drains = self.without_past_drain.pre_update_drain(meta);
-                assert_eq!(drains.future().collect::<Vec<char>>(), future_drain);
+                let drain = self.without_past_drain.pre_update_drain(meta);
+                assert_eq!(drain.future().collect::<Vec<char>>(), future_drain);
                 self.without_past_drain
                     .push_and_truncate_past(meta.past_len(), push);
             });
+        }
+        fn noop_forward_backward_log(&mut self) {
+            self.meta.set_queue(RevQueue::RUN_NOT_LOG);
+            self.meta.update_ref(Ok(true), |_, _| ());
+            self.meta.set_queue(RevQueue::RUN_BACKWARD_LOG);
+            self.meta.update_ref(Ok(true), |_, _| ());
         }
         fn forward_log(&mut self, get: Result<char, OutOfLog>) {
             self.meta.set_queue(RevQueue::RUN_FORWARD_LOG);
             match get {
                 Ok(get) => {
-                    self.meta.update_ref(true, |meta, direction| {
+                    self.meta.update_ref(Ok(true), |meta, direction| {
                         assert_eq!(direction, RevDirection::FORWARD_LOG);
 
                         // with_past_drain
-                        let (iter, past_len) = self.with_past_drain.pre_update_drain(meta);
-                        assert_eq!(iter.collect::<Vec<char>>(), []);
-                        assert_eq!(past_len, 0);
+                        let drain = self.with_past_drain.pre_update_drain(meta);
+                        assert_eq!(drain.all().collect::<Vec<char>>(), []);
                         assert_eq!(
                             self.with_past_drain.forward_log().map(|char| *char),
                             Ok(get)
                         );
 
                         // without_past_drain
-                        let iter = self.without_past_drain.pre_update_drain_future(meta);
-                        assert_eq!(iter.collect::<Vec<char>>(), []);
+                        let drain = self.without_past_drain.pre_update_drain(meta);
+                        assert_eq!(drain.future().collect::<Vec<char>>(), []);
                         assert_eq!(
                             self.without_past_drain.forward_log().map(|char| *char),
                             Ok(get)
@@ -459,31 +453,35 @@ mod test {
                     });
                 }
                 Err(OutOfLog) => {
-                    self.meta.update_ref(false, |_, _| ());
+                    self.meta.update_ref(Ok(false), |_, _| ());
                     assert_eq!(self.with_past_drain.forward_log(), Err(OutOfLog));
                     assert_eq!(self.without_past_drain.forward_log(), Err(OutOfLog));
                 }
             }
         }
-        fn backward_log(&mut self, get: Result<char, OutOfLog>) {
+        fn backward_log<const N: usize>(
+            &mut self,
+            future_drain: [char; N],
+            get: Result<char, OutOfLog>,
+        ) {
             self.meta.set_queue(RevQueue::RUN_BACKWARD_LOG);
             match get {
                 Ok(get) => {
-                    self.meta.update_ref(true, |meta, direction| {
+                    self.meta.update_ref(Ok(true), |meta, direction| {
                         assert_eq!(direction, RevDirection::BackwardLog);
 
                         // with_past_drain
-                        let (iter, past_len) = self.with_past_drain.pre_update_drain(meta);
-                        assert_eq!(iter.collect::<Vec<char>>(), []);
-                        assert_eq!(past_len, 0);
+                        let mut drain = self.with_past_drain.pre_update_drain(meta);
+                        assert_eq!(drain.past().collect::<Vec<char>>(), []);
+                        assert_eq!(drain.future().collect::<Vec<char>>(), future_drain);
                         assert_eq!(
                             self.with_past_drain.backward_log().map(|char| *char),
                             Ok(get)
                         );
 
                         // without_past_drain
-                        let iter = self.without_past_drain.pre_update_drain_future(meta);
-                        assert_eq!(iter.collect::<Vec<char>>(), []);
+                        let drain = self.without_past_drain.pre_update_drain(meta);
+                        assert_eq!(drain.future().collect::<Vec<char>>(), future_drain);
                         assert_eq!(
                             self.without_past_drain.backward_log().map(|char| *char),
                             Ok(get)
@@ -491,7 +489,8 @@ mod test {
                     });
                 }
                 Err(OutOfLog) => {
-                    self.meta.update_ref(false, |_, _| ());
+                    assert_eq!(N, 0);
+                    self.meta.update_ref(Ok(false), |_, _| ());
 
                     // with_past_drain
                     if self.with_past_drain.backward_log().is_ok() {
@@ -526,11 +525,11 @@ mod test {
         meta_and_logs.forward([], [], 'e', false);
         meta_and_logs.forward(['a'], [], 'f', false);
 
-        meta_and_logs.backward_log(Ok('f'));
-        meta_and_logs.backward_log(Ok('e'));
-        meta_and_logs.backward_log(Ok('d'));
-        meta_and_logs.backward_log(Ok('c'));
-        meta_and_logs.backward_log(Err(OutOfLog)); // 'b' is unreachable but not yet drained
+        meta_and_logs.backward_log([], Ok('f'));
+        meta_and_logs.backward_log([], Ok('e'));
+        meta_and_logs.backward_log([], Ok('d'));
+        meta_and_logs.backward_log([], Ok('c'));
+        meta_and_logs.backward_log([], Err(OutOfLog)); // 'b' is unreachable but not yet drained
 
         meta_and_logs.forward_log(Ok('c'));
         meta_and_logs.forward_log(Ok('d'));
@@ -538,30 +537,39 @@ mod test {
         meta_and_logs.forward_log(Ok('f'));
         meta_and_logs.forward_log(Err(OutOfLog));
 
-        meta_and_logs.backward_log(Ok('f'));
-        meta_and_logs.backward_log(Ok('e'));
+        meta_and_logs.backward_log([], Ok('f'));
+        meta_and_logs.backward_log([], Ok('e'));
 
         meta_and_logs.forward([], ['e', 'f'], 'g', false);
 
-        meta_and_logs.backward_log(Ok('g'));
-        meta_and_logs.backward_log(Ok('d'));
-        meta_and_logs.backward_log(Ok('c'));
-        meta_and_logs.backward_log(Err(OutOfLog));
+        meta_and_logs.backward_log([], Ok('g'));
+        meta_and_logs.backward_log([], Ok('d'));
+        meta_and_logs.backward_log([], Ok('c'));
+        meta_and_logs.backward_log([], Err(OutOfLog));
 
         meta_and_logs.forward_log(Ok('c'));
         meta_and_logs.forward_log(Ok('d'));
         meta_and_logs.forward_log(Ok('g'));
         meta_and_logs.forward_log(Err(OutOfLog));
 
-        meta_and_logs.backward_log(Ok('g'));
-        meta_and_logs.backward_log(Ok('d'));
+        meta_and_logs.backward_log([], Ok('g'));
+        meta_and_logs.backward_log([], Ok('d'));
 
         meta_and_logs.forward(['b', 'c'], ['d', 'g'], 'h', true);
 
-        meta_and_logs.backward_log(Ok('h'));
-        meta_and_logs.backward_log(Err(OutOfLog));
+        meta_and_logs.backward_log([], Ok('h'));
+        meta_and_logs.backward_log([], Err(OutOfLog));
 
         meta_and_logs.forward_log(Ok('h'));
         meta_and_logs.forward_log(Err(OutOfLog));
+
+        meta_and_logs.forward([], [], 'i', false);
+
+        meta_and_logs.backward_log([], Ok('i'));
+
+        meta_and_logs.noop_forward_backward_log();
+
+        meta_and_logs.backward_log(['i'], Ok('h'));
+        meta_and_logs.backward_log([], Err(OutOfLog));
     }
 }

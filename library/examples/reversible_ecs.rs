@@ -296,7 +296,7 @@ fn row4(app: &mut App) {
         // Any logs in the future of the log, for example after going backward in time and resuming
         // the NOT_LOG phase, should be despawned as they are no longer part of our reality as we
         // rewrite the future now! (TODO: rewrite, was in NOT_LOG match previously)
-        for entity in log.pre_update_drain_future(&meta).flatten() {
+        for entity in log.pre_update_drain(&meta).future().flatten() {
             commands.entity(entity).despawn();
         }
 
@@ -390,7 +390,7 @@ fn row5(app: &mut App) {
         };
 
         past_len_log.pre_update(&meta);
-        for entity in entity_log.pre_update_drain_future(&meta) {
+        for entity in entity_log.pre_update_drain(&meta).future() {
             commands.entity(entity).despawn();
         }
 

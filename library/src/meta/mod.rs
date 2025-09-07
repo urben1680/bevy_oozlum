@@ -484,6 +484,7 @@ impl RevMeta {
         };
         meta.direction = RunningOrRan::Ran(direction);
 
+        // check for PastLenLog instances that did missed being updated
         let now = meta.now;
         match meta
             .past_len_limits
@@ -497,17 +498,45 @@ impl RevMeta {
         }
     }
     #[cfg(test)]
-    pub(crate) fn update_ref(&mut self, should_run: bool, c: impl FnOnce(&mut Self, RevDirection)) {
+    pub(crate) fn update_ref(
+        &mut self,
+        should_run: Result<bool, PastLenLogMissed>,
+        c: impl FnOnce(&mut Self, RevDirection),
+    ) {
         let meta = core::mem::replace(self, RevMeta::new(None, true));
-        let mut ran = false;
-        *self = meta
-            .update(|mut meta, direction| {
-                ran = true;
-                c(&mut meta, direction);
-                Some(meta)
-            })
-            .unwrap();
-        assert_eq!(ran, should_run);
+        match should_run {
+            Ok(should_run) => {
+                let mut ran = false;
+                *self = meta
+                    .update(|mut meta, direction| {
+                        ran = true;
+                        c(&mut meta, direction);
+                        Some(meta)
+                    })
+                    .unwrap();
+                assert_eq!(ran, should_run);
+            }
+            Err(missed) => {
+                let mut ran = false;
+                let result = meta.update(|mut meta, direction| {
+                    ran = true;
+                    c(&mut meta, direction);
+                    Some(meta)
+                });
+                assert_eq!(ran, true);
+                match result {
+                    Err(RevMetaUpdateErr::PastLenLogsMissed {
+                        meta,
+                        past_len_logs_missed,
+                    }) => {
+                        *self = meta;
+                        println!("ERR {self:#?}");
+                        assert_eq!(past_len_logs_missed, [missed]);
+                    }
+                    other => panic!("OK {other:#?}"),
+                }
+            }
+        }
     }
     pub(super) fn update_past_len_state(
         &self,
@@ -657,7 +686,7 @@ mod test {
                 None => assert_eq!(self.get_queue(), None),
                 Some(queue) => self.set_queue(queue),
             }
-            self.update_ref(values.is_some(), |meta, direction| {
+            self.update_ref(Ok(values.is_some()), |meta, direction| {
                 let values = values.unwrap();
                 assert_eq!(meta.past_end(), values.past_end);
                 assert_eq!(meta.now(), values.now);

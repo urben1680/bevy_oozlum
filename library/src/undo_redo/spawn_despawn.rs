@@ -89,18 +89,23 @@ impl RevDespawnCleaner {
             }
         };
         let past_len = meta.past_len();
-        let iter = self
-            .spawn_buffer
-            .pre_update_drain(&meta)
-            .0
-            .flat_map(|buffer| buffer.0)
-            .chain(self.spawn.pre_update_drain_future(&meta).0)
-            .chain(self.despawn.pre_update_drain_past(&meta).0);
 
-        world.insert_resource(meta);
+        {
+            let drain_buffer = self.spawn_buffer.pre_update_drain(&meta);
+            let drain_spawn = self.spawn.pre_update_drain(&meta);
+            let mut drain_despawn = self.despawn.pre_update_drain(&meta);
+            let iter = drain_buffer
+                .all()
+                .transitions
+                .flat_map(|buffer| buffer.0)
+                .chain(drain_spawn.future().transitions)
+                .chain(drain_despawn.past().transitions);
 
-        for entity in iter {
-            let _ = world.try_despawn(entity); // todo: upstream a way to set the location
+            world.insert_resource(meta);
+
+            for entity in iter {
+                let _ = world.try_despawn(entity); // todo: upstream a way to set the location
+            }
         }
 
         let log_result = match direction {
@@ -125,7 +130,7 @@ impl RevDespawnCleaner {
                 .push_and_drain_past(max_past_len, |mut log| {
                     log.extend(self.despawn_queue.drain(..).map(|(entity, _)| entity));
                 })
-                .0;
+                .transitions;
             for entity in despawned {
                 let _ = world.try_despawn(entity); // todo: upstream a way to set the location
             }
@@ -142,7 +147,7 @@ impl RevDespawnCleaner {
                             .map(|(entity, location)| (Some(entity), location)),
                     );
                 })
-                .0
+                .transitions
                 .flat_map(|buffer| buffer.0);
             for entity in buffer {
                 let _ = world.try_despawn(entity); // todo: upstream a way to set the location

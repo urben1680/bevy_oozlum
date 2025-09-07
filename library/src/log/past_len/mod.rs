@@ -447,52 +447,6 @@ impl PastLenLog {
         self.offset_bytes.shrink_to_fit()
     }
 
-    /// Remove the logged runs that are in the future.
-    ///
-    /// This returns an error if one or more [`Self::backward_log`]/[`Self::forward_log`] calls
-    /// were missed. See [`PastLenNotLogError`].
-    ///
-    /// This **must** be called during [`RevDirection::NOT_LOG`] in frames where
-    /// [`Self::update_and_get_past_len`] is not used but later
-    /// [`backward_log`]/[`forward_log`] are tasked to determine if the log has been
-    /// updated. Otherwise errors may not be possible to be detected.
-    ///
-    /// See the [type docs] for an example.
-    ///
-    /// [`RevDirection::NOT_LOG`]: crate::meta::RevDirection::NOT_LOG
-    /// [type docs]: PastLenLog
-    pub fn truncate_future(&mut self) {
-        // This does not need to push a Limits::backward_limit to PastLenLogs because this method is
-        // either:
-        // a) called at RevDirection::NOT_LOG anyway, where PastLenLogs unsets the forward limits
-        //    itself and could not rely this unset is triggered from a push of this PastLenLog as it
-        //    might not run this frame
-        // b) called at a log RevDirection because the trigger came from PastLenLogs so it would be
-        //    pointless to push the update back to it
-        // In other words, this method is at most a reacting element and not a determining.
-
-        if self.offset_bytes.len() > self.index {
-            self.offset_bytes.truncate(self.index);
-            self.zeroes = 0;
-        }
-
-        self.zeroes_max = self.zeroes;
-    }
-
-    /// Clears the log.
-    /// todo: mention PastLenLogs::clear
-    #[track_caller]
-    pub fn clear(&mut self) {
-        self.offset_bytes.clear();
-        self.out_of_or_past_end_log = 0;
-        self.last_update = 0;
-        self.index = 0;
-        self.past_len = 0;
-        self.zeroes = 0;
-        self.zeroes_max = 0;
-        self.update_state = None;
-    }
-
     /// Update the log which does the following:
     /// - [`Self::truncate_future`] and returns its error if one or more [`Self::backward_log`]/
     ///   [`Self::forward_log`] calls were missed. See [`PastLenNotLogError`]
@@ -518,6 +472,7 @@ impl PastLenLog {
     /// [missed log traversal updates]: MissedUpdate
     /// [module docs]: super
     /// [type docs]: PastLenLog
+    #[track_caller]
     pub fn update_and_get_past_len(&mut self, meta: &RevMeta) -> u64 {
         assert_eq!(self.index, self.offset_bytes.len(), "todo");
 
@@ -642,21 +597,14 @@ impl PastLenLog {
     ///
     /// [`RevDirection::BackwardLog`]: crate::meta::RevDirection::BackwardLog
     /// [type docs]: PastLenLog
+    #[track_caller]
     pub fn backward_log(&mut self, meta: &RevMeta) -> bool {
+        let now = meta.now() + 1;
         // set next backward_limit if this method returns true
-        let backward_limit = match self.last_update.cmp(&(meta.now() + 1)) {
+        let backward_limit = match self.last_update.cmp(&now) {
             // did not yet reach the next past frame in the log, may be at end of reachable log
             Ordering::Less => return false,
             Ordering::Equal => {
-                if self.zeroes > 0 {
-                    self.zeroes -= 1;
-                    self.past_len -= 1;
-                    // self is not done going backward in this frame yet, but no need to call
-                    // PastLenLogs::push because the Limits::both_limits(meta.now(), meta.now()) was
-                    // already pushed in this frame by this log, see the IterItem { offset: 0, .. }
-                    // match arm below
-                    return true;
-                }
                 let mut iter = OffsetIter(self.offset_bytes.range(..self.index));
                 match iter.next_back() {
                     Some(IterItem { offset: 0, len }) => {
@@ -665,11 +613,11 @@ impl PastLenLog {
                         self.zeroes = len.get() as u8 - 1;
                         if self.zeroes == 0 {
                             match iter.next_back() {
-                                Some(IterItem { offset, .. }) => meta.now() - offset,
+                                Some(IterItem { offset, .. }) => now - offset,
                                 None => u64::MIN,
                             }
                         } else {
-                            meta.now()
+                            now
                         }
                     }
                     Some(IterItem { offset, len }) => {
@@ -714,6 +662,7 @@ impl PastLenLog {
     ///
     /// [`RevDirection::FORWARD_LOG`]: crate::meta::RevDirection::FORWARD_LOG
     /// [type docs]: PastLenLog
+    #[track_caller]
     pub fn forward_log(&mut self, meta: &RevMeta) -> bool {
         // set next forward_limit if this method returns true
         let mut iter = OffsetIter(self.offset_bytes.range(self.index..));
@@ -723,15 +672,9 @@ impl PastLenLog {
                 Ordering::Greater => return false,
                 Ordering::Equal => {
                     self.past_len += 1;
-                    if self.zeroes == 0 {
+                    if self.zeroes < len.get() as u8 - 1 {
                         self.zeroes += 1;
                         meta.now()
-                    } else if self.zeroes < len.get() as u8 - 1 {
-                        self.zeroes += 1;
-                        // self is not done going forward in this frame yet, but no need to call
-                        // PastLenLogs::push because the Limits::both_limits(meta.now(), meta.now())
-                        // was already pushed in this frame by this log, see the if case right above
-                        return true;
                     } else {
                         self.index += 1;
                         self.zeroes = 0;
@@ -771,14 +714,7 @@ impl PastLenLog {
                 Ordering::Equal => {
                     self.past_len += 1;
                     self.zeroes += 1;
-                    if self.zeroes == 1 {
-                        meta.now()
-                    } else {
-                        // self is not done going forward in this frame yet, but no need to call
-                        // PastLenLogs::push because the Limits::both_limits(meta.now(), meta.now())
-                        // was already pushed in this frame by this log, see the if case right above
-                        return true;
-                    }
+                    meta.now()
                 }
                 // missed an update, should have been reported by PastLenLogs, do nothing here as
                 // the user seems to have decided against panicking in that case
@@ -797,8 +733,23 @@ impl PastLenLog {
 
     pub fn pre_update(&mut self, meta: &RevMeta) {
         match meta.update_past_len_state(&mut self.update_state, self.last_update) {
-            PreUpdateVariant::DropLog => self.clear(),
-            PreUpdateVariant::DropFuture => self.truncate_future(),
+            PreUpdateVariant::RemoveLog => {
+                self.offset_bytes.clear();
+                self.out_of_or_past_end_log = 0;
+                self.last_update = 0;
+                self.index = 0;
+                self.past_len = 0;
+                self.zeroes = 0;
+                self.zeroes_max = 0;
+                self.update_state = None;
+            }
+            PreUpdateVariant::RemoveFuture => {
+                if self.offset_bytes.len() > self.index {
+                    self.offset_bytes.truncate(self.index);
+                    self.zeroes = 0;
+                }
+                self.zeroes_max = self.zeroes;
+            }
             PreUpdateVariant::Nothing => {}
         }
     }
@@ -806,6 +757,10 @@ impl PastLenLog {
 
 #[cfg(test)]
 mod test {
+    use bevy::ecs::change_detection::MaybeLocation;
+
+    use crate::meta::{RevDirection, RevQueue};
+
     use super::*;
 
     #[test]
@@ -945,260 +900,262 @@ mod test {
                 .eq(expected.into_iter().rev())
         );
     }
-    /*
-    #[derive(Clone)]
-    struct Log {
-        log: PastLenLog,
+
+    struct MetaAndLog {
         meta: RevMeta,
+        past_len_log: PastLenLog,
+        last_update: MaybeLocation,
     }
 
-    impl Log {
-        fn new(max_world_states: u64, now: u64) -> Self {
-            let log = PastLenLog::new();
-            let meta = RevMeta::new(NonZeroU64::new(max_world_states), now, false);
-            Self { log, meta }
-        }
-        fn forward(
+    // needed to get the same location in MetaAndLog and PastLenLogLimits
+    impl PastLenLog {
+        #[track_caller]
+        fn forward_set_location(
             &mut self,
-            updates_with_expected_past_len: Result<Vec<usize>, PastLenNotLogError>,
+            meta: &RevMeta,
+            past_len: u64,
+            last_update: &mut MaybeLocation,
         ) {
-            self.meta.queue_not_log_forward();
-            self.meta
-                .update(|meta| match updates_with_expected_past_len {
-                    Ok(updates_with_expected_past_len) => {
-                        let len = updates_with_expected_past_len.len();
-                        let mut before = Vec::with_capacity(len);
-                        let updates_with_actual_past_len: Vec<usize> = (0..len)
-                            .map(|_| {
-                                before.push(self.log.clone());
-                                match self.log.update_and_get_past_len(meta) {
-                                    Ok(past_len) => past_len,
-                                    Err(err) => panic!(
-                                        "{err}\nbefore: {before:#?}\nafter: {:#?}\nmeta: {meta:#?}",
-                                        self.log
-                                    ),
-                                }
-                            })
-                            .collect();
-                        assert_eq!(
-                            updates_with_actual_past_len, updates_with_expected_past_len,
-                            "\nbefore: {before:#?}\nafter: {:#?}\nmeta: {meta:#?}",
-                            self.log
-                        )
-                    }
-                    Err(err) => {
-                        let before = self.log.clone();
-                        assert_eq!(
-                            self.log.update_and_get_past_len(&meta),
-                            Err(err),
-                            "\nbefore: {before:#?}\nafter: {:#?}\nmeta: {meta:#?}",
-                            self.log
-                        );
-                    }
-                })
-                .expect("should update");
+            assert_eq!(self.update_and_get_past_len(meta), past_len);
+            *last_update = MaybeLocation::caller();
         }
-        fn forward_log(&mut self, expected_backward_log_updates: Result<usize, MissedUpdate>) {
-            let previous = self.meta.now() + 1;
-            assert_eq!(self.meta.queue_log(previous), Ok(1));
-            self.meta
-                .update(|meta| match expected_backward_log_updates {
-                    Ok(expected_backward_log_updates) => {
-                        let mut before = Vec::with_capacity(expected_backward_log_updates + 1);
-                        for _ in 0..expected_backward_log_updates {
-                            before.push(self.log.clone());
-                            assert_eq!(
-                                self.log.forward_log(meta),
-                                Ok(true),
-                                "\nbefore: {before:#?}\nafter: {:#?}\nmeta: {meta:#?}",
-                                self.log
-                            );
+        #[track_caller]
+        fn forward_log_set_location(&mut self, meta: &RevMeta, last_update: &mut MaybeLocation) {
+            assert_eq!(self.forward_log(meta), true);
+            *last_update = MaybeLocation::caller();
+        }
+        #[track_caller]
+        fn backward_log_set_location(&mut self, meta: &RevMeta, last_update: &mut MaybeLocation) {
+            assert_eq!(self.backward_log(meta), true);
+            *last_update = MaybeLocation::caller();
+        }
+    }
+
+    impl MetaAndLog {
+        fn new(max_world_states: u64) -> Self {
+            Self {
+                meta: RevMeta::new(NonZeroU64::new(max_world_states), false),
+                past_len_log: PastLenLog::new(),
+                last_update: MaybeLocation::caller(),
+            }
+        }
+        fn forward<const N: usize>(&mut self, past_lens: [u64; N]) {
+            self.meta.set_queue(RevQueue::RUN_NOT_LOG);
+            self.meta.update_ref(Ok(true), |meta, direction| {
+                assert_eq!(direction, RevDirection::NOT_LOG);
+                self.past_len_log.pre_update(meta);
+                for past_len in past_lens {
+                    self.past_len_log
+                        .forward_set_location(meta, past_len, &mut self.last_update);
+                }
+            });
+        }
+        fn forward_log(&mut self, updates: u64) {
+            // test cases where not all updates ran
+            if updates > 0 {
+                let missed = self.new_missed();
+
+                for insufficient_updates in 0..updates {
+                    self.meta.set_queue(RevQueue::RUN_FORWARD_LOG);
+                    self.meta.update_ref(Err(missed), |meta, direction| {
+                        assert_eq!(direction, RevDirection::FORWARD_LOG);
+                        for _ in 0..insufficient_updates {
+                            assert_eq!(self.past_len_log.forward_log(meta), true);
                         }
-                        before.push(self.log.clone());
-                        assert_eq!(
-                            self.log.forward_log(meta),
-                            Ok(false),
-                            "\nbefore: {before:#?}\nafter: {:#?}\nmeta: {meta:#?}",
-                            self.log
-                        );
-                    }
-                    Err(missed_frame) => {
-                        let before = self.log.clone();
-                        assert_eq!(
-                            self.log.forward_log(meta),
-                            Err(missed_frame),
-                            "\nbefore: {before:#?}\nafter: {:#?}\nmeta: {meta:#?}",
-                            self.log
-                        );
-                    }
-                })
-                .expect("should update");
-        }
-        fn forward_log_miss_frame(&mut self) {
-            let previous = self.meta.now() + 1;
-            assert_eq!(self.meta.queue_log(previous), Ok(1));
-            self.meta.update(|_| {}).expect("should update");
-        }
-        fn backward_log(&mut self, expected_backward_log_updates: Result<usize, MissedUpdate>) {
-            let previous = self.meta.now() - 1;
-            assert_eq!(self.meta.queue_log(previous), Ok(1));
-            self.meta
-                .update(|meta| match expected_backward_log_updates {
-                    Ok(expected_backward_log_updates) => {
-                        let mut before = Vec::with_capacity(expected_backward_log_updates + 1);
-                        for _ in 0..expected_backward_log_updates {
-                            before.push(self.log.clone());
-                            assert_eq!(
-                                self.log.backward_log(meta),
-                                Ok(true),
-                                "\nbefore: {before:#?}\nafter: {:#?}\nmeta: {meta:#?}",
-                                self.log
-                            );
+                    });
+
+                    // despite the error, RevMeta and PastLenLog were updated and this has to be undone to
+                    // continue testing
+                    self.last_update = missed.last_update;
+                    self.meta.set_queue(RevQueue::RUN_BACKWARD_LOG);
+                    self.meta.update_ref(Ok(true), |meta, direction| {
+                        assert_eq!(direction, RevDirection::BackwardLog);
+                        for _ in 0..insufficient_updates {
+                            assert_eq!(self.past_len_log.backward_log(meta), true);
                         }
-                        before.push(self.log.clone());
-                        assert_eq!(
-                            self.log.backward_log(meta),
-                            Ok(false),
-                            "\nbefore: {before:#?}\nafter: {:#?}\nmeta: {meta:#?}",
-                            self.log
-                        );
-                    }
-                    Err(missed_frame) => {
-                        let before = self.log.clone();
-                        assert_eq!(
-                            self.log.backward_log(meta),
-                            Err(PastLenBackwardError::MissedUpdate(missed_frame)),
-                            "\nbefore: {before:#?}\nafter: {:#?}\nmeta: {meta:#?}",
-                            self.log
-                        );
-                    }
-                })
-                .expect("should update");
+                        // assert no more updates would run
+                        assert_eq!(self.past_len_log.forward_log(meta), false);
+                    });
+                }
+            }
+
+            // test case where all updates ran
+            self.meta.set_queue(RevQueue::RUN_FORWARD_LOG);
+            self.meta.update_ref(Ok(true), |meta, direction| {
+                assert_eq!(direction, RevDirection::FORWARD_LOG);
+                for _ in 0..updates {
+                    self.past_len_log
+                        .forward_log_set_location(meta, &mut self.last_update);
+                }
+                // assert no more updates would run
+                assert_eq!(self.past_len_log.forward_log(meta), false);
+            });
         }
-        fn backward_log_miss_frame(&mut self) {
-            let previous = self.meta.now() - 1;
-            assert_eq!(self.meta.queue_log(previous), Ok(1));
-            self.meta.update(|_| {}).expect("should update");
+        fn backward_log(&mut self, updates: u64) {
+            // test cases where not all updates ran
+            if updates > 0 {
+                let missed = self.new_missed();
+
+                println!("BEFORE: {:#?}", self.meta);
+                for insufficient_updates in 0..updates {
+                    println!("{insufficient_updates}");
+                    self.meta.set_queue(RevQueue::RUN_BACKWARD_LOG);
+                    self.meta.update_ref(Err(missed), |meta, direction| {
+                        assert_eq!(direction, RevDirection::BackwardLog);
+                        for _ in 0..insufficient_updates {
+                            assert_eq!(self.past_len_log.backward_log(meta), true);
+                        }
+                    });
+
+                    // despite the error, RevMeta and PastLenLog were updated and this has to be undone to
+                    // continue testing
+                    self.last_update = missed.last_update;
+                    self.meta.set_queue(RevQueue::RUN_FORWARD_LOG);
+                    self.meta.update_ref(Ok(true), |meta, direction| {
+                        assert_eq!(direction, RevDirection::FORWARD_LOG);
+                        for _ in 0..insufficient_updates {
+                            assert_eq!(self.past_len_log.forward_log(meta), true);
+                        }
+                        // assert no more updates would run
+                        assert_eq!(self.past_len_log.backward_log(meta), false);
+                    });
+                    println!("AFTER: {:#?}", self.meta);
+                }
+            }
+
+            // test case where all updates ran
+            self.meta.set_queue(RevQueue::RUN_BACKWARD_LOG);
+            self.meta.update_ref(Ok(true), |meta, direction| {
+                assert_eq!(direction, RevDirection::BackwardLog);
+                for _ in 0..updates {
+                    self.past_len_log
+                        .backward_log_set_location(meta, &mut self.last_update);
+                }
+                // assert no more updates would run
+                assert_eq!(self.past_len_log.backward_log(meta), false);
+            });
+        }
+        fn new_missed(&self) -> PastLenLogMissed {
+            PastLenLogMissed {
+                internal_id: self.past_len_log.update_state.unwrap().id,
+                last_update: self.last_update,
+            }
         }
     }
 
     #[test]
     fn log_traversal_works() {
-        let mut log = Log::new(4, 0);
-        log.forward(Ok(vec![1])); // frame #1
-        log.forward(Ok(vec![2, 3])); // frame #2
-        log.forward(Ok(vec![4, 5]));
-        log.forward(Ok(vec![]));
+        let mut meta_and_log = MetaAndLog::new(4);
+
+        meta_and_log.forward([1]); // frame #1
+        meta_and_log.forward([2, 3]); // frame #2
+        meta_and_log.forward([4, 5]);
+        meta_and_log.forward([]);
         // shortened log of runs from frame #1 and #2 --> past_len -= 3
-        log.forward(Ok(vec![3, 4, 5]));
+        meta_and_log.forward([3, 4, 5]);
 
-        log.backward_log(Ok(3));
-        log.backward_log(Ok(0));
-        log.backward_log(Ok(2));
+        meta_and_log.backward_log(3);
+        meta_and_log.backward_log(0);
+        meta_and_log.backward_log(2);
 
-        log.forward_log(Ok(2));
-        log.forward_log(Ok(0));
-        log.forward_log(Ok(3));
+        meta_and_log.forward_log(2);
+        meta_and_log.forward_log(0);
+        meta_and_log.forward_log(3);
 
-        log.backward_log(Ok(3));
-        log.backward_log(Ok(0));
-        log.backward_log(Ok(2));
+        meta_and_log.backward_log(3);
+        meta_and_log.backward_log(0);
+        meta_and_log.backward_log(2);
 
-        log.forward(Ok(vec![1]));
+        meta_and_log.forward([1]);
     }
 
     #[test]
     fn behaves_like_meta_if_updated_once_per_frame() {
-        let mut log = Log::new(4, 0);
+        let mut meta_and_log = MetaAndLog::new(4);
 
-        log.forward(Ok(vec![1])); // frame #1
-        assert_eq!(log.meta.past_len(), 1);
+        meta_and_log.forward([1]); // frame #1
+        assert_eq!(meta_and_log.meta.past_len(), 1);
 
-        log.forward(Ok(vec![2])); // frame #2
-        assert_eq!(log.meta.past_len(), 2);
+        meta_and_log.forward([2]); // frame #2
+        assert_eq!(meta_and_log.meta.past_len(), 2);
 
-        log.forward(Ok(vec![3]));
-        assert_eq!(log.meta.past_len(), 3);
+        meta_and_log.forward([3]);
+        assert_eq!(meta_and_log.meta.past_len(), 3);
 
-        log.forward(Ok(vec![3]));
-        assert_eq!(log.meta.past_len(), 3);
+        meta_and_log.forward([3]);
+        assert_eq!(meta_and_log.meta.past_len(), 3);
     }
 
+    /*
     #[test]
     fn missed_update_in_log() {
-        let mut log = Log::new(4, 0);
+        let mut meta_and_log = MetaAndLog::new(4);
 
-        log.forward(Ok(vec![1])); // frame #1
-        log.forward(Ok(vec![2])); // frame #2
-        log.forward(Ok(vec![3])); // frame #3
+        meta_and_log.forward(Ok([1])); // frame #1
+        meta_and_log.forward(Ok([2])); // frame #2
+        meta_and_log.forward(Ok([3])); // frame #3
 
-        {
-            let mut log = log.clone();
-            let err = MissedUpdate(3);
-            log.backward_log_miss_frame();
-            log.backward_log(Err(err));
-            log.forward(Err(PastLenNotLogError::MissedUpdateBackwardLog(err)));
-        }
+        meta_and_log.forward(Err(()));
 
-        log.backward_log(Ok(1));
-        log.backward_log(Ok(1));
-        log.backward_log(Ok(1));
+        meta_and_log.backward_log(Ok(1));
+        meta_and_log.backward_log(Ok(1));
+        meta_and_log.backward_log(Ok(1));
 
         // -- log edge --
         let err = MissedUpdate(1);
-        log.forward_log_miss_frame();
-        log.forward_log(Err(err));
-        log.forward(Err(PastLenNotLogError::MissedUpdateForwardLog(err)));
+        meta_and_log.forward_log_miss_frame();
+        meta_and_log.forward_log(Err(err));
+        meta_and_log.forward(Err(()));
     }
 
     #[test]
     fn missed_update_out_of_log() {
-        let mut log = Log::new(3, 0);
+        let mut meta_and_log = MetaAndLog::new(3);
 
-        log.forward(Ok(vec![1]));
+        meta_and_log.forward(Ok([1]));
 
-        log.backward_log(Ok(1));
-        log.forward_log_miss_frame();
+        meta_and_log.backward_log(Ok(1));
+        meta_and_log.forward_log_miss_frame();
 
-        log.forward(Ok(vec![]));
+        meta_and_log.forward(Ok([]));
 
         // -- log edge --
-        log.forward(Ok(vec![]));
-        log.forward(Ok(vec![]));
+        meta_and_log.forward(Ok([]));
+        meta_and_log.forward(Ok([]));
 
-        log.forward(Err(PastLenNotLogError::MissedUpdateForwardLog(
+        meta_and_log.forward(Err(PastLenNotLogError::MissedUpdateForwardLog(
             MissedUpdate(1),
         )));
     }
 
     #[test]
     fn no_missed_frame_false_positive_in_log() {
-        let mut log = Log::new(3, 0);
+        let mut meta_and_log = MetaAndLog::new(3);
 
-        log.forward(Ok(vec![1]));
+        meta_and_log.forward(Ok([1]));
 
-        log.backward_log(Ok(1));
+        meta_and_log.backward_log(Ok(1));
 
-        log.forward(Ok(vec![]));
+        meta_and_log.forward(Ok([]));
         // should not detect a missed forward log update
-        log.forward(Ok(vec![1]));
+        meta_and_log.forward(Ok([1]));
     }
 
     #[test]
     fn no_missed_frame_false_positive_out_of_log() {
-        let mut log = Log::new(3, 0);
+        let mut meta_and_log = MetaAndLog::new(3);
 
-        log.forward(Ok(vec![1]));
+        meta_and_log.forward(Ok([1]));
 
-        log.backward_log(Ok(1));
+        meta_and_log.backward_log(Ok(1));
 
-        log.forward(Ok(vec![]));
+        meta_and_log.forward(Ok([]));
 
         // -- log edge --
-        log.forward(Ok(vec![]));
-        log.forward(Ok(vec![]));
+        meta_and_log.forward(Ok([]));
+        meta_and_log.forward(Ok([]));
         // should not detect a missed forward log update
-        log.forward(Ok(vec![1]));
+        meta_and_log.forward(Ok([1]));
     }
     */
 }

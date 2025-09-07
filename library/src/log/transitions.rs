@@ -1,11 +1,19 @@
 use std::{
     collections::{
-        vec_deque::{Drain, IterMut}, VecDeque
+        VecDeque,
+        vec_deque::{Drain, IterMut},
     },
-    fmt::Debug, marker::PhantomData, ops::{Deref, DerefMut},
+    fmt::Debug,
+    marker::PhantomData,
 };
 
-use crate::{log::{transition::TransitionDrains, PreUpdateVariant, TransitionDrain, TransitionDrainFuture, TransitionDrainPast}, meta::RevMeta};
+use crate::{
+    log::{
+        PreUpdateVariant, TransitionDrain, TransitionDrainFuture, TransitionDrainPast,
+        transition::TransitionDrains,
+    },
+    meta::RevMeta,
+};
 
 use super::{OutOfLog, TransitionLog};
 
@@ -19,12 +27,21 @@ pub struct TransitionsLog<T, U = ()> {
 pub struct TransitionsDrains<'log, T, U> {
     transitions: Drain<'log, T>,
     past_len: usize,
-    entry_amounts: TransitionDrains<'log, EntryAmount<U>>
+    entry_amounts: TransitionDrains<'log, EntryAmount<U>>,
 }
 
-pub type TransitionsDrainPast<'a, 'log, T, U> = TransitionsDrainChunkable<TransitionDrainPast<'a, 'log, T>, TransitionDrainPast<'a, 'log, EntryAmount<U>>, U>;
-pub type TransitionsDrainFuture<'log, T, U> = TransitionsDrainChunkable<TransitionDrainFuture<'log, T>, TransitionDrainFuture<'log, EntryAmount<U>>, U>;
-pub type TransitionsDrain<'log, T, U> = TransitionsDrainChunkable<TransitionDrain<'log, T>, TransitionDrain<'log, EntryAmount<U>>, U>;
+pub type TransitionsDrainPast<'a, 'log, T, U> = TransitionsDrainChunkable<
+    TransitionDrainPast<'a, 'log, T>,
+    TransitionDrainPast<'a, 'log, EntryAmount<U>>,
+    U,
+>;
+pub type TransitionsDrainFuture<'log, T, U> = TransitionsDrainChunkable<
+    TransitionDrainFuture<'log, T>,
+    TransitionDrainFuture<'log, EntryAmount<U>>,
+    U,
+>;
+pub type TransitionsDrain<'log, T, U> =
+    TransitionsDrainChunkable<TransitionDrain<'log, T>, TransitionDrain<'log, EntryAmount<U>>, U>;
 
 impl<'log, T, U> TransitionsDrains<'log, T, U> {
     pub fn past<'a>(&'a mut self) -> TransitionsDrainPast<'a, 'log, T, U> {
@@ -33,21 +50,21 @@ impl<'log, T, U> TransitionsDrains<'log, T, U> {
         TransitionsDrainChunkable {
             transitions: self.transitions.by_ref().take(past_len),
             entry_amounts: self.entry_amounts.past(),
-            _p: PhantomData
+            _p: PhantomData,
         }
     }
     pub fn future(self) -> TransitionsDrainFuture<'log, T, U> {
         TransitionsDrainChunkable {
             transitions: self.transitions.skip(self.past_len),
             entry_amounts: self.entry_amounts.future(),
-            _p: PhantomData
+            _p: PhantomData,
         }
     }
     pub fn all(self) -> TransitionsDrain<'log, T, U> {
         TransitionsDrainChunkable {
             transitions: self.transitions,
             entry_amounts: self.entry_amounts.all(),
-            _p: PhantomData
+            _p: PhantomData,
         }
     }
 }
@@ -55,19 +72,21 @@ impl<'log, T, U> TransitionsDrains<'log, T, U> {
 pub struct TransitionsDrainChunkable<TI, UI, U> {
     pub transitions: TI,
     pub entry_amounts: UI,
-    _p: PhantomData<fn(UI) -> U>
+    _p: PhantomData<fn(UI) -> U>,
 }
 
 impl<TI, UI, U> TransitionsDrainChunkable<TI, UI, U>
 where
     TI: Iterator,
-    UI: Iterator<Item = EntryAmount<U>>
+    UI: Iterator<Item = EntryAmount<U>>,
 {
     pub fn next_chunk<'a>(&'a mut self) -> Option<(core::iter::Take<&'a mut TI>, U)> {
-        self.entry_amounts.next().map(|entry_amount| (
-            self.transitions.by_ref().take(entry_amount.amount),
-            entry_amount.entry
-        ))
+        self.entry_amounts.next().map(|entry_amount| {
+            (
+                self.transitions.by_ref().take(entry_amount.amount),
+                entry_amount.entry,
+            )
+        })
     }
 }
 
@@ -107,7 +126,7 @@ impl<T, U> TransitionsLog<T, U> {
         TransitionsDrainChunkable {
             transitions: self.transitions.drain(..transition_drain),
             entry_amounts: self.amounts.drain_past(amount_drain),
-            _p: PhantomData
+            _p: PhantomData,
         }
     }
     fn push_and_get_transition_and_amount_drain<IntoU: Into<U>>(
@@ -153,15 +172,15 @@ impl<T, U> TransitionsLog<T, U> {
     }
     pub fn pre_update(&mut self, meta: &RevMeta) {
         match self.amounts.pre_update_check(meta) {
-            PreUpdateVariant::DropLog => {
+            PreUpdateVariant::RemoveLog => {
                 self.transitions.clear();
                 self.amounts.clear();
                 self.index = 0;
-            },
-            PreUpdateVariant::DropFuture => {
+            }
+            PreUpdateVariant::RemoveFuture => {
                 self.transitions.truncate(self.index);
                 self.amounts.truncate_future();
-            },
+            }
             PreUpdateVariant::Nothing => {}
         }
     }
@@ -170,34 +189,31 @@ impl<T, U> TransitionsLog<T, U> {
         meta: &'m RevMeta,
     ) -> TransitionsDrains<'log, T, U> {
         match self.amounts.pre_update_check(meta) {
-            PreUpdateVariant::DropLog => {
+            PreUpdateVariant::RemoveLog => {
                 let past_len = self.index;
                 self.index = 0;
                 TransitionsDrains {
                     transitions: self.transitions.drain(..),
                     past_len,
-                    entry_amounts: self.amounts.full_drain()
+                    entry_amounts: self.amounts.full_drain(),
                 }
             }
-            PreUpdateVariant::DropFuture => {
-                TransitionsDrains {
-                    transitions: self.transitions.drain(self.index..),
-                    past_len: 0,
-                    entry_amounts: self.amounts.drain_future(),
-                }
-            }
-            PreUpdateVariant::Nothing => {
-                TransitionsDrains {
-                    transitions: self.transitions.drain(..0),
-                    past_len: 0,
-                    entry_amounts: self.amounts.empty_drain(),
-                }
-            }
+            PreUpdateVariant::RemoveFuture => TransitionsDrains {
+                transitions: self.transitions.drain(self.index..),
+                past_len: 0,
+                entry_amounts: self.amounts.drain_future(),
+            },
+            PreUpdateVariant::Nothing => TransitionsDrains {
+                transitions: self.transitions.drain(..0),
+                past_len: 0,
+                entry_amounts: self.amounts.empty_drain(),
+            },
         }
     }
 }
 
-/// A `&mut VecDeque<T>` wrapper that does not expose methods which remove from the deque.
+/// A [`&mut VecDeque<T>`](VecDeque) wrapper that does not expose methods which remove from the
+/// deque.
 pub struct LogMut<'a, T>(&'a mut VecDeque<T>);
 
 impl<'a, T> LogMut<'a, T> {
@@ -284,7 +300,7 @@ pub struct EntryAmount<U> {
     pub amount: usize,
 }
 
-#[cfg(testa)]
+#[cfg(test)]
 mod test {
     use std::num::NonZeroU64;
 
@@ -298,25 +314,24 @@ mod test {
         without_past_drain: TransitionsLog<char, char>,
     }
 
-    fn collect_drain(
-        mut iter_t: impl Iterator<Item = char>,
-        iter_u: impl Iterator<Item = EntryAmount<char>>,
-    ) -> Vec<(String, char)> {
-        iter_u
-            .map(|entry_amount| {
-                (
-                    iter_t.by_ref().take(entry_amount.amount).collect(),
-                    entry_amount.entry,
-                )
-            })
-            .collect()
+    impl<TI, UI> TransitionsDrainChunkable<TI, UI, char>
+    where
+        TI: Iterator<Item = char>,
+        UI: Iterator<Item = EntryAmount<char>>,
+    {
+        fn to_tuples(mut self) -> Vec<(String, char)> {
+            let mut v = Vec::new();
+            while let Some((transitions, entry)) = self.next_chunk() {
+                v.push((transitions.collect(), entry))
+            }
+            v
+        }
     }
 
-    fn value_entry_to_tuple(value_entry: ValueEntry<IterMut<char>, &mut char>) -> (String, char) {
-        (
-            value_entry.value.map(|char| *char).collect(),
-            *value_entry.entry,
-        )
+    impl<'a> ValueEntry<IterMut<'a, char>, &'a mut char> {
+        fn to_tuple(self) -> (String, char) {
+            (self.value.map(|char| *char).collect(), *self.entry)
+        }
     }
 
     impl MetaAndLogs {
@@ -340,37 +355,32 @@ mod test {
                 RevQueue::RUN_NOT_LOG
             };
             self.meta.set_queue(queue);
-            self.meta.update_ref(true, |meta, direction| {
+            self.meta.update_ref(Ok(true), |meta, direction| {
                 assert_eq!(direction, RevDirection::NOT_LOG);
 
                 // with_past_drain
-                let (mut iter_t, mut iter_u, past_len) =
-                    self.with_past_drain.pre_update_drain(meta);
+                let mut drain = self.with_past_drain.pre_update_drain(meta);
                 if clear {
-                    assert_eq!(
-                        collect_drain(iter_t.by_ref(), iter_u.by_ref().take(past_len)),
-                        past_drain
-                    );
+                    assert_eq!(drain.past().to_tuples(), past_drain);
                 } else {
-                    assert_eq!(past_len, 0);
+                    assert_eq!(drain.past().to_tuples(), []);
                 }
-                assert_eq!(collect_drain(iter_t, iter_u), future_drain);
-                let (iter_t, iter_u) =
-                    self.with_past_drain
-                        .push_and_drain_past(meta.past_len(), |mut log| {
-                            log.extend(push.0.chars());
-                            push.1
-                        });
-                let drained = collect_drain(iter_t, iter_u);
+                assert_eq!(drain.future().to_tuples(), future_drain);
+                let drain = self
+                    .with_past_drain
+                    .push_and_drain_past(meta.past_len(), |mut log| {
+                        log.extend(push.0.chars());
+                        push.1
+                    });
                 if clear {
-                    assert_eq!(drained, []);
+                    assert_eq!(drain.to_tuples(), []);
                 } else {
-                    assert_eq!(drained, past_drain)
+                    assert_eq!(drain.to_tuples(), past_drain)
                 }
 
                 // without_past_drain
-                let (iter_t, iter_u) = self.without_past_drain.pre_update_drain_future(meta);
-                assert_eq!(collect_drain(iter_t, iter_u), future_drain);
+                let drain = self.without_past_drain.pre_update_drain(meta);
+                assert_eq!(drain.future().to_tuples(), future_drain);
                 self.without_past_drain
                     .push_and_truncate_past(meta.past_len(), |mut log| {
                         log.extend(push.0.chars());
@@ -378,83 +388,89 @@ mod test {
                     });
             });
         }
+        fn noop_forward_backward_log(&mut self) {
+            self.meta.set_queue(RevQueue::RUN_NOT_LOG);
+            self.meta.update_ref(Ok(true), |_, _| ());
+            self.meta.set_queue(RevQueue::RUN_BACKWARD_LOG);
+            self.meta.update_ref(Ok(true), |_, _| ());
+        }
         fn forward_log(&mut self, get: Result<(String, char), OutOfLog>) {
             self.meta.set_queue(RevQueue::RUN_FORWARD_LOG);
             match get {
                 Ok(get) => {
-                    self.meta.update_ref(true, |meta, direction| {
+                    self.meta.update_ref(Ok(true), |meta, direction| {
                         assert_eq!(direction, RevDirection::FORWARD_LOG);
 
                         // with_past_drain
-                        let (iter_t, iter_u, past_len) =
-                            self.with_past_drain.pre_update_drain(meta);
-                        assert_eq!(collect_drain(iter_t, iter_u), []);
-                        assert_eq!(past_len, 0);
+                        let drain = self.with_past_drain.pre_update_drain(meta);
+                        assert_eq!(drain.all().to_tuples(), []);
                         assert_eq!(
-                            self.with_past_drain.forward_log().map(value_entry_to_tuple),
+                            self.with_past_drain.forward_log().map(ValueEntry::to_tuple),
                             Ok(get.clone())
                         );
 
                         // without_past_drain
-                        let (iter_t, iter_u) =
-                            self.without_past_drain.pre_update_drain_future(meta);
-                        assert_eq!(collect_drain(iter_t, iter_u), []);
+                        let drain = self.without_past_drain.pre_update_drain(meta);
+                        assert_eq!(drain.future().to_tuples(), []);
                         assert_eq!(
                             self.without_past_drain
                                 .forward_log()
-                                .map(value_entry_to_tuple),
+                                .map(ValueEntry::to_tuple),
                             Ok(get)
                         );
                     });
                 }
                 Err(OutOfLog) => {
-                    self.meta.update_ref(false, |_, _| ());
+                    self.meta.update_ref(Ok(false), |_, _| ());
                     assert_eq!(
-                        self.with_past_drain.forward_log().map(value_entry_to_tuple),
+                        self.with_past_drain.forward_log().map(ValueEntry::to_tuple),
                         Err(OutOfLog)
                     );
                     assert_eq!(
                         self.without_past_drain
                             .forward_log()
-                            .map(value_entry_to_tuple),
+                            .map(ValueEntry::to_tuple),
                         Err(OutOfLog)
                     );
                 }
             }
         }
-        fn backward_log(&mut self, get: Result<(String, char), OutOfLog>) {
+        fn backward_log<const N: usize>(
+            &mut self,
+            future_drain: [(String, char); N],
+            get: Result<(String, char), OutOfLog>,
+        ) {
             self.meta.set_queue(RevQueue::RUN_BACKWARD_LOG);
             match get {
                 Ok(get) => {
-                    self.meta.update_ref(true, |meta, direction| {
+                    self.meta.update_ref(Ok(true), |meta, direction| {
                         assert_eq!(direction, RevDirection::BackwardLog);
 
                         // with_past_drain
-                        let (iter_t, iter_u, past_len) =
-                            self.with_past_drain.pre_update_drain(meta);
-                        assert_eq!(collect_drain(iter_t, iter_u), []);
-                        assert_eq!(past_len, 0);
+                        let mut drain = self.with_past_drain.pre_update_drain(meta);
+                        assert_eq!(drain.past().to_tuples(), []);
+                        assert_eq!(drain.future().to_tuples(), future_drain);
                         assert_eq!(
                             self.with_past_drain
                                 .backward_log()
-                                .map(value_entry_to_tuple),
+                                .map(ValueEntry::to_tuple),
                             Ok(get.clone())
                         );
 
                         // without_past_drain
-                        let (iter_t, iter_u) =
-                            self.without_past_drain.pre_update_drain_future(meta);
-                        assert_eq!(collect_drain(iter_t, iter_u), []);
+                        let drain = self.without_past_drain.pre_update_drain(meta);
+                        assert_eq!(drain.future().to_tuples(), future_drain);
                         assert_eq!(
                             self.without_past_drain
                                 .backward_log()
-                                .map(value_entry_to_tuple),
+                                .map(ValueEntry::to_tuple),
                             Ok(get)
                         );
                     });
                 }
                 Err(OutOfLog) => {
-                    self.meta.update_ref(false, |_, _| ());
+                    assert_eq!(N, 0);
+                    self.meta.update_ref(Ok(false), |_, _| ());
 
                     // with_past_drain
                     if self.with_past_drain.backward_log().is_ok() {
@@ -468,7 +484,7 @@ mod test {
                         assert_eq!(
                             self.with_past_drain
                                 .backward_log()
-                                .map(value_entry_to_tuple),
+                                .map(ValueEntry::to_tuple),
                             Err(OutOfLog)
                         );
 
@@ -480,7 +496,7 @@ mod test {
                     assert_eq!(
                         self.without_past_drain
                             .backward_log()
-                            .map(value_entry_to_tuple),
+                            .map(ValueEntry::to_tuple),
                         Err(OutOfLog)
                     );
                 }
@@ -492,14 +508,15 @@ mod test {
     fn traverses_log() {
         let mut meta_and_logs = MetaAndLogs::new(5);
 
-        let a = || ("a".repeat(1 << 0), 'A');
-        let b = || ("b".repeat(1 << 1), 'B');
-        let c = || ("c".repeat(1 << 2), 'C');
-        let d = || ("d".repeat(1 << 3), 'D');
-        let e = || ("e".repeat(1 << 4), 'E');
-        let f = || ("f".repeat(1 << 5), 'F');
-        let g = || ("g".repeat(1 << 6), 'G');
-        let h = || ("h".repeat(1 << 7), 'H');
+        let a = || ("a".repeat(1), 'A');
+        let b = || ("b".repeat(2), 'B');
+        let c = || ("c".repeat(3), 'C');
+        let d = || ("d".repeat(4), 'D');
+        let e = || ("e".repeat(5), 'E');
+        let f = || ("f".repeat(6), 'F');
+        let g = || ("g".repeat(7), 'G');
+        let h = || ("h".repeat(8), 'H');
+        let i = || ("i".repeat(9), 'I');
 
         meta_and_logs.forward([], [], a(), false);
         meta_and_logs.forward([], [], b(), false);
@@ -508,11 +525,11 @@ mod test {
         meta_and_logs.forward([], [], e(), false);
         meta_and_logs.forward([a()], [], f(), false);
 
-        meta_and_logs.backward_log(Ok(f()));
-        meta_and_logs.backward_log(Ok(e()));
-        meta_and_logs.backward_log(Ok(d()));
-        meta_and_logs.backward_log(Ok(c()));
-        meta_and_logs.backward_log(Err(OutOfLog)); // b() is unreachable but not yet drained
+        meta_and_logs.backward_log([], Ok(f()));
+        meta_and_logs.backward_log([], Ok(e()));
+        meta_and_logs.backward_log([], Ok(d()));
+        meta_and_logs.backward_log([], Ok(c()));
+        meta_and_logs.backward_log([], Err(OutOfLog)); // b() is unreachable but not yet drained
 
         meta_and_logs.forward_log(Ok(c()));
         meta_and_logs.forward_log(Ok(d()));
@@ -520,30 +537,39 @@ mod test {
         meta_and_logs.forward_log(Ok(f()));
         meta_and_logs.forward_log(Err(OutOfLog));
 
-        meta_and_logs.backward_log(Ok(f()));
-        meta_and_logs.backward_log(Ok(e()));
+        meta_and_logs.backward_log([], Ok(f()));
+        meta_and_logs.backward_log([], Ok(e()));
 
         meta_and_logs.forward([], [e(), f()], g(), false);
 
-        meta_and_logs.backward_log(Ok(g()));
-        meta_and_logs.backward_log(Ok(d()));
-        meta_and_logs.backward_log(Ok(c()));
-        meta_and_logs.backward_log(Err(OutOfLog));
+        meta_and_logs.backward_log([], Ok(g()));
+        meta_and_logs.backward_log([], Ok(d()));
+        meta_and_logs.backward_log([], Ok(c()));
+        meta_and_logs.backward_log([], Err(OutOfLog));
 
         meta_and_logs.forward_log(Ok(c()));
         meta_and_logs.forward_log(Ok(d()));
         meta_and_logs.forward_log(Ok(g()));
         meta_and_logs.forward_log(Err(OutOfLog));
 
-        meta_and_logs.backward_log(Ok(g()));
-        meta_and_logs.backward_log(Ok(d()));
+        meta_and_logs.backward_log([], Ok(g()));
+        meta_and_logs.backward_log([], Ok(d()));
 
         meta_and_logs.forward([b(), c()], [d(), g()], h(), true);
 
-        meta_and_logs.backward_log(Ok(h()));
-        meta_and_logs.backward_log(Err(OutOfLog));
+        meta_and_logs.backward_log([], Ok(h()));
+        meta_and_logs.backward_log([], Err(OutOfLog));
 
         meta_and_logs.forward_log(Ok(h()));
         meta_and_logs.forward_log(Err(OutOfLog));
+
+        meta_and_logs.forward([], [], i(), false);
+
+        meta_and_logs.backward_log([], Ok(i()));
+
+        meta_and_logs.noop_forward_backward_log();
+
+        meta_and_logs.backward_log([i()], Ok(h()));
+        meta_and_logs.backward_log([], Err(OutOfLog));
     }
 }

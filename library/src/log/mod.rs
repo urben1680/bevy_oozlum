@@ -10,19 +10,18 @@ mod transitions;
 pub use past_len::PastLenLog;
 pub(crate) use past_len::limits::{PastLenLogLimits, PastLenLogMissed, PastLenState};
 pub use transition::{
-    TransitionLog,
-    TransitionDrains,
-    TransitionDrain,
-    TransitionDrainFuture,
-    TransitionDrainPast
+    TransitionDrain, TransitionDrainFuture, TransitionDrainPast, TransitionDrains, TransitionLog,
 };
-pub use transitions::{EntryAmount, LogMut, TransitionsLog, ValueEntry};
+pub use transitions::{
+    EntryAmount, LogMut, TransitionsDrain, TransitionsDrainChunkable, TransitionsDrainFuture,
+    TransitionsDrainPast, TransitionsDrains, TransitionsLog, ValueEntry,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum PreUpdateVariant {
     Nothing,
-    DropFuture,
-    DropLog,
+    RemoveFuture,
+    RemoveLog,
 }
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]

@@ -20,7 +20,7 @@ struct PastLenUpdate {
 
 #[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct PastLenState {
-    id: u32,
+    pub(super) id: u32,
     updates_this_frame: NonZeroU32,
     global_log_exits: u64,
     global_log_clears: u64,
@@ -52,11 +52,10 @@ impl PastLenLimit {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub struct PastLenLogMissed {
-    internal_id: u32,
-    missed_forward: bool,
-    last_update: MaybeLocation,
+    pub(super) internal_id: u32,
+    pub(super) last_update: MaybeLocation,
 }
 
 struct UpdatesIter<'a>(Vec<UpdatesLocal<'a>>);
@@ -129,11 +128,11 @@ impl PastLenLogLimits {
             Some(state) => {
                 if state.global_log_clears < global_log_clears {
                     *state = new_state();
-                    PreUpdateVariant::DropLog
+                    PreUpdateVariant::RemoveLog
                 } else if state.global_log_exits < global_log_exits {
                     state.updates_this_frame = NonZeroU32::MIN;
                     state.global_log_exits = global_log_exits;
-                    PreUpdateVariant::DropFuture
+                    PreUpdateVariant::RemoveFuture
                 } else if updated_this_frame_again {
                     state.updates_this_frame = state.updates_this_frame.checked_add(1).unwrap();
                     PreUpdateVariant::Nothing
@@ -188,46 +187,29 @@ impl PastLenLogLimits {
             self.past_len_limits[internal_id as usize] = limits;
         }
 
-        // check limits of all PastLenLog instances
-        let iter = self.past_len_limits.iter_mut().enumerate();
-        let mut past_len_logs_missed = Vec::new();
         if log {
-            for (index, limits) in iter {
+            // check limits of all PastLenLog instances
+            let mut past_len_logs_missed = Vec::new();
+            for (index, limits) in self.past_len_limits.iter().enumerate() {
                 let internal_id = index as u32;
-                if now < limits.past {
+                if now < limits.past || now > limits.future {
                     past_len_logs_missed.push(PastLenLogMissed {
                         internal_id,
-                        missed_forward: false,
-                        last_update: limits.last_update,
-                    });
-                } else if now > limits.future {
-                    past_len_logs_missed.push(PastLenLogMissed {
-                        internal_id,
-                        missed_forward: true,
                         last_update: limits.last_update,
                     });
                 }
+            }
+            if past_len_logs_missed.is_empty() {
+                Ok(())
+            } else {
+                Err(past_len_logs_missed)
             }
         } else {
-            for (index, limits) in iter {
-                // unset future limits because logs just were or will be truncated
-                limits.future = u64::MAX;
-                let internal_id = index as u32;
-
-                if now < limits.past {
-                    past_len_logs_missed.push(PastLenLogMissed {
-                        internal_id,
-                        missed_forward: false,
-                        last_update: limits.last_update,
-                    });
-                }
-            }
-        }
-
-        if past_len_logs_missed.is_empty() {
+            // unset future limits because logs just were or will be truncated
+            self.past_len_limits
+                .iter_mut()
+                .for_each(|limit| limit.future = u64::MAX);
             Ok(())
-        } else {
-            Err(past_len_logs_missed)
         }
     }
     pub(super) fn push_past_len_update(&self, state: PastLenState, limits: PastLenLimit) {
@@ -354,7 +336,7 @@ mod test {
 
         // increased log_exits gives DropFuture variant
         let variant = limits.update_past_len_state(&mut state, false, 1, 0);
-        assert_eq!(variant, PreUpdateVariant::DropFuture);
+        assert_eq!(variant, PreUpdateVariant::RemoveFuture);
         assert_eq!(
             state,
             Some(PastLenState {
@@ -382,7 +364,7 @@ mod test {
         // increased log_clears gived DropLog variant and resets everything
         limits.clear();
         let variant = limits.update_past_len_state(&mut state, false, 1, 1);
-        assert_eq!(variant, PreUpdateVariant::DropLog);
+        assert_eq!(variant, PreUpdateVariant::RemoveLog);
         assert_eq!(
             state,
             Some(PastLenState {
@@ -397,7 +379,7 @@ mod test {
         // do not clear id counter to demonstrate this issues a new, potentially different id
         // limits.clear();
         let variant = limits.update_past_len_state(&mut state, false, 2, 2);
-        assert_eq!(variant, PreUpdateVariant::DropLog);
+        assert_eq!(variant, PreUpdateVariant::RemoveLog);
         assert_eq!(
             state,
             Some(PastLenState {
@@ -433,7 +415,6 @@ mod test {
         let result = limits.check_past_len_limits(0, true);
         let past_missed = Err(vec![PastLenLogMissed {
             internal_id: past_state.unwrap().id,
-            missed_forward: false,
             last_update: past_limit.last_update,
         }]);
         assert_eq!(result, past_missed);
@@ -442,7 +423,6 @@ mod test {
         let result = limits.check_past_len_limits(2, true);
         let future_missed = Err(vec![PastLenLogMissed {
             internal_id: future_state.unwrap().id,
-            missed_forward: true,
             last_update: future_limit.last_update,
         }]);
         assert_eq!(result, future_missed);
