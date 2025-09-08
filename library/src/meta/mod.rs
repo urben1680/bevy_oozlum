@@ -251,6 +251,25 @@ impl RevMeta {
     pub fn future_end(&self) -> u64 {
         self.future_end
     }
+    /// The reversible frame of the [`RevUpdate`] schedule.
+    /// 
+    /// When the schedule is not running, this frame can be understood as the id of the present
+    /// world state.
+    /// 
+    /// When the schedule is running, the world state of this id reflects what the systems should
+    /// work towards to. For example when the schedule is running forward, `now` is increased from
+    /// `n` to `n+1` and the reversible systems now have to bring the world state to from `n` to
+    /// `n+1`.
+    /// 
+    /// That is why, when the schedule is running backward, the returned value is not the same but
+    /// one less than when it ran forward just previously, as the reversible systems have to bring
+    /// the world from `n+1` back to `n` again.
+    /// 
+    /// Can only be `0` at or after [`RevDirection::BackwardLog`] and is otherwise non-zero.
+    /// 
+    /// This is the only frame returned by `RevMeta` that may be used for reversible logic, for
+    /// example as a seed for RNG. [`RevMeta::past_end`] and [`RevMeta::future_end`] on the other
+    /// hand are _not deterministic_ for the simulation at the present frame.
     pub const fn now(&self) -> u64 {
         self.now
     }
@@ -532,7 +551,7 @@ impl RevMeta {
                         *self = meta;
                         assert_eq!(past_len_logs_missed, [missed]);
                     }
-                    other => panic!("{other:#?}"),
+                    other => panic!("unexpected {other:#?}"),
                 }
             }
         }

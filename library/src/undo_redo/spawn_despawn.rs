@@ -118,6 +118,7 @@ impl RevDespawnCleaner {
         world.remove_resource::<RevMeta>()
     }
 
+    // todo: make fully private
     pub(crate) fn forward(&mut self, world: &mut World, max_past_len: u64) {
         let progress = RevOp::FinalDespawn { buffer: false };
         progress.scope(world, |world| {
@@ -155,6 +156,7 @@ impl RevDespawnCleaner {
         });
     }
 
+    // todo: make fully private
     pub(crate) fn forward_log(&mut self) -> Result<(), OutOfLog> {
         self.spawn.forward_log()?;
         let _ok = self.despawn.forward_log();
@@ -197,6 +199,7 @@ impl RevDespawnCleaner {
         Ok(())
     }
 
+    // todo: make fully private
     pub(crate) fn backward_log(&mut self) -> Result<(), OutOfLog> {
         self.spawn.backward_log()?;
         let _ok = self.despawn.backward_log();
@@ -349,6 +352,8 @@ mod test {
     use crate::panic_on_error_events;
 
     use super::*;
+
+    struct WorldWithMetaAndCleaner(World);
 
     #[test]
     fn log_traversal_works() {
