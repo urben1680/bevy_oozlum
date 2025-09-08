@@ -55,7 +55,6 @@ fn main() {
     let _scope_guard = ScopeGuard::new();
 
     App::new()
-        .insert_resource(RevMeta::new(NonZeroU64::new(MAX_LOG_LEN), false)) // todo fix plugin
         .add_plugins((
             // Add Bevy's MinimalPlugins for this example.
             MinimalPlugins,
@@ -63,7 +62,7 @@ fn main() {
             // This one here adds the given RevMeta and adds its runner system, which calls
             // RevUpdate, in FixedUpdate. You most likely want to pick this schedule, or another
             // one which is called in FixedUpdate.
-            RevPlugin::default(),
+            RevPlugin::add_meta_and_runner(NonZeroU64::new(MAX_LOG_LEN), false, FixedUpdate),
             // This example game consists of seven rows you can toss Waste in by pressing 1 to 7.
             // Each row is implemented as a plugin here that adds its system and other things if
             // needed. It makes no sense to give each row a different logic, but they shall show
@@ -122,7 +121,7 @@ fn main() {
                 // after the runner so reversible systems get to influence the presence of these
                 // entities.
                 // After that, the console output should happen.
-                (despawn_waste/*, render*/)
+                (despawn_waste, render)
                     .chain()
                     .after(RevMeta::try_run_rev_update),
             ),

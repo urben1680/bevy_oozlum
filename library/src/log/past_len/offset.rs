@@ -1,4 +1,9 @@
-use std::{collections::{vec_deque::Iter, VecDeque}, fmt::Debug, num::NonZeroU8, ops::ControlFlow};
+use std::{
+    collections::{VecDeque, vec_deque::Iter},
+    fmt::Debug,
+    num::NonZeroU8,
+    ops::ControlFlow,
+};
 
 const MAX_ZEROES_PER_BYTE: u8 = 65;
 const MAX_ZEROES_AS_BYTE: u8 = 0b10_111111;
@@ -15,7 +20,7 @@ pub(super) fn push_offset(
     index: &mut usize,
     zeroes: &mut u8,
     zeroes_max: &mut u8,
-    mut offset: u64
+    mut offset: u64,
 ) {
     if offset == 0 {
         // offsets of zero are not pushed right away unless the maximum is reached
@@ -67,22 +72,18 @@ pub(super) fn push_offset(
         if offset <= MAX_WRAPPING_OFFSET as u64 {
             // this is a wrapping byte
 
-            offset_bytes
-                .push_back(offset as u8 | WRAPPING_OFFSET_OR);
+            offset_bytes.push_back(offset as u8 | WRAPPING_OFFSET_OR);
             return;
         }
 
         // this is a wrapped byte
 
-        offset_bytes
-            .push_back((offset & WRAPPED_OFFSET_MASK as u64) as u8);
+        offset_bytes.push_back((offset & WRAPPED_OFFSET_MASK as u64) as u8);
 
         // wrapped bytes contain 7 usable bits for the offset
         offset >>= 7;
     }
 }
-
-
 
 /// Iterator to read [`PastLenLog::offset_bytes`] and decode them to [`IterItem`].
 #[derive(Clone)]

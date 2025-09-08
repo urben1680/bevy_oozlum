@@ -34,14 +34,14 @@ pub(crate) struct PastLenLimit {
 }
 
 impl PastLenLimit {
-    pub(crate) fn not_log_limit(now: u64, caller: MaybeLocation) -> Self {
+    pub(crate) fn new_not_log(now: u64, caller: MaybeLocation) -> Self {
         Self {
             past: now,
             future: u64::MAX,
             last_update: caller,
         }
     }
-    pub(crate) fn log_limits(past: u64, future: u64, caller: MaybeLocation) -> Self {
+    pub(crate) fn new_log(past: u64, future: u64, caller: MaybeLocation) -> Self {
         Self {
             past,
             future,
@@ -395,13 +395,13 @@ mod test {
 
         // add a past limit of 1
         let mut past_state = None;
-        let past_limit = PastLenLimit::log_limits(1, u64::MAX, MaybeLocation::caller());
+        let past_limit = PastLenLimit::new_log(1, u64::MAX, MaybeLocation::caller());
         limits.update_past_len_state(&mut past_state, false, 0, 0);
         limits.push_past_len_update(past_state.unwrap(), past_limit);
 
         // add a future limit of 1
         let mut future_state = None;
-        let future_limit = PastLenLimit::log_limits(u64::MIN, 1, MaybeLocation::caller());
+        let future_limit = PastLenLimit::new_log(u64::MIN, 1, MaybeLocation::caller());
         limits.update_past_len_state(&mut future_state, false, 0, 0);
         limits.push_past_len_update(future_state.unwrap(), future_limit);
 

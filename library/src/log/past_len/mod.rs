@@ -330,7 +330,11 @@ impl PastLenLog {
         self.update_and_get_past_len_with_caller(meta, MaybeLocation::caller())
     }
 
-    fn update_and_get_past_len_with_caller(&mut self, meta: &RevMeta, caller: MaybeLocation) -> u64 {
+    fn update_and_get_past_len_with_caller(
+        &mut self,
+        meta: &RevMeta,
+        caller: MaybeLocation,
+    ) -> u64 {
         assert_eq!(self.index, self.offset_bytes.len(), "todo");
 
         let iter = OffsetIter(self.offset_bytes.iter());
@@ -368,13 +372,19 @@ impl PastLenLog {
         // push present offset
         meta.past_len_limits().push_past_len_update(
             self.update_state.expect("todo"),
-            PastLenLimit::not_log_limit(meta.now(), caller),
+            PastLenLimit::new_not_log(meta.now(), caller),
         );
         let offset = meta.now() - self.last_update;
         self.last_update = meta.now();
         self.past_len += 1;
 
-        push_offset(&mut self.offset_bytes, &mut self.index, &mut self.zeroes, &mut self.zeroes_max, offset);
+        push_offset(
+            &mut self.offset_bytes,
+            &mut self.index,
+            &mut self.zeroes,
+            &mut self.zeroes_max,
+            offset,
+        );
 
         self.past_len
     }
@@ -435,7 +445,7 @@ impl PastLenLog {
         self.past_len -= 1;
         meta.past_len_limits().push_past_len_update(
             self.update_state.expect("todo"),
-            PastLenLimit::log_limits(backward_limit, meta.now(), caller),
+            PastLenLimit::new_log(backward_limit, meta.now(), caller),
         );
 
         true
@@ -477,8 +487,8 @@ impl PastLenLog {
                         self.zeroes = 0;
                         match iter.next() {
                             Some(IterItem { offset, .. }) => now_minus_1 + offset,
-                            None if self.zeroes_max == 0 => { u64::MAX},
-                            None => now_minus_1
+                            None if self.zeroes_max == 0 => u64::MAX,
+                            None => now_minus_1,
                         }
                     }
                 }
@@ -497,8 +507,8 @@ impl PastLenLog {
                         self.zeroes = 0;
                         match iter.next() {
                             Some(IterItem { offset, .. }) => frame - 1 + offset,
-                            None if self.zeroes_max == 0 => { u64::MAX},
-                            None => frame - 1
+                            None if self.zeroes_max == 0 => u64::MAX,
+                            None => frame - 1,
                         }
                     }
                     // missed an update, should have been reported by PastLenLogLimits, do nothing here
@@ -527,7 +537,7 @@ impl PastLenLog {
         self.past_len += 1;
         meta.past_len_limits().push_past_len_update(
             self.update_state.expect("todo"),
-            PastLenLimit::log_limits(meta.now(), forward_limit, caller),
+            PastLenLimit::new_log(meta.now(), forward_limit, caller),
         );
         true
     }
@@ -590,7 +600,13 @@ mod test {
                 assert_eq!(direction, RevDirection::NOT_LOG);
                 self.past_len_log.pre_update(meta);
                 for past_len in past_lens {
-                    assert_eq!(self.past_len_log.update_and_get_past_len_with_caller(meta, caller), past_len, "{:#?}", self.past_len_log);
+                    assert_eq!(
+                        self.past_len_log
+                            .update_and_get_past_len_with_caller(meta, caller),
+                        past_len,
+                        "{:#?}",
+                        self.past_len_log
+                    );
                     self.last_update = caller;
                 }
             });
@@ -612,7 +628,10 @@ mod test {
                         assert_eq!(direction, RevDirection::FORWARD_LOG);
                         for _ in 0..insufficient_updates {
                             missed.last_update = caller;
-                            assert_eq!(self.past_len_log.forward_log_with_caller(meta, caller), true);
+                            assert_eq!(
+                                self.past_len_log.forward_log_with_caller(meta, caller),
+                                true
+                            );
                         }
                     });
                     missed.last_update = self.last_update;
@@ -623,7 +642,11 @@ mod test {
                     self.meta.update_ref(Ok(true), |meta, direction| {
                         assert_eq!(direction, RevDirection::BackwardLog);
                         for _ in 0..insufficient_updates {
-                            assert_eq!(self.past_len_log.backward_log_with_caller(meta, self.last_update), true);
+                            assert_eq!(
+                                self.past_len_log
+                                    .backward_log_with_caller(meta, self.last_update),
+                                true
+                            );
                         }
                         // assert no more updates would run
                         assert_eq!(self.past_len_log.backward_log(meta), false);
@@ -660,7 +683,10 @@ mod test {
                         assert_eq!(direction, RevDirection::BackwardLog);
                         for _ in 0..insufficient_updates {
                             missed.last_update = caller;
-                            assert_eq!(self.past_len_log.backward_log_with_caller(meta, caller), true);
+                            assert_eq!(
+                                self.past_len_log.backward_log_with_caller(meta, caller),
+                                true
+                            );
                         }
                     });
                     missed.last_update = self.last_update;
@@ -671,7 +697,11 @@ mod test {
                     self.meta.update_ref(Ok(true), |meta, direction| {
                         assert_eq!(direction, RevDirection::FORWARD_LOG);
                         for _ in 0..insufficient_updates {
-                            assert_eq!(self.past_len_log.forward_log_with_caller(meta, self.last_update), true);
+                            assert_eq!(
+                                self.past_len_log
+                                    .forward_log_with_caller(meta, self.last_update),
+                                true
+                            );
                         }
                         // assert no more updates would run
                         assert_eq!(self.past_len_log.forward_log(meta), false);
@@ -720,23 +750,23 @@ mod test {
 
         meta_and_log.backward_log(3);
         meta_and_log.backward_log(0);
-        
+
         meta_and_log.forward([3], false);
 
         meta_and_log.backward_log(1);
 
         meta_and_log.forward([], false); // should unset future limit
         meta_and_log.forward([], false);
-        
+
         meta_and_log.backward_log(0);
         meta_and_log.backward_log(0);
-        
+
         meta_and_log.forward_log(0);
         meta_and_log.forward_log(0);
 
         meta_and_log.forward([1, 2], false);
         meta_and_log.forward([1, 2], true);
-        
+
         meta_and_log.backward_log(2);
 
         meta_and_log.forward_log(2);
