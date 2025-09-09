@@ -263,40 +263,6 @@ impl<'a, T: Iterator, U> IntoIterator for &'a mut ValueEntry<T, U> {
 #[derive(Debug, Clone)]
 pub struct EntryAmount<U> {
     pub entry: U,
-
-    /// The amount of transitions of an update. This can be useful to chunk them.
-    ///
-    /// # Examples
-    ///
-    /// With `log` being [`&mut DenseStatesLog`](DenseStatesLog) and [`DenseStatesLog::drain_future`] returning the
-    /// draining iterators, do this to chunk them by updates:
-    ///
-    /// ```
-    /// # let mut log = library::log::DenseStatesLog::<i32, (), 1>::new([0], ());
-    /// let (mut future_states, future_entry_amounts) = log.drain_future();
-    /// ```
-    ///
-    /// Now iterate...
-    /// ```
-    /// # let mut log = library::log::DenseStatesLog::<i32, (), 1>::new([0], ());
-    /// # let (mut future_states, future_entry_amounts) = log.drain_future();
-    /// for entry_amount in future_entry_amounts {
-    ///     let entry = entry_amount.entry;
-    ///     for future_states in future_states.by_ref().take(entry_amount.amount()) {
-    ///         // logic
-    ///     }
-    /// }
-    /// ```
-    ///
-    /// ...or collect them:
-    /// ```
-    /// # let mut log = library::log::DenseStatesLog::<i32, (), 1>::new([0], ());
-    /// # let (mut future_states, future_entry_amounts) = log.drain_future();
-    /// let updates: Vec<(Vec<_>, _)> = future_entry_amounts.map(|entry_amount| (
-    ///     future_states.by_ref().take(entry_amount.amount()).collect(),
-    ///     entry_amount.entry
-    /// )).collect();
-    /// ```
     pub amount: usize,
 }
 

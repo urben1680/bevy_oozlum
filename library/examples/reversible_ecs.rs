@@ -673,8 +673,8 @@ impl ScopeGuard {
             })
         }
 
-        //let _ = stdout().execute(SetSize(MAX_LOG_LEN as u16 + 2, 13));
-        //let _ = stdout().execute(Hide);
+        let _ = stdout().execute(SetSize(MAX_LOG_LEN as u16 + 2, 13));
+        let _ = stdout().execute(Hide);
         Self
     }
 }

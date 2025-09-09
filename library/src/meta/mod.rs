@@ -343,7 +343,7 @@ impl RevMeta {
                 }
 
                 // update RevMeta and RevDespawnCleaner
-                let mut despawn_cleaner_missing = !world.contains_resource::<RevDespawnCleaner>();
+                let mut despawn_cleaner_missing = false;
                 let mut meta_stopped_running_early = false;
                 let mut despawn_cleaner_out_of_log = false;
                 let update_result = meta.update(|meta, _| {
@@ -351,8 +351,7 @@ impl RevMeta {
                     schedule.run(world);
                     let cleaner_scope_option = world.try_resource_scope::<RevDespawnCleaner, _>(
                         |world, mut rev_despawn_cleaner| {
-                            despawn_cleaner_missing = false;
-                            rev_despawn_cleaner.update_get_meta(
+                            rev_despawn_cleaner.update(
                                 world,
                                 &mut meta_stopped_running_early,
                                 &mut despawn_cleaner_out_of_log,
@@ -360,7 +359,7 @@ impl RevMeta {
                         },
                     );
                     despawn_cleaner_missing = cleaner_scope_option.is_none();
-                    cleaner_scope_option.flatten()
+                    world.remove_resource::<RevMeta>()
                 });
 
                 // finalize reversibly despawned entities TODO: muss in update damit running-direction Some ist

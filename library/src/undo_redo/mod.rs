@@ -367,7 +367,7 @@ impl UndoRedoLog {
         self.undo_redo_log.pre_update(meta);
 
         let now = meta.now();
-        match meta.get_ran_direction() {
+        match meta.get_running_direction() {
             Some(RevDirection::NOT_LOG) => world
                 .try_resource_scope::<UndoRedoBuffer, _>(|world, mut buffer| {
                     if !buffer.0.is_empty() {
@@ -447,7 +447,8 @@ impl UndoRedoLog {
                     system_name: system_name.clone(),
                 })?
                 .value
-                .map(|cell| cell.0.get());
+                .map(|cell| cell.0.get())
+                .rev();
             for command in iter {
                 command.undo(world);
             }

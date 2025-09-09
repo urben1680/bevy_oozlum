@@ -74,18 +74,21 @@ impl RevDespawnCleaner {
     }
 
     /// Despawn entities that contain [`RevDespawned`] and their relevant operation (spawn, despawn, move_components) fell out of log.
-    pub(crate) fn update_get_meta(
+    pub(crate) fn update(
         &mut self,
         world: &mut World,
         not_running: &mut bool,
         out_of_log: &mut bool,
-    ) -> Option<RevMeta> {
-        let meta = world.remove_resource::<RevMeta>()?;
+    ) {
+        let Some(meta) = world.remove_resource::<RevMeta>() else {
+            return;
+        };
         let direction = match meta.get_running_direction() {
             Some(direction) => direction,
             None => {
                 *not_running = true;
-                return Some(meta);
+                world.insert_resource(meta);
+                return;
             }
         };
         let past_len = meta.past_len();
@@ -114,8 +117,6 @@ impl RevDespawnCleaner {
             RevDirection::BackwardLog => self.backward_log(),
         };
         *out_of_log = log_result.is_err();
-
-        world.remove_resource::<RevMeta>()
     }
 
     // todo: make fully private

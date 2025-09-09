@@ -262,12 +262,14 @@ fn test_step<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
     } else {
         iter.rev().collect()
     };
+    /*
     let mut app = App::new();
     let mut schedule = Schedule::new(RevUpdate);
     config(&mut schedule);
     schedule.set_apply_final_deferred(apply_final_deferred);
     app.add_schedule(schedule);
     //bevy_mod_debugdump::print_schedule_graph(&mut app, RevUpdate);
+    */
     panic!(
         "expected: {expected:?}\nactual:   {actual:?}\nconfig: {variant}\napply_final_deferred: {apply_final_deferred}\ndirection: {direction:?}\nstep: {step}"
     )
