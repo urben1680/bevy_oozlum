@@ -19,29 +19,31 @@ use super::{OutOfLog, TransitionLog};
 
 #[derive(Debug)]
 pub struct TransitionsLog<T, U = ()> {
-    amounts: TransitionLog<EntryAmount<U>>,
     transitions: VecDeque<T>,
+    updates: TransitionLog<TransitionsLogUpdate<U>>,
     index: usize,
 }
 
 pub struct TransitionsDrains<'log, T, U> {
     transitions: Drain<'log, T>,
+    updates: TransitionDrains<'log, TransitionsLogUpdate<U>>,
     past_len: usize,
-    entry_amounts: TransitionDrains<'log, EntryAmount<U>>,
 }
 
 pub type TransitionsDrainPast<'a, 'log, T, U> = TransitionsDrainChunkable<
     TransitionDrainPast<'a, 'log, T>,
-    TransitionDrainPast<'a, 'log, EntryAmount<U>>,
+    TransitionDrainPast<'a, 'log, TransitionsLogUpdate<U>>,
     U,
 >;
+
 pub type TransitionsDrainFuture<'log, T, U> = TransitionsDrainChunkable<
     TransitionDrainFuture<'log, T>,
-    TransitionDrainFuture<'log, EntryAmount<U>>,
+    TransitionDrainFuture<'log, TransitionsLogUpdate<U>>,
     U,
 >;
+
 pub type TransitionsDrain<'log, T, U> =
-    TransitionsDrainChunkable<TransitionDrain<'log, T>, TransitionDrain<'log, EntryAmount<U>>, U>;
+    TransitionsDrainChunkable<TransitionDrain<'log, T>, TransitionDrain<'log, TransitionsLogUpdate<U>>, U>;
 
 impl<'log, T, U> TransitionsDrains<'log, T, U> {
     pub fn past<'a>(&'a mut self) -> TransitionsDrainPast<'a, 'log, T, U> {
@@ -49,21 +51,21 @@ impl<'log, T, U> TransitionsDrains<'log, T, U> {
         self.past_len = 0;
         TransitionsDrainChunkable {
             transitions: self.transitions.by_ref().take(past_len),
-            entry_amounts: self.entry_amounts.past(),
+            updates: self.updates.past(),
             _p: PhantomData,
         }
     }
     pub fn future(self) -> TransitionsDrainFuture<'log, T, U> {
         TransitionsDrainChunkable {
             transitions: self.transitions.skip(self.past_len),
-            entry_amounts: self.entry_amounts.future(),
+            updates: self.updates.future(),
             _p: PhantomData,
         }
     }
     pub fn all(self) -> TransitionsDrain<'log, T, U> {
         TransitionsDrainChunkable {
             transitions: self.transitions,
-            entry_amounts: self.entry_amounts.all(),
+            updates: self.updates.all(),
             _p: PhantomData,
         }
     }
@@ -71,20 +73,20 @@ impl<'log, T, U> TransitionsDrains<'log, T, U> {
 
 pub struct TransitionsDrainChunkable<TI, UI, U> {
     pub transitions: TI,
-    pub entry_amounts: UI,
+    pub updates: UI,
     _p: PhantomData<fn(UI) -> U>,
 }
 
 impl<TI, UI, U> TransitionsDrainChunkable<TI, UI, U>
 where
     TI: Iterator,
-    UI: Iterator<Item = EntryAmount<U>>,
+    UI: Iterator<Item = TransitionsLogUpdate<U>>,
 {
-    pub fn next_chunk<'a>(&'a mut self) -> Option<(core::iter::Take<&'a mut TI>, U)> {
-        self.entry_amounts.next().map(|entry_amount| {
+    pub fn next_update<'a>(&'a mut self) -> Option<(core::iter::Take<&'a mut TI>, U)> {
+        self.updates.next().map(|update| {
             (
-                self.transitions.by_ref().take(entry_amount.amount),
-                entry_amount.entry,
+                self.transitions.by_ref().take(update.amount),
+                update.update,
             )
         })
     }
@@ -99,8 +101,8 @@ impl<T, U> Default for TransitionsLog<T, U> {
 impl<T, U> TransitionsLog<T, U> {
     pub const fn new() -> Self {
         Self {
-            amounts: TransitionLog::new(),
             transitions: VecDeque::new(),
+            updates: TransitionLog::new(),
             index: 0,
         }
     }
@@ -113,7 +115,7 @@ impl<T, U> TransitionsLog<T, U> {
             self.push_and_get_transition_and_amount_drain(max_past_len, c);
         // todo: truncate_front https://github.com/rust-lang/rust/issues/140667
         self.transitions.drain(..transition_drain);
-        self.amounts.drain_past(amount_drain);
+        self.updates.drain_past(amount_drain);
     }
     pub fn push_and_drain_past<IntoU: Into<U>>(
         &mut self,
@@ -125,7 +127,7 @@ impl<T, U> TransitionsLog<T, U> {
             self.push_and_get_transition_and_amount_drain(max_past_len + 1, c);
         TransitionsDrainChunkable {
             transitions: self.transitions.drain(..transition_drain),
-            entry_amounts: self.amounts.drain_past(amount_drain),
+            updates: self.updates.drain_past(amount_drain),
             _p: PhantomData,
         }
     }
@@ -135,51 +137,51 @@ impl<T, U> TransitionsLog<T, U> {
         c: impl FnOnce(LogMut<T>) -> IntoU,
     ) -> (usize, usize) {
         assert_eq!(self.index, self.transitions.len()); // do not truncate here, call pre_update!
-        let entry = c(LogMut(&mut self.transitions)).into();
+        let update = c(LogMut(&mut self.transitions)).into();
         let pushed_amount = self.transitions.len() - self.index;
-        let entry_amount = EntryAmount {
-            entry,
+        let update = TransitionsLogUpdate {
+            update,
             amount: pushed_amount,
         };
         self.index = self.transitions.len();
         let to_drain = self
-            .amounts
-            .push_and_iter_to_drain_past(max_past_len, entry_amount);
+            .updates
+            .push_and_iter_to_drain_past(max_past_len, update);
         let amount_drain = to_drain.len();
-        let transition_drain: usize = to_drain.map(|entry_amount| entry_amount.amount).sum();
+        let transition_drain: usize = to_drain.map(|update| update.amount).sum();
         self.index -= transition_drain;
         (transition_drain, amount_drain)
     }
-    pub fn backward_log(&mut self) -> Result<ValueEntry<IterMut<T>, &mut U>, OutOfLog> {
+    pub fn backward_log(&mut self) -> Result<TransitionLogUpdateMut<IterMut<T>, &mut U>, OutOfLog> {
         let old_index = self.index;
-        let entry_amount = self.amounts.backward_log()?;
-        self.index -= entry_amount.amount;
+        let update_mut = self.updates.backward_log()?;
+        self.index -= update_mut.amount;
         let iter = self.transitions.range_mut(self.index..old_index);
-        Ok(ValueEntry {
-            value: iter,
-            entry: &mut entry_amount.entry,
+        Ok(TransitionLogUpdateMut {
+            transitions: iter,
+            update: &mut update_mut.update,
         })
     }
-    pub fn forward_log(&mut self) -> Result<ValueEntry<IterMut<T>, &mut U>, OutOfLog> {
+    pub fn forward_log(&mut self) -> Result<TransitionLogUpdateMut<IterMut<T>, &mut U>, OutOfLog> {
         let old_index = self.index;
-        let entry_amount = self.amounts.forward_log()?;
-        self.index += entry_amount.amount;
+        let update_mut = self.updates.forward_log()?;
+        self.index += update_mut.amount;
         let iter = self.transitions.range_mut(old_index..self.index);
-        Ok(ValueEntry {
-            value: iter,
-            entry: &mut entry_amount.entry,
+        Ok(TransitionLogUpdateMut {
+            transitions: iter,
+            update: &mut update_mut.update,
         })
     }
     pub fn pre_update(&mut self, meta: &RevMeta) {
-        match self.amounts.pre_update_check(meta) {
+        match self.updates.pre_update_check(meta) {
             PreUpdateVariant::RemoveLog => {
                 self.transitions.clear();
-                self.amounts.clear();
+                self.updates.clear();
                 self.index = 0;
             }
             PreUpdateVariant::RemoveFuture => {
                 self.transitions.truncate(self.index);
-                self.amounts.truncate_future();
+                self.updates.truncate_future();
             }
             PreUpdateVariant::Nothing => {}
         }
@@ -188,25 +190,25 @@ impl<T, U> TransitionsLog<T, U> {
         &'log mut self,
         meta: &'m RevMeta,
     ) -> TransitionsDrains<'log, T, U> {
-        match self.amounts.pre_update_check(meta) {
+        match self.updates.pre_update_check(meta) {
             PreUpdateVariant::RemoveLog => {
                 let past_len = self.index;
                 self.index = 0;
                 TransitionsDrains {
                     transitions: self.transitions.drain(..),
                     past_len,
-                    entry_amounts: self.amounts.full_drain(),
+                    updates: self.updates.full_drain(),
                 }
             }
             PreUpdateVariant::RemoveFuture => TransitionsDrains {
                 transitions: self.transitions.drain(self.index..),
                 past_len: 0,
-                entry_amounts: self.amounts.drain_future(),
+                updates: self.updates.drain_future(),
             },
             PreUpdateVariant::Nothing => TransitionsDrains {
                 transitions: self.transitions.drain(..0),
                 past_len: 0,
-                entry_amounts: self.amounts.empty_drain(),
+                updates: self.updates.empty_drain(),
             },
         }
     }
@@ -241,28 +243,22 @@ where
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ValueEntry<T, U> {
-    pub value: T,
-    pub entry: U,
+pub struct TransitionLogUpdateMut<T, U> {
+    pub transitions: T,
+    pub update: U,
 }
 
-impl<'a, T: Iterator, U> IntoIterator for &'a mut ValueEntry<T, U> {
+impl<'a, T: Iterator, U> IntoIterator for &'a mut TransitionLogUpdateMut<T, U> {
     type IntoIter = &'a mut T;
     type Item = T::Item;
     fn into_iter(self) -> Self::IntoIter {
-        &mut self.value
+        &mut self.transitions
     }
 }
 
-/// `EntryAmount` is usually encountered in draining methods of logs with multiple states/transitions per update,
-/// for example [`DenseStatesLog`] which will be behind the `log` variable in the following code snippets.
-///
-/// These methods return two draining iterators, the first with the states/transitions of all updates that are
-/// drained, and the second with `EntryAmount`, containing the entry type `U` of the log (if specified) and the
-/// amount of states/transitions per update, returned by the [`amount`](Self::amount) method.
 #[derive(Debug, Clone)]
-pub struct EntryAmount<U> {
-    pub entry: U,
+pub struct TransitionsLogUpdate<U> {
+    pub update: U,
     pub amount: usize,
 }
 
@@ -283,20 +279,20 @@ mod test {
     impl<TI, UI> TransitionsDrainChunkable<TI, UI, char>
     where
         TI: Iterator<Item = char>,
-        UI: Iterator<Item = EntryAmount<char>>,
+        UI: Iterator<Item = TransitionsLogUpdate<char>>,
     {
         fn to_tuples(mut self) -> Vec<(String, char)> {
             let mut v = Vec::new();
-            while let Some((transitions, entry)) = self.next_chunk() {
-                v.push((transitions.collect(), entry))
+            while let Some((transitions, update)) = self.next_update() {
+                v.push((transitions.collect(), update))
             }
             v
         }
     }
 
-    impl<'a> ValueEntry<IterMut<'a, char>, &'a mut char> {
+    impl<'a> TransitionLogUpdateMut<IterMut<'a, char>, &'a mut char> {
         fn to_tuple(self) -> (String, char) {
-            (self.value.map(|char| *char).collect(), *self.entry)
+            (self.transitions.map(|char| *char).collect(), *self.update)
         }
     }
 
@@ -371,7 +367,7 @@ mod test {
                         let drain = self.with_past_drain.pre_update_drain(meta);
                         assert_eq!(drain.all().to_tuples(), []);
                         assert_eq!(
-                            self.with_past_drain.forward_log().map(ValueEntry::to_tuple),
+                            self.with_past_drain.forward_log().map(TransitionLogUpdateMut::to_tuple),
                             Ok(get.clone())
                         );
 
@@ -381,7 +377,7 @@ mod test {
                         assert_eq!(
                             self.without_past_drain
                                 .forward_log()
-                                .map(ValueEntry::to_tuple),
+                                .map(TransitionLogUpdateMut::to_tuple),
                             Ok(get)
                         );
                     });
@@ -389,13 +385,13 @@ mod test {
                 Err(OutOfLog) => {
                     self.meta.update_ref(Ok(false), |_, _| ());
                     assert_eq!(
-                        self.with_past_drain.forward_log().map(ValueEntry::to_tuple),
+                        self.with_past_drain.forward_log().map(TransitionLogUpdateMut::to_tuple),
                         Err(OutOfLog)
                     );
                     assert_eq!(
                         self.without_past_drain
                             .forward_log()
-                            .map(ValueEntry::to_tuple),
+                            .map(TransitionLogUpdateMut::to_tuple),
                         Err(OutOfLog)
                     );
                 }
@@ -419,7 +415,7 @@ mod test {
                         assert_eq!(
                             self.with_past_drain
                                 .backward_log()
-                                .map(ValueEntry::to_tuple),
+                                .map(TransitionLogUpdateMut::to_tuple),
                             Ok(get.clone())
                         );
 
@@ -429,7 +425,7 @@ mod test {
                         assert_eq!(
                             self.without_past_drain
                                 .backward_log()
-                                .map(ValueEntry::to_tuple),
+                                .map(TransitionLogUpdateMut::to_tuple),
                             Ok(get)
                         );
                     });
@@ -450,7 +446,7 @@ mod test {
                         assert_eq!(
                             self.with_past_drain
                                 .backward_log()
-                                .map(ValueEntry::to_tuple),
+                                .map(TransitionLogUpdateMut::to_tuple),
                             Err(OutOfLog)
                         );
 
@@ -462,7 +458,7 @@ mod test {
                     assert_eq!(
                         self.without_past_drain
                             .backward_log()
-                            .map(ValueEntry::to_tuple),
+                            .map(TransitionLogUpdateMut::to_tuple),
                         Err(OutOfLog)
                     );
                 }

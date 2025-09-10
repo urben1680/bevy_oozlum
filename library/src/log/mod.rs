@@ -13,8 +13,8 @@ pub use transition::{
     TransitionDrain, TransitionDrainFuture, TransitionDrainPast, TransitionDrains, TransitionLog,
 };
 pub use transitions::{
-    EntryAmount, LogMut, TransitionsDrain, TransitionsDrainChunkable, TransitionsDrainFuture,
-    TransitionsDrainPast, TransitionsDrains, TransitionsLog, ValueEntry,
+    TransitionsLogUpdate, LogMut, TransitionsDrain, TransitionsDrainChunkable, TransitionsDrainFuture,
+    TransitionsDrainPast, TransitionsDrains, TransitionsLog, TransitionLogUpdateMut,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -25,13 +25,13 @@ pub(crate) enum PreUpdateVariant {
 }
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
-pub struct OutOfLog; // todo: add location
+pub struct OutOfLog;
 
 impl Display for OutOfLog {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "a log was traversed beyond it's bounds or it was attempted to queue RevMeta to a frame outside the log"
+            "a log was traversed beyond its bounds"
         )
     }
 }

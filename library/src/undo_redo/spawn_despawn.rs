@@ -32,6 +32,14 @@ pub(crate) struct RevDespawnCleaner {
     spawn_buffer_queue_fallback: Vec<(Entity, MaybeLocation)>,
 }
 
+#[derive(Debug)]
+pub(crate) enum DespawnCleanerErr {
+    MetaMissing,
+    MetaNotRunning,
+    CleanerMissing,
+    CleanerOutOfLog,
+}
+
 impl RevDespawnCleaner {
     pub(crate) fn log_spawn(&mut self, entity: Entity, location: MaybeLocation, _: NonLogNow) {
         self.spawn_queue.push((entity, location));
@@ -63,6 +71,7 @@ impl RevDespawnCleaner {
         &mut self,
         buffers: usize,
         location: MaybeLocation,
+        _: NonLogNow,
     ) {
         self.spawn_buffer_queue
             .extend(core::iter::repeat_n((None, location), buffers));
@@ -74,53 +83,51 @@ impl RevDespawnCleaner {
     }
 
     /// Despawn entities that contain [`RevDespawned`] and their relevant operation (spawn, despawn, move_components) fell out of log.
-    pub(crate) fn update(
-        &mut self,
-        world: &mut World,
-        not_running: &mut bool,
-        out_of_log: &mut bool,
-    ) {
-        let Some(meta) = world.remove_resource::<RevMeta>() else {
-            return;
-        };
-        let direction = match meta.get_running_direction() {
-            Some(direction) => direction,
-            None => {
-                *not_running = true;
-                world.insert_resource(meta);
-                return;
-            }
-        };
-        let past_len = meta.past_len();
+    pub(crate) fn update(world: &mut World) -> Result<(), DespawnCleanerErr> {
+        world
+            .try_resource_scope::<Self, _>(|world, mut this| {
+                let this = &mut *this;
+                let Some(meta) = world.remove_resource::<RevMeta>() else {
+                    return Err(DespawnCleanerErr::MetaMissing);
+                };
+                let direction = match meta.get_running_direction() {
+                    Some(direction) => direction,
+                    None => {
+                        world.insert_resource(meta);
+                        return Err(DespawnCleanerErr::MetaNotRunning);
+                    }
+                };
+                let past_len = meta.past_len();
 
-        {
-            let drain_buffer = self.spawn_buffer.pre_update_drain(&meta);
-            let drain_spawn = self.spawn.pre_update_drain(&meta);
-            let mut drain_despawn = self.despawn.pre_update_drain(&meta);
-            let iter = drain_buffer
-                .all()
-                .transitions
-                .flat_map(|buffer| buffer.0)
-                .chain(drain_spawn.future().transitions)
-                .chain(drain_despawn.past().transitions);
+                {
+                    let drain_buffer = this.spawn_buffer.pre_update_drain(&meta);
+                    let drain_spawn = this.spawn.pre_update_drain(&meta);
+                    let mut drain_despawn = this.despawn.pre_update_drain(&meta);
+                    let iter = drain_buffer
+                        .all()
+                        .transitions
+                        .flat_map(|buffer| buffer.0)
+                        .chain(drain_spawn.future().transitions)
+                        .chain(drain_despawn.past().transitions);
 
-            world.insert_resource(meta);
+                    world.insert_resource(meta);
 
-            for entity in iter {
-                let _ = world.try_despawn(entity); // todo: upstream a way to set the location
-            }
-        }
+                    for entity in iter {
+                        let _ = world.try_despawn(entity); // todo: upstream a way to set the location
+                    }
+                }
 
-        let log_result = match direction {
-            RevDirection::NOT_LOG => Ok(self.forward(world, past_len)),
-            RevDirection::FORWARD_LOG => self.forward_log(),
-            RevDirection::BackwardLog => self.backward_log(),
-        };
-        *out_of_log = log_result.is_err();
+                match direction {
+                    RevDirection::NOT_LOG => Ok(this.forward(world, past_len)),
+                    RevDirection::FORWARD_LOG => this.forward_log(),
+                    RevDirection::BackwardLog => this.backward_log(),
+                }
+                .map_err(|OutOfLog| DespawnCleanerErr::CleanerOutOfLog)
+            })
+            .unwrap_or(Err(DespawnCleanerErr::CleanerMissing))
     }
 
-    // todo: make fully private
-    pub(crate) fn forward(&mut self, world: &mut World, max_past_len: u64) {
+    fn forward(&mut self, world: &mut World, max_past_len: u64) {
         let progress = RevOp::FinalDespawn { buffer: false };
         progress.scope(world, |world| {
             self.spawn.push_and_truncate_past(max_past_len, |mut log| {
@@ -157,11 +164,10 @@ impl RevDespawnCleaner {
         });
     }
 
-    // todo: make fully private
-    pub(crate) fn forward_log(&mut self) -> Result<(), OutOfLog> {
+    fn forward_log(&mut self) -> Result<(), OutOfLog> {
         self.spawn.forward_log()?;
-        let _ok = self.despawn.forward_log();
-        let _ok = self.spawn_buffer.forward_log();
+        self.despawn.forward_log().unwrap();
+        self.spawn_buffer.forward_log().unwrap();
 
         if size_of::<MaybeLocation>() == 0 {
             if !self.spawn_queue.is_empty() {
@@ -200,15 +206,14 @@ impl RevDespawnCleaner {
         Ok(())
     }
 
-    // todo: make fully private
-    pub(crate) fn backward_log(&mut self) -> Result<(), OutOfLog> {
+    fn backward_log(&mut self) -> Result<(), OutOfLog> {
         self.spawn.backward_log()?;
-        let _ok = self.despawn.backward_log();
+        self.despawn.backward_log().unwrap();
         let mut buffer_iter = self
             .spawn_buffer
             .backward_log()
             .unwrap() // should not be out-of-log like `Self::spawn` as they get called identically in `forward`
-            .value;
+            .transitions;
         let mut delayed_iter = self.spawn_buffer_queue.drain(..);
 
         'delayed_loop: for (delayed, location) in delayed_iter.by_ref() {
@@ -350,99 +355,264 @@ impl RevIsDespawned for EntityWorldMut<'_> {
 
 #[cfg(test)]
 mod test {
-    use crate::panic_on_error_events;
+    use std::num::NonZeroU64;
+
+    use crate::{meta::RevQueue, panic_on_error_events};
 
     use super::*;
 
-    struct WorldWithMetaAndCleaner(World);
+    struct WorldWithResources(World);
+
+    impl WorldWithResources {
+        fn new(max_world_states: u64) -> Self {
+            panic_on_error_events();
+            let mut world = World::new();
+            world.init_resource::<RevDespawnCleaner>();
+            world.insert_resource(RevMeta::new(NonZeroU64::new(max_world_states), false));
+            Self(world)
+        }
+        fn spawn_batch<const N: usize>(&mut self) -> [Entity; N] {
+            self.0
+                .spawn_batch(core::iter::repeat_n((), N))
+                .collect::<Vec<_>>()
+                .try_into()
+                .unwrap()
+        }
+        fn assert_entities<const N: usize>(&self, entities: [(Entity, bool); N]) {
+            for (n, (entity, exists)) in entities.into_iter().enumerate() {
+                assert_eq!(self.0.get_entity(entity).is_ok(), exists, "{n}");
+            }
+        }
+        fn forward<const SPAWN: usize, const DESPAWN: usize, const BUFFER: usize>(
+            &mut self,
+            spawn: [Entity; SPAWN],
+            despawn: [Entity; DESPAWN],
+            buffer: [Entity; BUFFER],
+            buffer_reserve: usize,
+            clear: bool,
+        ) {
+            let caller = MaybeLocation::caller();
+            let mut cleaner_result = None;
+            let mut meta = self.0.remove_resource::<RevMeta>().unwrap();
+            let queue = if clear {
+                RevQueue::CLEAR_THEN_RUN
+            } else {
+                RevQueue::RUN_NOT_LOG
+            };
+            meta.set_queue(queue);
+            meta = meta
+                .update(|meta, _| {
+                    let now = meta.non_log_now().unwrap();
+                    self.0.insert_resource(meta);
+                    let mut cleaner = self.0.resource_mut::<RevDespawnCleaner>();
+                    cleaner.log_spawn_batch(&spawn, caller, now);
+                    for entity in despawn {
+                        cleaner.log_despawn(entity, caller, now);
+                    }
+                    cleaner.log_spawn_buffer_batch(&buffer, caller);
+                    cleaner.log_spawn_buffer_batch_reserve(buffer_reserve, caller, now);
+                    cleaner_result = Some(RevDespawnCleaner::update(&mut self.0));
+                    self.0.remove_resource::<RevMeta>()
+                })
+                .unwrap();
+            if !matches!(cleaner_result, Some(Ok(()))) {
+                panic!("{cleaner_result:#?}");
+            }
+            self.0.insert_resource(meta);
+        }
+        fn forward_log(&mut self) {
+            let mut meta = self.0.remove_resource::<RevMeta>().unwrap();
+            let mut ran = false;
+            meta.set_queue(RevQueue::RUN_FORWARD_LOG);
+            meta = meta
+                .update(|meta, direction| {
+                    assert_eq!(direction, RevDirection::FORWARD_LOG);
+                    ran = true;
+                    self.0.insert_resource(meta);
+                    RevDespawnCleaner::update(&mut self.0).unwrap();
+                    self.0.remove_resource::<RevMeta>()
+                })
+                .unwrap();
+            assert!(ran);
+            self.0.insert_resource(meta);
+        }
+        fn backward_log<const BUFFER: usize>(&mut self, buffer: [Entity; BUFFER]) {
+            let caller = MaybeLocation::caller();
+            let mut meta = self.0.remove_resource::<RevMeta>().unwrap();
+            let mut ran = false;
+            meta.set_queue(RevQueue::RUN_BACKWARD_LOG);
+            meta = meta
+                .update(|meta, direction| {
+                    assert_eq!(direction, RevDirection::BackwardLog);
+                    ran = true;
+                    self.0.insert_resource(meta);
+                    self.0
+                        .resource_mut::<RevDespawnCleaner>()
+                        .log_spawn_buffer_batch(&buffer, caller);
+                    RevDespawnCleaner::update(&mut self.0).unwrap();
+                    self.0.remove_resource::<RevMeta>()
+                })
+                .unwrap();
+            assert!(ran);
+            self.0.insert_resource(meta);
+        }
+    }
 
     #[test]
     fn log_traversal_works() {
-        panic_on_error_events();
-        let mut world = World::new();
-        let mut cleaner = RevDespawnCleaner::default();
+        let mut world_with_resources = WorldWithResources::new(2);
+        let [
+            spawn_at_1,
+            spawn_at_2,
+            despawn_at_2,
+            spawn_buffer_at_2,
+            reserve_buffer_at_2,
+            spawn_at_3,
+            despawn_at_3,
+            spawn_buffer_at_3,
+            spawn_at_4,
+            spawn_buffer_at_4,
+            spawn_at_fresh_4,
+            despawn_at_fresh_4,
+            spawn_buffer_at_fresh_4,
+        ] = world_with_resources.spawn_batch();
 
         // do 1
-        let spawn_at_1_despawn_at_2 = world.spawn_empty().id();
-        cleaner.log_spawn(
-            spawn_at_1_despawn_at_2,
-            MaybeLocation::caller(),
-            NonLogNow(1),
-        );
-        cleaner.forward(&mut world, 0);
-        assert!(
-            world.get_entity(spawn_at_1_despawn_at_2).is_ok(),
-            "{cleaner:#?}"
-        );
+        world_with_resources.forward([spawn_at_1], [], [], 0, false);
+        world_with_resources.assert_entities([(spawn_at_1, true)]);
 
         // do 2
-        let spawn_at_2 = world.spawn_empty().id();
-        let spawn_buffer_at_2 = world.spawn_empty().id();
-        let reserve_buffer_at_2;
-        cleaner.log_spawn(spawn_at_2, MaybeLocation::caller(), NonLogNow(2));
-        cleaner.log_despawn(
-            spawn_at_1_despawn_at_2,
-            MaybeLocation::caller(),
-            NonLogNow(2),
-        );
-        cleaner.log_spawn_buffer(Some(spawn_buffer_at_2), MaybeLocation::caller());
-        cleaner.log_spawn_buffer(None, MaybeLocation::caller());
-        cleaner.forward(&mut world, 1);
-        assert!(
-            world.get_entity(spawn_at_1_despawn_at_2).is_ok(),
-            "{cleaner:#?}"
-        );
-        assert!(world.get_entity(spawn_at_2).is_ok(), "{cleaner:#?}");
-        assert!(world.get_entity(spawn_buffer_at_2).is_ok(), "{cleaner:#?}");
+        world_with_resources.forward([spawn_at_2], [despawn_at_2], [spawn_buffer_at_2], 1, false);
+        world_with_resources.assert_entities([
+            (spawn_at_1, true),
+            (spawn_at_2, true),
+            (despawn_at_2, true),
+            (spawn_buffer_at_2, true),
+        ]);
 
         // undo 2
-        reserve_buffer_at_2 = world.spawn_empty().id();
-        cleaner.log_spawn_buffer(Some(reserve_buffer_at_2), MaybeLocation::caller());
-        cleaner.backward_log().unwrap();
+        world_with_resources.backward_log([reserve_buffer_at_2]);
+        world_with_resources.assert_entities([
+            (spawn_at_1, true),
+            (spawn_at_2, true),
+            (despawn_at_2, true),
+            (spawn_buffer_at_2, true),
+            (reserve_buffer_at_2, true),
+        ]);
 
         // redo 2
-        cleaner.forward_log().unwrap();
+        world_with_resources.forward_log();
+        world_with_resources.assert_entities([
+            (spawn_at_1, true),
+            (spawn_at_2, true),
+            (despawn_at_2, true),
+            (spawn_buffer_at_2, true),
+            (reserve_buffer_at_2, true),
+        ]);
 
         // do 3
-        let spawn_at_3 = world.spawn_empty().id();
-        cleaner.log_spawn(spawn_at_3, MaybeLocation::caller(), NonLogNow(3));
-        cleaner.forward(&mut world, 1);
-        assert!(
-            world.get_entity(spawn_at_1_despawn_at_2).is_ok(),
-            "{cleaner:#?}"
-        );
-        assert!(world.get_entity(spawn_at_2).is_ok(), "{cleaner:#?}");
-        assert!(world.get_entity(spawn_buffer_at_2).is_ok(), "{cleaner:#?}");
-        assert!(world.get_entity(spawn_at_3).is_ok(), "{cleaner:#?}");
+        world_with_resources.forward([spawn_at_3], [despawn_at_3], [spawn_buffer_at_3], 0, false);
+        world_with_resources.assert_entities([
+            (spawn_at_1, true),
+            (spawn_at_2, true),
+            (despawn_at_2, true),
+            (spawn_buffer_at_2, true),
+            (reserve_buffer_at_2, true),
+            (spawn_at_3, true),
+            (despawn_at_3, true),
+            (spawn_buffer_at_3, true),
+        ]);
 
         // do 4
-        let spawn_at_4 = world.spawn_empty().id();
-        let spawn_buffer_at_4 = world.spawn_empty().id();
-        cleaner.log_spawn(spawn_at_4, MaybeLocation::caller(), NonLogNow(4));
-        cleaner.log_spawn_buffer(Some(spawn_buffer_at_4), MaybeLocation::caller());
-        cleaner.forward(&mut world, 1);
-        assert!(
-            world.get_entity(spawn_at_1_despawn_at_2).is_err(),
-            "{cleaner:#?}"
-        ); // finalized despawn_at_2
-        assert!(world.get_entity(spawn_at_2).is_ok(), "{cleaner:#?}");
-        assert!(
-            world.get_entity(reserve_buffer_at_2).is_err(),
-            "{cleaner:#?}"
-        ); // buffer out of log
-        assert!(world.get_entity(spawn_buffer_at_2).is_err(), "{cleaner:#?}"); // buffer out of log
-        assert!(world.get_entity(spawn_at_3).is_ok(), "{cleaner:#?}");
-        assert!(world.get_entity(spawn_at_4).is_ok(), "{cleaner:#?}");
-        assert!(world.get_entity(spawn_buffer_at_4).is_ok(), "{cleaner:#?}");
+        world_with_resources.forward([spawn_at_4], [], [spawn_buffer_at_4], 0, false);
+        world_with_resources.assert_entities([
+            (spawn_at_1, true),
+            (spawn_at_2, true),
+            (despawn_at_2, false),        // finalized despawn from 2
+            (spawn_buffer_at_2, false),   // buffer out of log
+            (reserve_buffer_at_2, false), // buffer out of log
+            (spawn_at_3, true),
+            (spawn_at_4, true),
+            (spawn_buffer_at_4, true),
+            (despawn_at_3, true),
+            (spawn_buffer_at_3, true),
+        ]);
 
         // undo 4
-        cleaner.backward_log().unwrap();
+        world_with_resources.backward_log([]);
+        world_with_resources.assert_entities([
+            (spawn_at_1, true),
+            (spawn_at_2, true),
+            (spawn_at_3, true),
+            (spawn_at_4, true),
+            (spawn_buffer_at_4, true),
+            (despawn_at_3, true),
+            (spawn_buffer_at_3, true),
+        ]);
 
         // do fresh 4
-        cleaner.forward(&mut world, 1);
-        assert!(world.get_entity(spawn_at_2).is_ok(), "{cleaner:#?}");
-        assert!(world.get_entity(spawn_at_3).is_ok(), "{cleaner:#?}");
-        assert!(world.get_entity(spawn_at_4).is_err(), "{cleaner:#?}"); // future spawn undone with forward
-        assert!(world.get_entity(spawn_buffer_at_4).is_err(), "{cleaner:#?}"); // future spawn buffer undone with forward
+        world_with_resources.forward(
+            [spawn_at_fresh_4],
+            [despawn_at_fresh_4],
+            [spawn_buffer_at_fresh_4],
+            0,
+            false,
+        );
+        world_with_resources.assert_entities([
+            (spawn_at_1, true),
+            (spawn_at_2, true),
+            (spawn_at_3, true),
+            (spawn_at_4, false),        // undone spawn out of log
+            (spawn_buffer_at_4, false), // buffer out of log
+            (spawn_at_fresh_4, true),
+            (despawn_at_fresh_4, true),
+            (spawn_buffer_at_fresh_4, true),
+            (despawn_at_3, true),
+            (spawn_buffer_at_3, true),
+        ]);
+
+        // undo 4 again
+        world_with_resources.backward_log([]);
+        world_with_resources.assert_entities([
+            (spawn_at_1, true),
+            (spawn_at_2, true),
+            (spawn_at_3, true),
+            (spawn_at_fresh_4, true),
+            (despawn_at_fresh_4, true),
+            (spawn_buffer_at_fresh_4, true),
+            (despawn_at_3, true),
+            (spawn_buffer_at_3, true),
+        ]);
+
+        // do yet another fresh 4 with clear
+        world_with_resources.forward([], [], [], 0, true);
+        world_with_resources.assert_entities([
+            (spawn_at_1, true),
+            (spawn_at_2, true),
+            (spawn_at_3, true),
+            (spawn_at_fresh_4, false), // undone spawn out of log
+            (despawn_at_fresh_4, true),
+            (spawn_buffer_at_fresh_4, false), // buffer out of log
+            (despawn_at_3, false),            // finalized despawn early from 3
+            (spawn_buffer_at_3, false),       // buffer out of log
+        ]);
+
+        // do 5
+        world_with_resources.forward([], [], [], 0, false);
+        world_with_resources.assert_entities([
+            (spawn_at_1, true),
+            (spawn_at_2, true),
+            (spawn_at_3, true),
+            (despawn_at_fresh_4, true),
+        ]);
+
+        // do 6
+        world_with_resources.forward([], [], [], 0, false);
+        world_with_resources.assert_entities([
+            (spawn_at_1, true),
+            (spawn_at_2, true),
+            (spawn_at_3, true),
+            (despawn_at_fresh_4, true), // never finalized
+        ]);
     }
 }

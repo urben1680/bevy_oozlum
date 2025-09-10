@@ -6,11 +6,9 @@ use std::{
 
 use bevy::{
     ecs::{
-        component::{ComponentId, Tick},
         error::BevyError,
         resource::Resource,
-        system::{ReadOnlySystemParam, Res, SystemMeta, SystemParam, SystemParamValidationError},
-        world::{World, unsafe_world_cell::UnsafeWorldCell},
+        world::World,
     },
     log::info,
     reflect::Reflect,
@@ -19,7 +17,7 @@ use bevy::{
 use crate::{
     log::{PastLenLogLimits, PastLenLogMissed, PastLenState, PreUpdateVariant},
     prelude::RevUpdate,
-    undo_redo::{BundleIdOfOpCache, RevDespawnCleaner, UndoRedoBuffer},
+    undo_redo::{BundleIdOfOpCache, DespawnCleanerErr, RevDespawnCleaner, UndoRedoBuffer},
 };
 
 #[derive(Reflect, Resource, Debug)]
@@ -66,67 +64,6 @@ impl RevDirection {
         self != Self::NOT_LOG
     }
 }
-
-// SAFETY: todo
-// todo: deprecate, one should use revmeta
-unsafe impl SystemParam for RevDirection {
-    type Item<'world, 'state> = Self;
-    type State = ComponentId;
-    fn init_state(world: &mut World) -> Self::State {
-        <Res<RevMeta> as SystemParam>::init_state(world)
-    }
-    fn init_access(
-        state: &Self::State,
-        system_meta: &mut SystemMeta,
-        component_access_set: &mut bevy::ecs::query::FilteredAccessSet<ComponentId>,
-        world: &mut World,
-    ) {
-        <Res<RevMeta> as SystemParam>::init_access(state, system_meta, component_access_set, world);
-    }
-    // todo: update implementation and doc for bevy 0.16 as the behavior of Res changes then again
-    unsafe fn validate_param(
-        &mut component_id: &mut Self::State,
-        _system_meta: &SystemMeta,
-        world: UnsafeWorldCell,
-    ) -> Result<(), SystemParamValidationError> {
-        let ptr = unsafe {
-            // SAFETY: Read-only access is registered in init_state for this id and ptr read access is finished before return.
-            world.get_resource_by_id(component_id)
-        };
-        ptr.map(|ptr| unsafe {
-            // SAFETY: todo
-            ptr.deref::<RevMeta>()
-        })
-        .ok_or(SystemParamValidationError::invalid::<RevDirection>(
-            "RevMeta does not exist",
-        ))?
-        .get_running_direction()
-        .ok_or(SystemParamValidationError::invalid::<RevDirection>(
-            "RevMeta is not in a running direction",
-        ))
-        .map(|_| ())
-    }
-    unsafe fn get_param<'world, 'state>(
-        &mut component_id: &'state mut Self::State,
-        _system_meta: &SystemMeta,
-        world: UnsafeWorldCell<'world>,
-        _change_tick: Tick,
-    ) -> Self::Item<'world, 'state> {
-        let ptr = unsafe {
-            // SAFETY: Read-only access is registered in init_state for this id and ptr read access is finished before return.
-            world.get_resource_by_id(component_id)
-        };
-        ptr.map(|ptr| unsafe {
-            // SAFETY: todo
-            ptr.deref::<RevMeta>()
-        })
-        .unwrap()
-        .running_direction()
-    }
-}
-
-// SAFETY: only reads RevMeta resource
-unsafe impl ReadOnlySystemParam for RevDirection {}
 
 impl Display for RevDirection {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -343,41 +280,24 @@ impl RevMeta {
                 }
 
                 // update RevMeta and RevDespawnCleaner
-                let mut despawn_cleaner_missing = false;
-                let mut meta_stopped_running_early = false;
-                let mut despawn_cleaner_out_of_log = false;
-                let update_result = meta.update(|meta, _| {
+                let mut cleaner_result = Ok(());
+                let meta_result = meta.update(|meta, _| {
                     world.insert_resource(meta);
                     schedule.run(world);
-                    let cleaner_scope_option = world.try_resource_scope::<RevDespawnCleaner, _>(
-                        |world, mut rev_despawn_cleaner| {
-                            rev_despawn_cleaner.update(
-                                world,
-                                &mut meta_stopped_running_early,
-                                &mut despawn_cleaner_out_of_log,
-                            )
-                        },
-                    );
-                    despawn_cleaner_missing = cleaner_scope_option.is_none();
+                    cleaner_result = RevDespawnCleaner::update(world);
                     world.remove_resource::<RevMeta>()
                 });
 
-                // finalize reversibly despawned entities TODO: muss in update damit running-direction Some ist
-                match update_result {
-                    Ok(meta)
-                        if !despawn_cleaner_missing
-                            && !meta_stopped_running_early
-                            && !despawn_cleaner_out_of_log =>
-                    {
+                // map errors
+                match meta_result {
+                    Ok(meta) if cleaner_result.is_ok() => {
                         world.insert_resource(meta);
                         Ok(())
                     }
                     Ok(meta) => Err(TryRunRevUpdateError::AfterRunErrors {
                         meta: Some(meta),
-                        meta_stopped_running_early,
                         past_len_logs_missed: Vec::new(),
-                        despawn_cleaner_out_of_log,
-                        despawn_cleaner_missing,
+                        despawn_cleaner_err: cleaner_result.err(),
                     }),
                     Err(RevMetaUpdateErr::AlreadyRunning { meta, direction }) => {
                         Err(TryRunRevUpdateError::AlreadyRunning { meta, direction })
@@ -385,10 +305,8 @@ impl RevMeta {
                     Err(RevMetaUpdateErr::RevMetaNotReturned) => {
                         Err(TryRunRevUpdateError::AfterRunErrors {
                             meta: None,
-                            meta_stopped_running_early,
                             past_len_logs_missed: Vec::new(),
-                            despawn_cleaner_out_of_log,
-                            despawn_cleaner_missing,
+                            despawn_cleaner_err: cleaner_result.err(),
                         })
                     }
                     Err(RevMetaUpdateErr::PastLenLogsMissed {
@@ -396,10 +314,8 @@ impl RevMeta {
                         past_len_logs_missed,
                     }) => Err(TryRunRevUpdateError::AfterRunErrors {
                         meta: Some(meta),
-                        meta_stopped_running_early,
                         past_len_logs_missed,
-                        despawn_cleaner_out_of_log,
-                        despawn_cleaner_missing,
+                        despawn_cleaner_err: cleaner_result.err(),
                     }),
                 }
             })
@@ -467,12 +383,11 @@ impl RevMeta {
             }
         };
 
-        // take queue or fall back to previous direction, return None if no direction from both
+        // take queue or fall back to previous direction, return early if no direction from both
         let Some(queue_or_ran) = queue.or(ran) else {
             return Ok(self);
         };
 
-        // update frame fields or return None if pause is queued or reached end of log
         let direction = match queue_or_ran {
             RevDirection::NOT_LOG => {
                 self.now += 1;
@@ -625,10 +540,8 @@ enum TryRunRevUpdateError {
     },
     AfterRunErrors {
         meta: Option<RevMeta>,
-        meta_stopped_running_early: bool,
         past_len_logs_missed: Vec<PastLenLogMissed>,
-        despawn_cleaner_out_of_log: bool,
-        despawn_cleaner_missing: bool,
+        despawn_cleaner_err: Option<DespawnCleanerErr>,
     },
 }
 
@@ -644,12 +557,13 @@ impl Display for TryRunRevUpdateError {
             }
             Self::AfterRunErrors {
                 meta,
-                meta_stopped_running_early,
                 past_len_logs_missed,
-                despawn_cleaner_out_of_log,
-                despawn_cleaner_missing,
+                despawn_cleaner_err,
             } => {
-                if *meta_stopped_running_early {
+                if matches!(
+                    *despawn_cleaner_err,
+                    Some(DespawnCleanerErr::MetaNotRunning)
+                ) {
                     write!(f, "RevMeta stopped running early\n")?;
                 }
                 if !past_len_logs_missed.is_empty() {
@@ -658,13 +572,19 @@ impl Display for TryRunRevUpdateError {
                         "PastLenLog instances did not run when they were expected to:\n{past_len_logs_missed:?}\n"
                     )?;
                 }
-                if *despawn_cleaner_out_of_log {
+                if matches!(
+                    *despawn_cleaner_err,
+                    Some(DespawnCleanerErr::CleanerOutOfLog)
+                ) {
                     write!(
                         f,
                         "the resource that finally despawns entities that were reversibly marked for despawn unexpectedly went out-of-log\n"
                     )?;
                 }
-                if *despawn_cleaner_missing {
+                if matches!(
+                    *despawn_cleaner_err,
+                    Some(DespawnCleanerErr::CleanerMissing)
+                ) {
                     write!(
                         f,
                         "the resource that finally despawns entities that were reversibly marked for despawn was removed\n"

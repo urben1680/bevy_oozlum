@@ -210,7 +210,9 @@ pub struct TransitionDrains<'log, T> {
 }
 
 pub type TransitionDrainPast<'a, 'log, T> = core::iter::Take<&'a mut TransitionDrain<'log, T>>;
+
 pub type TransitionDrainFuture<'log, T> = core::iter::Skip<TransitionDrain<'log, T>>;
+
 pub type TransitionDrain<'log, T> = std::collections::vec_deque::Drain<'log, T>;
 
 impl<'log, T> TransitionDrains<'log, T> {

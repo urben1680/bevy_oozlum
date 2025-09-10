@@ -15,7 +15,7 @@ use bevy_oozlum::{
 };
 
 const MAX_LOG_LEN: u64 = 71;
-const FIXED_TIMESTEP: Duration = Duration::from_millis(100);
+const FIXED_TIMESTEP: Duration = Duration::from_millis(80);
 const CURRENT_BEVY_VERSION: usize = 0_17_0;
 const WINNING_BEVY_VERSION: usize = 1_00_0;
 
@@ -381,7 +381,6 @@ fn row5(app: &mut App) {
         mut past_len_log: Local<PastLenLog>,
         mut entity_log: Local<TransitionLog<Entity>>,
         mut commands: Commands,
-        mut debug: Local<Vec<(RevMeta, PastLenLog)>>,
     ) {
         let waste = Waste {
             tossed_at: meta.now(),
@@ -407,7 +406,7 @@ fn row5(app: &mut App) {
                 let past_len = past_len_log.update_and_get_past_len(&meta);
 
                 // We spawn the waste entity and mark is as log scoped to be despawned when out-of-log.
-                let entity = commands.spawn(waste).rev_log_scope(now).id();
+                let entity = commands.spawn(waste).make_rev_log_scoped(now).id();
 
                 // We do not use the push_and_pop_past method because, as this system does not run every frame,
                 // multiple log entries may be out of log now.
@@ -429,7 +428,6 @@ fn row5(app: &mut App) {
                 commands.entity(entity).remove::<Waste>();
             }
         }
-        //debug.push((meta.clone(), past_len_log.clone()));
     }
 }
 
@@ -555,7 +553,7 @@ fn rev_log_scope_and_buffer_waste_op(
     now: NonLogNow,
 ) {
     // We mark the entity as log scoped which means it will be despawned when this frame gets out of log.
-    entity_commands.rev_log_scope(now);
+    entity_commands.make_rev_log_scoped(now);
 
     let entity = entity_commands.id();
 
@@ -579,7 +577,7 @@ fn rev_log_scope_and_buffer_waste_op(
 }
 
 /*
-    THE FOLLOWING CODE IS NOT RELEVANT TO THE REVERSIBLE ECS EXAMPLE
+    THE FOLLOWING BOILERPLATE CODE IS NOT RELEVANT TO THE REVERSIBLE ECS EXAMPLE
     Only input logic and console output is done below.
 */
 

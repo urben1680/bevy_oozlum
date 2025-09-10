@@ -27,7 +27,7 @@ pub trait RevEntityCommands<'a> {
     fn redo_and_buffer(&mut self, now: NonLogNow, undo_redo: impl UndoRedo);
 
     #[track_caller]
-    fn rev_log_scope(&mut self, now: NonLogNow) -> &mut Self;
+    fn make_rev_log_scoped(&mut self, now: NonLogNow) -> &mut Self;
 
     // the methods here are purposely sorted alphabetically to make it easily comparable to bevy's docs
     // unmentioned methods are either
@@ -380,7 +380,7 @@ impl<'a> RevEntityCommands<'a> for EntityCommands<'a> {
     }
 
     #[track_caller]
-    fn rev_log_scope(&mut self, now: NonLogNow) -> &mut Self {
+    fn make_rev_log_scoped(&mut self, now: NonLogNow) -> &mut Self {
         let caller = MaybeLocation::caller();
         self.queue(move |mut entity_mut: EntityWorldMut| {
             let entity = entity_mut.id();

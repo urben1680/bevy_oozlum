@@ -350,7 +350,7 @@ where
 
     let mut cleaner = world.resource_mut::<RevDespawnCleaner>();
     cleaner.log_spawn_batch(&entities, caller, now);
-    cleaner.log_spawn_buffer_batch_reserve(entities.len(), caller);
+    cleaner.log_spawn_buffer_batch_reserve(entities.len(), caller, now);
 
     entities
 }

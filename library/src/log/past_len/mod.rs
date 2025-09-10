@@ -788,37 +788,4 @@ mod test {
         meta_and_log.forward([3], false);
         assert_eq!(meta_and_log.meta.past_len(), 3);
     }
-
-    /*
-
-    #[test]
-    fn no_missed_frame_false_positive_in_log() {
-        let mut meta_and_log = MetaAndLog::new(3);
-
-        meta_and_log.forward(Ok([1]));
-
-        meta_and_log.backward_log(Ok(1));
-
-        meta_and_log.forward(Ok([]));
-        // should not detect a missed forward log update
-        meta_and_log.forward(Ok([1]));
-    }
-
-    #[test]
-    fn no_missed_frame_false_positive_out_of_log() {
-        let mut meta_and_log = MetaAndLog::new(3);
-
-        meta_and_log.forward(Ok([1]));
-
-        meta_and_log.backward_log(Ok(1));
-
-        meta_and_log.forward(Ok([]));
-
-        // -- log edge --
-        meta_and_log.forward(Ok([]));
-        meta_and_log.forward(Ok([]));
-        // should not detect a missed forward log update
-        meta_and_log.forward(Ok([1]));
-    }
-    */
 }

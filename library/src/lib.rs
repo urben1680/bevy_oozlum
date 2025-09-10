@@ -67,15 +67,13 @@ ISSUES/DISCUSSIONS:
 example broken, first write tests for spawn_despawn
 */
 
-use bevy::ecs::change_detection::MaybeLocation;
-
 pub mod app;
 pub mod log;
 pub mod meta;
 pub mod schedule;
 pub mod undo_redo;
 
-/// Contains all extension traits `as _` and common types.
+/// Contains common types an all extension traits `as _`. Does not contain [`log`] items.
 pub mod prelude {
     pub use crate::app::{RevApp as _, RevPlugin};
     pub use crate::meta::{RevDirection, RevMeta, RevQueue};
@@ -90,6 +88,7 @@ pub mod prelude {
 }
 
 /// Make `error!` and `error_once!` cause panics.
+// This exists in the reversible_ecs example too, keep that in sync to this
 #[cfg(test)]
 fn panic_on_error_events() {
     use bevy::log::{

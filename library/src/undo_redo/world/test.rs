@@ -29,24 +29,6 @@ fn setup() -> World {
 }
 
 #[test]
-fn delayed_buffer_spawn() {
-    let mut world = setup();
-    let now = world.resource::<RevMeta>().non_log_now().unwrap();
-    world.rev_spawn(now, Required(1));
-    world.resource_scope::<RevDespawnCleaner, _>(|world, mut res| {
-        res.forward(world, 1);
-    });
-    let mut buffer = world.remove_resource::<UndoRedoBuffer>().unwrap();
-    buffer.undo(&mut world);
-
-    // this method emits errors which cause panics if something went wrong
-    world
-        .resource_mut::<RevDespawnCleaner>()
-        .backward_log()
-        .unwrap();
-}
-
-#[test]
 fn rev_init_resource_on_unexisting_inits_resource() {
     let mut world = setup();
     let now = world.resource::<RevMeta>().non_log_now().unwrap();

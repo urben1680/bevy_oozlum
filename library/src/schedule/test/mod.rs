@@ -201,20 +201,22 @@ struct SysObsvObsv(u8);
 struct SysCmdObsv(u8);
 
 fn non_exclusive_system<const N: u8>(
-    direction: RevDirection,
+    meta: Res<RevMeta>,
     mut log: ResMut<TestLog>,
     commands: Commands,
 ) {
+    let direction = meta.running_direction();
+
     log.0.push(LogEntry::NonExclusiveSys((N, direction)));
 
-    non_exclusive_system_commands_only::<N>(direction, commands);
+    non_exclusive_system_commands_only::<N>(meta, commands);
 }
 
 fn non_exclusive_system_commands_only<const N: u8>(
-    direction: RevDirection,
+    meta: Res<RevMeta>,
     mut commands: Commands,
 ) {
-    if direction != RevDirection::NOT_LOG {
+    if meta.running_direction().is_log() {
         return;
     }
 
