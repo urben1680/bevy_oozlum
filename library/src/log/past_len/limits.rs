@@ -4,36 +4,103 @@ use bevy::{ecs::change_detection::MaybeLocation, reflect::Reflect, utils::Parall
 
 use crate::log::PreUpdateVariant;
 
+/// Part of [`RevMeta`](crate::meta::RevMeta) that keeps track of [`PastLenLog`](super::PastLenLog)
+/// updates and reports when such an update was expected for a present frame but did not happen.
 #[derive(Reflect)]
 pub(crate) struct PastLenLogLimits {
+    /// Amount of [`PastLenLog`](super::PastLenLog) currently known to this struct
     past_len_ids: AtomicU32,
+
+    /// A channel for [`PastLenLog`](super::PastLenLog) to report their updated limits.
+    /// 
+    /// Limits per thread are in chronological order, across threads
+    /// [`PastLenState::updates_this_frame`] is used to determine draining order. This is only
+    /// accurate if the compared limits regard the same log but the order is unimportant for other
+    /// comparisions.
     #[reflect(ignore)]
     past_len_updates: Parallel<Vec<PastLenUpdate>>,
-    past_len_limits: Vec<PastLenLimit>,
+
+    /// The most recent limits per [`PastLenLog`](super::PastLenLog), their [PastLenState::id] is
+    /// represented by the index in this vector.
+    past_len_limits: Vec<PastLenLimits>,
 }
 
+/// An bundling type for the state and the limits of an [`PastLenLog`](super::PastLenLog) update.
 #[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq)]
 struct PastLenUpdate {
     state: PastLenState,
-    limits: PastLenLimit,
+    limits: PastLenLimits,
 }
 
+/// The state of a [`PastLenLog`](super::PastLenLog) that is needed to report [`PastLenLimit`]
+/// and to react on log exits/clears.
 #[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct PastLenState {
+    /// Unique id of a [`PastLenLog`](super::PastLenLog) to keep track how many logs are out there
+    /// to reserve them space in [`PastLenLogLimits::past_len_limits`]. May change when
+    /// [`RevMeta`](crate::meta::RevMeta) is [cleared](crate::meta::RevQueue::Clear).
     pub(super) id: u32,
+
+    /// Counts how many times a log was updated in this frame.
+    /// 
+    /// Note that, despire being a `NonZero` type, the minimum value indeed represents zero updates.
+    /// What is important is that [`PastLenLimit`] updates can be ordered chronologically with this
+    /// value. The NonZero type only offers a niche since this struct is stored in an `Option` in
+    /// [`PastLenLog`](super::PastLenLog).
     updates_this_frame: NonZeroU32,
+
+    // todo
+    drain_alloc: Vec<UpdatesLocal<'static>>,
+
+    /// Contains the most recent count of log exits that was witnessed by an
+    /// [`PastLenLog`](super::PastLenLog).
+    /// 
+    /// See [`RevMeta::log_exits`](crate::meta::RevMeta::log_exits).
     global_log_exits: u64,
+
+    /// Contains the most recent count of log clears that was witnessed by an
+    /// [`PastLenLog`](super::PastLenLog).
+    /// 
+    /// See [`RevMeta::log_clears`](crate::meta::RevMeta::log_clears).
     global_log_clears: u64,
 }
 
+/// A limit for [`RevMeta::now`](crate::meta::RevMeta::now) that, if breached, indicates that a
+/// [`PastLenLog`](super::PastLenLog) unexpectedly did not update.
 #[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct PastLenLimit {
+pub(crate) struct PastLenLimits {
+    /// The minimum value for [`RevMeta::now`](crate::meta::RevMeta::now). At the next lower value
+    /// the [`PastLenLog`](super::PastLenLog) should update and send a new, lower limit to
+    /// [`PastLenLogLimits`].
+    /// 
+    /// May be larger than [`Self::future`] when a `PastLenLog` did update this frame repeatedly
+    /// but is still expecting to update again before the frame is over.
+    /// 
+    /// Is some frame at or below [`RevMeta::past_end`](crate::meta::RevMeta::past_end) if
+    /// `PastLenLog` has no further updates in its past.
     past: u64,
+    
+    /// The maximum value for [`RevMeta::now`](crate::meta::RevMeta::now). At the next higher value
+    /// the [`PastLenLog`](super::PastLenLog) should update and send a new, higher limit to
+    /// [`PastLenLogLimits`].
+    /// 
+    /// May be smaller than [`Self::past`] when a `PastLenLog` did update this frame repeatedly
+    /// but is still expecting to update again before the frame is over.
+    /// 
+    /// Is [`u64::MAX`] if `PastLenLog` has no further updates in its future.
+    /// 
+    /// Will be set to `u64::MAX` at [`RevDirection::NOT_LOG`](crate::meta::RevDirection::NOT_LOG).
     future: u64,
+
+    /// The last location when [`PastLenLog`](super::PastLenLog) was updated. Is empty if the
+    /// `track_location` feature is not used at Bevy.
     last_update: MaybeLocation,
 }
 
-impl PastLenLimit {
+impl PastLenLimits {
+    /// A new limit during an [`RevDirection::NOT_LOG`](crate::meta::RevDirection::NOT_LOG) update.
+    /// 
+    /// Restricts [`RevMeta::now`](crate::meta::RevMeta::now) to not go below `now`.
     pub(crate) fn new_not_log(now: u64, caller: MaybeLocation) -> Self {
         Self {
             past: now,
@@ -41,6 +108,12 @@ impl PastLenLimit {
             last_update: caller,
         }
     }
+
+    /// A new limit during an [`RevDirection::FORWARD_LOG`](crate::meta::RevDirection::FORWARD_LOG)/
+    /// [`RevDirection::BackwardLog`](crate::meta::RevDirection::BackwardLog) update.
+    /// 
+    /// Restricts [`RevMeta::now`](crate::meta::RevMeta::now) to not go below `past` or above
+    /// `future`, unless during [`RevDirection::NOT_LOG`](crate::meta::RevDirection::NOT_LOG).
     pub(crate) fn new_log(past: u64, future: u64, caller: MaybeLocation) -> Self {
         Self {
             past,
@@ -50,21 +123,34 @@ impl PastLenLimit {
     }
 }
 
+/// Identifies a [`PastLenLog`](super::PastLenLog) that should have been updated at the current
+/// [frame](crate::meta::RevMeta::now) but did not.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub struct PastLenLogMissed {
-    pub(super) internal_id: u32,
-    pub(super) last_update: MaybeLocation,
+    /// The internal [id](super::PastLenLog::id) of the [`PastLenLog`](super::PastLenLog).
+    pub id: u32,
+
+    /// The last location in the code where the [`PastLenLog`](super::PastLenLog) was updated.
+    /// 
+    /// Requires to use bevy's `track_location` feature.
+    pub last_update: MaybeLocation,
 }
 
+/// An iterator over [`PastLenLogLimits::past_len_updates`] that makes sure updates from the same
+/// [`PastLenLog`](super::PastLenLog) are yielded chronologically.
 struct UpdatesIter<'a>(Vec<UpdatesLocal<'a>>);
 
+/// The per-thread state of the [`UpdatesIter`] iterator.
 struct UpdatesLocal<'a> {
     drain: std::vec::Drain<'a, PastLenUpdate>,
+
+    /// The next least-recent update that waits to be picked up by the iterator in which case it is
+    /// replaced by the next from [`Self::drain`], if there is one. If not, this state is exhausted.
     next: PastLenUpdate,
 }
 
 impl<'a> Iterator for UpdatesIter<'a> {
-    type Item = (u32, PastLenLimit);
+    type Item = (u32, PastLenLimits);
     fn next(&mut self) -> Option<Self::Item> {
         let (index, local) = self
             .0
@@ -158,7 +244,7 @@ impl PastLenLogLimits {
         // size up self.past_len_limits if new PastLenLogs updated in the closure
         self.past_len_limits.resize(
             *self.past_len_ids.get_mut() as usize,
-            PastLenLimit {
+            PastLenLimits {
                 // in case a PastLenLog inits its state without mutating afterwards, make these
                 // bounds infallible
                 past: u64::MIN,
@@ -192,7 +278,7 @@ impl PastLenLogLimits {
                 let internal_id = index as u32;
                 if now < limits.past || now > limits.future {
                     past_len_logs_missed.push(PastLenLogMissed {
-                        internal_id,
+                        id: internal_id,
                         last_update: limits.last_update,
                     });
                 }
@@ -210,7 +296,7 @@ impl PastLenLogLimits {
             Ok(())
         }
     }
-    pub(super) fn push_past_len_update(&self, state: PastLenState, limits: PastLenLimit) {
+    pub(super) fn push_past_len_update(&self, state: PastLenState, limits: PastLenLimits) {
         self.past_len_updates
             .borrow_local_mut()
             .push(PastLenUpdate { state, limits });
@@ -223,8 +309,8 @@ mod test {
 
     #[test]
     fn iter_works() {
-        fn new_limits(value: u64) -> PastLenLimit {
-            PastLenLimit {
+        fn new_limits(value: u64) -> PastLenLimits {
+            PastLenLimits {
                 past: value,
                 future: value,
                 last_update: MaybeLocation::caller(),
@@ -395,13 +481,13 @@ mod test {
 
         // add a past limit of 1
         let mut past_state = None;
-        let past_limit = PastLenLimit::new_log(1, u64::MAX, MaybeLocation::caller());
+        let past_limit = PastLenLimits::new_log(1, u64::MAX, MaybeLocation::caller());
         limits.update_past_len_state(&mut past_state, false, 0, 0);
         limits.push_past_len_update(past_state.unwrap(), past_limit);
 
         // add a future limit of 1
         let mut future_state = None;
-        let future_limit = PastLenLimit::new_log(u64::MIN, 1, MaybeLocation::caller());
+        let future_limit = PastLenLimits::new_log(u64::MIN, 1, MaybeLocation::caller());
         limits.update_past_len_state(&mut future_state, false, 0, 0);
         limits.push_past_len_update(future_state.unwrap(), future_limit);
 
@@ -412,7 +498,7 @@ mod test {
         // 0 is breaching the past limit
         let result = limits.check_past_len_limits(0, true);
         let past_missed = Err(vec![PastLenLogMissed {
-            internal_id: past_state.unwrap().id,
+            id: past_state.unwrap().id,
             last_update: past_limit.last_update,
         }]);
         assert_eq!(result, past_missed);
@@ -420,7 +506,7 @@ mod test {
         // 2 is breaching the future limit
         let result = limits.check_past_len_limits(2, true);
         let future_missed = Err(vec![PastLenLogMissed {
-            internal_id: future_state.unwrap().id,
+            id: future_state.unwrap().id,
             last_update: future_limit.last_update,
         }]);
         assert_eq!(result, future_missed);

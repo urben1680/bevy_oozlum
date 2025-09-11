@@ -372,7 +372,7 @@ impl PastLenLog {
         // push present offset
         meta.past_len_limits().push_past_len_update(
             self.update_state.expect("todo"),
-            PastLenLimit::new_not_log(meta.now(), caller),
+            PastLenLimits::new_not_log(meta.now(), caller),
         );
         let offset = meta.now() - self.last_update;
         self.last_update = meta.now();
@@ -445,7 +445,7 @@ impl PastLenLog {
         self.past_len -= 1;
         meta.past_len_limits().push_past_len_update(
             self.update_state.expect("todo"),
-            PastLenLimit::new_log(backward_limit, meta.now(), caller),
+            PastLenLimits::new_log(backward_limit, meta.now(), caller),
         );
 
         true
@@ -537,7 +537,7 @@ impl PastLenLog {
         self.past_len += 1;
         meta.past_len_limits().push_past_len_update(
             self.update_state.expect("todo"),
-            PastLenLimit::new_log(meta.now(), forward_limit, caller),
+            PastLenLimits::new_log(meta.now(), forward_limit, caller),
         );
         true
     }
@@ -723,7 +723,7 @@ mod test {
         }
         fn new_missed(&self) -> PastLenLogMissed {
             PastLenLogMissed {
-                internal_id: self.past_len_log.update_state.unwrap().id,
+                id: self.past_len_log.update_state.unwrap().id,
                 last_update: self.last_update,
             }
         }

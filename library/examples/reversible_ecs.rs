@@ -2,7 +2,7 @@ use std::{io::stdout, num::NonZeroU64, time::Duration};
 
 use bevy::{
     app::App,
-    ecs::{entity::EntityHashSet, lifecycle::HookContext, world::DeferredWorld},
+    ecs::{entity::EntityHashSet, lifecycle::HookContext, system::SystemParam, world::DeferredWorld},
     prelude::*,
 };
 
@@ -15,7 +15,6 @@ use bevy_oozlum::{
 };
 
 const MAX_LOG_LEN: u64 = 71;
-const FIXED_TIMESTEP: Duration = Duration::from_millis(80);
 const CURRENT_BEVY_VERSION: usize = 0_17_0;
 const WINNING_BEVY_VERSION: usize = 1_00_0;
 
@@ -46,9 +45,6 @@ meta.future_end() == 00058                       meta.future_len() == 30
 
 */
 
-/*
-todo: make systems fallible instead of unwrap
-*/
 
 fn main() {
     // Ignore this, not imporant for the reversible ECS showcase but for this app.
@@ -135,7 +131,7 @@ fn main() {
         // Init and insert some resources, we want the reversible systems to run every 0.1 seconds.
         .init_resource::<KeysPressed>()
         .init_resource::<WasteCounts>()
-        .insert_resource(Time::<Fixed>::from_duration(FIXED_TIMESTEP))
+        .insert_resource(Time::<Fixed>::from_duration(score_to_duration(CURRENT_BEVY_VERSION as u64)))
         .run();
 }
 
@@ -166,16 +162,30 @@ struct WasteCounts {
     score: EntityHashSet,
 }
 
-impl WasteCounts {
+#[derive(SystemParam)]
+struct TimeAndCounts<'w> {
+    time: ResMut<'w, Time<Fixed>>,
+    counts: ResMut<'w, WasteCounts>
+}
+
+impl<'w> TimeAndCounts<'w> {
     fn score(&self) -> usize {
-        (self.score.len() + CURRENT_BEVY_VERSION).min(WINNING_BEVY_VERSION)
+        (self.counts.score.len() + CURRENT_BEVY_VERSION).min(WINNING_BEVY_VERSION)
     }
     fn update(&mut self, entity: Entity, waste: Waste, meta: &RevMeta) {
-        self.score.insert(entity);
-        if self.score() < WINNING_BEVY_VERSION && waste.tossed_at < meta.past_end() {
-            self.lost += 1;
+        self.counts.score.insert(entity);
+        let score = self.score();
+        if score < WINNING_BEVY_VERSION {
+            self.time.set_timestep(score_to_duration(score as u64));
+            if waste.tossed_at < meta.past_end() {
+                self.counts.lost += 1;
+            }
         }
     }
+}
+
+fn score_to_duration(score: u64) -> Duration {
+    Duration::from_micros(100_000 - score * 80)
 }
 
 fn control_rev_meta(mut meta: ResMut<RevMeta>, keys: Res<KeysPressed>) {
@@ -187,8 +197,8 @@ fn control_rev_meta(mut meta: ResMut<RevMeta>, keys: Res<KeysPressed>) {
 
 fn despawn_waste(
     waste: Query<(Entity, &Waste)>,
-    mut counts: ResMut<WasteCounts>,
     meta: Res<RevMeta>,
+    mut time_and_counts: TimeAndCounts,
     mut commands: Commands,
 ) {
     if meta.get_ran_direction() == Some(RevDirection::NOT_LOG) {
@@ -196,7 +206,7 @@ fn despawn_waste(
             if !meta.contains(waste.tossed_at) {
                 commands.entity(entity).despawn();
             }
-            counts.update(entity, waste, &meta);
+            time_and_counts.update(entity, waste, &meta);
         }
     }
 }
@@ -282,11 +292,11 @@ fn row4(app: &mut App) {
     // It also has to be a sparse log because not every frame the key is pressed.
     fn system(
         meta: Res<RevMeta>,
+        mut time_and_counts: TimeAndCounts,
         pressed: Res<KeysPressed>,
-        mut counts: ResMut<WasteCounts>,
         mut log: Local<TransitionLog<Option<Entity>>>,
         mut commands: Commands,
-    ) {
+    ) -> Result<(), BevyError> {
         let waste = Waste {
             tossed_at: meta.now(),
             row: 4,
@@ -334,7 +344,7 @@ fn row4(app: &mut App) {
                     commands.entity(entity).despawn();
 
                     // The player missed undoing this littering in time and the lost waste counter is increased.
-                    counts.update(entity, waste, &meta);
+                    time_and_counts.update(entity, waste, &meta);
                 }
             }
 
@@ -342,16 +352,18 @@ fn row4(app: &mut App) {
             // this frame. When we go forward in log, we reinsert the component.
             // This way we dont need to despawn and respawn during the log phase.
             RevDirection::BackwardLog => {
-                if let Some(entity) = log.backward_log().unwrap() {
+                if let Some(entity) = log.backward_log()? {
                     commands.entity(*entity).remove::<Waste>();
                 }
             }
             RevDirection::FORWARD_LOG => {
-                if let Some(entity) = log.forward_log().unwrap() {
+                if let Some(entity) = log.forward_log()? {
                     commands.entity(*entity).insert(waste);
                 }
             }
         }
+
+        Ok(())
     }
 }
 
@@ -381,7 +393,7 @@ fn row5(app: &mut App) {
         mut past_len_log: Local<PastLenLog>,
         mut entity_log: Local<TransitionLog<Entity>>,
         mut commands: Commands,
-    ) {
+    ) -> Result<(), BevyError> {
         let waste = Waste {
             tossed_at: meta.now(),
             row: 5,
@@ -419,15 +431,17 @@ fn row5(app: &mut App) {
                 // this method should always return true as well because the run condition makes sure it only runs
                 // in these frames, also during the log.
                 let _true = past_len_log.forward_log(&meta);
-                let entity = *entity_log.forward_log().unwrap();
+                let entity = *entity_log.forward_log()?;
                 commands.entity(entity).insert(waste);
             }
             RevDirection::BackwardLog => {
                 let _true = past_len_log.backward_log(&meta);
-                let entity = *entity_log.backward_log().unwrap();
+                let entity = *entity_log.backward_log()?;
                 commands.entity(entity).remove::<Waste>();
             }
         }
+
+        Ok(())
     }
 }
 
@@ -583,7 +597,7 @@ fn rev_log_scope_and_buffer_waste_op(
 
 fn map_input(
     mut keys: ResMut<KeysPressed>,
-    counts: Res<WasteCounts>,
+    time_and_counts: TimeAndCounts,
     mut exit: EventWriter<AppExit>,
 ) {
     use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, poll, read};
@@ -608,8 +622,8 @@ fn map_input(
             }
 
             // ignore any other inputs at game over
-            _ if counts.lost >= 10 => {}
-            _ if counts.score() >= WINNING_BEVY_VERSION => {}
+            _ if time_and_counts.counts.lost >= 10 => {}
+            _ if time_and_counts.score() >= WINNING_BEVY_VERSION => {}
 
             KeyCode::Left => keys.direction = Some(RevQueue::Run(RevDirection::FORWARD_LOG)),
             KeyCode::Right => keys.direction = Some(RevQueue::Run(RevDirection::BackwardLog)),
@@ -686,6 +700,7 @@ impl Drop for ScopeGuard {
 
 fn render(
     meta: Res<RevMeta>,
+    time_and_counts: TimeAndCounts,
     waste: Query<&Waste>,
     counts: Res<WasteCounts>,
     mut last_future_end: Local<Option<u64>>,
@@ -732,7 +747,7 @@ fn render(
             .replace_range(index..=index, "#");
     }
 
-    let mut bevy_version = format!("{:04}", counts.score());
+    let mut bevy_version = format!("{:04}", time_and_counts.score());
     bevy_version.insert(3, '.');
     bevy_version.insert(1, '.');
 
@@ -772,7 +787,7 @@ fn render(
 
     let blink = (meta.now() / 8) % 2 == 0;
     if lost < 10 {
-        if counts.score() < WINNING_BEVY_VERSION {
+        if time_and_counts.score() < WINNING_BEVY_VERSION {
             println!("LEFT: forward log, pause at end                  UP: exit log and resume");
             println!("RIGHT: backward log, pause at end                DOWN: pause");
         } else {
