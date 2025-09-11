@@ -5,11 +5,7 @@ use std::{
 };
 
 use bevy::{
-    ecs::{
-        error::BevyError,
-        resource::Resource,
-        world::World,
-    },
+    ecs::{error::BevyError, resource::Resource, world::World},
     log::info,
     reflect::Reflect,
 };
@@ -477,7 +473,8 @@ impl RevMeta {
     ) -> PreUpdateVariant {
         self.past_len_limits.update_past_len_state(
             state,
-            self.now == last_update,
+            self.now == last_update, // reicht nicht aus, 
+            // vorwärts, vorwärts (missed), dann zurück, hat den gleichen frame wert aber nicht den gleichen frame
             self.log_exits,
             self.log_clears,
         )

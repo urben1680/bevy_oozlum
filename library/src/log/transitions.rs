@@ -42,8 +42,11 @@ pub type TransitionsDrainFuture<'log, T, U> = TransitionsDrainChunkable<
     U,
 >;
 
-pub type TransitionsDrain<'log, T, U> =
-    TransitionsDrainChunkable<TransitionDrain<'log, T>, TransitionDrain<'log, TransitionsLogUpdate<U>>, U>;
+pub type TransitionsDrain<'log, T, U> = TransitionsDrainChunkable<
+    TransitionDrain<'log, T>,
+    TransitionDrain<'log, TransitionsLogUpdate<U>>,
+    U,
+>;
 
 impl<'log, T, U> TransitionsDrains<'log, T, U> {
     pub fn past<'a>(&'a mut self) -> TransitionsDrainPast<'a, 'log, T, U> {
@@ -83,12 +86,9 @@ where
     UI: Iterator<Item = TransitionsLogUpdate<U>>,
 {
     pub fn next_update<'a>(&'a mut self) -> Option<(core::iter::Take<&'a mut TI>, U)> {
-        self.updates.next().map(|update| {
-            (
-                self.transitions.by_ref().take(update.amount),
-                update.update,
-            )
-        })
+        self.updates
+            .next()
+            .map(|update| (self.transitions.by_ref().take(update.amount), update.update))
     }
 }
 
@@ -367,7 +367,9 @@ mod test {
                         let drain = self.with_past_drain.pre_update_drain(meta);
                         assert_eq!(drain.all().to_tuples(), []);
                         assert_eq!(
-                            self.with_past_drain.forward_log().map(TransitionLogUpdateMut::to_tuple),
+                            self.with_past_drain
+                                .forward_log()
+                                .map(TransitionLogUpdateMut::to_tuple),
                             Ok(get.clone())
                         );
 
@@ -385,7 +387,9 @@ mod test {
                 Err(OutOfLog) => {
                     self.meta.update_ref(Ok(false), |_, _| ());
                     assert_eq!(
-                        self.with_past_drain.forward_log().map(TransitionLogUpdateMut::to_tuple),
+                        self.with_past_drain
+                            .forward_log()
+                            .map(TransitionLogUpdateMut::to_tuple),
                         Err(OutOfLog)
                     );
                     assert_eq!(

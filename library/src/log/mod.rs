@@ -13,8 +13,9 @@ pub use transition::{
     TransitionDrain, TransitionDrainFuture, TransitionDrainPast, TransitionDrains, TransitionLog,
 };
 pub use transitions::{
-    TransitionsLogUpdate, LogMut, TransitionsDrain, TransitionsDrainChunkable, TransitionsDrainFuture,
-    TransitionsDrainPast, TransitionsDrains, TransitionsLog, TransitionLogUpdateMut,
+    LogMut, TransitionLogUpdateMut, TransitionsDrain, TransitionsDrainChunkable,
+    TransitionsDrainFuture, TransitionsDrainPast, TransitionsDrains, TransitionsLog,
+    TransitionsLogUpdate,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -29,10 +30,7 @@ pub struct OutOfLog;
 
 impl Display for OutOfLog {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "a log was traversed beyond its bounds"
-        )
+        write!(f, "a log was traversed beyond its bounds")
     }
 }
 

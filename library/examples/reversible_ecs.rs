@@ -2,7 +2,9 @@ use std::{io::stdout, num::NonZeroU64, time::Duration};
 
 use bevy::{
     app::App,
-    ecs::{entity::EntityHashSet, lifecycle::HookContext, system::SystemParam, world::DeferredWorld},
+    ecs::{
+        entity::EntityHashSet, lifecycle::HookContext, system::SystemParam, world::DeferredWorld,
+    },
     prelude::*,
 };
 
@@ -44,7 +46,6 @@ meta.now()        == 00028                       meta.len()        == 59
 meta.future_end() == 00058                       meta.future_len() == 30
 
 */
-
 
 fn main() {
     // Ignore this, not imporant for the reversible ECS showcase but for this app.
@@ -131,7 +132,9 @@ fn main() {
         // Init and insert some resources, we want the reversible systems to run every 0.1 seconds.
         .init_resource::<KeysPressed>()
         .init_resource::<WasteCounts>()
-        .insert_resource(Time::<Fixed>::from_duration(score_to_duration(CURRENT_BEVY_VERSION as u64)))
+        .insert_resource(Time::<Fixed>::from_duration(score_to_duration(
+            CURRENT_BEVY_VERSION as u64,
+        )))
         .run();
 }
 
@@ -165,7 +168,7 @@ struct WasteCounts {
 #[derive(SystemParam)]
 struct TimeAndCounts<'w> {
     time: ResMut<'w, Time<Fixed>>,
-    counts: ResMut<'w, WasteCounts>
+    counts: ResMut<'w, WasteCounts>,
 }
 
 impl<'w> TimeAndCounts<'w> {

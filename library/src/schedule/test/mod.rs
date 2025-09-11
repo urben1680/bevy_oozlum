@@ -212,10 +212,7 @@ fn non_exclusive_system<const N: u8>(
     non_exclusive_system_commands_only::<N>(meta, commands);
 }
 
-fn non_exclusive_system_commands_only<const N: u8>(
-    meta: Res<RevMeta>,
-    mut commands: Commands,
-) {
+fn non_exclusive_system_commands_only<const N: u8>(meta: Res<RevMeta>, mut commands: Commands) {
     if meta.running_direction().is_log() {
         return;
     }
