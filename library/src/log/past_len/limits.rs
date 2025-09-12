@@ -1,47 +1,183 @@
-use std::{fmt::Debug, num::NonZeroU32, sync::atomic::AtomicU32};
-
+use std::{fmt::Debug, sync::atomic::AtomicU32};
 use bevy::{ecs::change_detection::MaybeLocation, reflect::Reflect, utils::Parallel};
-
-use crate::log::PreUpdateVariant;
+use nonmax::NonMaxU32;
+use super::PreUpdateVariant;
 
 /// Part of [`RevMeta`](crate::meta::RevMeta) that keeps track of [`PastLenLog`](super::PastLenLog)
 /// updates and reports when such an update was expected for a present frame but did not happen.
-#[derive(Reflect)]
+#[derive(Reflect, Default)]
 pub(crate) struct PastLenLogLimits {
     /// Amount of [`PastLenLog`](super::PastLenLog) currently known to this struct
     past_len_ids: AtomicU32,
 
+    /// The locals contain 2D vectors:
+    /// 
+    /// - the outer vector's index represents with which [`PastLenState::updates_this_frame`] value
+    /// limits were pushed
+    /// - the inner vector contains all limits to said `updates_this_frame`
     #[reflect(ignore)]
-    past_len_updates: Parallel<Vec<Vec<(u32, PastLenLimits)>>>,
+    past_len_updates: Parallel<Vec<Vec<(NonMaxU32, PastLenLimits)>>>,
 
     /// The most recent limits per [`PastLenLog`](super::PastLenLog), their [PastLenState::id] is
     /// represented by the index in this vector.
     past_len_limits: Vec<PastLenLimits>,
 }
 
-/// An bundling type for the state and the limits of an [`PastLenLog`](super::PastLenLog) update.
-#[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq)]
-struct PastLenUpdate {
-    state: PastLenState,
-    limits: PastLenLimits,
+impl Debug for PastLenLogLimits {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PastLenLogLimits")
+            .field("past_len_ids", &self.past_len_ids)
+            .field("past_len_limits", &self.past_len_limits)
+            .finish_non_exhaustive()
+    }
+}
+
+impl PastLenLogLimits {
+    /// Update the given [`PastLenState`] or init it if its `None`.
+    ///
+    /// Return which operation the owning [`PastLenlog`](super::PastLenLog) has to do before any
+    /// other mutation.
+    pub(crate) fn update_past_len_state(
+        &self,
+        state: &mut Option<PastLenState>,
+        updated_this_frame_again: bool,
+        global_log_exits: u64,
+        global_log_clears: u64,
+    ) -> PreUpdateVariant {
+        let new_state = || {
+            let id = self
+                .past_len_ids
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let id = NonMaxU32::new(id).expect("exhausted maximum number of PastLenLog");
+            PastLenState {
+                id,
+                updates_this_frame: 0,
+                global_log_exits,
+                global_log_clears,
+            }
+        };
+        match state {
+            Some(state) => {
+                if state.global_log_clears < global_log_clears {
+                    // meta was cleared in the meantime
+                    *state = new_state();
+                    PreUpdateVariant::RemoveLog
+                } else if state.global_log_exits < global_log_exits {
+                    // meta ran at not-log in the meantime
+                    state.updates_this_frame = 0;
+                    state.global_log_exits = global_log_exits;
+                    PreUpdateVariant::RemoveFuture
+                } else if updated_this_frame_again {
+                    // this log updated this frame previously
+                    state.updates_this_frame = state.updates_this_frame.checked_add(1).unwrap();
+                    PreUpdateVariant::Nothing
+                } else {
+                    // this log updates for the first time this frame
+                    state.updates_this_frame = 0;
+                    PreUpdateVariant::Nothing
+                }
+            }
+            None => {
+                // init state, no further operation as it starts empty
+                *state = Some(new_state());
+                PreUpdateVariant::Nothing
+            }
+        }
+    }
+
+    /// Forget all limits and any [`PastLenlog`](super::PastLenLog) that did register so far.
+    ///
+    /// `PastLenLog`s have to reregister themselves with a new [`PastLenState`].
+    pub(crate) fn clear(&mut self) {
+        self.past_len_ids = AtomicU32::new(0);
+        self.past_len_updates
+            .iter_mut()
+            .flatten()
+            .for_each(Vec::clear);
+        self.past_len_limits.clear();
+    }
+
+    /// Update internal list of [`PastLenLimits`] with new updates and check if `now` is breaching
+    /// any of the limits.
+    pub(crate) fn check_past_len_limits(
+        &mut self,
+        now: u64,
+        log: bool,
+    ) -> Result<(), Vec<PastLenLogMissed>> {
+        // size up past_len_limits if new PastLenLogs updated since the last call of this
+        self.past_len_limits.resize(
+            *self.past_len_ids.get_mut() as usize,
+            PastLenLimits {
+                // in case a new PastLenLog called update_past_len_state but not
+                // push_past_len_update, these bounds need to be infallible
+                past: u64::MIN,
+                future: u64::MAX,
+
+                // if an error points to this, something went wrong internally
+                last_update: MaybeLocation::caller(),
+            },
+        );
+
+        // update limits of PastLenLog instances that updated since the last call of this
+        let iter = UpdatesIter {
+            past_len_updates: &mut self.past_len_updates,
+            skip_locals: 0,
+            updates_this_frame: 0,
+        };
+        for (index, limits) in iter {
+            // if a PastLenLog pushed more than one limit, the most recent determines the limits,
+            // so if one of the updates in a log frame was missed, this will error later below
+            self.past_len_limits[index] = limits;
+        }
+
+        if log {
+            // check limits of all known PastLenLog instances
+            let mut past_len_logs_missed = Vec::new();
+            for (index, limits) in self.past_len_limits.iter().enumerate() {
+                if now < limits.past || now > limits.future {
+                    past_len_logs_missed.push(PastLenLogMissed {
+                        id: index as u32,
+                        last_update: limits.last_update,
+                    });
+                }
+            }
+            if past_len_logs_missed.is_empty() {
+                Ok(())
+            } else {
+                Err(past_len_logs_missed)
+            }
+        } else {
+            // unset future limits because logs just were or will be truncated from their future
+            self.past_len_limits
+                .iter_mut()
+                .for_each(|limit| limit.future = u64::MAX);
+            Ok(())
+        }
+    }
+
+    /// Update the logged [`PastLenLimits`] associated to this `state` with the given `limits`.
+    pub(super) fn push_past_len_update(&self, state: PastLenState, limits: PastLenLimits) {
+        let v = &mut *self.past_len_updates.borrow_local_mut();
+        let updates_this_frame = state.updates_this_frame as usize;
+        let new_len = v.len().max(updates_this_frame + 1);
+        v.resize(new_len, Vec::new());
+        v[updates_this_frame].push((state.id, limits));
+    }
 }
 
 /// The state of a [`PastLenLog`](super::PastLenLog) that is needed to report [`PastLenLimit`]
 /// and to react on log exits/clears.
-#[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct PastLenState {
     /// Unique id of a [`PastLenLog`](super::PastLenLog) to keep track how many logs are out there
     /// to reserve them space in [`PastLenLogLimits::past_len_limits`]. May change when
     /// [`RevMeta`](crate::meta::RevMeta) is [cleared](crate::meta::RevQueue::Clear).
-    pub(super) id: u32,
+    ///
+    /// Is `NonMax` to offer a niche since `Self` is stored in an `Option` at `PastLenLog`.
+    pub(super) id: NonMaxU32,
 
     /// Counts how many times a log was updated in this frame.
-    ///
-    /// Note that, despire being a `NonZero` type, the minimum value indeed represents zero updates.
-    /// What is important is that [`PastLenLimit`] updates can be ordered chronologically with this
-    /// value. The NonZero type only offers a niche since this struct is stored in an `Option` in
-    /// [`PastLenLog`](super::PastLenLog).
-    updates_this_frame: NonZeroU32,
+    updates_this_frame: u32,
 
     /// Contains the most recent count of log exits that was witnessed by an
     /// [`PastLenLog`](super::PastLenLog).
@@ -104,12 +240,66 @@ impl PastLenLimits {
     /// [`RevDirection::BackwardLog`](crate::meta::RevDirection::BackwardLog) update.
     ///
     /// Restricts [`RevMeta::now`](crate::meta::RevMeta::now) to not go below `past` or above
-    /// `future`, unless during [`RevDirection::NOT_LOG`](crate::meta::RevDirection::NOT_LOG).
+    /// `future`, except during [`RevDirection::NOT_LOG`](crate::meta::RevDirection::NOT_LOG).
     pub(crate) fn new_log(past: u64, future: u64, caller: MaybeLocation) -> Self {
         Self {
             past,
             future,
             last_update: caller,
+        }
+    }
+}
+
+/// Iterator that pops all newly queued [`PastLenLimits`].
+///
+/// Makes sure the limits are yielded in chronological order for each log.
+struct UpdatesIter<'a> {
+    /// The queued limits
+    past_len_updates: &'a mut Parallel<Vec<Vec<(NonMaxU32, PastLenLimits)>>>,
+
+    /// The [`Parallel`] locals that can be skipped because they contain no more [`PastLenLimits`]
+    /// for the current [`Self::updates_this_frame`].
+    skip_locals: usize,
+
+    /// The [`PastLenState::updates_this_frame`] value that was present for the [`PastLenLimits`]
+    /// which are currently returned by the iterator.
+    updates_this_frame: usize,
+}
+
+impl<'a> UpdatesIter<'a> {
+    /// Pop the next item for the current [`Self::updates_this_frame`].
+    fn pop(&mut self) -> Option<(usize, PastLenLimits)> {
+        self.past_len_updates
+            .iter_mut()
+            .skip(self.skip_locals)
+            .flat_map(|local| {
+                let update = local.get_mut(self.updates_this_frame).and_then(Vec::pop);
+                if update.is_none() {
+                    // if this local exhausted limits for this updates_this_frame, skip it the next
+                    // time this method is called
+                    self.skip_locals += 1;
+                }
+                update
+            })
+            .next()
+            .map(|(id, limits)| (id.get() as usize, limits))
+    }
+}
+
+impl<'a> Iterator for UpdatesIter<'a> {
+    type Item = (usize, PastLenLimits);
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.pop() {
+            Some(index_and_limit) => Some(index_and_limit),
+            None => {
+                // Try to get an update of the next higher updates_this_frame. If this still yields
+                // None then all updates are drained as there would be no gap of updates. A log that
+                // updated for the nth time surely updated for the (n-1)th time before if n is > 0.
+                // See also the comment in `RevMeta::update_past_len_state`.
+                self.skip_locals = 0;
+                self.updates_this_frame += 1;
+                self.pop()
+            }
         }
     }
 }
@@ -127,174 +317,13 @@ pub struct PastLenLogMissed {
     pub last_update: MaybeLocation,
 }
 
-impl Debug for PastLenLogLimits {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("PastLenLimits")
-            .field("past_len_ids", &self.past_len_ids)
-            .field("past_len_limits", &self.past_len_limits)
-            .finish_non_exhaustive()
-    }
-}
-
-struct UpdatesIter<'a> {
-    past_len_updates: &'a mut Parallel<Vec<Vec<(u32, PastLenLimits)>>>,
-    updates_this_frame: usize,
-}
-
-impl<'a> UpdatesIter<'a> {
-    fn pop(&mut self) -> Option<(u32, PastLenLimits)> {
-        self.past_len_updates
-            .iter_mut()
-            .flat_map(|local| local.get_mut(self.updates_this_frame))
-            .flat_map(|updates| updates.pop())
-            .next()
-    }
-}
-
-impl<'a> Iterator for UpdatesIter<'a> {
-    type Item = (u32, PastLenLimits);
-    fn next(&mut self) -> Option<Self::Item> {
-        match self.pop() {
-            Some(id_and_limit) => Some(id_and_limit),
-            None => {
-                // try to get an update of the next higher updates_this_frame, if this still yields
-                // None then all updates are drained as there would be no gap of updates, a log that
-                // updated for the nth time surely updated for the (n-1)th time before if n is > 0
-                self.updates_this_frame += 1;
-                self.pop()
-
-                // todo: make sure each frame the count of a log is reset as otherwise the above is
-                // not correct
-            }
-        }
-    }
-}
-
-impl PastLenLogLimits {
-    pub(crate) fn new() -> Self {
-        Self {
-            past_len_ids: AtomicU32::new(0),
-            past_len_updates: Parallel::default(),
-            past_len_limits: Vec::new(),
-        }
-    }
-    pub(crate) fn update_past_len_state(
-        &self,
-        state: &mut Option<PastLenState>,
-        updated_this_frame_again: bool,
-        global_log_exits: u64,
-        global_log_clears: u64,
-    ) -> PreUpdateVariant {
-        let new_state = || {
-            let id = self
-                .past_len_ids
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            PastLenState {
-                id,
-                updates_this_frame: NonZeroU32::MIN,
-                global_log_exits,
-                global_log_clears,
-            }
-        };
-        match state {
-            Some(state) => {
-                if state.global_log_clears < global_log_clears {
-                    *state = new_state();
-                    PreUpdateVariant::RemoveLog
-                } else if state.global_log_exits < global_log_exits {
-                    state.updates_this_frame = NonZeroU32::MIN;
-                    state.global_log_exits = global_log_exits;
-                    PreUpdateVariant::RemoveFuture
-                } else if updated_this_frame_again { // todo: this might need extra case
-                    state.updates_this_frame = state.updates_this_frame.checked_add(1).unwrap();
-                    PreUpdateVariant::Nothing
-                } else {
-                    state.updates_this_frame = NonZeroU32::MIN;
-                    PreUpdateVariant::Nothing
-                }
-            }
-            None => {
-                *state = Some(new_state());
-                PreUpdateVariant::Nothing
-            }
-        }
-    }
-    pub(crate) fn clear(&mut self) {
-        self.past_len_ids = AtomicU32::new(0);
-        self.past_len_updates.iter_mut().for_each(Vec::clear);
-        self.past_len_limits.clear();
-    }
-    pub(crate) fn check_past_len_limits(
-        &mut self,
-        now: u64,
-        log: bool,
-    ) -> Result<(), Vec<PastLenLogMissed>> {
-        // size up self.past_len_limits if new PastLenLogs updated in the closure
-        self.past_len_limits.resize(
-            *self.past_len_ids.get_mut() as usize,
-            PastLenLimits {
-                // in case a PastLenLog inits its state without mutating afterwards, make these
-                // bounds infallible
-                past: u64::MIN,
-                future: u64::MAX,
-
-                // if an error points to this, something went wrong internally
-                last_update: MaybeLocation::caller(),
-            },
-        );
-
-        // update limits of PastLenLog instances that updated in the closure
-        let iter = UpdatesIter {
-            past_len_updates: &mut self.past_len_updates,
-            updates_this_frame: 0
-        };
-        for (internal_id, limits) in iter {
-            // if a PastLenLog pushed more than one limit, the most recent determines the limits,
-            // so if one of the updates in a log frame was missed, this will cause an error
-            self.past_len_limits[internal_id as usize] = limits;
-        }
-
-        if log {
-            // check limits of all PastLenLog instances
-            let mut past_len_logs_missed = Vec::new();
-            for (index, limits) in self.past_len_limits.iter().enumerate() {
-                let internal_id = index as u32;
-                if now < limits.past || now > limits.future {
-                    past_len_logs_missed.push(PastLenLogMissed {
-                        id: internal_id,
-                        last_update: limits.last_update,
-                    });
-                }
-            }
-            if past_len_logs_missed.is_empty() {
-                Ok(())
-            } else {
-                Err(past_len_logs_missed)
-            }
-        } else {
-            // unset future limits because logs just were or will be truncated
-            self.past_len_limits
-                .iter_mut()
-                .for_each(|limit| limit.future = u64::MAX);
-            Ok(())
-        }
-    }
-    pub(super) fn push_past_len_update(&self, state: PastLenState, limits: PastLenLimits) {
-        let v = &mut *self.past_len_updates.borrow_local_mut();
-        let updates_this_frame = state.updates_this_frame.get() as usize - 1;
-        let new_len = v.len().max(updates_this_frame);
-        v.resize(new_len, Vec::new());
-        v[updates_this_frame].push((state.id, limits));
-    }
-}
-
 #[cfg(test)]
 mod test {
     use super::*;
 
     #[test]
     fn updates_state() {
-        let mut limits = PastLenLogLimits::new();
+        let mut limits = PastLenLogLimits::default();
         let mut state = None;
 
         // initial set gives Nothing variant
@@ -303,8 +332,8 @@ mod test {
         assert_eq!(
             state,
             Some(PastLenState {
-                id: 0,
-                updates_this_frame: NonZeroU32::MIN,
+                id: NonMaxU32::ZERO,
+                updates_this_frame: 0,
                 global_log_exits: 0,
                 global_log_clears: 0,
             })
@@ -316,8 +345,8 @@ mod test {
         assert_eq!(
             state,
             Some(PastLenState {
-                id: 0,
-                updates_this_frame: NonZeroU32::new(2).unwrap(),
+                id: NonMaxU32::ZERO,
+                updates_this_frame: 1,
                 global_log_exits: 0,
                 global_log_clears: 0,
             })
@@ -329,8 +358,8 @@ mod test {
         assert_eq!(
             state,
             Some(PastLenState {
-                id: 0,
-                updates_this_frame: NonZeroU32::MIN,
+                id: NonMaxU32::ZERO,
+                updates_this_frame: 0,
                 global_log_exits: 0,
                 global_log_clears: 0,
             })
@@ -343,8 +372,8 @@ mod test {
         assert_eq!(
             state,
             Some(PastLenState {
-                id: 0,
-                updates_this_frame: NonZeroU32::new(2).unwrap(),
+                id: NonMaxU32::ZERO,
+                updates_this_frame: 1,
                 global_log_exits: 0,
                 global_log_clears: 0,
             })
@@ -356,8 +385,8 @@ mod test {
         assert_eq!(
             state,
             Some(PastLenState {
-                id: 0,
-                updates_this_frame: NonZeroU32::MIN,
+                id: NonMaxU32::ZERO,
+                updates_this_frame: 0,
                 global_log_exits: 1,
                 global_log_clears: 0,
             })
@@ -370,8 +399,8 @@ mod test {
         assert_eq!(
             state,
             Some(PastLenState {
-                id: 0,
-                updates_this_frame: NonZeroU32::new(2).unwrap(),
+                id: NonMaxU32::ZERO,
+                updates_this_frame: 1,
                 global_log_exits: 1,
                 global_log_clears: 0,
             })
@@ -384,8 +413,8 @@ mod test {
         assert_eq!(
             state,
             Some(PastLenState {
-                id: 0,
-                updates_this_frame: NonZeroU32::MIN,
+                id: NonMaxU32::ZERO,
+                updates_this_frame: 0,
                 global_log_exits: 1,
                 global_log_clears: 1,
             })
@@ -399,8 +428,8 @@ mod test {
         assert_eq!(
             state,
             Some(PastLenState {
-                id: 1,
-                updates_this_frame: NonZeroU32::MIN,
+                id: NonMaxU32::ONE,
+                updates_this_frame: 0,
                 global_log_exits: 2,
                 global_log_clears: 2,
             })
@@ -409,7 +438,7 @@ mod test {
 
     #[test]
     fn push_and_assert_limits() {
-        let mut limits = PastLenLogLimits::new();
+        let mut limits = PastLenLogLimits::default();
 
         // add a past limit of 1
         let mut past_state = None;
@@ -430,7 +459,7 @@ mod test {
         // 0 is breaching the past limit
         let result = limits.check_past_len_limits(0, true);
         let past_missed = Err(vec![PastLenLogMissed {
-            id: past_state.unwrap().id,
+            id: past_state.unwrap().id.get(),
             last_update: past_limit.last_update,
         }]);
         assert_eq!(result, past_missed);
@@ -438,7 +467,7 @@ mod test {
         // 2 is breaching the future limit
         let result = limits.check_past_len_limits(2, true);
         let future_missed = Err(vec![PastLenLogMissed {
-            id: future_state.unwrap().id,
+            id: future_state.unwrap().id.get(),
             last_update: future_limit.last_update,
         }]);
         assert_eq!(result, future_missed);

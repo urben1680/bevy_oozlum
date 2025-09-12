@@ -128,7 +128,7 @@ impl RevMeta {
             queue: None,
             log_exits: 0,
             log_clears: 0,
-            past_len_limits: PastLenLogLimits::new(),
+            past_len_limits: PastLenLogLimits::default(),
         }
     }
     #[cfg(test)]
@@ -142,7 +142,7 @@ impl RevMeta {
             queue: None,
             log_exits: 0,
             log_clears: 0,
-            past_len_limits: PastLenLogLimits::new(),
+            past_len_limits: PastLenLogLimits::default(),
         }
     }
     pub fn set_queue(&mut self, queue: RevQueue) {
@@ -471,10 +471,25 @@ impl RevMeta {
         state: &mut Option<PastLenState>,
         last_update: u64,
     ) -> PreUpdateVariant {
+        // Determining that a `PastLenLog` did not run yet this frame is sufficiently done this way.
+        // Such a log may result in this being true despite not having run this frame, but only if
+        // it previously missed a frame to update at before. At that point the user should already
+        // have been notified about that via an `RevMetaUpdateErr` through bevy's error handling.
+        // An example for this:
+        // 1. the log updates at non-log frame X
+        // 2. the log does not update at non-log frame X+1
+        // 3. now we undo the previous frame, Self::now returns X again but the log has no update to
+        //    undo so resetting the update count in the given `PastLenState` is not important
+        // 4. going back further, at X-1, the log undoes the update from 1. and the below evaluates
+        //    to false, resetting the update count in the given `PastLenState`
+        // 5. if 4. did not update the log, going forward in log now may incorrectly evaluates the
+        //    below to true, but the missed frame in 4. was already noticed and reported
+        // See also the comment in `UpdatesIter::next` in the `past_len` module.
+        let updated_this_frame = self.now == last_update;
+
         self.past_len_limits.update_past_len_state(
             state,
-            self.now == last_update, // reicht nicht aus, 
-            // vorwärts, vorwärts (missed), dann zurück, hat den gleichen frame wert aber nicht den gleichen frame
+            updated_this_frame,
             self.log_exits,
             self.log_clears,
         )

@@ -1,4 +1,5 @@
 use crate::{log::PreUpdateVariant, meta::RevMeta};
+use bevy::ecs::change_detection::MaybeLocation;
 use core::fmt::Debug;
 use std::{
     cmp::Ordering,
@@ -6,10 +7,9 @@ use std::{
     fmt::Display,
 };
 
-pub(crate) mod limits;
+pub(super) mod limits;
 mod offset;
 
-use bevy::ecs::change_detection::MaybeLocation;
 use limits::*;
 use offset::*;
 
@@ -68,7 +68,7 @@ use offset::*;
 /// # use bevy::prelude::*;
 /// # use bevy::ecs::error::Result;
 /// # use bevy_oozlum::prelude::*;
-/// # use bevy_oozlum::log::DenseTransitionLog;
+/// # use bevy_oozlum::log::TransitionLog;
 /// # use bevy_oozlum::log::PastLenLog;
 /// # #[derive(BufferedEvent, Clone)]
 /// # struct MyEvent;
@@ -76,14 +76,14 @@ use offset::*;
 ///     meta: Res<RevMeta>,
 ///     mut events: EventReader<MyEvent>,
 ///     mut past_len_log: Local<PastLenLog>,
-///     mut events_log: Local<DenseTransitionLog<MyEvent>>,
+///     mut events_log: Local<TransitionLog<MyEvent>>,
 /// ) -> Result {
+///     // always call pre_update before further mutations
+///     past_len_log.pre_update(&meta);
+///     events_log.pre_update(&meta);
+///
 ///     match meta.running_direction() {
 ///         RevDirection::NOT_LOG => {
-///             // always truncate the future of the logs in case there are no events
-///             past_len_log.truncate_future(&meta)?;
-///             events_log.drain_future();
-///
 ///             // there may be 0, 1 or more events per system run
 ///             for my_event in events.read() {
 ///                 // use event
@@ -92,7 +92,7 @@ use offset::*;
 ///                 // minimum amount of events to go back and forth to any point of the global
 ///                 // log and not a single event more
 ///                 let past_len = past_len_log.update_and_get_past_len(&meta)?;
-///                 events_log.push_and_drain_past(past_len, my_event.clone());
+///                 events_log.push_and_truncate_past(past_len, my_event.clone());
 ///             }
 ///         }
 ///         RevDirection::FORWARD_LOG => {
@@ -192,18 +192,12 @@ impl Display for PastLenLog {
     }
 }
 
-macro_rules! bytes_len_disclaimer {
-    () => {
-        "\nNote that the number of bytes have no relation to the length of the log."
-    };
-}
-
 impl PastLenLog {
     /// Creates an empty log.
     pub const fn new() -> Self {
         Self {
             offset_bytes: VecDeque::new(),
-            out_of_or_past_end_log: 0, // the minimum frame RevUpdate can go forward at is 1
+            out_of_or_past_end_log: 0,
             last_update: 0,
             index: 0,
             past_len: 0,
@@ -216,7 +210,8 @@ impl PastLenLog {
     /// Creates an empty log with space for at least `bytes_capacity` bytes.
     ///
     /// See [`VecDeque::with_capacity`].
-    #[doc = bytes_len_disclaimer!()]
+    /// 
+    /// Note that the number of bytes have no relation to the length of the log.
     pub fn with_capacity(bytes_capacity: usize) -> Self {
         Self {
             offset_bytes: VecDeque::with_capacity(bytes_capacity),
@@ -227,7 +222,8 @@ impl PastLenLog {
     /// Returns the number of bytes in the log.
     ///
     /// See [`VecDeque::len`].
-    #[doc = bytes_len_disclaimer!()]
+    /// 
+    /// Note that the number of bytes have no relation to the length of the log.
     pub fn bytes_len(&self) -> usize {
         self.offset_bytes.len()
     }
@@ -235,7 +231,8 @@ impl PastLenLog {
     /// Returns the number of bytes the log can hold without reallocating.
     ///
     /// See [`VecDeque::capacity`].
-    #[doc = bytes_len_disclaimer!()]
+    /// 
+    /// Note that the number of bytes have no relation to the length of the log.
     pub fn bytes_capacity(&self) -> usize {
         self.offset_bytes.capacity()
     }
@@ -243,7 +240,8 @@ impl PastLenLog {
     /// Returns `true` if the log contains no bytes.
     ///
     /// See [`VecDeque::is_empty`].
-    #[doc = bytes_len_disclaimer!()]
+    /// 
+    /// Note that the number of bytes have no relation to the length of the log.
     pub fn bytes_is_empty(&self) -> bool {
         self.offset_bytes.is_empty()
     }
@@ -251,7 +249,8 @@ impl PastLenLog {
     /// Reserves capacity for at least `additional` more bytes.
     ///
     /// See [`VecDeque::reserve`].
-    #[doc = bytes_len_disclaimer!()]
+    /// 
+    /// Note that the number of bytes have no relation to the length of the log.
     pub fn bytes_reserve(&mut self, additional: usize) {
         self.offset_bytes.reserve(additional)
     }
@@ -259,7 +258,8 @@ impl PastLenLog {
     /// Reserves capacity for at least `additional` more bytes.
     ///
     /// See [`VecDeque::reserve_exact`].
-    #[doc = bytes_len_disclaimer!()]
+    /// 
+    /// Note that the number of bytes have no relation to the length of the log.
     pub fn bytes_reserve_exact(&mut self, additional: usize) {
         self.offset_bytes.reserve_exact(additional)
     }
@@ -267,7 +267,8 @@ impl PastLenLog {
     /// Tries to reserve capacity for at least `additional` more bytes.
     ///
     /// See [`VecDeque::try_reserve`].
-    #[doc = bytes_len_disclaimer!()]
+    /// 
+    /// Note that the number of bytes have no relation to the length of the log.
     pub fn bytes_try_reserve(&mut self, additional: usize) -> Result<(), TryReserveError> {
         self.offset_bytes.try_reserve(additional)
     }
@@ -275,7 +276,8 @@ impl PastLenLog {
     /// Tries to reserve capacity for at least `additional` more bytes.
     ///
     /// See [`VecDeque::try_reserve_exact`].
-    #[doc = bytes_len_disclaimer!()]
+    /// 
+    /// Note that the number of bytes have no relation to the length of the log.
     pub fn bytes_try_reserve_exact(&mut self, additional: usize) -> Result<(), TryReserveError> {
         self.offset_bytes.try_reserve_exact(additional)
     }
@@ -283,7 +285,8 @@ impl PastLenLog {
     /// Shrinks the capacity of the log with a lower bound.
     ///
     /// See [`VecDeque::shrink_to`].
-    #[doc = bytes_len_disclaimer!()]
+    /// 
+    /// Note that the number of bytes have no relation to the length of the log.
     pub fn bytes_shrink_to(&mut self, min_capacity: usize) {
         self.offset_bytes.shrink_to(min_capacity)
     }
@@ -291,13 +294,63 @@ impl PastLenLog {
     /// Shrinks the capacity of the log as much as possible.
     ///
     /// See [`VecDeque::shrink_to_fit`].
-    #[doc = bytes_len_disclaimer!()]
+    /// 
+    /// Note that the number of bytes have no relation to the length of the log.
     pub fn bytes_shrink_to_fit(&mut self) {
         self.offset_bytes.shrink_to_fit()
     }
 
     pub fn id(&self) -> Option<u32> {
-        self.update_state.map(|state| state.id)
+        self.update_state.map(|state| state.id.get())
+    }
+
+    pub fn updated_at(&self) -> impl Iterator<Item = u64> + '_ {
+        struct Iter<'a> {
+            offsets: OffsetIter<'a>,
+            frame: u64,
+            zeroes: u8,
+            zeroes_max: u8
+        }
+
+        impl Iterator for Iter<'_> {
+            type Item = u64;
+            fn next(&mut self) -> Option<Self::Item> {
+                if self.zeroes > 0 {
+                    self.zeroes -= 1;
+                    return Some(self.frame);
+                }
+                match self.offsets.next() {
+                    Some(IterItem { offset: 0, len }) => {
+                        self.zeroes = len.get() - 1;
+                        Some(self.frame)
+                    }
+                    Some(IterItem { offset, .. }) => {
+                        self.zeroes = 0;
+                        self.frame += offset;
+                        Some(self.frame)
+                    }
+                    None if self.zeroes_max > 0 => {
+                        self.zeroes_max -= 1;
+                        Some(self.frame)
+                    }
+                    None => None
+                }
+            }
+            fn size_hint(&self) -> (usize, Option<usize>) {
+                let (mut min, mut max) = self.offsets.size_hint();
+                let zeroes_max = self.zeroes_max as usize;
+                min = min.saturating_add(zeroes_max);
+                max = max.and_then(|max| max.checked_add(zeroes_max));
+                (min, max)
+            }
+        }
+
+        Iter {
+            offsets: OffsetIter(self.offset_bytes.iter()),
+            frame: self.out_of_or_past_end_log,
+            zeroes: 0,
+            zeroes_max: self.zeroes_max
+        }
     }
 
     /// Update the log which does the following:
@@ -723,7 +776,7 @@ mod test {
         }
         fn new_missed(&self) -> PastLenLogMissed {
             PastLenLogMissed {
-                id: self.past_len_log.update_state.unwrap().id,
+                id: self.past_len_log.update_state.unwrap().id.get(),
                 last_update: self.last_update,
             }
         }

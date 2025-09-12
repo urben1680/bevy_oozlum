@@ -190,9 +190,9 @@ impl Iterator for OffsetIter<'_> {
         let min = len.div_ceil(10);
 
         // up to 65 zeroes can be stored in a byte
-        let max = len.saturating_mul(MAX_ZEROES_PER_BYTE as usize);
+        let max = len.checked_mul(MAX_ZEROES_PER_BYTE as usize);
 
-        (min, Some(max))
+        (min, max)
     }
 }
 
