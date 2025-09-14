@@ -666,6 +666,8 @@ impl BundleIdOfOpCache {
             let archetype = world.archetypes().get(archetype_id).unwrap();
             let components: Vec<_> = archetype
                 .components()
+                .iter()
+                .copied()
                 .filter(|component_id| !bundle_components.contains(component_id))
                 .collect();
             if components.is_empty() {

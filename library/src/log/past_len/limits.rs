@@ -1,3 +1,17 @@
+//! This module contains [`PastLenLogLimits`], a central part of [`RevMeta`](crate::meta::RevMeta).
+//! 
+//! [`PastLenLog`](super::PastLenLog) interacts with that struct in two ways:
+//! 
+//! 1. Updating it's [`PastLenState`] to determine which [`PreUpdateVariant`] is passed to the log
+//!    at [`pre_update`](super::PastLenLog::pre_update).
+//! 2. Receiving [`PastLenLimits`] at
+//!    [`update_and_get_past_len`](super::PastLenLog::update_and_get_past_len),
+//!    [`forward_log`](super::PastLenLog::forward_log) and
+//!    [`backward_log`](super::PastLenLog::backward_log). When `RevMeta` is updating
+//!   `PastLenLogLimits`, an error can be generated if a `PastLenLog` did not updat (often enough)
+//!   at the current frame as it did during
+//!   [`RevDirection::NOT_LOG`](crate::meta::RevDirection::NOT_LOG).
+
 use std::{fmt::Debug, sync::atomic::AtomicU32};
 use bevy::{ecs::change_detection::MaybeLocation, reflect::Reflect, utils::Parallel};
 use nonmax::NonMaxU32;

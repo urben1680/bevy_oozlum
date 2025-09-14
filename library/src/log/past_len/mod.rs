@@ -7,62 +7,33 @@ use std::{
     fmt::Display,
 };
 
-pub(super) mod limits;
-mod offset;
-
 use limits::*;
 use offset::*;
 
+pub(super) mod limits;
+mod offset;
+
 /// A log that keeps track when it was updated and provides an alternative value to
 /// [`RevMeta::past_len`] for when these updates do not happen exactly once per [`RevUpdate`].
+/// 
+/// This usually is accompied by another log that would grow too large if `RevMeta::past_len` was
+/// used when it actually updates much more rarely. Another use case can be when it runs arbitrarily
+/// often per frame and there is no other way to determine how long a log should be when updating.
+/// 
+/// If an update is missed, for example when the scope of the log is behind complicated and
+/// error-prone scheduling and is just not reached when it should, [`RevMeta::try_run_rev_update`]
+/// will detect this and return an error.
 ///
-/// It is generally adviced to not update this from multiple systems as debugging becomes easier
-/// if instead each system has its own `PastLenLog`.
-///
-/// # Examples
-///
-/// This log is usually used next to other [logs] that need a `max_past_len` value to determine
-/// when they can shorten their log entries once these go out of log. These logs do _not_ need
-/// a `PastLenLog` if they get updated exactly once every frame:
-///
-/// ```
-/// # use bevy::prelude::*;
-/// # use bevy::ecs::error::Result;
-/// # use bevy_oozlum::prelude::*;
-/// # use bevy_oozlum::log::DenseStateLog;
-/// # #[derive(Default)]
-/// # struct MyType;
-/// # impl MyType { fn new() -> Self { Self }}
-/// # let mut app = App::new();
-/// app.rev_add_systems(RevUpdate, my_system); // runs once per reversible frame
-///
-/// // needs no PastLenLog
-/// fn my_system(meta: Res<RevMeta>, mut value_log: Local<DenseStateLog<MyType>>) -> Result {
-///     match meta.running_direction() {
-///         RevDirection::Forward { log } => {
-///             if log {
-///                 value_log.forward_log()?;
-///             } else {
-///                 value_log.push_and_pop_past(meta.past_len() as usize, MyType::new());
-///             }
-///             // deref value_log to use value
-///         }
-///         RevDirection::BackwardLog => {
-///             // deref value_log to use value
-///             value_log.backward_log()?;
-///         }
-///     }
-///     Ok(())
-/// }
-/// ```
-///
-/// However, when you intend to update your log less often than that and `MyType` is large enough
-/// that you are concerned with the size if you let it allow to grow up to [`RevMeta::past_len`],
-/// you might want to use a `Sparse*` log instead (see the [logs] module) or add an `PastLenLog`
-/// next to your log.
-///
-/// If you want to update your log more often than once per frame or generally in anarbitrary
-/// manner, you might want to use a `PastLenLog` next to it:
+/// # Example
+/// 
+/// The following system reacts on messages. These may not be written for many frames, but then
+/// again they could appear in a large amount in a single frame. One could use a
+/// [`TransitionsLog`](super::TransitionsLog) for that and just push no messages when there are
+/// none. But if this system in turn could also be used with a run condition, then it is impossible
+/// to pick a good `past_len` value that makes sure not too many messages are drained or the log
+/// grows way beyond what is needed.
+/// 
+/// For that case and other comparable ones, pairing the log with `PastLenLog` fixs this:
 ///
 /// ```
 /// # use bevy::prelude::*;
@@ -70,17 +41,17 @@ use offset::*;
 /// # use bevy_oozlum::prelude::*;
 /// # use bevy_oozlum::log::TransitionLog;
 /// # use bevy_oozlum::log::PastLenLog;
-/// # #[derive(BufferedEvent, Clone)]
-/// # struct MyEvent;
+/// # #[derive(Message, Clone)]
+/// # struct MyMessage;
 /// fn my_system(
 ///     meta: Res<RevMeta>,
-///     mut events: EventReader<MyEvent>,
+///     mut events: MessageReader<MyMessage>,
 ///     mut past_len_log: Local<PastLenLog>,
-///     mut events_log: Local<TransitionLog<MyEvent>>,
+///     mut message_log: Local<TransitionLog<MyMessage>>,
 /// ) -> Result {
 ///     // always call pre_update before further mutations
 ///     past_len_log.pre_update(&meta);
-///     events_log.pre_update(&meta);
+///     message_log.pre_update(&meta);
 ///
 ///     match meta.running_direction() {
 ///         RevDirection::NOT_LOG => {
@@ -88,22 +59,22 @@ use offset::*;
 ///             for my_event in events.read() {
 ///                 // use event
 ///
-///                 // past_len contains just the right value that events_log is shortened the
+///                 // past_len contains just the right value that message_log is shortened the
 ///                 // minimum amount of events to go back and forth to any point of the global
 ///                 // log and not a single event more
-///                 let past_len = past_len_log.update_and_get_past_len(&meta)?;
-///                 events_log.push_and_truncate_past(past_len, my_event.clone());
+///                 let past_len = past_len_log.update_and_get_past_len(&meta);
+///                 message_log.push_and_truncate_past(past_len, my_event.clone());
 ///             }
 ///         }
 ///         RevDirection::FORWARD_LOG => {
-///             while past_len_log.forward_log(&meta)? {
-///                 let my_event = events_log.forward_log()?;
+///             while past_len_log.forward_log(&meta) {
+///                 let my_event = message_log.forward_log()?;
 ///                 // use event
 ///             }
 ///         }
 ///         RevDirection::BackwardLog => {
-///             while past_len_log.backward_log(&meta)? {
-///                 let my_event = events_log.backward_log()?;
+///             while past_len_log.backward_log(&meta) {
+///                 let my_event = message_log.backward_log()?;
 ///                 // use event
 ///             }
 ///         }

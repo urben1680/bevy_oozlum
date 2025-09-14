@@ -56,7 +56,7 @@ impl<T: ReadOnlySystem<In = (), Out = bool>> System for RevCondition<T> {
     fn flags(&self) -> SystemStateFlags {
         self.condition.flags()
     }
-    fn initialize(&mut self, world: &mut World) -> FilteredAccessSet<ComponentId> {
+    fn initialize(&mut self, world: &mut World) -> FilteredAccessSet {
         let mut access = self.condition.initialize(world);
         let meta_id = world.register_resource::<RevMeta>();
         self.meta_id = Some(meta_id);

@@ -1,3 +1,10 @@
+//! This module contains a way to write ([`push_offset`]) and read ([`OffsetIter`]) bytes that
+//! encode how many frames ago was the last update of [`PastLenLog`](super::PastLenLog).
+//! 
+//! This is more compact than storing `usize` instead.
+//! 
+//! An important feature here is that reading from both sides of the deque is possible.
+
 use std::{
     collections::{VecDeque, vec_deque::Iter},
     fmt::Debug,

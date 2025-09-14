@@ -10,7 +10,7 @@ use std::{
 
 use bevy::{
     ecs::{
-        component::{CheckChangeTicks, ComponentId, Tick},
+        component::{CheckChangeTicks, Tick},
         query::FilteredAccessSet,
         schedule::{ApplyDeferred, InternedSystemSet, IntoScheduleConfigs, SystemSet},
         system::{
@@ -176,7 +176,7 @@ struct Inner<T> {
 }
 
 struct AccessCache {
-    access: FilteredAccessSet<ComponentId>,
+    access: FilteredAccessSet,
     last_access: bool,
 }
 
@@ -333,7 +333,7 @@ impl<T: System, const FORWARD: bool> System for RevSystem<T, FORWARD> {
     fn queue_deferred(&mut self, _world: DeferredWorld) {
         unimplemented!("{} used as an observer", std::any::type_name::<T>())
     }
-    fn initialize(&mut self, world: &mut World) -> FilteredAccessSet<ComponentId> {
+    fn initialize(&mut self, world: &mut World) -> FilteredAccessSet {
         let (shared, access) =
             initialize_inner(&mut self.shared, &mut self.tick, &self.name, world);
         self.flags = shared.system.flags();
@@ -484,7 +484,7 @@ impl<T: System> System for CommandsBackward<T> {
     fn default_system_sets(&self) -> Vec<InternedSystemSet> {
         self.shared.default_system_sets.clone()
     }
-    fn initialize(&mut self, world: &mut World) -> FilteredAccessSet<ComponentId> {
+    fn initialize(&mut self, world: &mut World) -> FilteredAccessSet {
         let (shared, access) =
             initialize_inner(&mut self.shared, &mut self.tick, &self.name, world);
         self.has_deferred = shared.system.has_deferred();
@@ -504,7 +504,7 @@ fn initialize_inner<'a, T: System>(
     tick: &mut Tick,
     name: &DebugName,
     world: &mut World,
-) -> (MutexGuard<'a, Inner<T>>, FilteredAccessSet<ComponentId>) {
+) -> (MutexGuard<'a, Inner<T>>, FilteredAccessSet) {
     world.init_resource::<UndoRedoBuffer>();
     *tick = world.change_tick();
     let mut shared = shared.inner.try_lock().unwrap_or_else(expect_lock(name));

@@ -601,7 +601,7 @@ fn rev_log_scope_and_buffer_waste_op(
 fn map_input(
     mut keys: ResMut<KeysPressed>,
     time_and_counts: TimeAndCounts,
-    mut exit: EventWriter<AppExit>,
+    mut exit: MessageWriter<AppExit>,
 ) {
     use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, poll, read};
 

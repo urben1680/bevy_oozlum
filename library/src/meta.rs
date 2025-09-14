@@ -472,9 +472,11 @@ impl RevMeta {
         last_update: u64,
     ) -> PreUpdateVariant {
         // Determining that a `PastLenLog` did not run yet this frame is sufficiently done this way.
-        // Such a log may result in this being true despite not having run this frame, but only if
-        // it previously missed a frame to update at before. At that point the user should already
-        // have been notified about that via an `RevMetaUpdateErr` through bevy's error handling.
+        // Still cases may result in this being true despite not having run this frame, but only if
+        // the log previously missed a frame to update at before. At that point the user should
+        // already have been notified about that via an `RevMetaUpdateErr` through bevy's error
+        // handling.
+        //
         // An example for this:
         // 1. the log updates at non-log frame X
         // 2. the log does not update at non-log frame X+1
@@ -484,6 +486,7 @@ impl RevMeta {
         //    to false, resetting the update count in the given `PastLenState`
         // 5. if 4. did not update the log, going forward in log now may incorrectly evaluates the
         //    below to true, but the missed frame in 4. was already noticed and reported
+        //
         // See also the comment in `UpdatesIter::next` in the `past_len` module.
         let updated_this_frame = self.now == last_update;
 
