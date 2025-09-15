@@ -1,14 +1,14 @@
-//! This module contains [`PastLenLogLimits`], a central part of [`RevMeta`](crate::meta::RevMeta).
+//! This module contains [`PastLenLogLimits`] which is part of [`RevMeta`](crate::meta::RevMeta).
 //! 
 //! [`PastLenLog`](super::PastLenLog) interacts with that struct in two ways:
 //! 
-//! 1. Updating it's [`PastLenState`] to determine which [`PreUpdateVariant`] is passed to the log
-//!    at [`pre_update`](super::PastLenLog::pre_update).
-//! 2. Receiving [`PastLenLimits`] at
+//! 1. Updating [`PastLenState`] in the log to determine which [`PreUpdateVariant`] is returned in
+//!    [`pre_update`](super::PastLenLog::pre_update).
+//! 2. Sending [`PastLenLimits`] at
 //!    [`update_and_get_past_len`](super::PastLenLog::update_and_get_past_len),
 //!    [`forward_log`](super::PastLenLog::forward_log) and
 //!    [`backward_log`](super::PastLenLog::backward_log). When `RevMeta` is updating
-//!   `PastLenLogLimits`, an error can be generated if a `PastLenLog` did not updat (often enough)
+//!   `PastLenLogLimits`, an error can be generated if a `PastLenLog` did not update (often enough)
 //!   at the current frame as it did during
 //!   [`RevDirection::NOT_LOG`](crate::meta::RevDirection::NOT_LOG).
 
@@ -190,16 +190,16 @@ pub(crate) struct PastLenState {
     /// Is `NonMax` to offer a niche since `Self` is stored in an `Option` at `PastLenLog`.
     pub(super) id: NonMaxU32,
 
-    /// Counts how many times a log was updated in this frame.
+    /// Counts how many times this [`PastLenLog`](super::PastLenLog) was updated in this frame.
     updates_this_frame: u32,
 
-    /// Contains the most recent count of log exits that was witnessed by an
+    /// Contains the most recent global count of log exits that was witnessed by this
     /// [`PastLenLog`](super::PastLenLog).
     ///
     /// See [`RevMeta::log_exits`](crate::meta::RevMeta::log_exits).
     global_log_exits: u64,
 
-    /// Contains the most recent count of log clears that was witnessed by an
+    /// Contains the most recent global count of log clears that was witnessed by this
     /// [`PastLenLog`](super::PastLenLog).
     ///
     /// See [`RevMeta::log_clears`](crate::meta::RevMeta::log_clears).
