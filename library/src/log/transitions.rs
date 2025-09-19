@@ -4,6 +4,7 @@ use std::{
         vec_deque::{Drain, IterMut},
     },
     fmt::Debug,
+    iter::FusedIterator,
     marker::PhantomData,
 };
 
@@ -152,7 +153,7 @@ impl<T, U> TransitionsLog<T, U> {
         self.index -= transition_drain;
         (transition_drain, amount_drain)
     }
-    pub fn backward_log(&mut self) -> Result<TransitionLogUpdateMut<IterMut<T>, &mut U>, OutOfLog> {
+    pub fn backward_log(&mut self) -> Result<TransitionLogUpdateMut<T, U>, OutOfLog> {
         let old_index = self.index;
         let update_mut = self.updates.backward_log()?;
         self.index -= update_mut.amount;
@@ -162,7 +163,7 @@ impl<T, U> TransitionsLog<T, U> {
             update: &mut update_mut.update,
         })
     }
-    pub fn forward_log(&mut self) -> Result<TransitionLogUpdateMut<IterMut<T>, &mut U>, OutOfLog> {
+    pub fn forward_log(&mut self) -> Result<TransitionLogUpdateMut<T, U>, OutOfLog> {
         let old_index = self.index;
         let update_mut = self.updates.forward_log()?;
         self.index += update_mut.amount;
@@ -242,19 +243,58 @@ where
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TransitionLogUpdateMut<T, U> {
-    pub transitions: T,
-    pub update: U,
+#[derive(Debug)]
+pub struct TransitionLogUpdateMut<'a, T, U> {
+    transitions: IterMut<'a, T>,
+    pub update: &'a mut U,
 }
 
-impl<'a, T: Iterator, U> IntoIterator for &'a mut TransitionLogUpdateMut<T, U> {
-    type IntoIter = &'a mut T;
-    type Item = T::Item;
-    fn into_iter(self) -> Self::IntoIter {
-        &mut self.transitions
+impl<'a, T, U> Iterator for TransitionLogUpdateMut<'a, T, U> {
+    type Item = &'a mut T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.transitions.next()
+    }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.transitions.size_hint()
+    }
+
+    fn fold<Acc, F>(self, accum: Acc, f: F) -> Acc
+    where
+        F: FnMut(Acc, Self::Item) -> Acc,
+    {
+        self.transitions.fold(accum, f)
+    }
+
+    #[inline]
+    fn last(self) -> Option<&'a mut T> {
+        self.transitions.last()
     }
 }
+
+impl<'a, T, U> DoubleEndedIterator for TransitionLogUpdateMut<'a, T, U> {
+    #[inline]
+    fn next_back(&mut self) -> Option<&'a mut T> {
+        self.transitions.next_back()
+    }
+
+    fn rfold<Acc, F>(self, accum: Acc, f: F) -> Acc
+    where
+        F: FnMut(Acc, Self::Item) -> Acc,
+    {
+        self.transitions.rfold(accum, f)
+    }
+}
+
+impl<T, U> ExactSizeIterator for TransitionLogUpdateMut<'_, T, U> {
+    fn len(&self) -> usize {
+        self.transitions.len()
+    }
+}
+
+impl<T, U> FusedIterator for TransitionLogUpdateMut<'_, T, U> {}
 
 #[derive(Debug, Clone)]
 pub struct TransitionsLogUpdate<U> {
@@ -290,7 +330,7 @@ mod test {
         }
     }
 
-    impl<'a> TransitionLogUpdateMut<IterMut<'a, char>, &'a mut char> {
+    impl<'a> TransitionLogUpdateMut<'a, char, char> {
         fn to_tuple(self) -> (String, char) {
             (self.transitions.map(|char| *char).collect(), *self.update)
         }

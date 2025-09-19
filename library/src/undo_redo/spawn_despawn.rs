@@ -209,11 +209,7 @@ impl RevDespawnCleaner {
     fn backward_log(&mut self) -> Result<(), OutOfLog> {
         self.spawn.backward_log()?;
         self.despawn.backward_log().unwrap();
-        let mut buffer_iter = self
-            .spawn_buffer
-            .backward_log()
-            .unwrap() // should not be out-of-log like `Self::spawn` as they get called identically in `forward`
-            .transitions;
+        let mut buffer_iter = self.spawn_buffer.backward_log().unwrap(); // should not be out-of-log like `Self::spawn` as they get called identically in `forward`
         let mut delayed_iter = self.spawn_buffer_queue.drain(..);
 
         'delayed_loop: for (delayed, location) in delayed_iter.by_ref() {

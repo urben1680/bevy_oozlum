@@ -30,6 +30,7 @@ Enhancements:
 -- EntityWorldMut::insert_with_relationship_hook_mode
 -- EntityWorldMut::remove_reflect
 -- EntityWorldMut::remove_reflect_with_registry
+- meta reverse scope for PastLogLen? not needed
 
 -- ... (check Commands + friends)
 
@@ -73,9 +74,10 @@ pub mod meta;
 pub mod schedule;
 pub mod undo_redo;
 
-/// Contains common types an all extension traits `as _`. Does not contain [`log`] items.
+/// Contains common types an all extension traits `as _`.
 pub mod prelude {
     pub use crate::app::{RevApp as _, RevPlugin};
+    pub use crate::log::{PastLenLog, TransitionLog, TransitionsLog};
     pub use crate::meta::{RevDirection, RevMeta, RevQueue};
     pub use crate::schedule::{
         IntoRevScheduleConfigs as _, RevSchedule as _, RevSystems, RevUpdate,

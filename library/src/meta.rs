@@ -436,13 +436,15 @@ impl RevMeta {
         match should_run {
             Ok(should_run) => {
                 let mut ran = false;
-                *self = meta
-                    .update(|mut meta, direction| {
-                        ran = true;
-                        c(&mut meta, direction);
-                        Some(meta)
-                    })
-                    .unwrap();
+                let result = meta.update(|mut meta, direction| {
+                    ran = true;
+                    c(&mut meta, direction);
+                    Some(meta)
+                });
+                match result {
+                    Ok(meta) => *self = meta,
+                    err => panic!("unexpected {err:#?}"),
+                }
                 assert_eq!(ran, should_run);
             }
             Err(missed) => {
@@ -469,33 +471,9 @@ impl RevMeta {
     pub(super) fn update_past_len_state(
         &self,
         state: &mut Option<PastLenState>,
-        last_update: u64,
     ) -> PreUpdateVariant {
-        // Determining that a `PastLenLog` did not run yet this frame is sufficiently done this way.
-        // Still cases may result in this being true despite not having run this frame, but only if
-        // the log previously missed a frame to update at before. At that point the user should
-        // already have been notified about that via an `RevMetaUpdateErr` through bevy's error
-        // handling.
-        //
-        // An example for this:
-        // 1. the log updates at non-log frame X
-        // 2. the log does not update at non-log frame X+1
-        // 3. now we undo the previous frame, Self::now returns X again but the log has no update to
-        //    undo so resetting the update count in the given `PastLenState` is not important
-        // 4. going back further, at X-1, the log undoes the update from 1. and the below evaluates
-        //    to false, resetting the update count in the given `PastLenState`
-        // 5. if 4. did not update the log, going forward in log now may incorrectly evaluates the
-        //    below to true, but the missed frame in 4. was already noticed and reported
-        //
-        // See also the comment in `UpdatesIter::next` in the `past_len` module.
-        let updated_this_frame = self.now == last_update;
-
-        self.past_len_limits.update_past_len_state(
-            state,
-            updated_this_frame,
-            self.log_exits,
-            self.log_clears,
-        )
+        self.past_len_limits
+            .update_past_len_state(state, self.log_exits, self.log_clears)
     }
     pub(super) fn past_len_limits(&self) -> &PastLenLogLimits {
         &self.past_len_limits

@@ -1,8 +1,8 @@
 //! This module contains a way to write ([`push_offset`]) and read ([`OffsetIter`]) bytes that
 //! encode how many frames ago was the last update of [`PastLenLog`](super::PastLenLog).
-//! 
+//!
 //! This is more compact than storing `usize` instead.
-//! 
+//!
 //! An important feature here is that reading from both sides of the deque is possible.
 
 use std::{
@@ -30,21 +30,7 @@ pub(super) fn push_offset(
     mut offset: u64,
 ) {
     if offset == 0 {
-        // offsets of zero are not pushed right away unless the maximum is reached
-
-        if *zeroes == MAX_ZEROES_PER_BYTE {
-            // reached the maximum amount of zeroes that fit into a single byte, push it and
-            // start a new sequence of zero offsets
-            offset_bytes.push_back(MAX_ZEROES_AS_BYTE);
-            *index += 1;
-            *zeroes = 1;
-        } else {
-            // increase the sequence of zero offsets
-            *zeroes += 1;
-        }
-
-        *zeroes_max = *zeroes;
-        return;
+        return push_zero_offset(offset_bytes, index, zeroes, zeroes_max);
     } else if *zeroes == 1 {
         // there was an offset of 0 previously, push it now that it is sure no more such offsets
         // are following it
@@ -90,6 +76,23 @@ pub(super) fn push_offset(
         // wrapped bytes contain 7 usable bits for the offset
         offset >>= 7;
     }
+}
+
+pub(super) fn push_zero_offset(
+    offset_bytes: &mut VecDeque<u8>,
+    index: &mut usize,
+    zeroes: &mut u8,
+    zeroes_max: &mut u8,
+) {
+    if *zeroes == MAX_ZEROES_PER_BYTE {
+        offset_bytes.push_back(MAX_ZEROES_AS_BYTE);
+        *index += 1;
+        *zeroes = 0;
+    }
+
+    // increase the sequence of zero offsets
+    *zeroes += 1;
+    *zeroes_max = *zeroes;
 }
 
 /// Iterator to read [`PastLenLog::offset_bytes`] and decode them to [`IterItem`].

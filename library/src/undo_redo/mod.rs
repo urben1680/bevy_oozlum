@@ -395,7 +395,6 @@ impl UndoRedoLog {
                             direction: RevDirection::FORWARD_LOG,
                             system_name: system_name.clone(),
                         })?
-                        .transitions
                         .map(|cell| cell.0.get());
                     for command in iter {
                         command.redo(world);
@@ -446,7 +445,6 @@ impl UndoRedoLog {
                     direction: RevDirection::BackwardLog,
                     system_name: system_name.clone(),
                 })?
-                .transitions
                 .map(|cell| cell.0.get())
                 .rev();
             for command in iter {

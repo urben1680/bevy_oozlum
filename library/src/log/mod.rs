@@ -7,8 +7,8 @@ mod past_len;
 mod transition;
 mod transitions;
 
-pub use past_len::{PastLenLog, limits::PastLenLogMissed};
 pub(crate) use past_len::limits::{PastLenLogLimits, PastLenState};
+pub use past_len::{PastLenLog, limits::PastLenLogMissed};
 pub use transition::{
     TransitionDrain, TransitionDrainFuture, TransitionDrainPast, TransitionDrains, TransitionLog,
 };
