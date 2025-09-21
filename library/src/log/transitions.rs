@@ -40,8 +40,8 @@ impl<T, U> TransitionsLog<T, U> {
         }
     }
 
-    /// Creates an empty log with space for at least `transitions_capacity` transitions (`T`) from at
-    /// at least `updates_capacity` updates (`U`).
+    /// Creates an empty log with space for at least `transitions_capacity` transitions (`T`) from
+    /// at at least `updates_capacity` updates (`U`).
     ///
     /// See [`VecDeque::with_capacity`].
     pub fn with_capacities(transitions_capacity: usize, updates_capacity: usize) -> Self {
