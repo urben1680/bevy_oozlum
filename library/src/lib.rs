@@ -1,27 +1,16 @@
 /*
 TODO:
 
-- add license
--- dual license MIT/Apache-2.0 like bevy https://github.com/bevyengine/bevy/issues/2373
 - schedule/test
--- reflect on fix of https://github.com/bevyengine/bevy/issues/17828
 -- test not only multi-thread executor
-- transition log error tests
-- serde_with tests need to be revisited
-- log reflection impls like serde
-- OR undo changes, allow full serde/reflection again now that there are no issues with Arcs anymore
-- deprecate state logs and serde, encourage local logs entirely
--- all logs can work with meta to check for clear/truncate/drain
---- first rework PastLenLog to not have these checks anymore except for itself
--- make transition logs keep an additional entry so the values are drained out of log
 - bring capacity api back, reflect serialize uses that
+- update README
 
 Enhancements:
 - reduce todo!() and //todo and unwrap (in favor of expect)
 - #[inline]s
-- track_location and bevy_reflect feature (both are not documented?), rename feature serde -> serialize
+- bevy_reflect feature
 - delete unused types
-- integrate BuffersUndoRedo in new Rev wrappers, find good way to support DeferredWorld
 - despawn_single -> despawn
 - missing apis:
 -- EntityWorldMut::clone_with
@@ -30,8 +19,6 @@ Enhancements:
 -- EntityWorldMut::insert_with_relationship_hook_mode
 -- EntityWorldMut::remove_reflect
 -- EntityWorldMut::remove_reflect_with_registry
-- meta reverse scope for PastLogLen? not needed
-
 -- ... (check Commands + friends)
 
 Docs
@@ -40,19 +27,14 @@ Docs
 - documentations
 -- point out determinism aspects of methods
 -- log contract (always valid, may go further into the past)
--- check-logged-at should not be used as the sole shortening mechanism or else logs can grow larger than desired
 -- docs for private UndoRedo types
 -- point out additional conditions to not panic/return err and how some are only needed in observers/hooks
 -- remind in Apis with HasEffect bound to use App::register_non_entity_buffer
-- discourage deserialization
 
 ISSUES/DISCUSSIONS:
 - reversible change detection (copy over to new repo)
 - manual sync point configuration
 -- ScheduleBuildSettings::auto_insert_apply_deferred
-- more compact FrameTransitionLog
--- VecDeque<u8> with variable len entries
--- has to provide the same api
 - not supported:
 -- EntityWorldMut::clone_with because EntityClonerBuilder is not offering reads on which components are cloned
 --- could be supported with RevEntityClonerBuilder
@@ -63,9 +45,6 @@ ISSUES/DISCUSSIONS:
 - rev_insert_batch
 -- backup components one by one
 -- insert closure for each is noop
-- batch insert
-
-example broken, first write tests for spawn_despawn
 */
 
 pub mod app;
@@ -90,7 +69,7 @@ pub mod prelude {
 }
 
 /// Make `error!` and `error_once!` cause panics.
-// This exists in the reversible_ecs example too, keep that in sync to this
+// This exists in the reversible_ecs example too, keep that in sync to this.
 #[cfg(test)]
 fn panic_on_error_events() {
     use bevy::log::{

@@ -45,7 +45,7 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
 
     // set up schedules
     let mut schedule = Schedule::new(FixedUpdate);
-    schedule.add_systems(RevMeta::try_run_rev_update);
+    schedule.add_systems(RevMeta::run_rev_update);
     let err = schedule.initialize(&mut world).err();
     assert!(
         err.is_none(),

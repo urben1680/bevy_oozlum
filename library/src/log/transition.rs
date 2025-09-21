@@ -6,7 +6,7 @@ use crate::{
     meta::{RevDirection, RevMeta},
 };
 
-use super::{INDEX_OOB, OutOfLog};
+use super::OutOfLog;
 
 /// A simple log that contains exactly one transition type `T` per update.
 ///
@@ -307,7 +307,13 @@ impl<T> TransitionLog<T> {
     // when it should be
     pub fn backward_log(&mut self) -> Result<&mut T, OutOfLog> {
         let index = self.index.checked_sub(1).ok_or(OutOfLog)?;
-        let transition = self.transitions.get_mut(index).expect(INDEX_OOB);
+
+        // self.index should always be <= the deque len, so successfully reducing it without
+        // underflow is expected to result in a valid index into the log. If this is not the case
+        // here, the log was in an invalid state before calling the current method, this is a crate
+        // bug.
+        let transition = self.transitions.get_mut(index).unwrap();
+
         self.index = index;
         Ok(transition)
     }

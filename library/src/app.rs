@@ -169,7 +169,7 @@ impl Plugin for RevPlugin {
         // add runner
         match self {
             Self::AddMetaAndRunner { in_schedule, .. } | Self::AddRunner { in_schedule } => {
-                app.add_systems(*in_schedule, RevMeta::try_run_rev_update);
+                app.add_systems(*in_schedule, RevMeta::run_rev_update);
             }
             Self::AddMetaAndRunnerInSet {
                 in_schedule,
@@ -180,7 +180,7 @@ impl Plugin for RevPlugin {
                 in_schedule,
                 in_set,
             } => {
-                app.add_systems(*in_schedule, RevMeta::try_run_rev_update.in_set(*in_set));
+                app.add_systems(*in_schedule, RevMeta::run_rev_update.in_set(*in_set));
             }
             _ => {}
         }

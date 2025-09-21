@@ -13,7 +13,8 @@ pub(super) mod limits;
 mod offset;
 
 /// A log that keeps track when it was updated and provides an alternative value to
-/// [`RevMeta::past_len`] for when these updates do not happen exactly once per [`RevUpdate`].
+/// [`RevMeta::past_len`] for when these updates do not happen exactly once per
+/// [`RevUpdate`](crate::schedule::RevUpdate).
 ///
 /// This usually is accompied by another log that would grow too large if `RevMeta::past_len` was
 /// used when it actually updates much more rarely. Another use case can be when it runs arbitrarily
@@ -56,8 +57,7 @@ mod offset;
 ///         RevDirection::NOT_LOG => {
 ///             // message_log potentially gets updated multiple times
 ///             // this method returns the log len for the last message
-///             let past_len = past_len_log.update_many_and_get_past_len(&meta, messages.len());
-///             if let Some(past_len) = past_len {
+///             if let Some(past_len) = past_len_log.past_len_many(&meta, messages.len() as u64) {
 ///                 for my_message in messages.read() {
 ///                     // use message
 ///
@@ -66,13 +66,15 @@ mod offset;
 ///             }
 ///         }
 ///         RevDirection::FORWARD_LOG => {
-///             while past_len_log.forward_log(&meta) {
+///             let updates = past_len_log.forward_log_many(&meta);
+///             for _ in 0.. updates {
 ///                 let my_message = message_log.forward_log()?;
 ///                 // use message
 ///             }
 ///         }
 ///         RevDirection::BackwardLog => {
-///             while past_len_log.backward_log(&meta) {
+///             let updates = past_len_log.backward_log_many(&meta);
+///             for _ in 0.. updates {
 ///                 let my_message = message_log.backward_log()?;
 ///                 // use message
 ///             }
@@ -103,7 +105,7 @@ mod offset;
 ///     match meta.running_direction() {
 ///         RevDirection::NOT_LOG => {
 ///             if !messages.is_empty() {
-///                 let past_len = past_len_log.update_and_get_past_len(&meta);
+///                 let past_len = past_len_log.past_len(&meta);
 ///                 message_log.push_and_truncate_past(past_len, |mut log| {
 ///                     for my_message in messages.read() {
 ///                         // use message
@@ -135,39 +137,20 @@ mod offset;
 /// ```
 #[derive(Default)]
 pub struct PastLenLog {
-    /// Contains the offsets between the [frames](RevMeta::now) this log was updated at.
+    /// Offsets that need to be added or subtracted from [`Self::last_update`] to calculate at which
+    /// frame the log is expected to be updated.
     ///
-    /// The offsets are encoded in a special way to minimize the used memory as typically the
-    /// use-cases have the task to keep the memory overhead low.
-    ///
-    /// - Offset from `0` to `127` are encoded in a single byte as `x` bits in the pattern of
-    ///   `0b0_xxxxxxx`.
-    /// - Up to `65` sequential offsets of `0` are encoded in a single byte as `x` bits in the
-    ///   pattern of `0b10_xxxxxx`. The numeric value of the `x` is actually read plus 2. This is
-    ///   because:
-    ///   - There is no concept of "zero times an offset of `0`" so `0b10_000000` makes no sense to
-    ///     be interpreted as "zero times".
-    ///   - The value of "one time an offset of `0`" is already encoded in `0b0_0000000`.
-    /// - Offsets larger than `127` are encoded in multiple bytes and are split in chunks of `x`
-    ///   bits:
-    ///   - The first and last byte of this sequence use the pattern `0b11_xxxxxx`.
-    ///   - If more bits are needed, in between are bytes that use the pattern `0b0_xxxxxxx`.
-    ///   - This uses up to ten bytes in total for `u64::MAX`
-    /// - These bytes or sequences of bytes can be read in reverse as well, which is needed for
-    ///   reading the previous offset in [`Self::backward_log`].
-    /// - The [`OffsetIter`] iterator is used to read the offsets. See [`IterItem`].
+    /// For the encoding, see the [`offset`] module.
     offset_bytes: VecDeque<u8>,
 
     /// A frame this log matched at (or 0) that is either at [`RevMeta::past_end`] or as closely
-    /// before it as possible to determine how much other logs that run along this can be reduced
-    /// to.
+    /// before it.
     ///
-    /// This frame must not be a more recent frame because then [`Self::backward_log`] will be
-    /// unable to match that frame as [`Self::index`] cannot be reduced further. Otherwise, the
-    /// [`OutOfLog`] error is returned which is usually not encountered with this log.
+    /// This frame must not be a more recent frame than that because then [`Self::backward_log`]
+    /// will be unable to match that frame as [`Self::index`] cannot be reduced further.
     out_of_or_past_end_log: u64,
 
-    /// The chronological last frame this log got updated
+    /// The chronological last frame in the past this log got updated at.
     last_update: u64,
 
     /// The current index into [`Self::offset_bytes`]. Always points to the first byte of an
@@ -183,6 +166,8 @@ pub struct PastLenLog {
     /// The amount of sequential offsets of `0` at the future end of the log.
     zeroes_max: u8,
 
+    /// The state that is needed to get the [`PreUpdateVariant`] at [`Self::pre_update`] and to push
+    /// new limits to [`PastLenLogLimits`].
     update_state: Option<PastLenState>,
 }
 
@@ -230,7 +215,7 @@ impl PastLenLog {
     ///
     /// See [`VecDeque::with_capacity`].
     ///
-    /// Note that the number of bytes have no relation to the length of the log.
+    /// Note that the number of bytes has no relation to the length of the log.
     pub fn with_capacity(bytes_capacity: usize) -> Self {
         Self {
             offset_bytes: VecDeque::with_capacity(bytes_capacity),
@@ -242,7 +227,7 @@ impl PastLenLog {
     ///
     /// See [`VecDeque::len`].
     ///
-    /// Note that the number of bytes have no relation to the length of the log.
+    /// Note that the number of bytes has no relation to the length of the log.
     pub fn bytes_len(&self) -> usize {
         self.offset_bytes.len()
     }
@@ -251,7 +236,7 @@ impl PastLenLog {
     ///
     /// See [`VecDeque::capacity`].
     ///
-    /// Note that the number of bytes have no relation to the length of the log.
+    /// Note that the number of bytes has no relation to the length of the log.
     pub fn bytes_capacity(&self) -> usize {
         self.offset_bytes.capacity()
     }
@@ -260,7 +245,7 @@ impl PastLenLog {
     ///
     /// See [`VecDeque::is_empty`].
     ///
-    /// Note that the number of bytes have no relation to the length of the log.
+    /// Note that the number of bytes has no relation to the length of the log.
     pub fn bytes_is_empty(&self) -> bool {
         self.offset_bytes.is_empty()
     }
@@ -269,7 +254,7 @@ impl PastLenLog {
     ///
     /// See [`VecDeque::reserve`].
     ///
-    /// Note that the number of bytes have no relation to the length of the log.
+    /// Note that the number of bytes has no relation to the length of the log.
     pub fn bytes_reserve(&mut self, additional: usize) {
         self.offset_bytes.reserve(additional)
     }
@@ -278,7 +263,7 @@ impl PastLenLog {
     ///
     /// See [`VecDeque::reserve_exact`].
     ///
-    /// Note that the number of bytes have no relation to the length of the log.
+    /// Note that the number of bytes has no relation to the length of the log.
     pub fn bytes_reserve_exact(&mut self, additional: usize) {
         self.offset_bytes.reserve_exact(additional)
     }
@@ -287,7 +272,7 @@ impl PastLenLog {
     ///
     /// See [`VecDeque::try_reserve`].
     ///
-    /// Note that the number of bytes have no relation to the length of the log.
+    /// Note that the number of bytes has no relation to the length of the log.
     pub fn bytes_try_reserve(&mut self, additional: usize) -> Result<(), TryReserveError> {
         self.offset_bytes.try_reserve(additional)
     }
@@ -296,7 +281,7 @@ impl PastLenLog {
     ///
     /// See [`VecDeque::try_reserve_exact`].
     ///
-    /// Note that the number of bytes have no relation to the length of the log.
+    /// Note that the number of bytes has no relation to the length of the log.
     pub fn bytes_try_reserve_exact(&mut self, additional: usize) -> Result<(), TryReserveError> {
         self.offset_bytes.try_reserve_exact(additional)
     }
@@ -305,7 +290,7 @@ impl PastLenLog {
     ///
     /// See [`VecDeque::shrink_to`].
     ///
-    /// Note that the number of bytes have no relation to the length of the log.
+    /// Note that the number of bytes has no relation to the length of the log.
     pub fn bytes_shrink_to(&mut self, min_capacity: usize) {
         self.offset_bytes.shrink_to(min_capacity)
     }
@@ -314,15 +299,25 @@ impl PastLenLog {
     ///
     /// See [`VecDeque::shrink_to_fit`].
     ///
-    /// Note that the number of bytes have no relation to the length of the log.
+    /// Note that the number of bytes has no relation to the length of the log.
     pub fn bytes_shrink_to_fit(&mut self) {
         self.offset_bytes.shrink_to_fit()
     }
 
+    /// The internal id of this log, which is only `Some` after it first ran. The id will change
+    /// when [`RevQueue::Clear`](crate::meta::RevQueue::Clear) is queued and applied.
+    ///
+    /// This id is useful to identify missed updates from [`RevMeta::update`]. If
+    /// [`RevMeta::run_rev_update`] is used, such errors are handled by the default error handler
+    /// and likely require actively logging this id in advance.
     pub fn id(&self) -> Option<u32> {
         self.update_state.map(|state| state.id.get())
     }
 
+    /// Get an iterator that returns the [reversible frames](RevMeta::now) this log was updated at.
+    ///
+    /// If the log was updated multiple times at one frame, that frame will occur as many times in
+    /// sequence.
     pub fn updated_at(&self) -> impl Iterator<Item = u64> + '_ {
         struct Iter<'a> {
             offsets: OffsetIter<'a>,
@@ -383,21 +378,17 @@ impl PastLenLog {
     /// the [present reversible frame](RevMeta::now). This method may panic if this was not done.
     ///
     /// For updating this log multiple times during this frame, prefer to use
-    /// [`update_many_and_get_past_len`](Self::update_many_and_get_past_len) instead.
+    /// [`past_len_many`](Self::past_len_many) instead.
     ///
     /// For an example, see the second example in the [`PastLenLog`] documentation.
     #[track_caller]
-    pub fn update_and_get_past_len(&mut self, meta: &RevMeta) -> u64 {
-        self.update_and_get_past_len_with_caller(meta, MaybeLocation::caller())
+    pub fn past_len(&mut self, meta: &RevMeta) -> u64 {
+        self.past_len_with_caller(meta, MaybeLocation::caller())
     }
 
-    fn update_and_get_past_len_with_caller(
-        &mut self,
-        meta: &RevMeta,
-        caller: MaybeLocation,
-    ) -> u64 {
+    fn past_len_with_caller(&mut self, meta: &RevMeta, caller: MaybeLocation) -> u64 {
         self.truncate_past_and_push_offset(meta);
-        meta.past_len_limits().push_past_len_update(
+        meta.past_len_limits().push_limit(
             &mut self.update_state,
             PastLenLimits::new_not_log(meta.now(), caller),
         );
@@ -428,7 +419,7 @@ impl PastLenLog {
     /// # let updates = 10;
     /// let mut past_len = None;
     /// for _ in 0..updates {
-    ///     past_len = Some(past_len_log.update_and_get_past_len(meta));
+    ///     past_len = Some(past_len_log.past_len(meta));
     /// }
     /// past_len
     /// # ;
@@ -437,11 +428,11 @@ impl PastLenLog {
     /// ```
     ///
     /// For an example, see the first example in the [`PastLenLog`] documentation.
-    pub fn update_many_and_get_past_len(&mut self, meta: &RevMeta, updates: u64) -> Option<u64> {
-        self.update_many_and_get_past_len_with_caller(meta, updates, MaybeLocation::caller())
+    pub fn past_len_many(&mut self, meta: &RevMeta, updates: u64) -> Option<u64> {
+        self.past_len_many_with_caller(meta, updates, MaybeLocation::caller())
     }
 
-    fn update_many_and_get_past_len_with_caller(
+    fn past_len_many_with_caller(
         &mut self,
         meta: &RevMeta,
         updates: u64,
@@ -465,7 +456,7 @@ impl PastLenLog {
             );
         }
         self.past_len += remaining_updates;
-        meta.past_len_limits().push_past_len_update(
+        meta.past_len_limits().push_limit(
             &mut self.update_state,
             PastLenLimits::new_not_log(meta.now(), caller),
         );
@@ -473,9 +464,11 @@ impl PastLenLog {
         Some(self.past_len)
     }
 
+    /// Shortens the log if possible and pushes the present frame.
+    ///
+    /// Does not verify if [`Self::pre_update`] was called previously this frame as that is done by
+    /// [`PastLenLogLimits::push_limit`].
     fn truncate_past_and_push_offset(&mut self, meta: &RevMeta) {
-        assert_eq!(self.index, self.offset_bytes.len(), "todo");
-
         let iter = OffsetIter(self.offset_bytes.iter());
 
         let mut to_drain = 0;
@@ -521,22 +514,19 @@ impl PastLenLog {
         );
     }
 
-    /// Checks at [`RevDirection::BackwardLog`] if this log has been updated at this frame.
+    /// Checks at [`RevDirection::BackwardLog`](crate::meta::RevDirection::BackwardLog) if this log
+    /// has been updated at this frame.
     ///
-    /// Returns `Ok(true)` if that is the case or `Ok(false)` if not. This log is insensitive on
-    /// checking outside its range of logged frames and just returns `Ok(false)` then as well.
+    /// Returns `true` if that is the case or `false` if not. This log is insensitive on
+    /// checking outside its range of logged frames and just returns `false` then as well.
     ///
-    /// If this returns an error, an update has been missed, the log has been constructed from an
-    /// invalid state or [`RevMeta`] is in an invalid state. See [`PastLenBackwardError`].
+    /// Before calling this, [`pre_update`](Self::pre_update) **must** be called at least once in
+    /// the [present reversible frame](RevMeta::now). This method may panic if this was not done.
     ///
-    /// If this log is potenitally updated more than once per frame, use this method in the fitting
-    /// amount of `if` cases or with a `while` loop.
+    /// If this log is potenitally updated more than once in the scope this method is used, prefer
+    /// [`backward_log_many`](Self::backward_log_many) over using this method in a while loop.
     ///
-    /// See the [type docs] for an example.
-    ///
-    /// [`RevDirection::BackwardLog`]: crate::meta::RevDirection::BackwardLog
-    /// [type docs]: PastLenLog
-    // todo: mention panic
+    /// See the [type docs](PastLenLog) for an example.
     #[track_caller]
     pub fn backward_log(&mut self, meta: &RevMeta) -> bool {
         self.backward_log_with_caller(meta, MaybeLocation::caller())
@@ -567,7 +557,7 @@ impl PastLenLog {
             }
         };
         self.past_len -= 1;
-        meta.past_len_limits().push_past_len_update(
+        meta.past_len_limits().push_limit(
             &mut self.update_state,
             PastLenLimits::new_log(backward_limit, meta.now(), caller),
         );
@@ -575,7 +565,19 @@ impl PastLenLog {
         true
     }
 
-    // todo: mention panic
+    /// Checks at [`RevDirection::BackwardLog`](crate::meta::RevDirection::BackwardLog) how many
+    /// times this log has been updated at this frame.
+    ///
+    /// This log is insensitive on checking outside its range of logged frames and just returns
+    /// `0` then.
+    ///
+    /// Before calling this, [`pre_update`](Self::pre_update) **must** be called at least once in
+    /// the [present reversible frame](RevMeta::now). This method may panic if this was not done.
+    ///
+    /// If this log is updated exactly once in the scope this method is used, prefer
+    /// [`backward_log`](Self::backward_log) over this method.
+    ///
+    /// See the [type docs](PastLenLog) for an example.
     pub fn backward_log_many(&mut self, meta: &RevMeta) -> u64 {
         self.backward_log_many_with_caller(meta, MaybeLocation::caller())
     }
@@ -600,7 +602,7 @@ impl PastLenLog {
             updates += item.len.get() as u64;
         }
         self.past_len -= updates;
-        meta.past_len_limits().push_past_len_update(
+        meta.past_len_limits().push_limit(
             &mut self.update_state,
             PastLenLimits::new_log(self.last_update, meta.now(), caller),
         );
@@ -608,21 +610,19 @@ impl PastLenLog {
         updates
     }
 
-    /// Checks at [`RevDirection::FORWARD_LOG`] if this log has been updated at this frame.
+    /// Checks at [`RevDirection::FORWARD_LOG`](crate::meta::RevDirection::FORWARD_LOG) if this log
+    /// has been updated at this frame.
     ///
-    /// Returns `Ok(true)` if that is the case or `Ok(false)` if not. This log is insensitive on
-    /// checking outside its range of logged frames and just returns `Ok(false)` then as well.
+    /// Returns `true` if that is the case or `false` if not. This log is insensitive on
+    /// checking outside its range of logged frames and just returns `false` then as well.
     ///
-    /// If this returns an error, an update has been missed. See [`MissedUpdate`].
+    /// Before calling this, [`pre_update`](Self::pre_update) **must** be called at least once in
+    /// the [present reversible frame](RevMeta::now). This method may panic if this was not done.
     ///
-    /// If this log is potenitally updated more than once per frame, use this method in the fitting
-    /// amount of `if` cases or with a `while` loop.
+    /// If this log is potenitally updated more than once in the scope this method is used, prefer
+    /// [`forward_log_many`](Self::forward_log_many) over using this method in a while loop.
     ///
-    /// See the [type docs] for an example.
-    ///
-    /// [`RevDirection::FORWARD_LOG`]: crate::meta::RevDirection::FORWARD_LOG
-    /// [type docs]: PastLenLog
-    // todo: mention panic
+    /// See the [type docs](PastLenLog) for an example.
     #[track_caller]
     pub fn forward_log(&mut self, meta: &RevMeta) -> bool {
         self.forward_log_with_caller(meta, MaybeLocation::caller())
@@ -679,14 +679,26 @@ impl PastLenLog {
             None => return false,
         };
         self.past_len += 1;
-        meta.past_len_limits().push_past_len_update(
+        meta.past_len_limits().push_limit(
             &mut self.update_state,
             PastLenLimits::new_log(meta.now(), forward_limit, caller),
         );
         true
     }
 
-    // todo: mention panic
+    /// Checks at [`RevDirection::FORWARD_LOG`](crate::meta::RevDirection::FORWARD_LOG) how many
+    /// times this log has been updated at this frame.
+    ///
+    /// This log is insensitive on checking outside its range of logged frames and just returns
+    /// `0` then.
+    ///
+    /// Before calling this, [`pre_update`](Self::pre_update) **must** be called at least once in
+    /// the [present reversible frame](RevMeta::now). This method may panic if this was not done.
+    ///
+    /// If this log is updated exactly once in the scope this method is used, prefer
+    /// [`forward_log`](Self::forward_log) over this method.
+    ///
+    /// See the [type docs](PastLenLog) for an example.
     pub fn forward_log_many(&mut self, meta: &RevMeta) -> u64 {
         self.forward_log_many_with_caller(meta, MaybeLocation::caller())
     }
@@ -706,6 +718,11 @@ impl PastLenLog {
                     updates += (len.get() - self.zeroes) as u64;
                     self.index += 1;
                     self.zeroes = 0;
+                    forward_limit = match iter.clone().next() {
+                        Some(IterItem { offset, .. }) => now_minus_1 + offset,
+                        None if self.zeroes_max == 0 => u64::MAX,
+                        None => now_minus_1,
+                    };
                 }
                 Some(IterItem { offset, len }) => {
                     let frame = self.last_update + offset;
@@ -736,13 +753,17 @@ impl PastLenLog {
             return 0;
         }
         self.past_len += updates;
-        meta.past_len_limits().push_past_len_update(
+        meta.past_len_limits().push_limit(
             &mut self.update_state,
             PastLenLimits::new_log(meta.now(), forward_limit, caller),
         );
         updates
     }
 
+    /// This method **must** be called at least once per [reversible frame](RevMeta::now) before
+    /// updating this log further.
+    ///
+    /// This method has no effect if called again in the same frame.
     pub fn pre_update(&mut self, meta: &RevMeta) {
         match meta.update_past_len_state(&mut self.update_state) {
             PreUpdateVariant::RemoveLog => {
@@ -802,8 +823,7 @@ mod test {
                 self.past_len_log.pre_update(meta);
                 for past_len in past_lens {
                     assert_eq!(
-                        self.past_len_log
-                            .update_and_get_past_len_with_caller(meta, caller),
+                        self.past_len_log.past_len_with_caller(meta, caller),
                         past_len,
                         "{:#?}",
                         self.past_len_log
@@ -865,7 +885,6 @@ mod test {
                 // assert no more updates would run
                 assert_eq!(self.past_len_log.forward_log(meta), false);
                 assert_eq!(self.past_len_log.forward_log_many(meta), 0);
-                println!("{meta:#?}");
             });
 
             if updates != 0 {

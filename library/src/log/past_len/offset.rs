@@ -1,9 +1,23 @@
 //! This module contains a way to write ([`push_offset`]) and read ([`OffsetIter`]) bytes that
-//! encode how many frames ago was the last update of [`PastLenLog`](super::PastLenLog).
+//! encode how many frames in the past or the future [`PastLenLog`](super::PastLenLog) as updated
+//! at.
 //!
-//! This is more compact than storing `usize` instead.
+//! This is more compact than storing `u64`.
 //!
-//! An important feature here is that reading from both sides of the deque is possible.
+//! - Offset from `0` to `127` are encoded in a single byte as `x` bits in the pattern of
+//!   `0b0_xxxxxxx`.
+//! - Up to `65` sequential offsets of `0` are encoded in a single byte as `x` bits in the pattern
+//!   of `0b10_xxxxxx`. The numeric value of the `x` is actually read plus 2. This is because:
+//!   - There is no concept of "zero times an offset of `0`" so `0b10_000000` makes no sense to be
+//!     interpreted as "zero times".
+//!   - The value of "one time an offset of `0`" is already encoded in `0b0_0000000`.
+//! - Offsets larger than `127` are encoded in multiple bytes and are split in chunks of `x` bits:
+//!   - The first and last byte of this sequence use the pattern `0b11_xxxxxx`.
+//!   - If more bits are needed, in between are bytes that use the pattern `0b0_xxxxxxx`.
+//!   - This uses up to ten bytes in total for `u64::MAX`
+//! - These bytes or sequences of bytes can be read in reverse as well, which is needed for reading
+//!   the previous offset in [`PastLenLog::backward_log`](super::PastLenLog::backward_log).
+//! - The [`OffsetIter`] iterator is used to read the offsets. See [`IterItem`].
 
 use std::{
     collections::{VecDeque, vec_deque::Iter},
@@ -31,7 +45,9 @@ pub(super) fn push_offset(
 ) {
     if offset == 0 {
         return push_zero_offset(offset_bytes, index, zeroes, zeroes_max);
-    } else if *zeroes == 1 {
+    }
+
+    if *zeroes == 1 {
         // there was an offset of 0 previously, push it now that it is sure no more such offsets
         // are following it
         offset_bytes.push_back(0);
@@ -62,6 +78,7 @@ pub(super) fn push_offset(
 
     loop {
         *index += 1;
+
         if offset <= MAX_WRAPPING_OFFSET as u64 {
             // this is a wrapping byte
 
@@ -95,19 +112,22 @@ pub(super) fn push_zero_offset(
     *zeroes_max = *zeroes;
 }
 
-/// Iterator to read [`PastLenLog::offset_bytes`] and decode them to [`IterItem`].
+/// Iterator to read [`PastLenLog::offset_bytes`](super::PastLenLog::offset_bytes) and decode them
+/// to [`IterItem`].
 #[derive(Clone)]
 pub(super) struct OffsetIter<'a>(pub(super) Iter<'a, u8>);
 
-/// Reads a byte or sequence of bytes from [`PastLenLog::offset_bytes`]. Contains a single offset
-/// or, if the offset is `0`, a sequence of such offsets.
+/// Reads a byte or sequence of bytes from
+/// [`PastLenLog::offset_bytes`](super::PastLenLog::offset_bytes). Contains a single offset or, if
+/// the offset is `0`, a sequence of such offsets.
 #[derive(Debug, PartialEq, Clone)]
 pub(super) struct IterItem {
-    /// Amount of frames between two updates of [`PastLenLog`].
+    /// Amount of frames between two updates of [`PastLenLog`](super::PastLenLog).
     pub(super) offset: u64,
 
-    /// The amount of bytes this offset is made of to update [`PastLenLog::index`] correctly.
-    /// If [Self::offset] == `0`, this is the amount of `0` offsets in this byte instead.
+    /// The amount of bytes this offset is made of to update
+    /// [`PastLenLog::index`](super::PastLenLog::index) correctly. If [Self::offset] == `0`, this is
+    /// the amount of `0` offsets in this byte instead.
     pub(super) len: NonZeroU8,
 }
 

@@ -251,10 +251,7 @@ impl RevMeta {
         self.past_len_limits.clear();
         self.log_exits = 0;
     }
-    pub fn try_run_rev_update(world: &mut World) -> Result<(), BevyError> {
-        Self::try_run_rev_update_typed_err(world).map_err(Into::into)
-    }
-    fn try_run_rev_update_typed_err(world: &mut World) -> Result<(), TryRunRevUpdateError> {
+    pub fn run_rev_update(world: &mut World) -> Result<(), BevyError> {
         world
             .try_schedule_scope(RevUpdate, |world, schedule| {
                 let meta = world.remove_resource::<Self>();
@@ -321,6 +318,7 @@ impl RevMeta {
                 meta_or_schedule_presence::<true>(world, meta_exists);
                 Ok(())
             })
+            .map_err(Into::into)
     }
 
     pub fn update(
@@ -415,10 +413,7 @@ impl RevMeta {
 
         // check for PastLenLog instances that did missed being updated
         let now = meta.now;
-        match meta
-            .past_len_limits
-            .check_past_len_limits(now, direction.is_log())
-        {
+        match meta.past_len_limits.update(now, direction.is_log()) {
             Ok(()) => Ok(meta),
             Err(past_len_logs_missed) => Err(RevMetaUpdateErr::PastLenLogsMissed {
                 meta,
@@ -473,7 +468,7 @@ impl RevMeta {
         state: &mut Option<PastLenState>,
     ) -> PreUpdateVariant {
         self.past_len_limits
-            .update_past_len_state(state, self.log_exits, self.log_clears)
+            .update_state(state, self.log_exits, self.log_clears)
     }
     pub(super) fn past_len_limits(&self) -> &PastLenLogLimits {
         &self.past_len_limits

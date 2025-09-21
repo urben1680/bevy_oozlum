@@ -113,14 +113,14 @@ fn main() {
             (
                 // RevMeta is controlled by this system which obviously should be ordered before
                 // RevMeta runs RevUpdate.
-                control_rev_meta.before(RevMeta::try_run_rev_update),
+                control_rev_meta.before(RevMeta::run_rev_update),
                 // The system that despawns waste entities when they get out of the view is added
                 // after the runner so reversible systems get to influence the presence of these
                 // entities.
                 // After that, the console output should happen.
                 (despawn_waste, render)
                     .chain()
-                    .after(RevMeta::try_run_rev_update),
+                    .after(RevMeta::run_rev_update),
             ),
         )
         // Before reversible systems run, we want to update the resource containing the pressed keys.
@@ -418,7 +418,7 @@ fn row5(app: &mut App) {
                 // We get the past len from the frame log instead from RevMeta.
                 // Note that here, in contrast to the previous row, we do not need to increase the past_len because
                 // we dont do anything with the entities that go out of log.
-                let past_len = past_len_log.update_and_get_past_len(&meta);
+                let past_len = past_len_log.past_len(&meta);
 
                 // We spawn the waste entity and mark is as log scoped to be despawned when out-of-log.
                 let entity = commands.spawn(waste).make_rev_log_scoped(now).id();
