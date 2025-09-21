@@ -48,7 +48,7 @@ impl<T, U> TransitionsLog<T, U> {
         Self {
             transitions: VecDeque::with_capacity(transitions_capacity),
             updates: TransitionLog::with_capacity(updates_capacity),
-            index: 0,
+            ..Self::new()
         }
     }
 

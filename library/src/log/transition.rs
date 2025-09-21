@@ -283,9 +283,7 @@ impl<T> TransitionLog<T> {
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             transitions: VecDeque::with_capacity(capacity),
-            index: 0,
-            global_log_clears: 0,
-            global_log_exits: 0,
+            ..Self::new()
         }
     }
 
