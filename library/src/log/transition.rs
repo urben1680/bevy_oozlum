@@ -1,5 +1,5 @@
 use core::fmt::Debug;
-use std::collections::{VecDeque, vec_deque::Iter};
+use std::collections::{TryReserveError, VecDeque, vec_deque::Iter};
 
 use crate::{
     log::PreUpdateVariant,
@@ -8,26 +8,30 @@ use crate::{
 
 use super::OutOfLog;
 
-/// A simple log that contains exactly one transition type `T` per update.
+/// A log that is updated with exactly one transition type `T` that is used to transition a state
+/// forward or backward in time.
 ///
 /// # Examples
 ///
-/// Generally, a variant of [`DenseTransitionLog::pre_update`] needs to be called before any other
-/// mutation. These methods handle when [`RevMeta::queue_clear`] was used or the
-/// [`RevDirection`](crate::meta::RevDirection) changed from a log variant to the `NOT_LOG` one.
+/// Generally, [`pre_update`](Self::pre_update) or [`pre_update_drain`](Self::pre_update_drain)
+/// need to be called before any other mutation. These methods handle when
+/// [`RevQueue::Clear`](crate::meta::RevQueue::Clear) was queued and applied or the
+/// [`RevDirection`](crate::meta::RevDirection) changed from a
+/// [log variant](crate::meta::RevDirection::is_log) to the
+/// [`NOT_LOG`](crate::meta::RevDirection::NOT_LOG) one.
 ///
 /// These methods make sure the log catches such situations even if the current system does not run
-/// in the very same frame they take effect, like because of run conditions.
+/// in the very same frame they took effect, like when that frame was missed because of run
+/// conditions.
 ///
-/// If you mutate the log multiple times per frame, you only need to call these once at the
-/// beginning.
+/// If the log is mutated multiple times per frame, these `pre_update` methods only need to called
+/// once at the beginning.
 ///
 /// After that, depending on the direction, you either push a new transition into the log or
 /// traverse it forwards or backwards.
 ///
-/// Like all transition logs, this one is only suited for a constant amount of updates per frame.
-/// For a variable amount of updates, consider pairing it with a
-/// [`PastLenLog`](crate::log::PastLenLog).
+/// This log alone is only suited for a constant amount of updates per frame. For a variable amount
+/// of updates, consider pairing it with a [`PastLenLog`](crate::log::PastLenLog).
 ///
 /// ## Basic `Local` usage
 ///
@@ -36,15 +40,14 @@ use super::OutOfLog;
 /// ```
 /// # use bevy::prelude::*;
 /// # use bevy_oozlum::prelude::*;
-/// # use bevy_oozlum::log::DenseTransitionLog;
 /// # struct MyType;
-/// fn system(meta: Res<RevMeta>, mut log: Local<DenseTransitionLog<MyType>>) -> Result<(), BevyError> {
-///     // always call before any mutation
+/// fn system(meta: Res<RevMeta>, mut log: Local<TransitionLog<MyType>>) -> Result<(), BevyError> {
 ///     log.pre_update(&meta);
 ///
 ///     match meta.running_direction() {
 ///         RevDirection::NOT_LOG => {
 ///             let new_transition = todo!();
+///
 ///             // mutate some state with the new transition
 ///
 ///             // push transition to the log
@@ -52,53 +55,101 @@ use super::OutOfLog;
 ///         },
 ///         RevDirection::FORWARD_LOG => {
 ///             let next_transition = log.forward_log()?;
-///             // mutate some state with the new transition
+///
+///             // mutate some state with the logged transition
 ///         },
 ///         RevDirection::BackwardLog => {
 ///             let previous_transition = log.backward_log()?;
-///             // mutate some state with the new transition
+///
+///             // mutate some state with the logged transition
 ///         }
 ///     }
+///
+///     Ok(())
+/// }
+/// ```
+///
+/// ## Constant amount of updates > 1
+///
+/// If a constant amount of transitions needs to be stores per update, multiply the `past_len`
+/// value.
+///
+/// ```
+/// # use bevy::prelude::*;
+/// # use bevy_oozlum::prelude::*;
+/// # struct MyType;
+/// fn system(meta: Res<RevMeta>, mut log: Local<TransitionLog<MyType>>) -> Result<(), BevyError> {
+///     log.pre_update(&meta);
+///
+///     match meta.running_direction() {
+///         RevDirection::NOT_LOG => {
+///             let new_transition_a = todo!();
+///             let new_transition_b = todo!();
+///
+///             // mutate some state with the new transitions
+///
+///             // push the transitions to the log
+///             let max_past_len = meta.past_len() * 2;
+///             log.push_and_truncate_past(max_past_len, new_transition_a);
+///             log.push_and_truncate_past(max_past_len, new_transition_b);
+///         },
+///         RevDirection::FORWARD_LOG => {
+///             let next_transition_a = log.forward_log()?;
+///             let next_transition_b = log.forward_log()?;
+///
+///             // mutate some state with the logged transitions
+///         },
+///         RevDirection::BackwardLog => {
+///             // note that the order of transitions is reversed here
+///             let previous_transition_b = log.backward_log()?;
+///             let previous_transition_a = log.backward_log()?;
+///
+///             // mutate some state with the logged transitions
+///         }
+///     }
+///
+///     Ok(())
 /// }
 /// ```
 ///
 /// ## Draining future
 ///
-/// There may be cases where you need to do some sort of cleanup in which case the transitions that
-/// the log no longer needs should be drained, not immediately dropped.
+/// There may be cases where extra cleanup is needed in which case the transitions that the log no
+/// longer needs should be drained, not immediately dropped.
 ///
 /// In this example the cleanup is needed for log entries in the future part.
 ///
 /// ```
 /// # use bevy::prelude::*;
 /// # use bevy_oozlum::prelude::*;
-/// # use bevy_oozlum::log::DenseTransitionLog;
 /// # struct MyType;
-/// fn system(meta: Res<RevMeta>, mut log: Local<DenseTransitionLog<MyType>>) -> Result<(), BevyError> {
-///     // always call before any mutation
-///     let iter = log.pre_update_drain_past(&meta);
-///
-///     for future_transition in iter {
-///         // do cleanup tasks
+/// fn system(meta: Res<RevMeta>, mut log: Local<TransitionLog<MyType>>) -> Result<(), BevyError> {
+///     for future_transition in log.pre_update_drain(&meta).future() {
+///         // do cleanup tasks with future transitions
 ///     }
 ///
 ///     match meta.running_direction() {
 ///         RevDirection::NOT_LOG => {
 ///             let new_transition = todo!();
+///
 ///             // mutate some state with the new transition
 ///
-///             // push transition to the log
+///             // push the transition to the log
 ///             log.push_and_truncate_past(meta.past_len(), new_transition);
 ///         },
 ///         RevDirection::FORWARD_LOG => {
 ///             let next_transition = log.forward_log()?;
-///             // mutate some state with the new transition
+///
+///             // mutate some state with the logged transition
 ///         },
 ///         RevDirection::BackwardLog => {
 ///             let previous_transition = log.backward_log()?;
-///             // mutate some state with the new transition
+///
+///             // mutate some state with the logged transition
 ///         }
 ///     }
+///
+///     Ok(())
 /// }
 /// ```
 ///
@@ -108,28 +159,26 @@ use super::OutOfLog;
 /// past part of the log.
 ///
 /// There are two iterations in the example where cleanup work has to happen. This is because either
-/// of the two could happen in isolation, the first because [`RevMeta::queue_clear`] has been used
-/// and the second because the log reached [`RevMeta::past_len`].
+/// of the two could happen in isolation, the first because
+/// [`RevQueue::Clear`](crate::meta::RevQueue::Clear) was queued and applied and the second because
+/// the log exceeds [`RevMeta::past_len`].
 ///
 /// ```
 /// # use bevy::prelude::*;
 /// # use bevy_oozlum::prelude::*;
-/// # use bevy_oozlum::log::DenseTransitionLog;
 /// # struct MyType;
-/// fn system(meta: Res<RevMeta>, mut log: Local<DenseTransitionLog<MyType>>) -> Result<(), BevyError> {
-///     // always call before any mutation
-///     let iter = log.pre_update_drain_past(&meta);
-///
-///     for past_transition in iter {
-///         // do cleanup tasks
+/// fn system(meta: Res<RevMeta>, mut log: Local<TransitionLog<MyType>>) -> Result<(), BevyError> {
+///     for past_transition in log.pre_update_drain(&meta).past() {
+///         // do cleanup tasks with past transitions
 ///     }
 ///
 ///     match meta.running_direction() {
 ///         RevDirection::NOT_LOG => {
 ///             let new_transition = todo!();
+///
 ///             // mutate some state with the new transition
 ///
-///             // push transition to the log
+///             // push the transition to the log
 ///             let iter = log.push_and_drain_past(meta.past_len(), new_transition);
 ///
 ///             for past_transition in iter {
@@ -138,47 +187,51 @@ use super::OutOfLog;
 ///         },
 ///         RevDirection::FORWARD_LOG => {
 ///             let next_transition = log.forward_log()?;
-///             // mutate some state with the new transition
+///
+///             // mutate some state with the logged transition
 ///         },
 ///         RevDirection::BackwardLog => {
 ///             let previous_transition = log.backward_log()?;
-///             // mutate some state with the new transition
+///
+///             // mutate some state with the logged transition
 ///         }
 ///     }
+///
+///     Ok(())
 /// }
 /// ```
 ///
-/// ## Drain future and past
+/// ## Draining future and past
 ///
 /// Combination of the two examples above. The distinction between future and past transitions is
-/// of course optional.
+/// optional; instead of [`past`](TransitionDrains::past) and [`future`](TransitionDrains::future),
+/// [`all`](TransitionDrains::all) can be used.
 ///
-/// The `MyType` may for example contain an [`Entity`](bevy::ecs::entity::Entity) ID of a temporal
-/// entity for this transition that needs to be despawned.
+/// The `MyType` may for example contain an [ID](bevy::ecs::entity::Entity) temporal entity for this
+/// transition that needs to be despawned.
 ///
 /// ```
 /// # use bevy::prelude::*;
 /// # use bevy_oozlum::prelude::*;
-/// # use bevy_oozlum::log::DenseTransitionLog;
 /// # struct MyType;
-/// fn system(meta: Res<RevMeta>, mut log: Local<DenseTransitionLog<MyType>>) -> Result<(), BevyError> {
-///     // always call before any mutation
-///     let (mut iter, past_len) = log.pre_update_drain(&meta);
+/// fn system(meta: Res<RevMeta>, mut log: Local<TransitionLog<MyType>>) -> Result<(), BevyError> {
+///     let mut drain = log.pre_update_drain(&meta);
 ///
-///     for past_transition in iter.by_ref().take(past_len) {
+///     for past_transition in drain.past() {
 ///         // do cleanup tasks with past transitions
 ///     }
 ///
-///     for future_transition in iter {
+///     for future_transition in drain.future() {
 ///         // do cleanup tasks with future transitions
 ///     }
 ///
 ///     match meta.running_direction() {
 ///         RevDirection::NOT_LOG => {
 ///             let new_transition = todo!();
+///
 ///             // mutate some state with the new transition
 ///
-///             // push transition to the log
+///             // push the transition to the log
 ///             let iter = log.push_and_drain_past(meta.past_len(), new_transition);
 ///
 ///             for past_transition in iter {
@@ -187,13 +240,17 @@ use super::OutOfLog;
 ///         },
 ///         RevDirection::FORWARD_LOG => {
 ///             let next_transition = log.forward_log()?;
-///             // mutate some state with the new transition
+///
+///             // mutate some state with the logged transition
 ///         },
 ///         RevDirection::BackwardLog => {
 ///             let previous_transition = log.backward_log()?;
-///             // mutate some state with the new transition
+///
+///             // mutate some state with the logged transition
 ///         }
 ///     }
+///
+///     Ok(())
 /// }
 /// ```
 #[derive(Debug)]
@@ -202,31 +259,6 @@ pub struct TransitionLog<T> {
     index: usize,
     global_log_clears: u64,
     global_log_exits: u64,
-}
-
-pub struct TransitionDrains<'log, T> {
-    pub(super) transitions: TransitionDrain<'log, T>,
-    pub(super) past_len: usize,
-}
-
-pub type TransitionDrainPast<'a, 'log, T> = core::iter::Take<&'a mut TransitionDrain<'log, T>>;
-
-pub type TransitionDrainFuture<'log, T> = core::iter::Skip<TransitionDrain<'log, T>>;
-
-pub type TransitionDrain<'log, T> = std::collections::vec_deque::Drain<'log, T>;
-
-impl<'log, T> TransitionDrains<'log, T> {
-    pub fn past<'a>(&'a mut self) -> TransitionDrainPast<'a, 'log, T> {
-        let past_len = self.past_len;
-        self.past_len = 0;
-        self.transitions.by_ref().take(past_len)
-    }
-    pub fn future(self) -> TransitionDrainFuture<'log, T> {
-        self.transitions.skip(self.past_len)
-    }
-    pub fn all(self) -> TransitionDrain<'log, T> {
-        self.transitions
-    }
 }
 
 impl<T> Default for TransitionLog<T> {
@@ -244,6 +276,82 @@ impl<T> TransitionLog<T> {
             global_log_exits: 0,
         }
     }
+
+    /// Creates an empty log with space for at least `capacity` transitions.
+    ///
+    /// See [`VecDeque::with_capacity`].
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            transitions: VecDeque::with_capacity(capacity),
+            index: 0,
+            global_log_clears: 0,
+            global_log_exits: 0,
+        }
+    }
+
+    /// Returns the number of transitions in the log.
+    ///
+    /// See [`VecDeque::len`].
+    pub fn len(&self) -> usize {
+        self.transitions.len()
+    }
+
+    /// Returns the number of transitions the log can hold without reallocating.
+    ///
+    /// See [`VecDeque::capacity`].
+    pub fn capacity(&self) -> usize {
+        self.transitions.capacity()
+    }
+
+    /// Returns `true` if the log contains no transitions.
+    ///
+    /// See [`VecDeque::is_empty`].
+    pub fn is_empty(&self) -> bool {
+        self.transitions.is_empty()
+    }
+
+    /// Reserves capacity for at least `additional` more transitions.
+    ///
+    /// See [`VecDeque::reserve`].
+    pub fn reserve(&mut self, additional: usize) {
+        self.transitions.reserve(additional)
+    }
+
+    /// Reserves capacity for at least `additional` more transitions.
+    ///
+    /// See [`VecDeque::reserve_exact`].
+    pub fn reserve_exact(&mut self, additional: usize) {
+        self.transitions.reserve_exact(additional)
+    }
+
+    /// Tries to reserve capacity for at least `additional` more transitions.
+    ///
+    /// See [`VecDeque::try_reserve`].
+    pub fn try_reserve(&mut self, additional: usize) -> Result<(), TryReserveError> {
+        self.transitions.try_reserve(additional)
+    }
+
+    /// Tries to reserve capacity for at least `additional` more transitions.
+    ///
+    /// See [`VecDeque::try_reserve_exact`].
+    pub fn try_reserve_exact(&mut self, additional: usize) -> Result<(), TryReserveError> {
+        self.transitions.try_reserve_exact(additional)
+    }
+
+    /// Shrinks the capacity of the log with a lower bound.
+    ///
+    /// See [`VecDeque::shrink_to`].
+    pub fn shrink_to(&mut self, min_capacity: usize) {
+        self.transitions.shrink_to(min_capacity)
+    }
+
+    /// Shrinks the capacity of the log as much as possible.
+    ///
+    /// See [`VecDeque::shrink_to_fit`].
+    pub fn shrink_to_fit(&mut self) {
+        self.transitions.shrink_to_fit()
+    }
+
     pub fn push_and_truncate_past(&mut self, max_past_len: u64, transition: T) {
         let to_drain = self.push_and_get_drain(max_past_len, transition);
         // todo: truncate_front https://github.com/rust-lang/rust/issues/140667
@@ -273,6 +381,14 @@ impl<T> TransitionLog<T> {
         self.index = self.transitions.len() - to_drain;
         self.transitions.range(..to_drain)
     }
+    pub(super) fn full_drain(&mut self) -> TransitionDrains<T> {
+        let past_len = self.index;
+        self.index = 0;
+        TransitionDrains {
+            transitions: self.transitions.drain(..),
+            past_len,
+        }
+    }
     pub(super) fn drain_future(&mut self) -> TransitionDrains<T> {
         TransitionDrains {
             transitions: self.transitions.drain(self.index..),
@@ -282,6 +398,12 @@ impl<T> TransitionLog<T> {
     pub(super) fn drain_past(&mut self, to_drain: usize) -> TransitionDrain<T> {
         self.transitions.drain(..to_drain)
     }
+    pub(super) fn empty_drain(&mut self) -> TransitionDrains<T> {
+        TransitionDrains {
+            transitions: self.transitions.drain(..0),
+            past_len: 0,
+        }
+    }
     pub(super) fn truncate_future(&mut self) {
         self.transitions.truncate(self.index);
     }
@@ -289,29 +411,13 @@ impl<T> TransitionLog<T> {
         self.transitions.clear();
         self.index = 0;
     }
-    pub(super) fn empty_drain(&mut self) -> TransitionDrains<T> {
-        TransitionDrains {
-            transitions: self.transitions.drain(..0),
-            past_len: 0,
-        }
-    }
-    pub(super) fn full_drain(&mut self) -> TransitionDrains<T> {
-        let past_len = self.index;
-        self.index = 0;
-        TransitionDrains {
-            transitions: self.transitions.drain(..),
-            past_len,
-        }
-    }
-    // todo: mention in docs that OutOfLog is not reliable but instead that the log is in-log
-    // when it should be
     pub fn backward_log(&mut self) -> Result<&mut T, OutOfLog> {
         let index = self.index.checked_sub(1).ok_or(OutOfLog)?;
 
         // self.index should always be <= the deque len, so successfully reducing it without
         // underflow is expected to result in a valid index into the log. If this is not the case
-        // here, the log was in an invalid state before calling the current method, this is a crate
-        // bug.
+        // here, the log was in an invalid state before calling the current method, this would be a
+        // crate bug.
         let transition = self.transitions.get_mut(index).unwrap();
 
         self.index = index;
@@ -364,6 +470,31 @@ impl<T> TransitionLog<T> {
             PreUpdateVariant::RemoveFuture => self.drain_future(),
             PreUpdateVariant::Nothing => self.empty_drain(),
         }
+    }
+}
+
+pub struct TransitionDrains<'log, T> {
+    pub(super) transitions: TransitionDrain<'log, T>,
+    pub(super) past_len: usize,
+}
+
+pub type TransitionDrainPast<'a, 'log, T> = core::iter::Take<&'a mut TransitionDrain<'log, T>>;
+
+pub type TransitionDrainFuture<'log, T> = core::iter::Skip<TransitionDrain<'log, T>>;
+
+pub type TransitionDrain<'log, T> = std::collections::vec_deque::Drain<'log, T>;
+
+impl<'log, T> TransitionDrains<'log, T> {
+    pub fn past<'a>(&'a mut self) -> TransitionDrainPast<'a, 'log, T> {
+        let past_len = self.past_len;
+        self.past_len = 0;
+        self.transitions.by_ref().take(past_len)
+    }
+    pub fn future(self) -> TransitionDrainFuture<'log, T> {
+        self.transitions.skip(self.past_len)
+    }
+    pub fn all(self) -> TransitionDrain<'log, T> {
+        self.transitions
     }
 }
 

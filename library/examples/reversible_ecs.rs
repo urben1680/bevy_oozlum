@@ -418,7 +418,7 @@ fn row5(app: &mut App) {
                 // We get the past len from the frame log instead from RevMeta.
                 // Note that here, in contrast to the previous row, we do not need to increase the past_len because
                 // we dont do anything with the entities that go out of log.
-                let past_len = past_len_log.past_len(&meta);
+                let past_len = past_len_log.update_get(&meta);
 
                 // We spawn the waste entity and mark is as log scoped to be despawned when out-of-log.
                 let entity = commands.spawn(waste).make_rev_log_scoped(now).id();

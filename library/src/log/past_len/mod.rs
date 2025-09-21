@@ -1,10 +1,7 @@
 use crate::{log::PreUpdateVariant, meta::RevMeta};
 use bevy::ecs::change_detection::MaybeLocation;
-use core::fmt::Debug;
-use std::{
-    collections::{TryReserveError, VecDeque},
-    fmt::Display,
-};
+use core::fmt::{Debug, Display};
+use std::collections::{TryReserveError, VecDeque};
 
 use limits::*;
 use offset::*;
@@ -21,120 +18,12 @@ mod offset;
 /// often per frame and there is no other way to determine how long a log should be when updating.
 ///
 /// If an update is missed, for example when the scope of the log is behind complicated and
-/// error-prone scheduling and is just not reached when it should, [`RevMeta::try_run_rev_update`]
+/// error-prone scheduling and is just not reached when it should, [`RevMeta::run_rev_update`]
 /// will detect this and return an error.
 ///
-/// # Example
-///
-/// The following systems reacts on messages. These may not be written for many frames, but then
-/// again they could appear in a large amount in a single frame. One could use a
-/// [`TransitionsLog`](super::TransitionsLog) for that and just push no messages when there are
-/// none. But if this system in turn could also be used with a run condition, then it is impossible
-/// to pick a good `past_len` value that makes sure not too many messages are drained or the log
-/// grows way beyond what is needed.
-///
-/// For that case and other comparable ones, pairing the log with `PastLenLog` fixes this.
-///
-/// ## With [`TransitionLog`](super::TransitionLog)
-///
-/// ```
-/// # use bevy::prelude::*;
-/// # use bevy::ecs::error::Result;
-/// # use bevy_oozlum::prelude::*;
-/// # #[derive(Message, Clone)]
-/// # struct MyMessage;
-/// fn my_system(
-///     meta: Res<RevMeta>,
-///     mut messages: MessageReader<MyMessage>,
-///     mut past_len_log: Local<PastLenLog>,
-///     mut message_log: Local<TransitionLog<MyMessage>>,
-/// ) -> Result {
-///     // always call pre_update before further mutations
-///     past_len_log.pre_update(&meta);
-///     message_log.pre_update(&meta);
-///
-///     match meta.running_direction() {
-///         RevDirection::NOT_LOG => {
-///             // message_log potentially gets updated multiple times
-///             // this method returns the log len for the last message
-///             if let Some(past_len) = past_len_log.past_len_many(&meta, messages.len() as u64) {
-///                 for my_message in messages.read() {
-///                     // use message
-///
-///                     message_log.push_and_truncate_past(past_len, my_message.clone());
-///                 }
-///             }
-///         }
-///         RevDirection::FORWARD_LOG => {
-///             let updates = past_len_log.forward_log_many(&meta);
-///             for _ in 0.. updates {
-///                 let my_message = message_log.forward_log()?;
-///                 // use message
-///             }
-///         }
-///         RevDirection::BackwardLog => {
-///             let updates = past_len_log.backward_log_many(&meta);
-///             for _ in 0.. updates {
-///                 let my_message = message_log.backward_log()?;
-///                 // use message
-///             }
-///         }
-///     }
-///     Ok(())
-/// }
-/// ```
-///
-/// ## With [`TransitionsLog`](super::TransitionsLog)
-///
-/// ```
-/// # use bevy::prelude::*;
-/// # use bevy::ecs::error::Result;
-/// # use bevy_oozlum::prelude::*;
-/// # #[derive(Message, Clone)]
-/// # struct MyMessage;
-/// fn my_system(
-///     meta: Res<RevMeta>,
-///     mut messages: MessageReader<MyMessage>,
-///     mut past_len_log: Local<PastLenLog>,
-///     mut message_log: Local<TransitionsLog<MyMessage>>,
-/// ) -> Result {
-///     // always call pre_update before further mutations
-///     past_len_log.pre_update(&meta);
-///     message_log.pre_update(&meta);
-///
-///     match meta.running_direction() {
-///         RevDirection::NOT_LOG => {
-///             if !messages.is_empty() {
-///                 let past_len = past_len_log.past_len(&meta);
-///                 message_log.push_and_truncate_past(past_len, |mut log| {
-///                     for my_message in messages.read() {
-///                         // use message
-///
-///                         log.push(my_message.clone())
-///                     }
-///                 })
-///             }
-///         }
-///         RevDirection::FORWARD_LOG => {
-///             if past_len_log.forward_log(&meta) {
-///                 let my_messages = message_log.forward_log()?;
-///                 for my_message in my_messages {
-///                     // use message
-///                 }
-///             }
-///         }
-///         RevDirection::BackwardLog => {
-///             if past_len_log.backward_log(&meta) {
-///                 let my_messages = message_log.backward_log()?;
-///                 for my_message in my_messages {
-///                     // use message
-///                 }
-///             }
-///         }
-///     }
-///     Ok(())
-/// }
-/// ```
+/// For examples, see the [`update_get`](Self::update_get) method when a single update of an
+/// accompied log needs the `max_past_len` value or [`update_many_get`](Self::update_many_get) when
+/// an accompied log is updated multiple times in a row.
 #[derive(Default)]
 pub struct PastLenLog {
     /// Offsets that need to be added or subtracted from [`Self::last_update`] to calculate at which
@@ -228,7 +117,7 @@ impl PastLenLog {
     /// See [`VecDeque::len`].
     ///
     /// Note that the number of bytes has no relation to the length of the log.
-    pub fn bytes_len(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.offset_bytes.len()
     }
 
@@ -237,7 +126,7 @@ impl PastLenLog {
     /// See [`VecDeque::capacity`].
     ///
     /// Note that the number of bytes has no relation to the length of the log.
-    pub fn bytes_capacity(&self) -> usize {
+    pub fn capacity(&self) -> usize {
         self.offset_bytes.capacity()
     }
 
@@ -246,7 +135,7 @@ impl PastLenLog {
     /// See [`VecDeque::is_empty`].
     ///
     /// Note that the number of bytes has no relation to the length of the log.
-    pub fn bytes_is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.offset_bytes.is_empty()
     }
 
@@ -255,7 +144,7 @@ impl PastLenLog {
     /// See [`VecDeque::reserve`].
     ///
     /// Note that the number of bytes has no relation to the length of the log.
-    pub fn bytes_reserve(&mut self, additional: usize) {
+    pub fn reserve(&mut self, additional: usize) {
         self.offset_bytes.reserve(additional)
     }
 
@@ -264,7 +153,7 @@ impl PastLenLog {
     /// See [`VecDeque::reserve_exact`].
     ///
     /// Note that the number of bytes has no relation to the length of the log.
-    pub fn bytes_reserve_exact(&mut self, additional: usize) {
+    pub fn reserve_exact(&mut self, additional: usize) {
         self.offset_bytes.reserve_exact(additional)
     }
 
@@ -273,7 +162,7 @@ impl PastLenLog {
     /// See [`VecDeque::try_reserve`].
     ///
     /// Note that the number of bytes has no relation to the length of the log.
-    pub fn bytes_try_reserve(&mut self, additional: usize) -> Result<(), TryReserveError> {
+    pub fn try_reserve(&mut self, additional: usize) -> Result<(), TryReserveError> {
         self.offset_bytes.try_reserve(additional)
     }
 
@@ -282,7 +171,7 @@ impl PastLenLog {
     /// See [`VecDeque::try_reserve_exact`].
     ///
     /// Note that the number of bytes has no relation to the length of the log.
-    pub fn bytes_try_reserve_exact(&mut self, additional: usize) -> Result<(), TryReserveError> {
+    pub fn try_reserve_exact(&mut self, additional: usize) -> Result<(), TryReserveError> {
         self.offset_bytes.try_reserve_exact(additional)
     }
 
@@ -291,7 +180,7 @@ impl PastLenLog {
     /// See [`VecDeque::shrink_to`].
     ///
     /// Note that the number of bytes has no relation to the length of the log.
-    pub fn bytes_shrink_to(&mut self, min_capacity: usize) {
+    pub fn shrink_to(&mut self, min_capacity: usize) {
         self.offset_bytes.shrink_to(min_capacity)
     }
 
@@ -300,7 +189,7 @@ impl PastLenLog {
     /// See [`VecDeque::shrink_to_fit`].
     ///
     /// Note that the number of bytes has no relation to the length of the log.
-    pub fn bytes_shrink_to_fit(&mut self) {
+    pub fn shrink_to_fit(&mut self) {
         self.offset_bytes.shrink_to_fit()
     }
 
@@ -378,15 +267,74 @@ impl PastLenLog {
     /// the [present reversible frame](RevMeta::now). This method may panic if this was not done.
     ///
     /// For updating this log multiple times during this frame, prefer to use
-    /// [`past_len_many`](Self::past_len_many) instead.
+    /// [`update_many_get`](Self::update_many_get) instead.
     ///
-    /// For an example, see the second example in the [`PastLenLog`] documentation.
+    /// # Example
+    ///
+    /// The following systems reacts on messages. These may not be written for many frames, but then
+    /// again they could appear in a large amount in a single frame. One could use a
+    /// [`TransitionsLog`](super::TransitionsLog) for that and just push no messages when there are
+    /// none. But if this system in turn could also be used with a run condition, then it is
+    /// impossible to pick a good `past_len` value that makes sure not too many messages are drained
+    /// or the log grows way beyond what is needed.
+    ///
+    /// For that case and other comparable ones, pairing the log with `PastLenLog` fixes this.
+    ///
+    /// ```
+    /// # use bevy::prelude::*;
+    /// # use bevy::ecs::error::Result;
+    /// # use bevy_oozlum::prelude::*;
+    /// # #[derive(Message, Clone)]
+    /// # struct MyMessage;
+    /// fn my_system(
+    ///     meta: Res<RevMeta>,
+    ///     mut messages: MessageReader<MyMessage>,
+    ///     mut past_len_log: Local<PastLenLog>,
+    ///     mut message_log: Local<TransitionsLog<MyMessage>>,
+    /// ) -> Result {
+    ///     // always call pre_update before further mutations
+    ///     past_len_log.pre_update(&meta);
+    ///     message_log.pre_update(&meta);
+    ///
+    ///     match meta.running_direction() {
+    ///         RevDirection::NOT_LOG => {
+    ///             if !messages.is_empty() {
+    ///                 let past_len = past_len_log.update_get(&meta);
+    ///                 message_log.push_and_truncate_past(past_len, |mut log| {
+    ///                     for my_message in messages.read() {
+    ///                         // use message
+    ///
+    ///                         log.push(my_message.clone())
+    ///                     }
+    ///                 })
+    ///             }
+    ///         }
+    ///         RevDirection::FORWARD_LOG => {
+    ///             if past_len_log.forward_log(&meta) {
+    ///                 let my_messages = message_log.forward_log()?;
+    ///                 for my_message in my_messages {
+    ///                     // use message
+    ///                 }
+    ///             }
+    ///         }
+    ///         RevDirection::BackwardLog => {
+    ///             if past_len_log.backward_log(&meta) {
+    ///                 let my_messages = message_log.backward_log()?;
+    ///                 for my_message in my_messages {
+    ///                     // use message
+    ///                 }
+    ///             }
+    ///         }
+    ///     }
+    ///     Ok(())
+    /// }
+    /// ```
     #[track_caller]
-    pub fn past_len(&mut self, meta: &RevMeta) -> u64 {
-        self.past_len_with_caller(meta, MaybeLocation::caller())
+    pub fn update_get(&mut self, meta: &RevMeta) -> u64 {
+        self.update_get_with_caller(meta, MaybeLocation::caller())
     }
 
-    fn past_len_with_caller(&mut self, meta: &RevMeta, caller: MaybeLocation) -> u64 {
+    fn update_get_with_caller(&mut self, meta: &RevMeta, caller: MaybeLocation) -> u64 {
         self.truncate_past_and_push_offset(meta);
         meta.past_len_limits().push_limit(
             &mut self.update_state,
@@ -419,7 +367,7 @@ impl PastLenLog {
     /// # let updates = 10;
     /// let mut past_len = None;
     /// for _ in 0..updates {
-    ///     past_len = Some(past_len_log.past_len(meta));
+    ///     past_len = Some(past_len_log.update_get(meta));
     /// }
     /// past_len
     /// # ;
@@ -427,12 +375,66 @@ impl PastLenLog {
     /// # }).unwrap();
     /// ```
     ///
-    /// For an example, see the first example in the [`PastLenLog`] documentation.
-    pub fn past_len_many(&mut self, meta: &RevMeta, updates: u64) -> Option<u64> {
-        self.past_len_many_with_caller(meta, updates, MaybeLocation::caller())
+    /// # Example
+    ///
+    /// The following systems reacts on messages. These may not be written for many frames, but then
+    /// again they could appear in a large amount in a single frame. One could use a
+    /// [`TransitionsLog`](super::TransitionsLog) for that and just push no messages when there are
+    /// none. But if this system in turn could also be used with a run condition, then it is
+    /// impossible to pick a good `past_len` value that makes sure not too many messages are drained
+    /// or the log grows way beyond what is needed.
+    ///
+    /// ```
+    /// # use bevy::prelude::*;
+    /// # use bevy::ecs::error::Result;
+    /// # use bevy_oozlum::prelude::*;
+    /// # #[derive(Message, Clone)]
+    /// # struct MyMessage;
+    /// fn my_system(
+    ///     meta: Res<RevMeta>,
+    ///     mut messages: MessageReader<MyMessage>,
+    ///     mut past_len_log: Local<PastLenLog>,
+    ///     mut message_log: Local<TransitionLog<MyMessage>>,
+    /// ) -> Result {
+    ///     // always call pre_update before further mutations
+    ///     past_len_log.pre_update(&meta);
+    ///     message_log.pre_update(&meta);
+    ///
+    ///     match meta.running_direction() {
+    ///         RevDirection::NOT_LOG => {
+    ///             // message_log potentially gets updated multiple times
+    ///             // this method returns the log len for the last message
+    ///             if let Some(past_len) = past_len_log.update_many_get(&meta, messages.len() as u64) {
+    ///                 for my_message in messages.read() {
+    ///                     // use message
+    ///
+    ///                     message_log.push_and_truncate_past(past_len, my_message.clone());
+    ///                 }
+    ///             }
+    ///         }
+    ///         RevDirection::FORWARD_LOG => {
+    ///             let updates = past_len_log.forward_log_many(&meta);
+    ///             for _ in 0..updates {
+    ///                 let my_message = message_log.forward_log()?;
+    ///                 // use message
+    ///             }
+    ///         }
+    ///         RevDirection::BackwardLog => {
+    ///             let updates = past_len_log.backward_log_many(&meta);
+    ///             for _ in 0..updates {
+    ///                 let my_message = message_log.backward_log()?;
+    ///                 // use message
+    ///             }
+    ///         }
+    ///     }
+    ///     Ok(())
+    /// }
+    /// ```
+    pub fn update_many_get(&mut self, meta: &RevMeta, updates: u64) -> Option<u64> {
+        self.update_many_get_with_caller(meta, updates, MaybeLocation::caller())
     }
 
-    fn past_len_many_with_caller(
+    fn update_many_get_with_caller(
         &mut self,
         meta: &RevMeta,
         updates: u64,
@@ -526,7 +528,7 @@ impl PastLenLog {
     /// If this log is potenitally updated more than once in the scope this method is used, prefer
     /// [`backward_log_many`](Self::backward_log_many) over using this method in a while loop.
     ///
-    /// See the [type docs](PastLenLog) for an example.
+    /// See the [`update_get`](Self::update_get) for an example.
     #[track_caller]
     pub fn backward_log(&mut self, meta: &RevMeta) -> bool {
         self.backward_log_with_caller(meta, MaybeLocation::caller())
@@ -577,7 +579,7 @@ impl PastLenLog {
     /// If this log is updated exactly once in the scope this method is used, prefer
     /// [`backward_log`](Self::backward_log) over this method.
     ///
-    /// See the [type docs](PastLenLog) for an example.
+    /// See [`update_many_get`](Self::update_many_get) for an example.
     pub fn backward_log_many(&mut self, meta: &RevMeta) -> u64 {
         self.backward_log_many_with_caller(meta, MaybeLocation::caller())
     }
@@ -622,7 +624,7 @@ impl PastLenLog {
     /// If this log is potenitally updated more than once in the scope this method is used, prefer
     /// [`forward_log_many`](Self::forward_log_many) over using this method in a while loop.
     ///
-    /// See the [type docs](PastLenLog) for an example.
+    /// See [`update_get`](Self::update_get) for an example.
     #[track_caller]
     pub fn forward_log(&mut self, meta: &RevMeta) -> bool {
         self.forward_log_with_caller(meta, MaybeLocation::caller())
@@ -698,7 +700,7 @@ impl PastLenLog {
     /// If this log is updated exactly once in the scope this method is used, prefer
     /// [`forward_log`](Self::forward_log) over this method.
     ///
-    /// See the [type docs](PastLenLog) for an example.
+    /// See [`update_many_get`](Self::update_many_get) for an example.
     pub fn forward_log_many(&mut self, meta: &RevMeta) -> u64 {
         self.forward_log_many_with_caller(meta, MaybeLocation::caller())
     }
@@ -823,7 +825,7 @@ mod test {
                 self.past_len_log.pre_update(meta);
                 for past_len in past_lens {
                     assert_eq!(
-                        self.past_len_log.past_len_with_caller(meta, caller),
+                        self.past_len_log.update_get_with_caller(meta, caller),
                         past_len,
                         "{:#?}",
                         self.past_len_log

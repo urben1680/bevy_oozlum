@@ -4,7 +4,7 @@
 //!
 //! This is more compact than storing `u64`.
 //!
-//! - Offset from `0` to `127` are encoded in a single byte as `x` bits in the pattern of
+//! - Offsets from `0` to `127` are encoded in a single byte as `x` bits in the pattern of
 //!   `0b0_xxxxxxx`.
 //! - Up to `65` sequential offsets of `0` are encoded in a single byte as `x` bits in the pattern
 //!   of `0b10_xxxxxx`. The numeric value of the `x` is actually read plus 2. This is because:
@@ -14,9 +14,11 @@
 //! - Offsets larger than `127` are encoded in multiple bytes and are split in chunks of `x` bits:
 //!   - The first and last byte of this sequence use the pattern `0b11_xxxxxx`.
 //!   - If more bits are needed, in between are bytes that use the pattern `0b0_xxxxxxx`.
-//!   - This uses up to ten bytes in total for `u64::MAX`
+//!   - This uses up to ten bytes in total for `u64::MAX`.
+//! - This encoding does not consume more bytes than `u64` for offsets below `2^55`.
 //! - These bytes or sequences of bytes can be read in reverse as well, which is needed for reading
-//!   the previous offset in [`PastLenLog::backward_log`](super::PastLenLog::backward_log).
+//!   the previous offset in [`PastLenLog::backward_log`](super::PastLenLog::backward_log)
+//!   ([`many`](super::PastLenLog::backward_log_many)).
 //! - The [`OffsetIter`] iterator is used to read the offsets. See [`IterItem`].
 
 use std::{

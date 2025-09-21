@@ -128,12 +128,12 @@ impl<T: ReadOnlySystem<In = (), Out = bool>> System for RevCondition<T> {
                 match result {
                     Ok(false) => Ok(false),
                     Ok(true) => {
-                        let past_len = self.run_log.past_len(meta);
+                        let past_len = self.run_log.update_get(meta);
                         self.run_or_err_log.push_and_truncate_past(past_len, Ok(()));
                         Ok(true)
                     }
                     Err(RunSystemError::Skipped(skipped)) => {
-                        let past_len = self.run_log.past_len(meta);
+                        let past_len = self.run_log.update_get(meta);
                         self.run_or_err_log.push_and_truncate_past(
                             past_len,
                             Err(Box::new(RevRunSystemError::Skipped(skipped.clone()))),
@@ -141,7 +141,7 @@ impl<T: ReadOnlySystem<In = (), Out = bool>> System for RevCondition<T> {
                         Err(RunSystemError::Skipped(skipped))
                     }
                     Err(RunSystemError::Failed(failed)) => {
-                        let past_len = self.run_log.past_len(meta);
+                        let past_len = self.run_log.update_get(meta);
                         self.run_or_err_log.push_and_truncate_past(
                             past_len,
                             Err(Box::new(RevRunSystemError::Failed(format!("{failed}")))),

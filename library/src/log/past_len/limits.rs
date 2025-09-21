@@ -14,8 +14,8 @@
 
 use super::PreUpdateVariant;
 use bevy::{ecs::change_detection::MaybeLocation, reflect::Reflect, utils::Parallel};
+use core::{fmt::Debug, sync::atomic::AtomicU32};
 use nonmax::NonMaxU32;
-use std::{fmt::Debug, sync::atomic::AtomicU32};
 
 /// Part of [`RevMeta`](crate::meta::RevMeta) that keeps track of [`PastLenLog`](super::PastLenLog)
 /// updates and reports when such an update was expected for a present frame but did not happen.

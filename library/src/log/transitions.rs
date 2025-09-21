@@ -1,6 +1,6 @@
 use std::{
     collections::{
-        VecDeque,
+        TryReserveError, VecDeque,
         vec_deque::{Drain, IterMut},
     },
     fmt::Debug,
@@ -25,74 +25,6 @@ pub struct TransitionsLog<T, U = ()> {
     index: usize,
 }
 
-pub struct TransitionsDrains<'log, T, U> {
-    transitions: Drain<'log, T>,
-    updates: TransitionDrains<'log, TransitionsLogUpdate<U>>,
-    past_len: usize,
-}
-
-pub type TransitionsDrainPast<'a, 'log, T, U> = TransitionsDrainChunkable<
-    TransitionDrainPast<'a, 'log, T>,
-    TransitionDrainPast<'a, 'log, TransitionsLogUpdate<U>>,
-    U,
->;
-
-pub type TransitionsDrainFuture<'log, T, U> = TransitionsDrainChunkable<
-    TransitionDrainFuture<'log, T>,
-    TransitionDrainFuture<'log, TransitionsLogUpdate<U>>,
-    U,
->;
-
-pub type TransitionsDrain<'log, T, U> = TransitionsDrainChunkable<
-    TransitionDrain<'log, T>,
-    TransitionDrain<'log, TransitionsLogUpdate<U>>,
-    U,
->;
-
-impl<'log, T, U> TransitionsDrains<'log, T, U> {
-    pub fn past<'a>(&'a mut self) -> TransitionsDrainPast<'a, 'log, T, U> {
-        let past_len = self.past_len;
-        self.past_len = 0;
-        TransitionsDrainChunkable {
-            transitions: self.transitions.by_ref().take(past_len),
-            updates: self.updates.past(),
-            _p: PhantomData,
-        }
-    }
-    pub fn future(self) -> TransitionsDrainFuture<'log, T, U> {
-        TransitionsDrainChunkable {
-            transitions: self.transitions.skip(self.past_len),
-            updates: self.updates.future(),
-            _p: PhantomData,
-        }
-    }
-    pub fn all(self) -> TransitionsDrain<'log, T, U> {
-        TransitionsDrainChunkable {
-            transitions: self.transitions,
-            updates: self.updates.all(),
-            _p: PhantomData,
-        }
-    }
-}
-
-pub struct TransitionsDrainChunkable<TI, UI, U> {
-    pub transitions: TI,
-    pub updates: UI,
-    _p: PhantomData<fn(UI) -> U>,
-}
-
-impl<TI, UI, U> TransitionsDrainChunkable<TI, UI, U>
-where
-    TI: Iterator,
-    UI: Iterator<Item = TransitionsLogUpdate<U>>,
-{
-    pub fn next_update<'a>(&'a mut self) -> Option<(core::iter::Take<&'a mut TI>, U)> {
-        self.updates
-            .next()
-            .map(|update| (self.transitions.by_ref().take(update.amount), update.update))
-    }
-}
-
 impl<T, U> Default for TransitionsLog<T, U> {
     fn default() -> Self {
         Self::new()
@@ -107,10 +39,152 @@ impl<T, U> TransitionsLog<T, U> {
             index: 0,
         }
     }
+
+    /// Creates an empty log with space for at least `transitions_capacity` transitions (`T`) from at
+    /// at least `updates_capacity` updates (`U`).
+    ///
+    /// See [`VecDeque::with_capacity`].
+    pub fn with_capacities(transitions_capacity: usize, updates_capacity: usize) -> Self {
+        Self {
+            transitions: VecDeque::with_capacity(transitions_capacity),
+            updates: TransitionLog::with_capacity(updates_capacity),
+            index: 0,
+        }
+    }
+
+    /// Returns the number of transitions (`T`) in the log.
+    ///
+    /// See [`VecDeque::len`].
+    pub fn transitions_len(&self) -> usize {
+        self.transitions.len()
+    }
+
+    /// Returns the number of updates (`U`) in the log.
+    ///
+    /// See [`VecDeque::len`].
+    pub fn updates_len(&self) -> usize {
+        self.updates.len()
+    }
+
+    /// Returns the number of transitions (`T`) the log can hold without reallocating.
+    ///
+    /// See [`VecDeque::capacity`].
+    pub fn transitions_capacity(&self) -> usize {
+        self.transitions.capacity()
+    }
+
+    /// Returns the number of updates (`U`) the log can hold without reallocating.
+    ///
+    /// See [`VecDeque::capacity`].
+    pub fn updates_capacity(&self) -> usize {
+        self.updates.capacity()
+    }
+
+    /// Returns `true` if the log contains no transitions (`T`).
+    ///
+    /// See [`VecDeque::is_empty`].
+    pub fn transitions_is_empty(&self) -> bool {
+        self.transitions.is_empty()
+    }
+
+    /// Returns `true` if the log contains no updates (`U`).
+    ///
+    /// See [`VecDeque::is_empty`].
+    pub fn updates_is_empty(&self) -> bool {
+        self.updates.is_empty()
+    }
+
+    /// Reserves capacity for at least `additional` more transitions (`T`).
+    ///
+    /// See [`VecDeque::reserve`].
+    pub fn transitions_reserve(&mut self, additional: usize) {
+        self.transitions.reserve(additional)
+    }
+
+    /// Reserves capacity for at least `additional` more updates (`U`).
+    ///
+    /// See [`VecDeque::reserve`].
+    pub fn updates_reserve(&mut self, additional: usize) {
+        self.updates.reserve(additional)
+    }
+
+    /// Reserves capacity for at least `additional` more transitions (`T`).
+    ///
+    /// See [`VecDeque::reserve_exact`].
+    pub fn transitions_reserve_exact(&mut self, additional: usize) {
+        self.transitions.reserve_exact(additional)
+    }
+
+    /// Reserves capacity for at least `additional` more updates (`U`).
+    ///
+    /// See [`VecDeque::reserve_exact`].
+    pub fn updates_reserve_exact(&mut self, additional: usize) {
+        self.updates.reserve_exact(additional)
+    }
+
+    /// Tries to reserve capacity for at least `additional` more transitions (`T`).
+    ///
+    /// See [`VecDeque::try_reserve`].
+    pub fn transitions_try_reserve(&mut self, additional: usize) -> Result<(), TryReserveError> {
+        self.transitions.try_reserve(additional)
+    }
+
+    /// Tries to reserve capacity for at least `additional` more updates (`U`).
+    ///
+    /// See [`VecDeque::try_reserve`].
+    pub fn updates_try_reserve(&mut self, additional: usize) -> Result<(), TryReserveError> {
+        self.updates.try_reserve(additional)
+    }
+
+    /// Tries to reserve capacity for at least `additional` more transitions (`T`).
+    ///
+    /// See [`VecDeque::try_reserve_exact`].
+    pub fn transitions_try_reserve_exact(
+        &mut self,
+        additional: usize,
+    ) -> Result<(), TryReserveError> {
+        self.transitions.try_reserve_exact(additional)
+    }
+
+    /// Tries to reserve capacity for at least `additional` more updates (`U`).
+    ///
+    /// See [`VecDeque::try_reserve_exact`].
+    pub fn updates_try_reserve_exact(&mut self, additional: usize) -> Result<(), TryReserveError> {
+        self.updates.try_reserve_exact(additional)
+    }
+
+    /// Shrinks the capacity of the log's transitions (`T`) with a lower bound.
+    ///
+    /// See [`VecDeque::shrink_to`].
+    pub fn transitions_shrink_to(&mut self, min_capacity: usize) {
+        self.transitions.shrink_to(min_capacity)
+    }
+
+    /// Shrinks the capacity of the log's updates (`U`) with a lower bound.
+    ///
+    /// See [`VecDeque::shrink_to`].
+    pub fn updates_shrink_to(&mut self, min_capacity: usize) {
+        self.updates.shrink_to(min_capacity)
+    }
+
+    /// Shrinks the capacity of the log's transitions (`T`) as much as possible.
+    ///
+    /// See [`VecDeque::shrink_to_fit`].
+    pub fn transitions_shrink_to_fit(&mut self) {
+        self.transitions.shrink_to_fit()
+    }
+
+    /// Shrinks the capacity of the log's updates (`U`) as much as possible.
+    ///
+    /// See [`VecDeque::shrink_to_fit`].
+    pub fn updates_shrink_to_fit(&mut self) {
+        self.updates.shrink_to_fit()
+    }
+
     pub fn push_and_truncate_past<IntoU: Into<U>>(
         &mut self,
         max_past_len: u64,
-        c: impl FnOnce(LogMut<T>) -> IntoU,
+        c: impl FnOnce(LogMut<T, U>) -> IntoU,
     ) {
         let (transition_drain, amount_drain) =
             self.push_and_get_transition_and_amount_drain(max_past_len, c);
@@ -121,7 +195,7 @@ impl<T, U> TransitionsLog<T, U> {
     pub fn push_and_drain_past<IntoU: Into<U>>(
         &mut self,
         max_past_len: u64,
-        c: impl FnOnce(LogMut<T>) -> IntoU,
+        c: impl FnOnce(LogMut<T, U>) -> IntoU,
     ) -> TransitionsDrain<T, U> {
         // for the + 1, see the comment in TransitionLog::push_and_get_drain
         let (transition_drain, amount_drain) =
@@ -135,10 +209,14 @@ impl<T, U> TransitionsLog<T, U> {
     fn push_and_get_transition_and_amount_drain<IntoU: Into<U>>(
         &mut self,
         max_past_len: u64,
-        c: impl FnOnce(LogMut<T>) -> IntoU,
+        c: impl FnOnce(LogMut<T, U>) -> IntoU,
     ) -> (usize, usize) {
         assert_eq!(self.index, self.transitions.len()); // do not truncate here, call pre_update!
-        let update = c(LogMut(&mut self.transitions)).into();
+        let log_mut = LogMut {
+            transitions: &mut self.transitions,
+            updates: &mut self.updates,
+        };
+        let update = c(log_mut).into();
         let pushed_amount = self.transitions.len() - self.index;
         let update = TransitionsLogUpdate {
             update,
@@ -197,19 +275,19 @@ impl<T, U> TransitionsLog<T, U> {
                 self.index = 0;
                 TransitionsDrains {
                     transitions: self.transitions.drain(..),
-                    past_len,
                     updates: self.updates.full_drain(),
+                    past_len,
                 }
             }
             PreUpdateVariant::RemoveFuture => TransitionsDrains {
                 transitions: self.transitions.drain(self.index..),
-                past_len: 0,
                 updates: self.updates.drain_future(),
+                past_len: 0,
             },
             PreUpdateVariant::Nothing => TransitionsDrains {
                 transitions: self.transitions.drain(..0),
-                past_len: 0,
                 updates: self.updates.empty_drain(),
+                past_len: 0,
             },
         }
     }
@@ -217,29 +295,163 @@ impl<T, U> TransitionsLog<T, U> {
 
 /// A [`&mut VecDeque<T>`](VecDeque) wrapper that does not expose methods which remove from the
 /// deque.
-pub struct LogMut<'a, T>(&'a mut VecDeque<T>);
+///
+/// Also offers length and capacity methods for transitions (`T`) and updates (`U`).
+pub struct LogMut<'a, T, U> {
+    transitions: &'a mut VecDeque<T>,
+    updates: &'a mut TransitionLog<TransitionsLogUpdate<U>>,
+}
 
-impl<'a, T> LogMut<'a, T> {
+impl<'a, T, U> LogMut<'a, T, U> {
     pub fn append(&mut self, other: &mut VecDeque<T>) {
-        self.0.append(other);
+        self.transitions.append(other);
     }
     pub fn push(&mut self, value: T) {
-        self.0.push_back(value);
+        self.transitions.push_back(value);
+    }
+
+    /// Returns the number of transitions (`T`) in the log.
+    ///
+    /// See [`VecDeque::len`].
+    pub fn transitions_len(&self) -> usize {
+        self.transitions.len()
+    }
+
+    /// Returns the number of updates (`U`) in the log.
+    ///
+    /// See [`VecDeque::len`].
+    pub fn updates_len(&self) -> usize {
+        self.updates.len()
+    }
+
+    /// Returns the number of transitions (`T`) the log can hold without reallocating.
+    ///
+    /// See [`VecDeque::capacity`].
+    pub fn transitions_capacity(&self) -> usize {
+        self.transitions.capacity()
+    }
+
+    /// Returns the number of updates (`U`) the log can hold without reallocating.
+    ///
+    /// See [`VecDeque::capacity`].
+    pub fn updates_capacity(&self) -> usize {
+        self.updates.capacity()
+    }
+
+    /// Returns `true` if the log contains no transitions (`T`).
+    ///
+    /// See [`VecDeque::is_empty`].
+    pub fn transitions_is_empty(&self) -> bool {
+        self.transitions.is_empty()
+    }
+
+    /// Returns `true` if the log contains no updates (`U`).
+    ///
+    /// See [`VecDeque::is_empty`].
+    pub fn updates_is_empty(&self) -> bool {
+        self.updates.is_empty()
+    }
+
+    /// Reserves capacity for at least `additional` more transitions (`T`).
+    ///
+    /// See [`VecDeque::reserve`].
+    pub fn transitions_reserve(&mut self, additional: usize) {
+        self.transitions.reserve(additional)
+    }
+
+    /// Reserves capacity for at least `additional` more updates (`U`).
+    ///
+    /// See [`VecDeque::reserve`].
+    pub fn updates_reserve(&mut self, additional: usize) {
+        self.updates.reserve(additional)
+    }
+
+    /// Reserves capacity for at least `additional` more transitions (`T`).
+    ///
+    /// See [`VecDeque::reserve_exact`].
+    pub fn transitions_reserve_exact(&mut self, additional: usize) {
+        self.transitions.reserve_exact(additional)
+    }
+
+    /// Reserves capacity for at least `additional` more updates (`U`).
+    ///
+    /// See [`VecDeque::reserve_exact`].
+    pub fn updates_reserve_exact(&mut self, additional: usize) {
+        self.updates.reserve_exact(additional)
+    }
+
+    /// Tries to reserve capacity for at least `additional` more transitions (`T`).
+    ///
+    /// See [`VecDeque::try_reserve`].
+    pub fn transitions_try_reserve(&mut self, additional: usize) -> Result<(), TryReserveError> {
+        self.transitions.try_reserve(additional)
+    }
+
+    /// Tries to reserve capacity for at least `additional` more updates (`U`).
+    ///
+    /// See [`VecDeque::try_reserve`].
+    pub fn updates_try_reserve(&mut self, additional: usize) -> Result<(), TryReserveError> {
+        self.updates.try_reserve(additional)
+    }
+
+    /// Tries to reserve capacity for at least `additional` more transitions (`T`).
+    ///
+    /// See [`VecDeque::try_reserve_exact`].
+    pub fn transitions_try_reserve_exact(
+        &mut self,
+        additional: usize,
+    ) -> Result<(), TryReserveError> {
+        self.transitions.try_reserve_exact(additional)
+    }
+
+    /// Tries to reserve capacity for at least `additional` more updates (`U`).
+    ///
+    /// See [`VecDeque::try_reserve_exact`].
+    pub fn updates_try_reserve_exact(&mut self, additional: usize) -> Result<(), TryReserveError> {
+        self.updates.try_reserve_exact(additional)
+    }
+
+    /// Shrinks the capacity of the log's transitions (`T`) with a lower bound.
+    ///
+    /// See [`VecDeque::shrink_to`].
+    pub fn transitions_shrink_to(&mut self, min_capacity: usize) {
+        self.transitions.shrink_to(min_capacity)
+    }
+
+    /// Shrinks the capacity of the log's updates (`U`) with a lower bound.
+    ///
+    /// See [`VecDeque::shrink_to`].
+    pub fn updates_shrink_to(&mut self, min_capacity: usize) {
+        self.updates.shrink_to(min_capacity)
+    }
+
+    /// Shrinks the capacity of the log's transitions (`T`) as much as possible.
+    ///
+    /// See [`VecDeque::shrink_to_fit`].
+    pub fn transitions_shrink_to_fit(&mut self) {
+        self.transitions.shrink_to_fit()
+    }
+
+    /// Shrinks the capacity of the log's updates (`U`) as much as possible.
+    ///
+    /// See [`VecDeque::shrink_to_fit`].
+    pub fn updates_shrink_to_fit(&mut self) {
+        self.updates.shrink_to_fit()
     }
 }
 
-impl<'a, T> Extend<T> for LogMut<'a, T> {
+impl<'a, T, U> Extend<T> for LogMut<'a, T, U> {
     fn extend<I: IntoIterator<Item = T>>(&mut self, iter: I) {
-        self.0.extend(iter);
+        self.transitions.extend(iter);
     }
 }
 
-impl<'a, T> Extend<&'a T> for LogMut<'a, T>
+impl<'a, T, U> Extend<&'a T> for LogMut<'a, T, U>
 where
     T: 'a + Copy,
 {
     fn extend<I: IntoIterator<Item = &'a T>>(&mut self, iter: I) {
-        self.0.extend(iter);
+        self.transitions.extend(iter);
     }
 }
 
@@ -300,6 +512,101 @@ impl<T, U> FusedIterator for TransitionLogUpdateMut<'_, T, U> {}
 pub struct TransitionsLogUpdate<U> {
     pub update: U,
     pub amount: usize,
+}
+
+pub struct TransitionsDrains<'log, T, U> {
+    transitions: Drain<'log, T>,
+    updates: TransitionDrains<'log, TransitionsLogUpdate<U>>,
+    past_len: usize,
+}
+
+pub type TransitionsDrainPast<'a, 'log, T, U> = TransitionsDrainChunkable<
+    TransitionDrainPast<'a, 'log, T>,
+    TransitionDrainPast<'a, 'log, TransitionsLogUpdate<U>>,
+    U,
+>;
+
+pub type TransitionsDrainFuture<'log, T, U> = TransitionsDrainChunkable<
+    TransitionDrainFuture<'log, T>,
+    TransitionDrainFuture<'log, TransitionsLogUpdate<U>>,
+    U,
+>;
+
+pub type TransitionsDrain<'log, T, U> = TransitionsDrainChunkable<
+    TransitionDrain<'log, T>,
+    TransitionDrain<'log, TransitionsLogUpdate<U>>,
+    U,
+>;
+
+impl<'log, T, U> TransitionsDrains<'log, T, U> {
+    /// Drains all transitions (`T`) and updates (`U`) that are so far in the past that they are
+    /// out-of-log.
+    ///
+    /// The values are returned in chronological order.
+    ///
+    /// Calling this method a second time will return empty iterators.
+    ///
+    /// See [`VecDeque::drain`].
+    pub fn past<'a>(&'a mut self) -> TransitionsDrainPast<'a, 'log, T, U> {
+        let past_len = self.past_len;
+        self.past_len = 0;
+        TransitionsDrainChunkable {
+            transitions: self.transitions.by_ref().take(past_len),
+            updates: self.updates.past(),
+            _p: PhantomData,
+        }
+    }
+
+    /// Drains all transitions (`T`) and updates (`U`) that are in the future and thus became
+    /// out-of-log.
+    ///
+    /// The values are returned in chronological order.
+    ///
+    /// This consumes `self`. If the past values are of interest, use [`past`](Self::past) first.
+    ///
+    /// See [`VecDeque::drain`].
+    pub fn future(self) -> TransitionsDrainFuture<'log, T, U> {
+        TransitionsDrainChunkable {
+            transitions: self.transitions.skip(self.past_len),
+            updates: self.updates.future(),
+            _p: PhantomData,
+        }
+    }
+
+    /// Drains all transitions (`T`) and updates (`U`) that are so far in the past that they are
+    /// out-of-log, or are in the future and thus became out-of-log.
+    ///
+    /// The values are returned in chronological order.
+    ///
+    /// If the past and future values need to be separated or one or the other are not of interest,
+    /// see [`past`](Self::past)/[`future`](Self::future).
+    ///
+    /// See [`VecDeque::drain`].
+    pub fn all(self) -> TransitionsDrain<'log, T, U> {
+        TransitionsDrainChunkable {
+            transitions: self.transitions,
+            updates: self.updates.all(),
+            _p: PhantomData,
+        }
+    }
+}
+
+pub struct TransitionsDrainChunkable<TI, UI, U> {
+    pub transitions: TI,
+    pub updates: UI,
+    _p: PhantomData<fn(UI) -> U>,
+}
+
+impl<TI, UI, U> TransitionsDrainChunkable<TI, UI, U>
+where
+    TI: Iterator,
+    UI: Iterator<Item = TransitionsLogUpdate<U>>,
+{
+    pub fn next_update<'a>(&mut self) -> Option<(core::iter::Take<&'_ mut TI>, U)> {
+        self.updates
+            .next()
+            .map(|update| (self.transitions.by_ref().take(update.amount), update.update))
+    }
 }
 
 #[cfg(test)]

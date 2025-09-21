@@ -372,7 +372,7 @@ impl UndoRedoLog {
                 .try_resource_scope::<UndoRedoBuffer, _>(|world, mut buffer| {
                     if !buffer.0.is_empty() {
                         let meta = world.resource::<RevMeta>();
-                        let past_len = self.past_len_log.past_len(meta);
+                        let past_len = self.past_len_log.update_get(meta);
                         self.undo_redo_log
                             .push_and_truncate_past(past_len, |mut log| {
                                 log.extend(
