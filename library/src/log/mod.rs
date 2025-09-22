@@ -21,8 +21,8 @@ pub use transition::{
 };
 
 pub use transitions::{
-    LogMut, TransitionLogUpdateMut, TransitionsDrainAll, TransitionsDrainChunkable,
-    TransitionsDrainFuture, TransitionsDrainPast, TransitionsDrains, TransitionsLog,
+    LogMut, TransitionsDrainAll, TransitionsDrainChunkable, TransitionsDrainFuture,
+    TransitionsDrainPast, TransitionsDrains, TransitionsLog, TransitionsLogIterMut,
     TransitionsLogUpdate,
 };
 

@@ -26,18 +26,18 @@ use super::OutOfLog;
 /// [log variant](crate::meta::RevDirection::is_log) to the
 /// [`NOT_LOG`](crate::meta::RevDirection::NOT_LOG) one.
 ///
-/// These methods make sure the log catches such situations even if the current system does not run
-/// in the very same frame they took effect, like when that frame was missed because of run
-/// conditions.
+/// These methods make sure the log catches such changes even if the current system does not run in
+/// the very same frame they took effect, like when that frame was missed because of run conditions.
 ///
 /// If the log is mutated multiple times per frame, these `pre_update` methods only need to called
 /// once at the beginning.
 ///
-/// After that, depending on the direction, you either push a new transition into the log or
-/// traverse it forwards or backwards.
+/// After that, depending on the direction, either a new transition is pushed into the log or it is
+/// traversed forwards or backwards.
 ///
 /// This log alone is only suited for a constant amount of updates per frame. For a variable amount
-/// of updates, consider pairing it with a [`PastLenLog`](crate::log::PastLenLog).
+/// of updates, like when the system is skipped completely sometimes, consider pairing it with a
+/// [`PastLenLog`](crate::log::PastLenLog).
 ///
 /// ## Basic `Local` usage
 ///
@@ -46,7 +46,7 @@ use super::OutOfLog;
 /// ```
 /// # use bevy::prelude::*;
 /// # use bevy_oozlum::prelude::*;
-/// # [derive(Clone)]
+/// # #[derive(Clone)]
 /// # struct MyType;
 /// fn system(meta: Res<RevMeta>, mut log: Local<TransitionLog<MyType>>) -> Result<(), BevyError> {
 ///     log.pre_update(&meta);
@@ -90,7 +90,7 @@ use super::OutOfLog;
 /// ```
 /// # use bevy::prelude::*;
 /// # use bevy_oozlum::prelude::*;
-/// # [derive(Clone)]
+/// # #[derive(Clone)]
 /// # struct MyType;
 /// fn system(meta: Res<RevMeta>, mut log: Local<TransitionLog<MyType>>) -> Result<(), BevyError> {
 ///     log.pre_update(&meta);
@@ -133,14 +133,14 @@ use super::OutOfLog;
 /// ## Draining future
 ///
 /// There may be cases where extra cleanup is needed in which case the transitions that the log no
-/// longer needs should be drained, not immediately dropped.
+/// longer needs should be drained with in an iterator.
 ///
-/// In this example the cleanup is needed for log entries in the future part.
+/// In this example the cleanup is required for log entries that are in the future part.
 ///
 /// ```
 /// # use bevy::prelude::*;
 /// # use bevy_oozlum::prelude::*;
-/// # [derive(Clone)]
+/// # #[derive(Clone)]
 /// # struct MyType;
 /// fn system(meta: Res<RevMeta>, mut log: Local<TransitionLog<MyType>>) -> Result<(), BevyError> {
 ///     for future_transition in log.pre_update_drain(&meta).future() {
@@ -174,8 +174,8 @@ use super::OutOfLog;
 ///
 /// ## Draining past
 ///
-/// Like the _Draining future_ example, but here the relevant transitions for cleanup work are the
-/// past part of the log.
+/// Like the _Draining future_ example, but here the relevant transitions for cleanup work are in
+/// the past part of the log.
 ///
 /// There are two iterations in the example where cleanup work has to happen. This is because either
 /// of the two could happen in isolation, the first because
@@ -185,7 +185,7 @@ use super::OutOfLog;
 /// ```
 /// # use bevy::prelude::*;
 /// # use bevy_oozlum::prelude::*;
-/// # [derive(Clone)]
+/// # #[derive(Clone)]
 /// # struct MyType;
 /// fn system(meta: Res<RevMeta>, mut log: Local<TransitionLog<MyType>>) -> Result<(), BevyError> {
 ///     for past_transition in log.pre_update_drain(&meta).past() {
@@ -227,13 +227,14 @@ use super::OutOfLog;
 /// optional; instead of [`past`](TransitionDrains::past) and [`future`](TransitionDrains::future),
 /// [`all`](TransitionDrains::all) can be used.
 ///
-/// The `MyType` may for example contain an [ID](bevy::ecs::entity::Entity) of a temporal entity for
-/// the transition that needs to be despawned.
+/// The `MyType` may for example contain an [entity ID](bevy::ecs::entity::Entity). This could be
+/// the ID of a temporal entity that is associated to this transition. The cleanup then would be to
+/// despawn it.
 ///
 /// ```
 /// # use bevy::prelude::*;
 /// # use bevy_oozlum::prelude::*;
-/// # [derive(Clone)]
+/// # #[derive(Clone)]
 /// # struct MyType;
 /// fn system(meta: Res<RevMeta>, mut log: Local<TransitionLog<MyType>>) -> Result<(), BevyError> {
 ///     let mut drain = log.pre_update_drain(&meta);
@@ -420,16 +421,19 @@ impl<T> TransitionLog<T> {
     /// [`RevQueue::Clear`](crate::meta::RevQueue::Clear) was queued and applied.
     ///
     /// The `max_past_len` addition by one is done to ensure that drained values were pushed at a
-    /// frame that is now out-of-log. This may not be needed in some cases, but is critical in
+    /// frame that is now out-of-log. This may not be needed in some cases, but is important in
     /// others like when `T` contains an entity [ID](bevy::ecs::entity::Entity) that needs to remain
-    /// alive as long it was spawned within the global log range. This trade-off makes this method
-    /// less of a source of bugs in the user logic.
+    /// alive as long it was spawned within the global log range. This makes this method less likely
+    /// a source of bugs in the user logic.
     ///
-    /// As an explaination why this log type would drain transitions earlier, be aware that only the
-    /// transition _from the very first state_ that can be reverted to _to the second state_ is
-    /// required to be stored to cover a past length of `max_past_len`. The transition _to the first
-    /// state_ is otherwise not useful because it would only be used to transition to and from the
-    /// previous state that is now out-of-log.
+    /// As an explaination why this log type would drain transitions earlier: Only the transition
+    /// _from the very first state_ that can be reverted to _to the second state_ is required to be
+    /// stored to cover a past length of `max_past_len`. The transition _to the first state_ is
+    /// otherwise not useful because it would only be used to transition to and from the previous
+    /// state that is now out-of-log.
+    ///
+    /// So if this addition by one was not done, the transition pushed at [`RevMeta::past_end`], a
+    /// frame that is still in-log, would be drained here.
     ///
     /// For examples, see the [type level documentation](TransitionLog).
     pub fn push_and_drain_past(
@@ -444,7 +448,11 @@ impl<T> TransitionLog<T> {
     /// Pushes the `transition` and returns how many elements need to be removed from the past end
     /// of the log to contain at most `may_past_len` elements.
     fn push_and_get_drain(&mut self, max_past_len: u64, transition: T) -> usize {
-        assert_eq!(self.index, self.transitions.len()); // do not truncate here, call pre_update!
+        assert_eq!(
+            self.index,
+            self.transitions.len(),
+            "`TransitionLog::pre_update(_drain)` was not called in advance"
+        );
         self.transitions.push_back(transition);
         let to_drain = self.transitions.len().saturating_sub(max_past_len as usize);
         self.index = self.transitions.len() - to_drain;
@@ -454,13 +462,17 @@ impl<T> TransitionLog<T> {
     /// Behaves like [`Self::push_and_drain_past`] except `max_past_len` is not increased by `1` and
     /// the returned iterator is not yet drained.
     ///
-    /// This **must** be followed by [Self::drain_past] later.
+    /// This **must** be followed by [Self::drain_past].
     pub(super) fn push_and_iter_to_drain_past(
         &mut self,
         max_past_len: u64,
         transition: T,
     ) -> Iter<T> {
-        assert_eq!(self.index, self.transitions.len()); // do not truncate here, call pre_update!
+        assert_eq!(
+            self.index,
+            self.transitions.len(),
+            "`TransitionsLog::pre_update(_drain)` was not called in advance"
+        );
         self.transitions.push_back(transition);
         let to_drain = self.transitions.len().saturating_sub(max_past_len as usize);
         self.index = self.transitions.len() - to_drain;
@@ -487,11 +499,11 @@ impl<T> TransitionLog<T> {
 
     /// Drains the `to_drain` log entries at the past end. The argument value is taken from
     /// [`Self::push_and_iter_to_drain_past`].
-    pub(super) fn drain_past(&mut self, to_drain: usize) -> TransitionDrainAll<T> {
+    pub(super) fn drain_past(&mut self, to_drain: usize) -> Drain<T> {
         self.transitions.drain(..to_drain)
     }
 
-    /// Returns an emptry drain, keeping the log unchanged.
+    /// Returns an empty drain, keeping the log unchanged.
     pub(super) fn empty_drain(&mut self) -> TransitionDrains<T> {
         TransitionDrains {
             transitions: self.transitions.drain(..0),
@@ -515,8 +527,9 @@ impl<T> TransitionLog<T> {
     /// the log unchanged.
     ///
     /// The value can be mutated in case applying the transition is not only changing the state but
-    /// also the transition itself. This may be needed if that mutation makes the value at
-    /// [`forward_log`](Self::forward_log) usable at all.
+    /// also the transition itself. This may be needed if a previously added value is taken again
+    /// and stored in this transition at `backward_log`. [`forward_log`](Self::forward_log) would
+    /// then take the value from the transition to return it.
     ///
     /// This is used during [`RevDirection::BackwardLog`](crate::meta::RevDirection::BackwardLog).
     ///
@@ -529,10 +542,9 @@ impl<T> TransitionLog<T> {
     pub fn backward_log(&mut self) -> Result<&mut T, OutOfLog> {
         let index = self.index.checked_sub(1).ok_or(OutOfLog::new())?;
 
-        // self.index should always be <= the deque len, so successfully reducing it without
+        // self.index should always be <= the deque len, so successfully reducing the index without
         // underflow is expected to result in a valid index into the log. If this is not the case
-        // here, the log was in an invalid state before calling the current method, this would be a
-        // crate bug.
+        // here, this would be a crate bug.
         let transition = self.transitions.get_mut(index).unwrap();
 
         self.index = index;
@@ -544,8 +556,9 @@ impl<T> TransitionLog<T> {
     /// the log unchanged.
     ///
     /// The value can be mutated in case applying the transition is not only changing the state but
-    /// also the transition itself. This may be needed if that mutation makes the value at
-    /// [`backward_log`](Self::backward_log) usable at all.
+    /// also the transition itself. This may be needed if a previously added value is taken again
+    /// and stored in this transition at [`backward_log`](Self::backward_log). `forward_log` would
+    /// then take the value from the transition to return it.
     ///
     /// This is used during [`RevDirection::FORWARD_LOG`](crate::meta::RevDirection::FORWARD_LOG).
     ///
@@ -584,7 +597,8 @@ impl<T> TransitionLog<T> {
         }
     }
 
-    /// Call this method once per [reversible frame](RevMeta::now) before any other mutation.
+    /// This method **must** be called once per [reversible frame](RevMeta::now) before any other
+    /// mutation.
     ///
     /// This may remove log entries. If a draining iterator for these entries is required, use
     /// [`pre_update_drain`](Self::pre_update_drain) instead.
@@ -598,7 +612,8 @@ impl<T> TransitionLog<T> {
         }
     }
 
-    /// Call this method once per [reversible frame](RevMeta::now) before any other mutation.
+    /// This method **must** be called once per [reversible frame](RevMeta::now) before any other
+    /// mutation.
     ///
     /// This may remove log entries which can be received with the returned iterators. If no
     /// iterators are required, use [`pre_update`](Self::pre_update) instead.
@@ -618,22 +633,22 @@ impl<T> TransitionLog<T> {
 
 /// Contains iterators for the past and future log entries that need to be removed at this frame.
 pub struct TransitionDrains<'log, T> {
-    pub(super) transitions: TransitionDrainAll<'log, T>,
+    pub(super) transitions: Drain<'log, T>,
     pub(super) past_len: usize,
 }
 
 /// Draining transition iterator returned by [`TransitionDrains::past`].
-pub struct TransitionDrainPast<'a, 'log, T>(Take<&'a mut TransitionDrainAll<'log, T>>);
+pub struct TransitionDrainPast<'a, 'log, T>(Take<&'a mut Drain<'log, T>>);
 
 impl<'a, 'log, T> TransitionDrainPast<'a, 'log, T> {
-    pub(super) fn new(iter: &'a mut TransitionDrainAll<'log, T>, past_len: usize) -> Self {
+    pub(super) fn new(iter: &'a mut Drain<'log, T>, past_len: usize) -> Self {
         Self(iter.take(past_len))
     }
 }
 
 impl<'a, 'log, T> Drop for TransitionDrainPast<'a, 'log, T> {
     fn drop(&mut self) {
-        // fully iterate the past so following usages of the inner Drain only yields future values
+        // fully iterate the past so the inner Drain only yields future values after that
         for _ in self {}
     }
 }
@@ -686,12 +701,12 @@ impl<'a, 'log, T> DoubleEndedIterator for TransitionDrainPast<'a, 'log, T> {
     }
 
     #[inline]
-    fn rfold<Acc, Fold>(mut self, init: Acc, fold: Fold) -> Acc
+    fn rfold<Acc, Fold>(mut self, init: Acc, f: Fold) -> Acc
     where
         Self: Sized,
         Fold: FnMut(Acc, Self::Item) -> Acc,
     {
-        self.0.by_ref().rfold(init, fold)
+        self.0.by_ref().rfold(init, f)
     }
 }
 
@@ -705,7 +720,7 @@ impl<'a, 'log, T> ExactSizeIterator for TransitionDrainPast<'a, 'log, T> {
 impl<'a, 'log, T> FusedIterator for TransitionDrainPast<'a, 'log, T> {}
 
 /// Draining transition iterator returned by [`TransitionDrains::future`].
-pub type TransitionDrainFuture<'log, T> = Skip<TransitionDrainAll<'log, T>>;
+pub type TransitionDrainFuture<'log, T> = Skip<Drain<'log, T>>;
 
 /// Draining transition iterator returned by [`TransitionDrains::all`].
 pub type TransitionDrainAll<'log, T> = Drain<'log, T>;
@@ -846,8 +861,14 @@ mod test {
                 }
                 Err(()) => {
                     self.meta.update_ref(Ok(false), |_, _| ());
-                    assert_eq!(self.with_past_drain.forward_log(), Err(OutOfLog::new()));
-                    assert_eq!(self.without_past_drain.forward_log(), Err(OutOfLog::new()));
+
+                    #[track_caller]
+                    fn assert_err(log: &mut TransitionLog<char>) {
+                        assert_eq!(log.forward_log(), Err(OutOfLog::new()));
+                    }
+
+                    assert_err(&mut self.with_past_drain);
+                    assert_err(&mut self.without_past_drain);
                 }
             }
         }
@@ -880,6 +901,11 @@ mod test {
                     assert_eq!(N, 0);
                     self.meta.update_ref(Ok(false), |_, _| ());
 
+                    #[track_caller]
+                    fn assert_err(log: &mut TransitionLog<char>) {
+                        assert_eq!(log.backward_log(), Err(OutOfLog::new()));
+                    }
+
                     // with_past_drain
                     if self.with_past_drain.backward_log().is_ok() {
                         // Because this past-draining log secretly keeps one more transition than
@@ -889,14 +915,14 @@ mod test {
                         // first backward_log is not asserted to be Ok here.
 
                         // test again
-                        assert_eq!(self.with_past_drain.backward_log(), Err(OutOfLog::new()));
+                        assert_err(&mut self.with_past_drain);
 
                         // undoing first backward_log
                         assert!(self.with_past_drain.forward_log().is_ok());
                     }
 
                     // without_past_drain
-                    assert_eq!(self.without_past_drain.backward_log(), Err(OutOfLog::new()));
+                    assert_err(&mut self.without_past_drain);
                 }
             }
         }

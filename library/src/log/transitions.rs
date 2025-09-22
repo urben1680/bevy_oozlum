@@ -229,23 +229,23 @@ impl<T, U> TransitionsLog<T, U> {
         (transition_drain, amount_drain)
     }
     #[track_caller]
-    pub fn backward_log(&mut self) -> Result<TransitionLogUpdateMut<T, U>, OutOfLog> {
+    pub fn backward_log(&mut self) -> Result<TransitionsLogIterMut<T, U>, OutOfLog> {
         let old_index = self.index;
         let update_mut = self.updates.backward_log()?;
         self.index -= update_mut.amount;
         let iter = self.transitions.range_mut(self.index..old_index);
-        Ok(TransitionLogUpdateMut {
+        Ok(TransitionsLogIterMut {
             transitions: iter,
             update: &mut update_mut.update,
         })
     }
     #[track_caller]
-    pub fn forward_log(&mut self) -> Result<TransitionLogUpdateMut<T, U>, OutOfLog> {
+    pub fn forward_log(&mut self) -> Result<TransitionsLogIterMut<T, U>, OutOfLog> {
         let old_index = self.index;
         let update_mut = self.updates.forward_log()?;
         self.index += update_mut.amount;
         let iter = self.transitions.range_mut(old_index..self.index);
-        Ok(TransitionLogUpdateMut {
+        Ok(TransitionsLogIterMut {
             transitions: iter,
             update: &mut update_mut.update,
         })
@@ -455,12 +455,12 @@ where
 }
 
 #[derive(Debug)]
-pub struct TransitionLogUpdateMut<'a, T, U> {
+pub struct TransitionsLogIterMut<'a, T, U> {
     transitions: IterMut<'a, T>,
     pub update: &'a mut U,
 }
 
-impl<'a, T, U> Iterator for TransitionLogUpdateMut<'a, T, U> {
+impl<'a, T, U> Iterator for TransitionsLogIterMut<'a, T, U> {
     type Item = &'a mut T;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -485,7 +485,7 @@ impl<'a, T, U> Iterator for TransitionLogUpdateMut<'a, T, U> {
     }
 }
 
-impl<'a, T, U> DoubleEndedIterator for TransitionLogUpdateMut<'a, T, U> {
+impl<'a, T, U> DoubleEndedIterator for TransitionsLogIterMut<'a, T, U> {
     #[inline]
     fn next_back(&mut self) -> Option<&'a mut T> {
         self.transitions.next_back()
@@ -499,13 +499,13 @@ impl<'a, T, U> DoubleEndedIterator for TransitionLogUpdateMut<'a, T, U> {
     }
 }
 
-impl<T, U> ExactSizeIterator for TransitionLogUpdateMut<'_, T, U> {
+impl<T, U> ExactSizeIterator for TransitionsLogIterMut<'_, T, U> {
     fn len(&self) -> usize {
         self.transitions.len()
     }
 }
 
-impl<T, U> FusedIterator for TransitionLogUpdateMut<'_, T, U> {}
+impl<T, U> FusedIterator for TransitionsLogIterMut<'_, T, U> {}
 
 #[derive(Debug, Clone)]
 pub struct TransitionsLogUpdate<U> {
@@ -638,9 +638,10 @@ mod test {
         }
     }
 
-    impl<'a> TransitionLogUpdateMut<'a, char, char> {
+    impl<'a> TransitionsLogIterMut<'a, char, char> {
         fn to_tuple(self) -> (String, char) {
-            (self.transitions.map(|char| *char).collect(), *self.update)
+            let update = *self.update;
+            (self.map(|char| *char).collect(), update)
         }
     }
 
@@ -717,7 +718,7 @@ mod test {
                         assert_eq!(
                             self.with_past_drain
                                 .forward_log()
-                                .map(TransitionLogUpdateMut::to_tuple),
+                                .map(TransitionsLogIterMut::to_tuple),
                             Ok(get.clone())
                         );
 
@@ -727,25 +728,23 @@ mod test {
                         assert_eq!(
                             self.without_past_drain
                                 .forward_log()
-                                .map(TransitionLogUpdateMut::to_tuple),
+                                .map(TransitionsLogIterMut::to_tuple),
                             Ok(get)
                         );
                     });
                 }
                 Err(()) => {
+                    #[track_caller]
+                    fn assert_err(log: &mut TransitionsLog<char, char>) {
+                        assert_eq!(
+                            log.forward_log().map(TransitionsLogIterMut::to_tuple),
+                            Err(OutOfLog::new())
+                        );
+                    }
+
                     self.meta.update_ref(Ok(false), |_, _| ());
-                    assert_eq!(
-                        self.with_past_drain
-                            .forward_log()
-                            .map(TransitionLogUpdateMut::to_tuple),
-                        Err(OutOfLog::new())
-                    );
-                    assert_eq!(
-                        self.without_past_drain
-                            .forward_log()
-                            .map(TransitionLogUpdateMut::to_tuple),
-                        Err(OutOfLog::new())
-                    );
+                    assert_err(&mut self.with_past_drain);
+                    assert_err(&mut self.without_past_drain);
                 }
             }
         }
@@ -767,7 +766,7 @@ mod test {
                         assert_eq!(
                             self.with_past_drain
                                 .backward_log()
-                                .map(TransitionLogUpdateMut::to_tuple),
+                                .map(TransitionsLogIterMut::to_tuple),
                             Ok(get.clone())
                         );
 
@@ -777,7 +776,7 @@ mod test {
                         assert_eq!(
                             self.without_past_drain
                                 .backward_log()
-                                .map(TransitionLogUpdateMut::to_tuple),
+                                .map(TransitionsLogIterMut::to_tuple),
                             Ok(get)
                         );
                     });
@@ -785,6 +784,14 @@ mod test {
                 Err(()) => {
                     assert_eq!(N, 0);
                     self.meta.update_ref(Ok(false), |_, _| ());
+
+                    #[track_caller]
+                    fn assert_err(log: &mut TransitionsLog<char, char>) {
+                        assert_eq!(
+                            log.backward_log().map(TransitionsLogIterMut::to_tuple),
+                            Err(OutOfLog::new())
+                        );
+                    }
 
                     // with_past_drain
                     if self.with_past_drain.backward_log().is_ok() {
@@ -795,24 +802,14 @@ mod test {
                         // first backward_log is not asserted to be Ok here.
 
                         // test again
-                        assert_eq!(
-                            self.with_past_drain
-                                .backward_log()
-                                .map(TransitionLogUpdateMut::to_tuple),
-                            Err(OutOfLog::new())
-                        );
+                        assert_err(&mut self.with_past_drain);
 
                         // undoing first backward_log
                         assert!(self.with_past_drain.forward_log().is_ok());
                     }
 
                     // without_past_drain
-                    assert_eq!(
-                        self.without_past_drain
-                            .backward_log()
-                            .map(TransitionLogUpdateMut::to_tuple),
-                        Err(OutOfLog::new())
-                    );
+                    assert_err(&mut self.without_past_drain);
                 }
             }
         }
