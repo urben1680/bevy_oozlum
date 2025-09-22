@@ -1,4 +1,4 @@
-use crate::{log::PreUpdateVariant, meta::RevMeta};
+use crate::{log::PreUpdateKind, meta::RevMeta};
 use bevy::ecs::change_detection::MaybeLocation;
 use core::fmt::{Debug, Display};
 use std::collections::{TryReserveError, VecDeque};
@@ -61,7 +61,7 @@ pub struct PastLenLog {
 }
 
 impl Debug for PastLenLog {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("PastLenLog")
             .field("offset_bytes", &self.offset_bytes)
             .field("offsets (decoded)", &OffsetIter(self.offset_bytes.iter()))
@@ -77,7 +77,7 @@ impl Debug for PastLenLog {
 }
 
 impl Display for PastLenLog {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self.id() {
             None => write!(f, "PastLenLog #Uninit"),
             Some(id) => write!(f, "PastLenLog #{id}"),
@@ -768,7 +768,7 @@ impl PastLenLog {
     /// This method has no effect if called again in the same frame.
     pub fn pre_update(&mut self, meta: &RevMeta) {
         match meta.update_past_len_state(&mut self.update_state) {
-            PreUpdateVariant::RemoveLog => {
+            PreUpdateKind::RemoveLog => {
                 self.offset_bytes.clear();
                 self.out_of_or_past_end_log = 0;
                 self.last_update = 0;
@@ -777,14 +777,14 @@ impl PastLenLog {
                 self.zeroes = 0;
                 self.zeroes_max = 0;
             }
-            PreUpdateVariant::RemoveFuture => {
+            PreUpdateKind::RemoveFuture => {
                 if self.offset_bytes.len() > self.index {
                     self.offset_bytes.truncate(self.index);
                     self.zeroes = 0;
                 }
                 self.zeroes_max = self.zeroes;
             }
-            PreUpdateVariant::Nothing => {}
+            PreUpdateKind::Nothing => {}
         }
     }
 }

@@ -11,7 +11,7 @@ use bevy::{
 };
 
 use crate::{
-    log::{PastLenLogLimits, PastLenLogMissed, PastLenState, PreUpdateVariant},
+    log::{PastLenLogLimits, PastLenLogMissed, PastLenState, PreUpdateKind},
     prelude::RevUpdate,
     undo_redo::{BundleIdOfOpCache, DespawnCleanerErr, RevDespawnCleaner, UndoRedoBuffer},
 };
@@ -463,10 +463,7 @@ impl RevMeta {
             }
         }
     }
-    pub(super) fn update_past_len_state(
-        &self,
-        state: &mut Option<PastLenState>,
-    ) -> PreUpdateVariant {
+    pub(super) fn update_past_len_state(&self, state: &mut Option<PastLenState>) -> PreUpdateKind {
         self.past_len_limits
             .update_state(state, self.log_exits, self.log_clears)
     }

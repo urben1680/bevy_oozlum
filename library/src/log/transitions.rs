@@ -1,16 +1,12 @@
-use std::{
-    collections::{
-        TryReserveError, VecDeque,
-        vec_deque::{Drain, IterMut},
-    },
-    fmt::Debug,
-    iter::FusedIterator,
-    marker::PhantomData,
+use core::{fmt::Debug, iter::FusedIterator, marker::PhantomData};
+use std::collections::{
+    TryReserveError, VecDeque,
+    vec_deque::{Drain, IterMut},
 };
 
 use crate::{
     log::{
-        PreUpdateVariant, TransitionDrain, TransitionDrainFuture, TransitionDrainPast,
+        PreUpdateKind, TransitionDrainAll, TransitionDrainFuture, TransitionDrainPast,
         transition::TransitionDrains,
     },
     meta::RevMeta,
@@ -32,6 +28,7 @@ impl<T, U> Default for TransitionsLog<T, U> {
 }
 
 impl<T, U> TransitionsLog<T, U> {
+    /// Creates an empty log.
     pub const fn new() -> Self {
         Self {
             transitions: VecDeque::new(),
@@ -196,7 +193,7 @@ impl<T, U> TransitionsLog<T, U> {
         &mut self,
         max_past_len: u64,
         c: impl FnOnce(LogMut<T, U>) -> IntoU,
-    ) -> TransitionsDrain<T, U> {
+    ) -> TransitionsDrainAll<T, U> {
         // for the + 1, see the comment in TransitionLog::push_and_get_drain
         let (transition_drain, amount_drain) =
             self.push_and_get_transition_and_amount_drain(max_past_len + 1, c);
@@ -231,6 +228,7 @@ impl<T, U> TransitionsLog<T, U> {
         self.index -= transition_drain;
         (transition_drain, amount_drain)
     }
+    #[track_caller]
     pub fn backward_log(&mut self) -> Result<TransitionLogUpdateMut<T, U>, OutOfLog> {
         let old_index = self.index;
         let update_mut = self.updates.backward_log()?;
@@ -241,6 +239,7 @@ impl<T, U> TransitionsLog<T, U> {
             update: &mut update_mut.update,
         })
     }
+    #[track_caller]
     pub fn forward_log(&mut self) -> Result<TransitionLogUpdateMut<T, U>, OutOfLog> {
         let old_index = self.index;
         let update_mut = self.updates.forward_log()?;
@@ -252,25 +251,25 @@ impl<T, U> TransitionsLog<T, U> {
         })
     }
     pub fn pre_update(&mut self, meta: &RevMeta) {
-        match self.updates.pre_update_check(meta) {
-            PreUpdateVariant::RemoveLog => {
+        match self.updates.pre_update_kind(meta) {
+            PreUpdateKind::RemoveLog => {
                 self.transitions.clear();
                 self.updates.clear();
                 self.index = 0;
             }
-            PreUpdateVariant::RemoveFuture => {
+            PreUpdateKind::RemoveFuture => {
                 self.transitions.truncate(self.index);
                 self.updates.truncate_future();
             }
-            PreUpdateVariant::Nothing => {}
+            PreUpdateKind::Nothing => {}
         }
     }
     pub fn pre_update_drain<'log, 'm>(
         &'log mut self,
         meta: &'m RevMeta,
     ) -> TransitionsDrains<'log, T, U> {
-        match self.updates.pre_update_check(meta) {
-            PreUpdateVariant::RemoveLog => {
+        match self.updates.pre_update_kind(meta) {
+            PreUpdateKind::RemoveLog => {
                 let past_len = self.index;
                 self.index = 0;
                 TransitionsDrains {
@@ -279,12 +278,12 @@ impl<T, U> TransitionsLog<T, U> {
                     past_len,
                 }
             }
-            PreUpdateVariant::RemoveFuture => TransitionsDrains {
+            PreUpdateKind::RemoveFuture => TransitionsDrains {
                 transitions: self.transitions.drain(self.index..),
                 updates: self.updates.drain_future(),
                 past_len: 0,
             },
-            PreUpdateVariant::Nothing => TransitionsDrains {
+            PreUpdateKind::Nothing => TransitionsDrains {
                 transitions: self.transitions.drain(..0),
                 updates: self.updates.empty_drain(),
                 past_len: 0,
@@ -511,7 +510,9 @@ impl<T, U> FusedIterator for TransitionLogUpdateMut<'_, T, U> {}
 #[derive(Debug, Clone)]
 pub struct TransitionsLogUpdate<U> {
     pub update: U,
-    pub amount: usize,
+
+    /// Must be private because draining iterators rely on the value to remain unchanged.
+    amount: usize,
 }
 
 pub struct TransitionsDrains<'log, T, U> {
@@ -532,9 +533,9 @@ pub type TransitionsDrainFuture<'log, T, U> = TransitionsDrainChunkable<
     U,
 >;
 
-pub type TransitionsDrain<'log, T, U> = TransitionsDrainChunkable<
-    TransitionDrain<'log, T>,
-    TransitionDrain<'log, TransitionsLogUpdate<U>>,
+pub type TransitionsDrainAll<'log, T, U> = TransitionsDrainChunkable<
+    TransitionDrainAll<'log, T>,
+    TransitionDrainAll<'log, TransitionsLogUpdate<U>>,
     U,
 >;
 
@@ -551,7 +552,7 @@ impl<'log, T, U> TransitionsDrains<'log, T, U> {
         let past_len = self.past_len;
         self.past_len = 0;
         TransitionsDrainChunkable {
-            transitions: self.transitions.by_ref().take(past_len),
+            transitions: TransitionDrainPast::new(&mut self.transitions, past_len),
             updates: self.updates.past(),
             _p: PhantomData,
         }
@@ -579,10 +580,10 @@ impl<'log, T, U> TransitionsDrains<'log, T, U> {
     /// The values are returned in chronological order.
     ///
     /// If the past and future values need to be separated or one or the other are not of interest,
-    /// see [`past`](Self::past)/[`future`](Self::future).
+    /// use [`past`](Self::past) and/or [`future`](Self::future).
     ///
     /// See [`VecDeque::drain`].
-    pub fn all(self) -> TransitionsDrain<'log, T, U> {
+    pub fn all(self) -> TransitionsDrainAll<'log, T, U> {
         TransitionsDrainChunkable {
             transitions: self.transitions,
             updates: self.updates.all(),
@@ -611,7 +612,7 @@ where
 
 #[cfg(test)]
 mod test {
-    use std::num::NonZeroU64;
+    use core::num::NonZeroU64;
 
     use crate::meta::{RevDirection, RevQueue};
 
@@ -703,7 +704,7 @@ mod test {
             self.meta.set_queue(RevQueue::RUN_BACKWARD_LOG);
             self.meta.update_ref(Ok(true), |_, _| ());
         }
-        fn forward_log(&mut self, get: Result<(String, char), OutOfLog>) {
+        fn forward_log(&mut self, get: Result<(String, char), ()>) {
             self.meta.set_queue(RevQueue::RUN_FORWARD_LOG);
             match get {
                 Ok(get) => {
@@ -731,19 +732,19 @@ mod test {
                         );
                     });
                 }
-                Err(OutOfLog) => {
+                Err(()) => {
                     self.meta.update_ref(Ok(false), |_, _| ());
                     assert_eq!(
                         self.with_past_drain
                             .forward_log()
                             .map(TransitionLogUpdateMut::to_tuple),
-                        Err(OutOfLog)
+                        Err(OutOfLog::new())
                     );
                     assert_eq!(
                         self.without_past_drain
                             .forward_log()
                             .map(TransitionLogUpdateMut::to_tuple),
-                        Err(OutOfLog)
+                        Err(OutOfLog::new())
                     );
                 }
             }
@@ -751,7 +752,7 @@ mod test {
         fn backward_log<const N: usize>(
             &mut self,
             future_drain: [(String, char); N],
-            get: Result<(String, char), OutOfLog>,
+            get: Result<(String, char), ()>,
         ) {
             self.meta.set_queue(RevQueue::RUN_BACKWARD_LOG);
             match get {
@@ -781,7 +782,7 @@ mod test {
                         );
                     });
                 }
-                Err(OutOfLog) => {
+                Err(()) => {
                     assert_eq!(N, 0);
                     self.meta.update_ref(Ok(false), |_, _| ());
 
@@ -798,7 +799,7 @@ mod test {
                             self.with_past_drain
                                 .backward_log()
                                 .map(TransitionLogUpdateMut::to_tuple),
-                            Err(OutOfLog)
+                            Err(OutOfLog::new())
                         );
 
                         // undoing first backward_log
@@ -810,7 +811,7 @@ mod test {
                         self.without_past_drain
                             .backward_log()
                             .map(TransitionLogUpdateMut::to_tuple),
-                        Err(OutOfLog)
+                        Err(OutOfLog::new())
                     );
                 }
             }
@@ -842,13 +843,13 @@ mod test {
         meta_and_logs.backward_log([], Ok(e()));
         meta_and_logs.backward_log([], Ok(d()));
         meta_and_logs.backward_log([], Ok(c()));
-        meta_and_logs.backward_log([], Err(OutOfLog)); // b() is unreachable but not yet drained
+        meta_and_logs.backward_log([], Err(())); // b() is unreachable but not yet drained
 
         meta_and_logs.forward_log(Ok(c()));
         meta_and_logs.forward_log(Ok(d()));
         meta_and_logs.forward_log(Ok(e()));
         meta_and_logs.forward_log(Ok(f()));
-        meta_and_logs.forward_log(Err(OutOfLog));
+        meta_and_logs.forward_log(Err(()));
 
         meta_and_logs.backward_log([], Ok(f()));
         meta_and_logs.backward_log([], Ok(e()));
@@ -858,12 +859,12 @@ mod test {
         meta_and_logs.backward_log([], Ok(g()));
         meta_and_logs.backward_log([], Ok(d()));
         meta_and_logs.backward_log([], Ok(c()));
-        meta_and_logs.backward_log([], Err(OutOfLog));
+        meta_and_logs.backward_log([], Err(()));
 
         meta_and_logs.forward_log(Ok(c()));
         meta_and_logs.forward_log(Ok(d()));
         meta_and_logs.forward_log(Ok(g()));
-        meta_and_logs.forward_log(Err(OutOfLog));
+        meta_and_logs.forward_log(Err(()));
 
         meta_and_logs.backward_log([], Ok(g()));
         meta_and_logs.backward_log([], Ok(d()));
@@ -871,10 +872,10 @@ mod test {
         meta_and_logs.forward([b(), c()], [d(), g()], h(), true);
 
         meta_and_logs.backward_log([], Ok(h()));
-        meta_and_logs.backward_log([], Err(OutOfLog));
+        meta_and_logs.backward_log([], Err(()));
 
         meta_and_logs.forward_log(Ok(h()));
-        meta_and_logs.forward_log(Err(OutOfLog));
+        meta_and_logs.forward_log(Err(()));
 
         meta_and_logs.forward([], [], i(), false);
 
@@ -883,6 +884,6 @@ mod test {
         meta_and_logs.noop_forward_backward_log();
 
         meta_and_logs.backward_log([i()], Ok(h()));
-        meta_and_logs.backward_log([], Err(OutOfLog));
+        meta_and_logs.backward_log([], Err(()));
     }
 }

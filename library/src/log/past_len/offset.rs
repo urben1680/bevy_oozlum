@@ -21,12 +21,8 @@
 //!   ([`many`](super::PastLenLog::backward_log_many)).
 //! - The [`OffsetIter`] iterator is used to read the offsets. See [`IterItem`].
 
-use std::{
-    collections::{VecDeque, vec_deque::Iter},
-    fmt::Debug,
-    num::NonZeroU8,
-    ops::ControlFlow,
-};
+use core::{fmt::Debug, num::NonZeroU8, ops::ControlFlow};
+use std::collections::{VecDeque, vec_deque::Iter};
 
 const MAX_ZEROES_PER_BYTE: u8 = 65;
 const MAX_ZEROES_AS_BYTE: u8 = 0b10_111111;
@@ -134,7 +130,7 @@ pub(super) struct IterItem {
 }
 
 impl Debug for OffsetIter<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_list()
             .entries(self.clone().flat_map(|IterItem { offset, len }| {
                 let count = if offset == 0 { len.get() } else { 1 };

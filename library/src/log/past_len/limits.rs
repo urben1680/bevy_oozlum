@@ -12,7 +12,7 @@
 //!   at the current frame as it did during
 //!   [`RevDirection::NOT_LOG`](crate::meta::RevDirection::NOT_LOG).
 
-use super::PreUpdateVariant;
+use super::PreUpdateKind;
 use bevy::{ecs::change_detection::MaybeLocation, reflect::Reflect, utils::Parallel};
 use core::{fmt::Debug, sync::atomic::AtomicU32};
 use nonmax::NonMaxU32;
@@ -41,7 +41,7 @@ pub(crate) struct PastLenLogLimits {
 }
 
 impl Debug for PastLenLogLimits {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("PastLenLogLimits")
             .field("past_len_ids", &self.past_len_ids)
             .field("updates", &self.updates)
@@ -64,11 +64,11 @@ impl PastLenLogLimits {
         state: &mut Option<PastLenState>,
         meta_log_exits: u64,
         meta_log_clears: u64,
-    ) -> PreUpdateVariant {
+    ) -> PreUpdateKind {
         let new_state = || {
             let id = self
                 .past_len_ids
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
             let id = NonMaxU32::new(id).expect("exhausted maximum number of PastLenLog");
             PastLenState {
                 id,
@@ -83,26 +83,26 @@ impl PastLenLogLimits {
                 if state.meta_log_clears < meta_log_clears {
                     // meta was cleared in the meantime
                     *state = new_state();
-                    PreUpdateVariant::RemoveLog
+                    PreUpdateKind::RemoveLog
                 } else if state.meta_log_exits < meta_log_exits {
                     // meta ran at not-log in the meantime
                     state.limits_updates = self.updates;
                     state.meta_log_exits = meta_log_exits;
                     state.updates_this_frame = 0;
-                    PreUpdateVariant::RemoveFuture
+                    PreUpdateKind::RemoveFuture
                 } else {
                     if state.limits_updates != self.updates {
                         // this log did not update at this frame yet
                         state.limits_updates = self.updates;
                         state.updates_this_frame = 0;
                     }
-                    PreUpdateVariant::Nothing
+                    PreUpdateKind::Nothing
                 }
             }
             None => {
                 // init state, no further operation as it starts empty
                 *state = Some(new_state());
-                PreUpdateVariant::Nothing
+                PreUpdateKind::Nothing
             }
         }
     }
@@ -384,7 +384,7 @@ mod test {
 
         // initial set gives Nothing variant
         let variant = limits.update_state(&mut state, 0, 0);
-        assert_eq!(variant, PreUpdateVariant::Nothing);
+        assert_eq!(variant, PreUpdateKind::Nothing);
         assert_eq!(
             state,
             Some(PastLenState {
@@ -412,7 +412,7 @@ mod test {
 
         // update at another frame
         let variant = limits.update_state(&mut state, 0, 0);
-        assert_eq!(variant, PreUpdateVariant::Nothing);
+        assert_eq!(variant, PreUpdateKind::Nothing);
         assert_eq!(
             state,
             Some(PastLenState {
@@ -441,7 +441,7 @@ mod test {
 
         // increased log_exits gives DropFuture variant
         let variant = limits.update_state(&mut state, 1, 0);
-        assert_eq!(variant, PreUpdateVariant::RemoveFuture);
+        assert_eq!(variant, PreUpdateKind::RemoveFuture);
         assert_eq!(
             state,
             Some(PastLenState {
@@ -471,7 +471,7 @@ mod test {
         // increased log_clears gived DropLog variant and resets everything
         limits.clear();
         let variant = limits.update_state(&mut state, 1, 1);
-        assert_eq!(variant, PreUpdateVariant::RemoveLog);
+        assert_eq!(variant, PreUpdateKind::RemoveLog);
         assert_eq!(
             state,
             Some(PastLenState {
@@ -488,7 +488,7 @@ mod test {
         // do not clear id counter to demonstrate this issues a new, potentially different id
         // limits.clear();
         let variant = limits.update_state(&mut state, 2, 2);
-        assert_eq!(variant, PreUpdateVariant::RemoveLog);
+        assert_eq!(variant, PreUpdateKind::RemoveLog);
         assert_eq!(
             state,
             Some(PastLenState {

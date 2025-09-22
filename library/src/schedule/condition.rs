@@ -15,7 +15,7 @@ use bevy::{
 };
 
 use crate::{
-    log::{OutOfLog, PastLenLog, TransitionLog},
+    log::{PastLenLog, TransitionLog},
     meta::{RevDirection, RevMeta},
 };
 
@@ -164,7 +164,7 @@ impl<T: ReadOnlySystem<In = (), Out = bool>> System for RevCondition<T> {
                                 Err(RunSystemError::Failed(failed.as_str().into()))
                             }
                         },
-                        Err(OutOfLog) => panic!("todo"),
+                        Err(out_of_log) => panic!("todo"),
                     }
                 } else {
                     Ok(false)
@@ -182,7 +182,7 @@ impl<T: ReadOnlySystem<In = (), Out = bool>> System for RevCondition<T> {
                                 Err(RunSystemError::Failed(failed.as_str().into()))
                             }
                         },
-                        Err(OutOfLog) => panic!("todo"),
+                        Err(out_of_log) => panic!("todo"),
                     }
                 } else {
                     Ok(false)
