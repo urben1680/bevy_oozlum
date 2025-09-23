@@ -1,14 +1,18 @@
-use core::{fmt::Debug, iter::{FusedIterator, Take}, marker::PhantomData};
+use crate::{
+    log::{
+        OutOfLog, PreUpdateKind, TransitionDrainAll, TransitionDrainFuture, TransitionDrainPast,
+        TransitionLog, transition::TransitionDrains,
+    },
+    meta::RevMeta,
+};
+use core::{
+    fmt::Debug,
+    iter::{FusedIterator, Take},
+    marker::PhantomData,
+};
 use std::collections::{
     TryReserveError, VecDeque,
     vec_deque::{Drain, IterMut},
-};
-use crate::{
-    log::{
-        PreUpdateKind, TransitionDrainAll, TransitionDrainFuture, TransitionDrainPast,
-        transition::TransitionDrains, OutOfLog, TransitionLog
-    },
-    meta::RevMeta,
 };
 
 /// A log that is updated with with a variable amount of transition type `T` which are used to
@@ -74,7 +78,7 @@ use crate::{
 ///             let next_update = iter.update.clone();
 ///             for next_transition in iter {
 ///                 let next_transition: MyTransition = next_transition.clone();
-/// 
+///
 ///                 // mutate some state with the logged transitions and update
 ///             }
 ///         },
@@ -83,7 +87,7 @@ use crate::{
 ///             let previous_update: MyUpdate = iter.update.clone();
 ///             for previous_transition in iter {
 ///                 let previous_transition: MyTransition = previous_transition.clone();
-/// 
+///
 ///                 // mutate some state with the logged transitions and update
 ///             }
 ///         }
@@ -97,7 +101,7 @@ use crate::{
 ///
 /// There may be cases where extra cleanup is needed in which case the transitions that the log no
 /// longer needs should be drained with in an iterator.
-/// 
+///
 /// The type returned by `pre_update_drain` is more complex than the
 /// [`TransitionLog` variant](TransitionLog::pre_update_drain) as it is not just a single iterator
 /// but two, one over the transitions (`T`) and one over the updates (`U`). The iterator fields are
@@ -119,15 +123,16 @@ use crate::{
 ///     meta: Res<RevMeta>,
 ///     mut log: Local<TransitionsLog<MyTransition, MyUpdate>>
 /// ) -> Result<(), BevyError> {
-///     let mut drain_future = log.pre_update_drain(&meta).future();
-///     // if no update chunks are needed, use `drain_future.transitions` and `drain_future.updates`
-///     while let Some((iter, future_update)) = drain_future.next_update() {
+///     let drains = log.pre_update_drain(&meta);
+///
+///     let mut future_drains = drains.future();
+///     // if no update chunks are needed, use `transitions` and `updates` fields of `future_drains`
+///     while let Some((iter, future_update)) = future_drains.next_update() {
 ///         for future_transition in iter {
-/// 
+///
 ///             // do cleanup tasks with future transitions and updates
 ///         }
 ///     }
-/// 
 ///
 ///     match meta.running_direction() {
 ///         RevDirection::NOT_LOG => {
@@ -174,11 +179,12 @@ use crate::{
 ///     mut log: Local<TransitionsLog<MyTransition, MyUpdate>>
 /// ) -> Result<(), BevyError> {
 ///     let mut drains = log.pre_update_drain(&meta);
-/// 
-///     // if no update chunks are needed, use `drain_past.transitions` and `drain_past.updates`
-///     while let Some((iter, past_update)) = drains.past().next_update() {
+///
+///     let mut past_drains = drains.past();
+///     // if no update chunks are needed, use `transitions` and `updates` fields of `past_drains`
+///     while let Some((iter, past_update)) = past_drains.next_update() {
 ///         for past_transition in iter {
-/// 
+///
 ///             // do cleanup tasks with past transitions and updates
 ///         }
 ///     }
@@ -200,7 +206,7 @@ use crate::{
 ///
 ///             while let Some((iter, past_update)) = drain_past.next_update() {
 ///                 for past_transition in iter {
-/// 
+///
 ///                     // do cleanup tasks with past transitions and updates
 ///                 }
 ///             }
@@ -235,23 +241,24 @@ use crate::{
 ///     mut log: Local<TransitionsLog<MyTransition, MyUpdate>>
 /// ) -> Result<(), BevyError> {
 ///     let mut drains = log.pre_update_drain(&meta);
-/// 
-///     while let Some((iter, past_update)) = drains.past().next_update() {
+///
+///     let mut past_drains = drains.past();
+///     while let Some((iter, past_update)) = past_drains.next_update() {
 ///         for past_transition in iter {
-/// 
+///
 ///             // do cleanup tasks with past transitions and updates
 ///         }
 ///     }
-/// 
-///     let mut drain_future = drains.future();
-///     while let Some((iter, future_update)) = drain_future.next_update() {
+///
+///     let mut future_drains = drains.future();
+///     while let Some((iter, future_update)) = future_drains.next_update() {
 ///         for future_transition in iter {
-/// 
+///
 ///             // do cleanup tasks with future transitions and updates
 ///         }
 ///     }
-/// 
-///     // or, instead of the two above: `let mut drain = log.pre_update_drain(&meta).all()`
+///
+///     // or, instead of the two above: `let mut all_drains = drains.all()`
 ///
 ///     match meta.running_direction() {
 ///         RevDirection::NOT_LOG => {
@@ -270,7 +277,7 @@ use crate::{
 ///
 ///             while let Some((iter, past_update)) = drain_past.next_update() {
 ///                 for past_transition in iter {
-/// 
+///
 ///                     // do cleanup tasks with past transitions and updates
 ///                 }
 ///             }
@@ -452,13 +459,9 @@ impl<T, U> TransitionsLog<T, U> {
         self.updates.shrink_to_fit()
     }
 
-    pub fn push_and_truncate_past(
-        &mut self,
-        max_past_len: u64,
-        c: impl FnOnce(LogMut<T, U>) -> U,
-    ) {
+    pub fn push_and_truncate_past(&mut self, max_past_len: u64, c: impl FnOnce(LogMut<T, U>) -> U) {
         let (transition_drain, amount_drain) =
-            self.push_and_get_transition_and_amount_drain(max_past_len, c);
+            self.push_and_get_transition_and_update_drain(max_past_len, c);
         // todo: truncate_front https://github.com/rust-lang/rust/issues/140667
         self.transitions.drain(..transition_drain);
         self.updates.drain_past(amount_drain);
@@ -470,14 +473,14 @@ impl<T, U> TransitionsLog<T, U> {
     ) -> TransitionsDrainAll<T, U> {
         // for the + 1, see the comment in TransitionLog::push_and_get_drain
         let (transition_drain, amount_drain) =
-            self.push_and_get_transition_and_amount_drain(max_past_len + 1, c);
+            self.push_and_get_transition_and_update_drain(max_past_len + 1, c);
         TransitionsDrainChunkable {
             transitions: self.transitions.drain(..transition_drain),
             updates: self.updates.drain_past(amount_drain),
             _p: PhantomData,
         }
     }
-    fn push_and_get_transition_and_amount_drain(
+    fn push_and_get_transition_and_update_drain(
         &mut self,
         max_past_len: u64,
         c: impl FnOnce(LogMut<T, U>) -> U,
@@ -497,10 +500,10 @@ impl<T, U> TransitionsLog<T, U> {
         let to_drain = self
             .updates
             .push_and_iter_to_drain_past(max_past_len, update);
-        let amount_drain = to_drain.len();
+        let update_drain = to_drain.len();
         let transition_drain: usize = to_drain.map(|update| update.transitions).sum();
         self.index -= transition_drain;
-        (transition_drain, amount_drain)
+        (transition_drain, update_drain)
     }
     #[track_caller]
     pub fn backward_log(&mut self) -> Result<TransitionsLogIterMut<T, U>, OutOfLog> {
@@ -880,9 +883,12 @@ where
     UI: ExactSizeIterator<Item = TransitionsLogUpdate<U>>,
 {
     pub fn next_update(&mut self) -> Option<(TransitionsDrainChunk<'_, TI>, U)> {
-        self.updates
-            .next()
-            .map(|update| (self.transitions.by_ref().take(update.transitions), update.update))
+        self.updates.next().map(|update| {
+            (
+                self.transitions.by_ref().take(update.transitions),
+                update.update,
+            )
+        })
     }
 }
 

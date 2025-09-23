@@ -1,5 +1,5 @@
 use crate::{
-    log::{PreUpdateKind, OutOfLog},
+    log::{OutOfLog, PreUpdateKind},
     meta::{RevDirection, RevMeta},
 };
 use core::{
@@ -46,7 +46,7 @@ use std::collections::{
 /// # #[derive(Clone)]
 /// # struct MyTransition;
 /// fn system(
-///     meta: Res<RevMeta>, 
+///     meta: Res<RevMeta>,
 ///     mut log: Local<TransitionLog<MyTransition>>
 /// ) -> Result<(), BevyError> {
 ///     log.pre_update(&meta);
@@ -89,11 +89,11 @@ use std::collections::{
 /// # #[derive(Clone)]
 /// # struct MyTransition;
 /// fn system(
-///     meta: Res<RevMeta>, 
+///     meta: Res<RevMeta>,
 ///     mut log: Local<TransitionLog<MyTransition>>
 /// ) -> Result<(), BevyError> {
 ///     for future_transition in log.pre_update_drain(&meta).future() {
-/// 
+///
 ///         // do cleanup tasks with future transitions
 ///     }
 ///
@@ -130,11 +130,11 @@ use std::collections::{
 /// # #[derive(Clone)]
 /// # struct MyTransition;
 /// fn system(
-///     meta: Res<RevMeta>, 
+///     meta: Res<RevMeta>,
 ///     mut log: Local<TransitionLog<MyTransition>>
 /// ) -> Result<(), BevyError> {
 ///     for past_transition in log.pre_update_drain(&meta).past() {
-/// 
+///
 ///         // do cleanup tasks with past transitions
 ///     }
 ///
@@ -148,7 +148,7 @@ use std::collections::{
 ///             let drain = log.push_and_drain_past(meta.past_len(), new_transition);
 ///
 ///             for past_transition in drain {
-/// 
+///
 ///                 // do cleanup tasks with past transitions
 ///             }
 ///         },
@@ -176,21 +176,21 @@ use std::collections::{
 /// # #[derive(Clone)]
 /// # struct MyTransition;
 /// fn system(
-///     meta: Res<RevMeta>, 
+///     meta: Res<RevMeta>,
 ///     mut log: Local<TransitionLog<MyTransition>>
 /// ) -> Result<(), BevyError> {
 ///     let mut drains = log.pre_update_drain(&meta);
 ///
 ///     for past_transition in drains.past() {
-/// 
+///
 ///         // do cleanup tasks with past transitions
 ///     }
 ///
 ///     for future_transition in drains.future() {
-/// 
+///
 ///         // do cleanup tasks with future transitions
 ///     }
-/// 
+///
 ///     // or, instead of the two above: `for transition in drain.all() { ... }`
 ///
 ///     match meta.running_direction() {
@@ -203,7 +203,7 @@ use std::collections::{
 ///             let drain = log.push_and_drain_past(meta.past_len(), new_transition);
 ///
 ///             for past_transition in drain {
-/// 
+///
 ///                 // do cleanup tasks with past transitions
 ///             }
 ///         },
@@ -623,7 +623,7 @@ impl<'log, T> TransitionDrains<'log, T> {
 // do not implement DoubleEndedIterator because using that would purge the non-taken future values!
 pub struct TransitionDrainPast<'a, 'log, T> {
     transitions: Take<&'a mut Drain<'log, T>>,
-    past_len: &'a mut usize
+    past_len: &'a mut usize,
 }
 
 impl<'a, 'log, T> TransitionDrainPast<'a, 'log, T> {
@@ -631,7 +631,7 @@ impl<'a, 'log, T> TransitionDrainPast<'a, 'log, T> {
         let transitions = transitions.take(*past_len);
         Self {
             transitions,
-            past_len
+            past_len,
         }
     }
 }

@@ -87,9 +87,11 @@ impl RevDespawnCleaner {
         world
             .try_resource_scope::<Self, _>(|world, this| {
                 let this = this.into_inner();
-                let meta = world.get_resource::<RevMeta>()
+                let meta = world
+                    .get_resource::<RevMeta>()
                     .ok_or(DespawnCleanerErr::MetaMissing)?;
-                let direction = meta.get_running_direction()
+                let direction = meta
+                    .get_running_direction()
                     .ok_or(DespawnCleanerErr::MetaNotRunning)?;
                 let past_len = meta.past_len();
 

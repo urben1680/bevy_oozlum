@@ -1,7 +1,7 @@
-use core::fmt::{Debug, Display};
-use std::collections::{TryReserveError, VecDeque};
 use crate::{log::PreUpdateKind, meta::RevMeta};
 use bevy::ecs::change_detection::MaybeLocation;
+use core::fmt::{Debug, Display};
+use std::collections::{TryReserveError, VecDeque};
 
 use limits::*;
 use offset::*;
