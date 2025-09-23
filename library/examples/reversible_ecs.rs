@@ -140,7 +140,7 @@ fn main() {
 
 #[derive(Resource, Default)]
 struct KeysPressed {
-    direction: Option<RevQueue>,
+    queue: Option<RevQueue>,
     num1: bool,
     num2: bool,
     num3: bool,
@@ -192,7 +192,7 @@ fn score_to_duration(score: u64) -> Duration {
 }
 
 fn control_rev_meta(mut meta: ResMut<RevMeta>, keys: Res<KeysPressed>) {
-    match keys.direction {
+    match keys.queue {
         Some(queue) => meta.set_queue(queue),
         None => {}
     }
@@ -628,10 +628,10 @@ fn map_input(
             _ if time_and_counts.counts.lost >= 10 => {}
             _ if time_and_counts.score() >= WINNING_BEVY_VERSION => {}
 
-            KeyCode::Left => keys.direction = Some(RevQueue::Run(RevDirection::FORWARD_LOG)),
-            KeyCode::Right => keys.direction = Some(RevQueue::Run(RevDirection::BackwardLog)),
-            KeyCode::Up => keys.direction = Some(RevQueue::Run(RevDirection::NOT_LOG)),
-            KeyCode::Down => keys.direction = Some(RevQueue::Pause),
+            KeyCode::Left => keys.queue = Some(RevQueue::Run(RevDirection::FORWARD_LOG)),
+            KeyCode::Right => keys.queue = Some(RevQueue::Run(RevDirection::BackwardLog)),
+            KeyCode::Up => keys.queue = Some(RevQueue::Run(RevDirection::NOT_LOG)),
+            KeyCode::Down => keys.queue = Some(RevQueue::Pause),
             KeyCode::Char('1') => keys.num1 = true,
             KeyCode::Char('2') => keys.num2 = true,
             KeyCode::Char('3') => keys.num3 = true,
@@ -639,6 +639,10 @@ fn map_input(
             KeyCode::Char('5') => keys.num5 = true,
             KeyCode::Char('6') => keys.num6 = true,
             KeyCode::Char('7') => keys.num7 = true,
+
+            // psst, you can also clear the waves, but this marks all waste as lost
+            KeyCode::Backspace => keys.queue = Some(RevQueue::Clear { then_run: true }),
+
             _ => {}
         }
         Ok(())
@@ -705,9 +709,12 @@ fn render(
     meta: Res<RevMeta>,
     time_and_counts: TimeAndCounts,
     waste: Query<&Waste>,
-    counts: Res<WasteCounts>,
     mut last_future_end: Local<Option<u64>>,
 ) {
+    if meta.paused() {
+        return;
+    }
+
     let _ = stdout().execute(BeginSynchronizedUpdate);
     let _ = stdout().execute(Clear(ClearType::All));
 
@@ -765,8 +772,8 @@ fn render(
         println!("{padding}{row_future}{}{past_row}", i + 1);
     }
 
-    let total = waste.iter().len() + counts.lost;
-    let lost = counts.lost.min(10);
+    let total = waste.iter().len() + time_and_counts.counts.lost;
+    let lost = time_and_counts.counts.lost.min(10);
     let lost_bar: String = "#"
         .repeat(lost)
         .chars()

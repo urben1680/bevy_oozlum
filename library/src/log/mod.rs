@@ -8,10 +8,6 @@
 //!
 //! Each log type contains further documentation and examples.
 
-mod past_len;
-mod transition;
-mod transitions;
-
 use bevy::ecs::change_detection::MaybeLocation;
 pub(crate) use past_len::limits::{PastLenLogLimits, PastLenState};
 pub use past_len::{PastLenLog, limits::PastLenLogMissed};
@@ -25,6 +21,10 @@ pub use transitions::{
     TransitionsDrainPast, TransitionsDrains, TransitionsLog, TransitionsLogIterMut,
     TransitionsLogUpdate,
 };
+
+mod past_len;
+mod transition;
+mod transitions;
 
 /// Defines in which way a log has to be adjusted to reflect new changes to
 /// [`RevMeta`](crate::meta::RevMeta) since the last time the log was updated.
@@ -47,6 +47,7 @@ pub(crate) enum PreUpdateKind {
 pub struct OutOfLog(MaybeLocation);
 
 impl OutOfLog {
+    /// Constructor with location tracking.
     #[track_caller]
     fn new() -> Self {
         Self(MaybeLocation::caller())

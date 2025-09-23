@@ -244,9 +244,8 @@ impl RevMeta {
         self.now == self.future_end
     }
     fn clear(&mut self) {
-        self.past_end = 0;
-        self.now = 0;
-        self.future_end = 0;
+        self.past_end = self.now;
+        self.future_end = self.now;
         self.log_clears += 1;
         self.past_len_limits.clear();
         self.log_exits = 0;
@@ -830,29 +829,7 @@ mod test {
         meta.update_assert(
             Some(RevQueue::RUN_NOT_LOG),
             Some(RunValues {
-                past_end: 0,
-                now: 1,
-                future_end: 1,
-                log_exits: 0,
-                log_clears: 1,
-                direction: RevDirection::NOT_LOG,
-            }),
-        );
-        meta.update_assert(
-            None,
-            Some(RunValues {
-                past_end: 0,
-                now: 2,
-                future_end: 2,
-                log_exits: 0,
-                log_clears: 1,
-                direction: RevDirection::NOT_LOG,
-            }),
-        );
-        meta.update_assert(
-            None,
-            Some(RunValues {
-                past_end: 0,
+                past_end: 2,
                 now: 3,
                 future_end: 3,
                 log_exits: 0,
@@ -861,11 +838,33 @@ mod test {
             }),
         );
         meta.update_assert(
+            None,
+            Some(RunValues {
+                past_end: 2,
+                now: 4,
+                future_end: 4,
+                log_exits: 0,
+                log_clears: 1,
+                direction: RevDirection::NOT_LOG,
+            }),
+        );
+        meta.update_assert(
+            None,
+            Some(RunValues {
+                past_end: 2,
+                now: 5,
+                future_end: 5,
+                log_exits: 0,
+                log_clears: 1,
+                direction: RevDirection::NOT_LOG,
+            }),
+        );
+        meta.update_assert(
             Some(RevQueue::RUN_BACKWARD_LOG),
             Some(RunValues {
-                past_end: 0,
-                now: 2,
-                future_end: 3,
+                past_end: 2,
+                now: 4,
+                future_end: 5,
                 log_exits: 0,
                 log_clears: 1,
                 direction: RevDirection::BackwardLog,
@@ -874,9 +873,9 @@ mod test {
         meta.update_assert(
             None,
             Some(RunValues {
-                past_end: 0,
-                now: 1,
-                future_end: 3,
+                past_end: 2,
+                now: 3,
+                future_end: 5,
                 log_exits: 0,
                 log_clears: 1,
                 direction: RevDirection::BackwardLog,
@@ -885,9 +884,9 @@ mod test {
         meta.update_assert(
             Some(RevQueue::CLEAR_THEN_RUN),
             Some(RunValues {
-                past_end: 0,
-                now: 1,
-                future_end: 1,
+                past_end: 3,
+                now: 4,
+                future_end: 4,
                 log_exits: 0,
                 log_clears: 2,
                 direction: RevDirection::NOT_LOG,

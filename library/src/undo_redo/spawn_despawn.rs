@@ -85,18 +85,12 @@ impl RevDespawnCleaner {
     /// Despawn entities that contain [`RevDespawned`] and their relevant operation (spawn, despawn, move_components) fell out of log.
     pub(crate) fn update(world: &mut World) -> Result<(), DespawnCleanerErr> {
         world
-            .try_resource_scope::<Self, _>(|world, mut this| {
-                let this = &mut *this;
-                let Some(meta) = world.remove_resource::<RevMeta>() else {
-                    return Err(DespawnCleanerErr::MetaMissing);
-                };
-                let direction = match meta.get_running_direction() {
-                    Some(direction) => direction,
-                    None => {
-                        world.insert_resource(meta);
-                        return Err(DespawnCleanerErr::MetaNotRunning);
-                    }
-                };
+            .try_resource_scope::<Self, _>(|world, this| {
+                let this = this.into_inner();
+                let meta = world.get_resource::<RevMeta>()
+                    .ok_or(DespawnCleanerErr::MetaMissing)?;
+                let direction = meta.get_running_direction()
+                    .ok_or(DespawnCleanerErr::MetaNotRunning)?;
                 let past_len = meta.past_len();
 
                 {
@@ -110,8 +104,6 @@ impl RevDespawnCleaner {
                         .chain(drain_spawn.future().transitions)
                         .chain(drain_despawn.past().transitions);
 
-                    world.insert_resource(meta);
-
                     for entity in iter {
                         let _ = world.try_despawn(entity); // todo: upstream a way to set the location
                     }
@@ -122,7 +114,7 @@ impl RevDespawnCleaner {
                     RevDirection::FORWARD_LOG => this.forward_log(),
                     RevDirection::BackwardLog => this.backward_log(),
                 }
-                .map_err(|OutOfLog| DespawnCleanerErr::CleanerOutOfLog)
+                .map_err(|_| DespawnCleanerErr::CleanerOutOfLog)
             })
             .unwrap_or(Err(DespawnCleanerErr::CleanerMissing))
     }

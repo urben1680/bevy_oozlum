@@ -12,10 +12,10 @@
 //!   at the current frame as it did during
 //!   [`RevDirection::NOT_LOG`](crate::meta::RevDirection::NOT_LOG).
 
-use super::PreUpdateKind;
-use bevy::{ecs::change_detection::MaybeLocation, reflect::Reflect, utils::Parallel};
 use core::{fmt::Debug, sync::atomic::AtomicU32};
+use super::PreUpdateKind;
 use nonmax::NonMaxU32;
+use bevy::{ecs::change_detection::MaybeLocation, reflect::Reflect, utils::Parallel};
 
 /// Part of [`RevMeta`](crate::meta::RevMeta) that keeps track of [`PastLenLog`](super::PastLenLog)
 /// updates and reports when such an update was expected for a present frame but did not happen.

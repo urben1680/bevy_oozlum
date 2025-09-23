@@ -5,6 +5,7 @@ TODO:
 -- test not only multi-thread executor
 - bring capacity api back, reflect serialize uses that
 - update README
+- RevQueue::Clear bug(s), test more in example
 
 Enhancements:
 - reduce todo!() and //todo and unwrap (in favor of expect)
