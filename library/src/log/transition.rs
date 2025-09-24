@@ -325,10 +325,9 @@ impl<T> TransitionLog<T> {
     }
 
     /// Pushes `transition` to the log and then shortens the log to contain at most `max_past_len`
-    /// past values. If `0` is passed as the first argument, the pushed `transition` is immediately
-    /// removed again.
+    /// past log entries.
     ///
-    /// To receive an iterator over the removed values that got out-of-log, use
+    /// To receive an iterator over the removed log entries that got out-of-log, use
     /// [`push_and_drain_past`](Self::push_and_drain_past) instead. Note that the `max_past_len`
     /// logic works a bit differently with that method, see its documentation.
     ///
@@ -346,47 +345,45 @@ impl<T> TransitionLog<T> {
     }
 
     /// Pushes `transition` to the log and then shortens the log to contain at most
-    /// `max_past_len + 1` past values.
+    /// `max_past_len + 1` past log entries.
     ///
     /// This is used during [`RevDirection::NOT_LOG`](crate::meta::RevDirection::NOT_LOG).
     ///
     /// Before calling this, [`pre_update_drain`](Self::pre_update_drain) **must** be called at
     /// least once in the [present reversible frame](RevMeta::now). This method may panic if this
     /// was not done. Do not use [`pre_update`](Self::pre_update) because that method is needed as
-    /// well to receive past values that are now out-of-log.
+    /// well to receive past log entries that are now out-of-log.
     ///
-    /// This methods returns values that got out-of-log because the push of `transition` exceeded
-    /// `max_past_len`. If there are no such values, the iterator is empty. `pre_update_drain`
-    /// would also return values that got out-of-log when
-    /// [`RevQueue::Clear`](crate::meta::RevQueue::Clear) was queued and applied.
+    /// This methods returns log entries that got out-of-log because the push of `transition` and a
+    /// potential reduction of `max_past_len` form the last update exceed the current
+    /// `max_past_len` value. If there are no such log entries, the iterator is empty.
     ///
-    /// The `max_past_len` addition by one is done to ensure that drained values were pushed at a
-    /// frame that is now out-of-log. This may not be needed in some cases, but is important in
-    /// others like when `T` contains an entity [ID](bevy::ecs::entity::Entity) that needs to remain
-    /// alive as long it was spawned within the global log range. This makes this method less likely
-    /// a source of bugs in the user logic.
+    /// The `max_past_len` addition by one is done to ensure that drained log entries were pushed at
+    /// a frame that is now out-of-log. This may not be needed in some cases, but is important in
+    /// others like when log entries contain an entity [ID](bevy::ecs::entity::Entity) that needs to
+    /// remain alive as long it was spawned within the global log range. This makes this method less
+    /// likely a source of bugs in the user logic.
     ///
-    /// As an explaination why this log type would drain transitions earlier: Only the transition
-    /// _from the very first state_ that can be reverted to _to the second state_ is required to be
-    /// stored to cover a past length of `max_past_len`. The transition _to the first state_ is
-    /// otherwise not useful because it would only be used to transition to and from the previous
-    /// state that is now out-of-log.
+    /// As an explaination why this log type would drain log entries earlier: Only the log entry to
+    /// transition _from the very first state_ that can be reverted to _to the second state_ is
+    /// required to be stored to cover a past length of `max_past_len`. The log entry to transition
+    /// _to the first state_ is otherwise not useful because it would only be used to transition to
+    /// and from the state before that which is now out-of-log.
     ///
-    /// So if this addition by one was not done, the transition pushed at [`RevMeta::past_end`], a
+    /// So if this addition by one was not done, the log entry pushed at [`RevMeta::past_end`], a
     /// frame that is still in-log, would be drained here.
     ///
+    /// It is assumed that storing one additionally log entry is not an issue for the user and is
+    /// preferred over a potential source of bugs.
+    ///
     /// For examples, see the [type level documentation](TransitionLog).
-    pub fn push_and_drain_past(
-        &mut self,
-        max_past_len: u64,
-        transition: T,
-    ) -> TransitionDrainAll<T> {
+    pub fn push_and_drain_past(&mut self, max_past_len: u64, transition: T) -> Drain<T> {
         let to_drain = self.push_and_get_drain(max_past_len + 1, transition);
         self.transitions.drain(..to_drain)
     }
 
-    /// Pushes the `transition` and returns how many elements need to be removed from the past end
-    /// of the log to contain at most `may_past_len` elements.
+    /// Pushes the `transition` and returns how many log entries need to be removed from the past
+    /// end of the log to contain at most `may_past_len` log entries.
     fn push_and_get_drain(&mut self, max_past_len: u64, transition: T) -> usize {
         assert_eq!(
             self.index,
@@ -462,14 +459,14 @@ impl<T> TransitionLog<T> {
         self.index = 0;
     }
 
-    /// Returns the transition value that was logged at the chronologically previous push. If the
-    /// log is at the past end before this call, this method returns an [`OutOfLog`] error, leaving
-    /// the log unchanged.
+    /// Returns a reference to the log entry that was logged at the chronologically previous push.
+    /// If the log is at the past end before this call, this method returns an [`OutOfLog`] error,
+    /// leaving the log unchanged.
     ///
-    /// The value can be mutated in case applying the transition is not only changing the state but
-    /// also the transition itself. This may be needed if a previously added value is taken again
-    /// and stored in this transition at `backward_log`. [`forward_log`](Self::forward_log) would
-    /// then take the value from the transition to return it.
+    /// The log entry can be mutated in case applying it is not only changing the state but also the
+    /// log entry itself. This may be needed if a previously added value is taken again and stored
+    /// in this log entry at `backward_log`. [`forward_log`](Self::forward_log) would then take the
+    /// value from the log entry to return it.
     ///
     /// This is used during [`RevDirection::BackwardLog`](crate::meta::RevDirection::BackwardLog).
     ///
@@ -491,14 +488,14 @@ impl<T> TransitionLog<T> {
         Ok(transition)
     }
 
-    /// Returns the transition value that was logged at the chronologically next push. If the
-    /// log is at the past end before this call, this method returns an [`OutOfLog`] error, leaving
-    /// the log unchanged.
+    /// Returns a reference to the log entry that was logged at the chronologically next push. If
+    /// the log is at the future end before this call, this method returns an [`OutOfLog`] error,
+    /// leaving the log unchanged.
     ///
-    /// The value can be mutated in case applying the transition is not only changing the state but
-    /// also the transition itself. This may be needed if a previously added value is taken again
-    /// and stored in this transition at [`backward_log`](Self::backward_log). `forward_log` would
-    /// then take the value from the transition to return it.
+    /// The log entry can be mutated in case applying it is not only changing the state but also the
+    /// log entry itself. This may be needed if a previously added value is taken again
+    /// and stored in this log entry at [`backward_log`](Self::backward_log). `forward_log` would
+    /// then take the value from the log entry to return it.
     ///
     /// This is used during [`RevDirection::FORWARD_LOG`](crate::meta::RevDirection::FORWARD_LOG).
     ///
@@ -572,8 +569,15 @@ impl<T> TransitionLog<T> {
 }
 
 /// Contains iterators for the past and future log entries that need to be removed at this frame.
+///
+/// These iterators may be empty if there is nothing out-of-log to drain.
+///
+/// Returned by [`TransitionLog::pre_update_drain`].
 pub struct TransitionDrains<'log, T> {
+    /// Draining iterator containing transitions of either the future or the whole log, or is empty.
     pub(super) transitions: Drain<'log, T>,
+
+    /// Amount of transitions in [`Self::transitions`] that are in the past.
     pub(super) past_len: usize,
 }
 
@@ -583,7 +587,7 @@ impl<'log, T> TransitionDrains<'log, T> {
     /// The transitions are returned in the order they were pushed.
     ///
     /// Calling this method a second time will return an iterator that continues where the first
-    /// usage ended. If the iterator at the first time was exhausted, following ones will be empty.
+    /// usage ended. If the iterator was exhausted that first time, following ones will be empty.
     ///
     /// See [`VecDeque::drain`].
     pub fn past<'a>(&'a mut self) -> TransitionDrainPast<'a, 'log, T> {
@@ -620,7 +624,7 @@ impl<'log, T> TransitionDrains<'log, T> {
 }
 
 /// Draining transition iterator returned by [`TransitionDrains::past`].
-// do not implement DoubleEndedIterator because using that would purge the non-taken future values!
+// DO NOT implement DoubleEndedIterator because using that would purge the non-taken future values!
 pub struct TransitionDrainPast<'a, 'log, T> {
     transitions: Take<&'a mut Drain<'log, T>>,
     past_len: &'a mut usize,

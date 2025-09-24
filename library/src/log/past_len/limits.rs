@@ -13,8 +13,8 @@
 //!   [`RevDirection::NOT_LOG`](crate::meta::RevDirection::NOT_LOG).
 
 use super::PreUpdateKind;
-use bevy::{ecs::change_detection::MaybeLocation, reflect::Reflect, utils::Parallel};
-use core::{fmt::Debug, sync::atomic::AtomicU32};
+use bevy::{ecs::change_detection::MaybeLocation, log::info, reflect::Reflect, utils::Parallel};
+use core::{fmt::Debug, panic::Location, sync::atomic::AtomicU32};
 use nonmax::NonMaxU32;
 
 /// Part of [`RevMeta`](crate::meta::RevMeta) that keeps track of [`PastLenLog`](super::PastLenLog)
@@ -59,17 +59,22 @@ impl PastLenLogLimits {
     ///
     /// Return which operation the owning [`PastLenlog`](super::PastLenLog) has to do before any
     /// other mutation.
+    #[track_caller]
     pub(crate) fn update_state(
         &self,
         state: &mut Option<PastLenState>,
         meta_log_exits: u64,
         meta_log_clears: u64,
     ) -> PreUpdateKind {
+        let caller = Location::caller();
         let new_state = || {
             let id = self
                 .past_len_ids
                 .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
             let id = NonMaxU32::new(id).expect("exhausted maximum number of PastLenLog");
+            info!(
+                "A `PastLenLog` with the id {id} was initiated at {caller}, this id remains valid until `RevQueue::Clear` is applied"
+            );
             PastLenState {
                 id,
                 updates_this_frame: 0,

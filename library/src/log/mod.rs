@@ -9,6 +9,7 @@
 //! Each log type contains further documentation and examples.
 
 use bevy::ecs::change_detection::MaybeLocation;
+
 pub(crate) use past_len::limits::{PastLenLogLimits, PastLenState};
 pub use past_len::{PastLenLog, limits::PastLenLogMissed};
 
@@ -43,11 +44,32 @@ pub(crate) enum PreUpdateKind {
 /// An error that may be returned by the `backward_log`/`forward_log` methods of
 /// [`TransitionLog`]/[`TransitionsLog`] in case they already were at the end of their log before
 /// the method call.
+///
+/// This error cannot occur if:
+/// 1. The `max_past_len` parameter in their `push_and_truncate_past`/ `push_and_drain_past` methods
+///    is always taken from the situational correct source:
+///    - [`RevMeta::past_len`](crate::meta::RevMeta::past_len) (log is updated every frame)
+///    - [`PastLenLog::update_get`] (log is updated arbitrarily)
+///    - [`PastLenLog::update_many_get`] (log is updated in varying batches)
+///    - `u64::MAX` (log is allowed to have unlimited growth)
+/// 2. No [log updates](crate::meta::RevDirection::is_log) are missed that correspond to the frames
+///    the log was updated at during [`RevDirection::NOT_LOG`](crate::meta::RevDirection::NOT_LOG).
+///    This is trivial if the log simply updates every frame. In other cases, this can be tracked
+///    with a [`PastLenLog`] that is updated along the log. This causes
+///    [`RevMeta::update`](crate::meta::RevMeta::update) to return
+///    [`RevMetaUpdateErr::PastLenLogsMissed`](crate::meta::RevMetaUpdateErr::PastLenLogsMissed)
+///    before `OutOfLog` could be encountered. The specific `PastLenLog` from the error can be
+///    identified in two ways:
+///    - When [`PastLenLog::pre_update`] sets it's [id](PastLenLog::id), an info log will be written
+///      which can be compared to  [`PastLenLogMissed::id`] from the error above. Note that the id
+///      will change when [`RevQueue::Clear`](crate::meta::RevQueue::Clear) is applied, which is
+///      also logged.
+///    - Using bevy's `track_location` cargo feature to read [`PastLenLogMissed::last_update`].
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct OutOfLog(MaybeLocation);
 
 impl OutOfLog {
-    /// Constructor with location tracking.
+    /// Constructor with location tracking, if enabled.
     #[track_caller]
     fn new() -> Self {
         Self(MaybeLocation::caller())

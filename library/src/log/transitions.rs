@@ -106,7 +106,7 @@ use std::collections::{
 /// [`TransitionLog` variant](TransitionLog::pre_update_drain) as it is not just a single iterator
 /// but two, one over the transitions (`T`) and one over the updates (`U`). The iterator fields are
 /// freely accessible, but if the draining needs to be done in update chunks, use the
-/// [`next_update`](TransitionsDrainChunkable::next_update) method that returns an
+/// [`next_log_entry`](TransitionsDrainChunkable::next_log_entry) method that returns an
 /// `Option<(impl Iterator<Item = T>, U)>`. In every case, the iterators yield the items in the
 /// order they were pushed.
 ///
@@ -127,7 +127,7 @@ use std::collections::{
 ///
 ///     let mut future_drains = drains.future();
 ///     // if no update chunks are needed, use `transitions` and `updates` fields of `future_drains`
-///     while let Some((iter, future_update)) = future_drains.next_update() {
+///     while let Some((iter, future_update)) = future_drains.next_log_entry() {
 ///         for future_transition in iter {
 ///
 ///             // do cleanup tasks with future transitions and updates
@@ -182,7 +182,7 @@ use std::collections::{
 ///
 ///     let mut past_drains = drains.past();
 ///     // if no update chunks are needed, use `transitions` and `updates` fields of `past_drains`
-///     while let Some((iter, past_update)) = past_drains.next_update() {
+///     while let Some((iter, past_update)) = past_drains.next_log_entry() {
 ///         for past_transition in iter {
 ///
 ///             // do cleanup tasks with past transitions and updates
@@ -204,7 +204,7 @@ use std::collections::{
 ///                 new_update
 ///             });
 ///
-///             while let Some((iter, past_update)) = drain_past.next_update() {
+///             while let Some((iter, past_update)) = drain_past.next_log_entry() {
 ///                 for past_transition in iter {
 ///
 ///                     // do cleanup tasks with past transitions and updates
@@ -243,7 +243,7 @@ use std::collections::{
 ///     let mut drains = log.pre_update_drain(&meta);
 ///
 ///     let mut past_drains = drains.past();
-///     while let Some((iter, past_update)) = past_drains.next_update() {
+///     while let Some((iter, past_update)) = past_drains.next_log_entry() {
 ///         for past_transition in iter {
 ///
 ///             // do cleanup tasks with past transitions and updates
@@ -251,7 +251,7 @@ use std::collections::{
 ///     }
 ///
 ///     let mut future_drains = drains.future();
-///     while let Some((iter, future_update)) = future_drains.next_update() {
+///     while let Some((iter, future_update)) = future_drains.next_log_entry() {
 ///         for future_transition in iter {
 ///
 ///             // do cleanup tasks with future transitions and updates
@@ -275,7 +275,7 @@ use std::collections::{
 ///                 new_update
 ///             });
 ///
-///             while let Some((iter, past_update)) = drain_past.next_update() {
+///             while let Some((iter, past_update)) = drain_past.next_log_entry() {
 ///                 for past_transition in iter {
 ///
 ///                     // do cleanup tasks with past transitions and updates
@@ -459,6 +459,23 @@ impl<T, U> TransitionsLog<T, U> {
         self.updates.shrink_to_fit()
     }
 
+    /// Pushes transitions (`T`) and an update (`U`) to the log and then shortens the log to contain
+    /// past log entries.
+    ///
+    /// The closure offers different ways to push the transitions, see [`LogMut`], but also allows
+    /// to not push any at all. This is still considered as an update however.
+    ///
+    /// To receive an iterator over the removed log entries that got out-of-log, use
+    /// [`push_and_drain_past`](Self::push_and_drain_past) instead. Note that the `max_past_len`
+    /// logic works a bit differently with that method, see its documentation.
+    ///
+    /// This is used during [`RevDirection::NOT_LOG`](crate::meta::RevDirection::NOT_LOG).
+    ///
+    /// Before calling this, [`pre_update`](Self::pre_update) or
+    /// [`pre_update_drain`](Self::pre_update_drain) **must** be called at least once in the
+    /// [present reversible frame](RevMeta::now). This method may panic if this was not done.
+    ///
+    /// For examples, see the [type level documentation](TransitionsLog).
     pub fn push_and_truncate_past(&mut self, max_past_len: u64, c: impl FnOnce(LogMut<T, U>) -> U) {
         let (transition_drain, amount_drain) =
             self.push_and_get_transition_and_update_drain(max_past_len, c);
@@ -466,12 +483,48 @@ impl<T, U> TransitionsLog<T, U> {
         self.transitions.drain(..transition_drain);
         self.updates.drain_past(amount_drain);
     }
+
+    /// Pushes transitions (`T`) and an update (`U`) to the log and then shortens the log to contain
+    /// at most `max_past_len + 1` past updates.
+    ///
+    /// The closure offers different ways to push the transitions, see [`LogMut`], but also allows
+    /// to not push any at all. This is still considered as an update however.
+    ///
+    /// This is used during [`RevDirection::NOT_LOG`](crate::meta::RevDirection::NOT_LOG).
+    ///
+    /// Before calling this, [`pre_update_drain`](Self::pre_update_drain) **must** be called at
+    /// least once in the [present reversible frame](RevMeta::now). This method may panic if this
+    /// was not done. Do not use [`pre_update`](Self::pre_update) because that method is needed as
+    /// well to receive past log entries that are now out-of-log.
+    ///
+    /// This methods returns log entries that got out-of-log because the push of `transition` and a
+    /// potential reduction of `max_past_len` form the last update exceed the current
+    /// `max_past_len` value. If there are no such log entries, the iterator is empty.
+    ///
+    /// The `max_past_len` addition by one is done to ensure that drained log entries were pushed at
+    /// a frame that is now out-of-log. This may not be needed in some cases, but is important in
+    /// others like when log entries contain an entity [ID](bevy::ecs::entity::Entity) that needs to
+    /// remain alive as long it was spawned within the global log range. This makes this method less
+    /// likely a source of bugs in the user logic.
+    ///
+    /// As an explaination why this log type would drain log entries earlier: Only the log entry to
+    /// transition _from the very first state_ that can be reverted to _to the second state_ is
+    /// required to be stored to cover a past length of `max_past_len`. The log entry to transition
+    /// _to the first state_ is otherwise not useful because it would only be used to transition to
+    /// and from the state before that which is now out-of-log.
+    ///
+    /// So if this addition by one was not done, the log entry pushed at [`RevMeta::past_end`], a
+    /// frame that is still in-log, would be drained here.
+    ///
+    /// It is assumed that storing one additionally log entry is not an issue for the user and is
+    /// preferred over a potential source of bugs.
+    ///
+    /// For examples, see the [type level documentation](TransitionsLog).
     pub fn push_and_drain_past(
         &mut self,
         max_past_len: u64,
         c: impl FnOnce(LogMut<T, U>) -> U,
     ) -> TransitionsDrainAll<T, U> {
-        // for the + 1, see the comment in TransitionLog::push_and_get_drain
         let (transition_drain, amount_drain) =
             self.push_and_get_transition_and_update_drain(max_past_len + 1, c);
         TransitionsDrainChunkable {
@@ -480,6 +533,10 @@ impl<T, U> TransitionsLog<T, U> {
             _p: PhantomData,
         }
     }
+
+    /// Applies the pushing closure and returns how many transitions (first tuple element) and how
+    /// many updates (second tuple element) need to be removed from the past end of the log to
+    /// contain at most `may_past_len` elements.
     fn push_and_get_transition_and_update_drain(
         &mut self,
         max_past_len: u64,
@@ -505,6 +562,26 @@ impl<T, U> TransitionsLog<T, U> {
         self.index -= transition_drain;
         (transition_drain, update_drain)
     }
+
+    /// Returns references to the log entry that was logged at the chronologically previous push. If
+    /// the log is at the past end before this call, this method returns an [`OutOfLog`] error,
+    /// leaving the log unchanged.
+    ///
+    /// The references are returned in an transition (`T`) iterator, see [`TransitionsLogIterMut`].
+    /// It contains an accessible reference field to the update (`U`).
+    ///
+    /// The log entry can be mutated in case applying it is not only changing the state but also the
+    /// log entry itself. This may be needed if a previously added value is taken again and stored
+    /// in this log entry at `backward_log`. [`forward_log`](Self::forward_log) would then take the
+    /// value from the log entry to return it.
+    ///
+    /// This is used during [`RevDirection::BackwardLog`](crate::meta::RevDirection::BackwardLog).
+    ///
+    /// Before calling this, [`pre_update`](Self::pre_update) or
+    /// [`pre_update_drain`](Self::pre_update_drain) **must** be called at least once in the
+    /// [present reversible frame](RevMeta::now).
+    ///
+    /// For examples, see the [type level documentation](TransitionsLog).
     #[track_caller]
     pub fn backward_log(&mut self) -> Result<TransitionsLogIterMut<T, U>, OutOfLog> {
         let old_index = self.index;
@@ -516,6 +593,26 @@ impl<T, U> TransitionsLog<T, U> {
             update: &mut update_mut.update,
         })
     }
+
+    /// Returns references to the log entry that was logged at the chronologically next push. If the
+    /// log is at the future end before this call, this method returns an [`OutOfLog`] error,
+    /// leaving the log unchanged.
+    ///
+    /// The references are returned in an transition (`T`) iterator, see [`TransitionsLogIterMut`].
+    /// It contains an accessible reference field to the update (`U`).
+    ///
+    /// The log entry can be mutated in case applying it is not only changing the state but also the
+    /// log entry itself. This may be needed if a previously added value is taken again
+    /// and stored in this log entry at [`backward_log`](Self::backward_log). `forward_log` would
+    /// then take the value from the log entry to return it.
+    ///
+    /// This is used during [`RevDirection::FORWARD_LOG`](crate::meta::RevDirection::FORWARD_LOG).
+    ///
+    /// Before calling this, [`pre_update`](Self::pre_update) or
+    /// [`pre_update_drain`](Self::pre_update_drain) **must** be called at least once in the
+    /// [present reversible frame](RevMeta::now).
+    ///
+    /// For examples, see the [type level documentation](TransitionsLog).
     #[track_caller]
     pub fn forward_log(&mut self) -> Result<TransitionsLogIterMut<T, U>, OutOfLog> {
         let old_index = self.index;
@@ -527,6 +624,14 @@ impl<T, U> TransitionsLog<T, U> {
             update: &mut update_mut.update,
         })
     }
+
+    /// This method **must** be called once per [reversible frame](RevMeta::now) before any other
+    /// mutation.
+    ///
+    /// This may remove log entries. If a draining iterator for these entries is required, use
+    /// [`pre_update_drain`](Self::pre_update_drain) instead.
+    ///
+    /// For examples, see the [type level documentation](TransitionsLog).
     pub fn pre_update(&mut self, meta: &RevMeta) {
         match self.updates.pre_update_kind(meta) {
             PreUpdateKind::RemoveLog => {
@@ -541,6 +646,14 @@ impl<T, U> TransitionsLog<T, U> {
             PreUpdateKind::Nothing => {}
         }
     }
+
+    /// This method **must** be called once per [reversible frame](RevMeta::now) before any other
+    /// mutation.
+    ///
+    /// This may remove log entries which can be received with the returned iterators. The iterators
+    /// may be empty. If no iterators are required, use [`pre_update`](Self::pre_update) instead.
+    ///
+    /// For examples, see the [type level documentation](TransitionsLog).
     pub fn pre_update_drain<'log, 'm>(
         &'log mut self,
         meta: &'m RevMeta,
@@ -569,21 +682,28 @@ impl<T, U> TransitionsLog<T, U> {
     }
 }
 
-/// A [`&mut VecDeque<T>`](VecDeque) wrapper that does not expose methods which remove from the
-/// deque.
+/// A [`&mut VecDeque<T>`](VecDeque) wrapper that only exposes methods which add to the deque.
 ///
-/// Also offers length and capacity methods for transitions (`T`) and updates (`U`).
+/// Also offers length and capacity methods for transitions (`T`) and updates (`U`) that do not
+/// affect the stored log entries.
 pub struct LogMut<'a, T, U> {
     transitions: &'a mut VecDeque<T>,
     updates: &'a mut TransitionLog<TransitionsLogUpdate<U>>,
 }
 
 impl<'a, T, U> LogMut<'a, T, U> {
-    pub fn append(&mut self, other: &mut VecDeque<T>) {
-        self.transitions.append(other);
+    /// Moves all `transitions` into the log, leaving `transitions` empty.
+    ///
+    /// See [`VecDeque::append`].
+    pub fn append(&mut self, transitions: &mut VecDeque<T>) {
+        self.transitions.append(transitions);
     }
-    pub fn push(&mut self, value: T) {
-        self.transitions.push_back(value);
+
+    /// Pushes the `transition` into the log.
+    ///
+    /// See [`VecDeque::push_back`].
+    pub fn push(&mut self, transition: T) {
+        self.transitions.push_back(transition);
     }
 
     /// Returns the number of transitions (`T`) in the log.
@@ -731,15 +851,24 @@ where
     }
 }
 
+/// An iterator over mutable references of the chronologically [next](TransitionsLog::forward_log)
+/// or [previous](TransitionsLog::backward_log) transitions (`T`).
+///
+/// A mutable reference to the update (`U`) of the log entry is accessible as the
+/// [`update` field](Self::update).
 #[derive(Debug)]
 pub struct TransitionsLogIterMut<'a, T, U> {
+    /// Mutable references to the transitions of this log entry.
     transitions: IterMut<'a, T>,
+
+    /// A mutable reference to the update of this log entry.
     pub update: &'a mut U,
 }
 
 impl<'a, T, U> Iterator for TransitionsLogIterMut<'a, T, U> {
     type Item = &'a mut T;
 
+    #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         self.transitions.next()
     }
@@ -784,17 +913,33 @@ impl<T, U> ExactSizeIterator for TransitionsLogIterMut<'_, T, U> {
 
 impl<T, U> FusedIterator for TransitionsLogIterMut<'_, T, U> {}
 
+/// An internal wrapper around the update and the amount of transitions that belong to
+/// a log entry.
 #[derive(Debug, Clone)]
 pub struct TransitionsLogUpdate<U> {
+    /// The update value of this log entry.
     pub update: U,
 
+    /// The amount of transitions that belong to this log entry
+    ///
     /// Must be private because draining iterators rely on the value to remain unchanged.
     transitions: usize,
 }
 
+/// Contains iterators for the past and future log entries that need to be removed at this frame.
+///
+/// These iterators may be empty if there is nothing out-of-log to drain.
+///
+/// Returned by [`TransitionsLog::pre_update_drain`].
 pub struct TransitionsDrains<'log, T, U> {
+    /// Draining iterator containing transitions of either the future or the whole log, or is empty.
     transitions: Drain<'log, T>,
+
+    /// Draining iterator containing updates of either the future or the whole log, or is empty.
     updates: TransitionDrains<'log, TransitionsLogUpdate<U>>,
+
+    /// Amount of transitions in [`Self::transitions`] that are in the past. [`Self::updates`]
+    /// tracks its past length itself.
     past_len: usize,
 }
 
@@ -849,32 +994,49 @@ impl<'log, T, U> TransitionsDrains<'log, T, U> {
     }
 }
 
+/// Draining transition iterator returned by [`TransitionsDrains::past`].
 pub type TransitionsDrainPast<'a, 'log, T, U> = TransitionsDrainChunkable<
     TransitionDrainPast<'a, 'log, T>,
     TransitionDrainPast<'a, 'log, TransitionsLogUpdate<U>>,
     U,
 >;
 
+/// Draining transition iterator returned by [`TransitionsDrains::future`].
 pub type TransitionsDrainFuture<'log, T, U> = TransitionsDrainChunkable<
     TransitionDrainFuture<'log, T>,
     TransitionDrainFuture<'log, TransitionsLogUpdate<U>>,
     U,
 >;
 
+/// Draining transition iterator returned by [`TransitionsDrains::all`].
+///
+/// Is also returned by [`TransitionsLog::push_and_drain_past`] but in that case contains only
+/// past log entries.
 pub type TransitionsDrainAll<'log, T, U> = TransitionsDrainChunkable<
     TransitionDrainAll<'log, T>,
     TransitionDrainAll<'log, TransitionsLogUpdate<U>>,
     U,
 >;
 
+/// A wrapper of iterators returned by [`TransitionsDrains`] methods.
+///
+/// The fields [`transitions`](Self::transitions) and [`updates`](Self::updates) allow direct
+/// access to the values of all drained log entries.
+///
+/// To drain transitions and updates in steps of log entries, the
+/// [`next_log_entry`](Self::next_log_entry) method in a `while` loop.
 pub struct TransitionsDrainChunkable<TI, UI, U>
 where
     TI: ExactSizeIterator,
     UI: ExactSizeIterator<Item = TransitionsLogUpdate<U>>,
 {
+    /// Draining iterator of transitions from potentially multiple log entries.
     pub transitions: TI,
+
+    /// Draining iterator of updates from potentially multiple log entries.
     pub updates: UI,
-    _p: PhantomData<fn(UI) -> U>,
+
+    _p: PhantomData<U>,
 }
 
 impl<TI, UI, U> TransitionsDrainChunkable<TI, UI, U>
@@ -882,7 +1044,10 @@ where
     TI: ExactSizeIterator,
     UI: ExactSizeIterator<Item = TransitionsLogUpdate<U>>,
 {
-    pub fn next_update(&mut self) -> Option<(TransitionsDrainChunk<'_, TI>, U)> {
+    /// Returns the transitions and the update of the next log entry from the draining iterators.
+    ///
+    /// Returns `None` if no more log entries are to drain.
+    pub fn next_log_entry(&mut self) -> Option<(Take<&'_ mut TI>, U)> {
         self.updates.next().map(|update| {
             (
                 self.transitions.by_ref().take(update.transitions),
@@ -891,8 +1056,6 @@ where
         })
     }
 }
-
-pub type TransitionsDrainChunk<'a, TI> = Take<&'a mut TI>;
 
 #[cfg(test)]
 mod test {
@@ -915,7 +1078,7 @@ mod test {
     {
         fn to_tuples(mut self) -> Vec<(String, char)> {
             let mut v = Vec::new();
-            while let Some((transitions, update)) = self.next_update() {
+            while let Some((transitions, update)) = self.next_log_entry() {
                 v.push((transitions.collect(), update))
             }
             v

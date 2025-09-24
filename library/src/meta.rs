@@ -249,6 +249,9 @@ impl RevMeta {
         self.log_clears += 1;
         self.past_len_limits.clear();
         self.log_exits = 0;
+        info!(
+            "`RevQueue::Clear` was applied, all `PastLenLog` ids until now are invalid and will be reinitialized at their next updates"
+        )
     }
     pub fn run_rev_update(world: &mut World) -> Result<(), BevyError> {
         world
@@ -462,6 +465,7 @@ impl RevMeta {
             }
         }
     }
+    #[track_caller]
     pub(super) fn update_past_len_state(&self, state: &mut Option<PastLenState>) -> PreUpdateKind {
         self.past_len_limits
             .update_state(state, self.log_exits, self.log_clears)

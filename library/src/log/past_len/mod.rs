@@ -766,6 +766,11 @@ impl PastLenLog {
     /// updating this log further.
     ///
     /// This method has no effect if called again in the same frame.
+    ///
+    /// If this initiates the inner state, for example because this is called for the very first
+    /// time for this log or [`RevQueue::Clear`](crate::meta::RevQueue::Clear) was applied, an info
+    /// log with the [`id`](Self::id) is written alongside the location where this was called.
+    #[track_caller]
     pub fn pre_update(&mut self, meta: &RevMeta) {
         match meta.update_past_len_state(&mut self.update_state) {
             PreUpdateKind::RemoveLog => {
