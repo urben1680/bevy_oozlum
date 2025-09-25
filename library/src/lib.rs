@@ -5,6 +5,8 @@ TODO:
 -- test not only multi-thread executor
 - update README
 - PastLenLog -> UpdateLog, rename push methods
+- StrLog
+-- https://github.com/rust-lang/rust/issues/133253
 
 Enhancements:
 - reduce todo!() and //todo and unwrap (in favor of expect)

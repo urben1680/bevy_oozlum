@@ -15,29 +15,36 @@ use bevy_ecs::{
 use bevy_utils::prelude::DebugName;
 use core::any::TypeId;
 
+/// Wrap a `condition` into a reversivle `BoxedCondition` that logs the system output at
+/// [`RevDirection::NOT_LOG`] and traverses the log during [log directions](RevDirection::is_log),
+/// bypassing the inner system.
 pub(super) fn into_rev_condition<Marker>(
     condition: impl SystemCondition<Marker>,
 ) -> BoxedCondition {
     let condition = RevCondition {
         condition: IntoSystem::into_system(condition),
         meta_id: Default::default(),
-        run_log: Default::default(),
-        run_or_err_log: Default::default(),
+        ok_true: Default::default(),
+        err_failed: Default::default(),
+        failed: Default::default(),
     };
     Box::new(condition)
 }
 
+/// Condition wrapper to turn it into a reversible condition.
 struct RevCondition<T> {
+    /// Wrapped condition passed to
+    /// [`IntoRevScheduleConfigs::rev_run_if`](super::IntoRevScheduleConfigs::rev_run_if).
     condition: T,
-    meta_id: Option<ComponentId>,
-    run_log: UpdateLog,
-    run_or_err_log: TransitionLog<Result<(), Box<RevRunSystemError>>>,
-}
 
-#[derive(Clone)]
-enum RevRunSystemError {
-    Skipped(SystemParamValidationError),
-    Failed(String),
+    /// [`ComponentId`] of [`RevMeta`].
+    meta_id: Option<ComponentId>,
+
+    ok_true: UpdateLog,
+
+    err_failed: UpdateLog,
+
+    failed: TransitionLog<String>,
 }
 
 impl<T: ReadOnlySystem<In = (), Out = bool>> System for RevCondition<T> {
@@ -56,7 +63,7 @@ impl<T: ReadOnlySystem<In = (), Out = bool>> System for RevCondition<T> {
         let mut access = self.condition.initialize(world);
         let meta_id = world.register_resource::<RevMeta>();
         self.meta_id = Some(meta_id);
-        access.add_unfiltered_resource_read(meta_id); // cannot fail because `condition` is a read-only system
+        access.add_unfiltered_resource_read(meta_id);
         access
     }
     unsafe fn validate_param_unsafe(
@@ -110,8 +117,9 @@ impl<T: ReadOnlySystem<In = (), Out = bool>> System for RevCondition<T> {
                     RevMeta::EXPECT_RUNNING,
                 ))?;
 
-        self.run_log.pre_update(meta);
-        self.run_or_err_log.pre_update(meta);
+        self.ok_true.pre_update(meta);
+        self.err_failed.pre_update(meta);
+        self.failed.pre_update(meta);
 
         match direction {
             RevDirection::NOT_LOG => {
@@ -122,26 +130,14 @@ impl<T: ReadOnlySystem<In = (), Out = bool>> System for RevCondition<T> {
                 };
 
                 match result {
-                    Ok(false) => Ok(false),
+                    Ok(false) | Err(RunSystemError::Skipped(_)) => Ok(false),
                     Ok(true) => {
-                        let past_len = self.run_log.push_get_past_len(meta);
-                        self.run_or_err_log.push(past_len, Ok(()));
+                        self.ok_true.push_get_past_len(meta);
                         Ok(true)
                     }
-                    Err(RunSystemError::Skipped(skipped)) => {
-                        let past_len = self.run_log.push_get_past_len(meta);
-                        self.run_or_err_log.push(
-                            past_len,
-                            Err(Box::new(RevRunSystemError::Skipped(skipped.clone()))),
-                        );
-                        Err(RunSystemError::Skipped(skipped))
-                    }
                     Err(RunSystemError::Failed(failed)) => {
-                        let past_len = self.run_log.push_get_past_len(meta);
-                        self.run_or_err_log.push(
-                            past_len,
-                            Err(Box::new(RevRunSystemError::Failed(format!("{failed}")))),
-                        );
+                        let past_len = self.err_failed.push_get_past_len(meta);
+                        self.failed.push(past_len, format!("{failed}"));
                         Err(RunSystemError::Failed(failed))
                     }
                 }
@@ -149,40 +145,24 @@ impl<T: ReadOnlySystem<In = (), Out = bool>> System for RevCondition<T> {
             // todo: simplify error msg, can only be internal bug
             // todo: upstream systems returning Result<bool, BevyError> be valid conditions
             RevDirection::FORWARD_LOG => {
-                if self.run_log.forward_log(meta) {
-                    match self.run_or_err_log.forward_log() {
-                        Ok(Ok(_)) => Ok(true),
-                        Ok(Err(err)) => match &**err {
-                            RevRunSystemError::Skipped(skipped) => {
-                                Err(RunSystemError::Skipped(skipped.clone()))
-                            }
-                            RevRunSystemError::Failed(failed) => {
-                                Err(RunSystemError::Failed(failed.as_str().into()))
-                            }
-                        },
-                        Err(out_of_log) => panic!("todo"),
-                    }
-                } else {
-                    Ok(false)
+                if self.ok_true.forward_log(meta) {
+                    return Ok(true);
                 }
+                if self.err_failed.forward_log(meta) {
+                    let failed = self.failed.forward_log().unwrap();
+                    return Err(RunSystemError::Failed(failed.as_str().into()));
+                }
+                Ok(false)
             }
             RevDirection::BackwardLog => {
-                if self.run_log.backward_log(meta) {
-                    match self.run_or_err_log.backward_log() {
-                        Ok(Ok(_)) => Ok(true),
-                        Ok(Err(err)) => match &**err {
-                            RevRunSystemError::Skipped(skipped) => {
-                                Err(RunSystemError::Skipped(skipped.clone()))
-                            }
-                            RevRunSystemError::Failed(failed) => {
-                                Err(RunSystemError::Failed(failed.as_str().into()))
-                            }
-                        },
-                        Err(out_of_log) => panic!("todo"),
-                    }
-                } else {
-                    Ok(false)
+                if self.ok_true.backward_log(meta) {
+                    return Ok(true);
                 }
+                if self.err_failed.backward_log(meta) {
+                    let failed = self.failed.backward_log().unwrap();
+                    return Err(RunSystemError::Failed(failed.as_str().into()));
+                }
+                Ok(false)
             }
         }
     }
