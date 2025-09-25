@@ -26,7 +26,7 @@ use std::collections::{
 /// [`RevQueue::Clear`](crate::meta::RevQueue::Clear) was queued and applied or the
 /// [`RevDirection`](crate::meta::RevDirection) changed from a
 /// [log variant](crate::meta::RevDirection::is_log) to the
-/// [`NOT_LOG`](crate::meta::RevDirection::NOT_LOG) one.
+/// [`RevDirection::NOT_LOG`](crate::meta::RevDirection::NOT_LOG) one.
 ///
 /// These methods make sure the log catches such changes even if the current system does not run in
 /// the very same frame they took effect, like when that frame was missed because of run conditions.

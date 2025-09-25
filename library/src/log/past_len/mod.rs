@@ -196,9 +196,13 @@ impl PastLenLog {
     /// The internal id of this log, which is only `Some` after it first ran. The id will change
     /// when [`RevQueue::Clear`](crate::meta::RevQueue::Clear) is queued and applied.
     ///
+    /// When [`pre_update`](Self::pre_update) initiates the inner state, for example because it is
+    /// called for the very first time for this log or
+    /// [`RevQueue::Clear`](crate::meta::RevQueue::Clear) was applied, an info log with the id is
+    /// written alongside the location where it was called.
+    ///
     /// This id is useful to identify missed updates from [`RevMeta::update`]. If
-    /// [`RevMeta::run_rev_update`] is used, such errors are handled by the default error handler
-    /// and likely require actively logging this id in advance.
+    /// [`RevMeta::run_rev_update`] is used, such errors are handled by the default error handler.
     pub fn id(&self) -> Option<u32> {
         self.update_state.map(|state| state.id.get())
     }

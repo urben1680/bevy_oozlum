@@ -5,7 +5,7 @@ TODO:
 -- test not only multi-thread executor
 - bring capacity api back, reflect serialize uses that
 - update README
--
+- PastLenLog -> UpdateLog, rename push methods
 
 Enhancements:
 - reduce todo!() and //todo and unwrap (in favor of expect)

@@ -73,7 +73,8 @@ impl PastLenLogLimits {
                 .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
             let id = NonMaxU32::new(id).expect("exhausted maximum number of PastLenLog");
             info!(
-                "A `PastLenLog` with the id {id} was initiated at {caller}, this id remains valid until `RevQueue::Clear` is applied"
+                "A `PastLenLog` with the id {id} was initiated at {caller}, \
+                this id remains valid until a `RevQueue::Clear` is applied"
             );
             PastLenState {
                 id,
@@ -83,32 +84,28 @@ impl PastLenLogLimits {
                 meta_log_clears,
             }
         };
-        match state {
-            Some(state) => {
-                if state.meta_log_clears < meta_log_clears {
-                    // meta was cleared in the meantime
-                    *state = new_state();
-                    PreUpdateKind::RemoveLog
-                } else if state.meta_log_exits < meta_log_exits {
-                    // meta ran at not-log in the meantime
-                    state.limits_updates = self.updates;
-                    state.meta_log_exits = meta_log_exits;
-                    state.updates_this_frame = 0;
-                    PreUpdateKind::RemoveFuture
-                } else {
-                    if state.limits_updates != self.updates {
-                        // this log did not update at this frame yet
-                        state.limits_updates = self.updates;
-                        state.updates_this_frame = 0;
-                    }
-                    PreUpdateKind::Nothing
-                }
+        let Some(state) = state else {
+            // init state, no further operation as it starts empty
+            *state = Some(new_state());
+            return PreUpdateKind::Nothing;
+        };
+        if state.meta_log_clears < meta_log_clears {
+            // meta was cleared in the meantime
+            *state = new_state();
+            PreUpdateKind::RemoveLog
+        } else if state.meta_log_exits < meta_log_exits {
+            // meta ran at not-log in the meantime
+            state.limits_updates = self.updates;
+            state.meta_log_exits = meta_log_exits;
+            state.updates_this_frame = 0;
+            PreUpdateKind::RemoveFuture
+        } else {
+            if state.limits_updates != self.updates {
+                // this log did not update at this frame yet
+                state.limits_updates = self.updates;
+                state.updates_this_frame = 0;
             }
-            None => {
-                // init state, no further operation as it starts empty
-                *state = Some(new_state());
-                PreUpdateKind::Nothing
-            }
+            PreUpdateKind::Nothing
         }
     }
 
