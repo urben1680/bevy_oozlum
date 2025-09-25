@@ -1,18 +1,15 @@
-use bevy::{
-    ecs::{
-        bundle::Bundle,
-        change_detection::MaybeLocation,
-        component::Component,
-        entity::Entity,
-        resource::Resource,
-        world::{
-            EntityMut, EntityMutExcept, EntityRef, EntityRefExcept, EntityWorldMut,
-            FilteredEntityMut, FilteredEntityRef, World,
-        },
+use bevy_ecs::{
+    bundle::Bundle,
+    change_detection::MaybeLocation,
+    component::Component,
+    entity::Entity,
+    resource::Resource,
+    world::{
+        EntityMut, EntityMutExcept, EntityRef, EntityRefExcept, EntityWorldMut, FilteredEntityMut,
+        FilteredEntityRef, World,
     },
-    log::{error, error_once},
-    reflect::Reflect,
 };
+use bevy_log::{error, error_once};
 
 use crate::{
     log::{OutOfLog, TransitionsLog},
@@ -124,13 +121,13 @@ impl RevDespawnCleaner {
     fn forward(&mut self, world: &mut World, max_past_len: u64) {
         let progress = RevOp::FinalDespawn { buffer: false };
         progress.scope(world, |world| {
-            self.spawn.push_and_truncate_past(max_past_len, |mut log| {
+            self.spawn.push(max_past_len, |mut log| {
                 log.extend(self.spawn_queue.drain(..).map(|(entity, _)| entity));
             });
 
             let despawned = self
                 .despawn
-                .push_and_drain_past(max_past_len, |mut log| {
+                .push_drain_past(max_past_len, |mut log| {
                     log.extend(self.despawn_queue.drain(..).map(|(entity, _)| entity));
                 })
                 .transitions;
@@ -142,7 +139,7 @@ impl RevDespawnCleaner {
 
             let buffer = self
                 .spawn_buffer
-                .push_and_drain_past(max_past_len, |mut log| {
+                .push_drain_past(max_past_len, |mut log| {
                     log.extend(self.spawn_buffer_queue.drain(..));
                     log.extend(
                         self.spawn_buffer_queue_fallback
@@ -286,7 +283,8 @@ impl RevDespawnCleaner {
     }
 }
 
-#[derive(Component, Debug, Reflect, Clone, Copy)]
+#[derive(Component, Debug, Clone, Copy)]
+#[cfg_attr(feature = "bevy_reflect", derive(bevy_reflect::Reflect))]
 #[component(immutable)]
 pub(crate) struct RevDespawned; // todo: store MaybeLocation in component change meta
 

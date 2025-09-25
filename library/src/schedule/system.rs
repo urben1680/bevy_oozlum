@@ -1,3 +1,15 @@
+use bevy_ecs::{
+    component::{CheckChangeTicks, Tick},
+    query::FilteredAccessSet,
+    schedule::{ApplyDeferred, InternedSystemSet, IntoScheduleConfigs, SystemSet},
+    system::{
+        IntoSystem, ReadOnlySystem, RunSystemError, ScheduleSystem, System, SystemIn, SystemInput,
+        SystemParamValidationError, SystemStateFlags,
+    },
+    world::{DeferredWorld, World, unsafe_world_cell::UnsafeWorldCell},
+};
+use bevy_log::warn;
+use bevy_utils::prelude::DebugName;
 use std::{
     any::{TypeId, type_name},
     fmt::Debug,
@@ -8,27 +20,9 @@ use std::{
     },
 };
 
-use bevy::{
-    ecs::{
-        component::{CheckChangeTicks, Tick},
-        query::FilteredAccessSet,
-        schedule::{ApplyDeferred, InternedSystemSet, IntoScheduleConfigs, SystemSet},
-        system::{
-            IntoSystem, ReadOnlySystem, RunSystemError, ScheduleSystem, System, SystemIn,
-            SystemInput, SystemParamValidationError, SystemStateFlags,
-        },
-        world::{DeferredWorld, World, unsafe_world_cell::UnsafeWorldCell},
-    },
-    log::warn,
-    utils::{default, prelude::DebugName},
-};
-
 use crate::{
     meta::RevMeta,
-    schedule::{
-        BackwardSystems, BwdCmdSet, BwdCmdSysSet, BwdSysSet, ForwardSystems, FwdSysSet,
-        error_per_flag,
-    },
+    schedule::{BackwardSystems, BwdCmdSet, BwdCmdSysSet, BwdSysSet, ForwardSystems, FwdSysSet},
     undo_redo::{UndoRedoBuffer, UndoRedoLog},
 };
 
@@ -56,7 +50,10 @@ where
     }
 
     let name = |string: &str| {
-        let sys_name = sys_name.as_string();
+        if size_of::<DebugName>() == 0 {
+            return DebugName::borrowed("");
+        }
+        let sys_name = format!("{sys_name}");
         let mut name = String::with_capacity(sys_name.len() + string.len());
         name.extend([&sys_name, string]);
         DebugName::owned(name)
@@ -70,7 +67,7 @@ where
     let inner = Mutex::new(Inner {
         system,
         access: None,
-        commands_log: default(),
+        commands_log: Default::default(),
     });
 
     let shared = Arc::new(Shared {
@@ -157,7 +154,7 @@ impl<T, const FORWARD: bool> RevSystem<T, FORWARD> {
         Self {
             shared,
             name,
-            tick: default(),
+            tick: Default::default(),
             flags: SystemStateFlags::empty(),
             commands_err: false,
         }
@@ -384,8 +381,8 @@ impl<T> CommandsBackward<T> {
         Self {
             shared,
             name,
-            tick: default(),
-            has_deferred: default(),
+            tick: Default::default(),
+            has_deferred: Default::default(),
             commands_err: false,
         }
     }
@@ -534,20 +531,30 @@ fn expect_lock<T: Debug, Out>(name: &DebugName) -> impl FnOnce(T) -> Out + '_ {
     move |err| panic!("Could not access reversible system {name} because of {err:#?}")
 }
 
+macro_rules! error_per_flag {
+    ($flag:expr, $($arg:tt)+) => ({
+        if !*$flag {
+            bevy_log::error!($($arg)+);
+            *$flag = true;
+        }
+        core::default::Default::default()
+    });
+}
+
+use error_per_flag;
+
 #[cfg(test)]
 mod test {
-    use bevy::{
-        app::{App, Update},
-        ecs::{
-            change_detection::{Res, ResMut},
-            component::Component,
-            event::Event,
-            lifecycle::HookContext,
-            observer::On,
-            schedule::IntoScheduleConfigs,
-            system::{Commands, IntoSystem},
-            world::{DeferredWorld, World},
-        },
+    use bevy_app::{App, Update};
+    use bevy_ecs::{
+        change_detection::{Res, ResMut},
+        component::Component,
+        event::Event,
+        lifecycle::HookContext,
+        observer::On,
+        schedule::IntoScheduleConfigs,
+        system::{Commands, IntoSystem},
+        world::{DeferredWorld, World},
     };
 
     use crate::{panic_on_error_events, prelude::*, undo_redo::UndoRedoBuffer};

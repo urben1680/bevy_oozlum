@@ -3,15 +3,12 @@ TODO:
 
 - schedule/test
 -- test not only multi-thread executor
-- bring capacity api back, reflect serialize uses that
 - update README
 - PastLenLog -> UpdateLog, rename push methods
 
 Enhancements:
 - reduce todo!() and //todo and unwrap (in favor of expect)
 - #[inline]s
-- bevy_reflect feature
-- delete unused types
 - despawn_single -> despawn
 - missing apis:
 -- EntityWorldMut::clone_with
@@ -27,7 +24,6 @@ Docs
 - check with optional features off that these still show up in docs
 - documentations
 -- point out determinism aspects of methods
--- log contract (always valid, may go further into the past)
 -- docs for private UndoRedo types
 -- point out additional conditions to not panic/return err and how some are only needed in observers/hooks
 -- remind in Apis with HasEffect bound to use App::register_non_entity_buffer
@@ -48,6 +44,11 @@ ISSUES/DISCUSSIONS:
 -- insert closure for each is noop
 */
 
+// todo: deny
+#![deny(broken_intra_doc_links)] // works only in cargo doc --no-deps
+#![warn(missing_docs)]
+
+#[cfg(feature = "bevy_app")]
 pub mod app;
 pub mod log;
 pub mod meta;
@@ -56,9 +57,10 @@ pub mod undo_redo;
 
 /// Contains common types an all extension traits `as _`.
 pub mod prelude {
+    #[cfg(feature = "bevy_app")]
     pub use crate::app::{RevApp as _, RevPlugin};
-    pub use crate::log::{PastLenLog, TransitionLog, TransitionsLog};
-    pub use crate::meta::{RevDirection, RevMeta, RevQueue};
+    pub use crate::log::{TransitionLog, TransitionsLog, UpdateLog};
+    pub use crate::meta::{NonLogNow, RevDirection, RevMeta, RevQueue};
     pub use crate::schedule::{
         IntoRevScheduleConfigs as _, RevSchedule as _, RevSystems, RevUpdate,
     };
@@ -73,7 +75,7 @@ pub mod prelude {
 // This exists in the reversible_ecs example too, keep that in sync to this.
 #[cfg(test)]
 fn panic_on_error_events() {
-    use bevy::log::{
+    use bevy_log::{
         Level,
         tracing::{Event, Subscriber, dispatcher::get_default},
         tracing_subscriber::{

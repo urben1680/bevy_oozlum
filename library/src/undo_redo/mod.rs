@@ -1,25 +1,22 @@
-use std::{
+use bevy_ecs::{
+    bundle::{Bundle, BundleFromComponents},
+    change_detection::MaybeLocation,
+    entity::{Entity, EntityDoesNotExistError},
+    resource::Resource,
+    system::{Commands, EntityCommands},
+    world::{DeferredWorld, EntityWorldMut, FromWorld, World},
+};
+use bevy_platform::cell::SyncCell;
+use bevy_utils::prelude::DebugName;
+use core::{
     any::type_name_of_val,
     error::Error,
     fmt::{Debug, Display},
     hash::Hash,
 };
 
-use bevy::{
-    ecs::{
-        bundle::{Bundle, BundleFromComponents},
-        change_detection::MaybeLocation,
-        entity::{Entity, EntityDoesNotExistError},
-        resource::Resource,
-        system::{Commands, EntityCommands},
-        world::{DeferredWorld, EntityWorldMut, FromWorld, World},
-    },
-    platform::cell::SyncCell,
-    utils::prelude::DebugName,
-};
-
 use crate::{
-    log::{PastLenLog, TransitionsLog},
+    log::{TransitionsLog, UpdateLog},
     meta::{NonLogNow, RevDirection, RevMeta},
 };
 
@@ -91,9 +88,9 @@ pub trait BuffersUndoRedo {
     /// - hooks
     /// - observers
     /// - bundle effects
-    /// - [`SystemParam::apply`](bevy::ecs::system::SystemParam::apply)
-    /// - [`SystemBuffer::apply`](bevy::ecs::system::SystemBuffer::apply)
-    /// - [`System::apply_deferred`](bevy::ecs::system::System::apply_deferred)
+    /// - [`SystemParam::apply`](bevy_ecs::system::SystemParam::apply)
+    /// - [`SystemBuffer::apply`](bevy_ecs::system::SystemBuffer::apply)
+    /// - [`System::apply_deferred`](bevy_ecs::system::System::apply_deferred)
     ///
     /// Note that the sync point **must** belong to a reversible system.
     /// todo: lay out situations where this is not true (trigger in non-reversible systems, queue commands in hooks/observers)
@@ -272,7 +269,7 @@ impl<T: UndoRedo> UndoRedo for Box<[T]> {
 #[derive(Default, Debug)]
 pub(crate) struct UndoRedoLog {
     undo_redo_log: TransitionsLog<DebugHidden>,
-    past_len_log: PastLenLog,
+    past_len_log: UpdateLog,
 }
 
 struct DebugHidden(SyncCell<Box<dyn UndoRedo>>);
@@ -372,13 +369,10 @@ impl UndoRedoLog {
                 .try_resource_scope::<UndoRedoBuffer, _>(|world, mut buffer| {
                     if !buffer.0.is_empty() {
                         let meta = world.resource::<RevMeta>();
-                        let past_len = self.past_len_log.update_get(meta);
-                        self.undo_redo_log
-                            .push_and_truncate_past(past_len, |mut log| {
-                                log.extend(
-                                    buffer.0.drain(..).map(|boxed| DebugHidden(boxed.undo_redo)),
-                                )
-                            });
+                        let past_len = self.past_len_log.push_get_past_len(meta);
+                        self.undo_redo_log.push(past_len, |mut log| {
+                            log.extend(buffer.0.drain(..).map(|boxed| DebugHidden(boxed.undo_redo)))
+                        });
                     }
                 })
                 .ok_or_else(|| UndoRedoLogError::UndoRedoBufferMissing {

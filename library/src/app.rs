@@ -1,21 +1,17 @@
-use std::num::NonZeroU64;
-
-use bevy::{
-    app::{App, FixedUpdate, Plugin},
-    ecs::{
-        schedule::{
-            InternedScheduleLabel, InternedSystemSet, IntoScheduleConfigs, ScheduleLabel,
-            Schedules, SystemSet,
-        },
-        system::ScheduleSystem,
-    },
-};
-
 use crate::{
     meta::RevMeta,
     schedule::{IntoRevScheduleConfigs, RevSchedule},
     undo_redo::{BundleIdOfOpCache, RevDespawnCleaner, RevDespawned, UndoRedoBuffer},
 };
+use bevy_app::{App, FixedUpdate, Plugin};
+use bevy_ecs::{
+    schedule::{
+        InternedScheduleLabel, InternedSystemSet, IntoScheduleConfigs, ScheduleLabel, Schedules,
+        SystemSet,
+    },
+    system::ScheduleSystem,
+};
+use core::num::NonZeroU64;
 
 pub trait RevApp {
     fn rev_add_systems<Marker>(
@@ -159,7 +155,7 @@ impl Plugin for RevPlugin {
             } => {
                 let meta = RevMeta::new(*max_world_states, *paused);
                 if let Some(existing) = app.world().get_resource::<RevMeta>() {
-                    bevy::log::warn!("`RevPlugin::build` overwrote {existing:?} with {meta:?}");
+                    bevy_log::warn!("`RevPlugin::build` overwrote {existing:?} with {meta:?}");
                 }
                 app.insert_resource(meta);
             }

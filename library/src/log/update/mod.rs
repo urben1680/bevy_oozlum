@@ -1,5 +1,5 @@
 use crate::{log::PreUpdateKind, meta::RevMeta};
-use bevy::ecs::change_detection::MaybeLocation;
+use bevy_ecs::change_detection::MaybeLocation;
 use core::fmt::{Debug, Display};
 use std::collections::{TryReserveError, VecDeque};
 
@@ -21,11 +21,12 @@ mod offset;
 /// error-prone scheduling and is just not reached when it should, [`RevMeta::run_rev_update`]
 /// will detect this and return an error.
 ///
-/// For examples, see the [`update_get`](Self::update_get) method when a single update of an
-/// accompied log needs the `max_past_len` value or [`update_many_get`](Self::update_many_get) when
-/// an accompied log is updated multiple times in a row.
+/// For examples, see the [`push_get_past_len`](Self::push_get_past_len) method when a single update
+/// of an accompied log needs the `max_past_len` value or
+/// [`push_many_get_past_len`](Self::push_many_get_past_len) when an accompied log is updated
+/// multiple times in a row.
 #[derive(Default)]
-pub struct PastLenLog {
+pub struct UpdateLog {
     /// Offsets that need to be added or subtracted from [`Self::last_update`] to calculate at which
     /// frame the log is expected to be updated.
     ///
@@ -56,15 +57,18 @@ pub struct PastLenLog {
     zeroes_max: u8,
 
     /// The state that is needed to get the [`PreUpdateVariant`] at [`Self::pre_update`] and to push
-    /// new limits to [`PastLenLogLimits`].
-    update_state: Option<PastLenState>,
+    /// new limits to [`UpdateLogLimits`].
+    update_state: Option<UpdateLogState>,
 }
 
-impl Debug for PastLenLog {
+impl Debug for UpdateLog {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("PastLenLog")
+        f.debug_struct("UpdateLog")
             .field("offset_bytes", &self.offset_bytes)
-            .field("offsets (decoded)", &OffsetIter(self.offset_bytes.iter()))
+            .field(
+                "offset_bytes (decoded)",
+                &OffsetIter(self.offset_bytes.iter()),
+            )
             .field("out_of_or_past_end_log", &self.out_of_or_past_end_log)
             .field("last_update", &self.last_update)
             .field("index", &self.index)
@@ -76,16 +80,16 @@ impl Debug for PastLenLog {
     }
 }
 
-impl Display for PastLenLog {
+impl Display for UpdateLog {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self.id() {
-            None => write!(f, "PastLenLog #Uninit"),
-            Some(id) => write!(f, "PastLenLog #{id}"),
+            None => write!(f, "UpdateLog #Uninit"),
+            Some(id) => write!(f, "UpdateLog #{id} (maybe outdated)"),
         }
     }
 }
 
-impl PastLenLog {
+impl UpdateLog {
     /// Creates an empty log.
     pub const fn new() -> Self {
         Self {
@@ -271,7 +275,7 @@ impl PastLenLog {
     /// the [present reversible frame](RevMeta::now). This method may panic if this was not done.
     ///
     /// For updating this log multiple times during this frame, prefer to use
-    /// [`update_many_get`](Self::update_many_get) instead.
+    /// [`push_many_get_past_len`](Self::push_many_get_past_len) instead.
     ///
     /// # Example
     ///
@@ -279,32 +283,32 @@ impl PastLenLog {
     /// again they could appear in a large amount in a single frame. One could use a
     /// [`TransitionsLog`](super::TransitionsLog) for that and just push no messages when there are
     /// none. But if this system in turn could also be used with a run condition, then it is
-    /// impossible to pick a good `past_len` value that makes sure not too many messages are drained
-    /// or the log grows way beyond what is needed.
+    /// impossible to pick a good `max_past_len` value that makes sure not too many messages are
+    /// drained or the log grows way beyond what is needed.
     ///
-    /// For that case and other comparable ones, pairing the log with `PastLenLog` fixes this.
+    /// For that case and other comparable ones, pairing the log with `UpdateLog` fixes this.
     ///
     /// ```
-    /// # use bevy::prelude::*;
-    /// # use bevy::ecs::error::Result;
+    /// # use bevy_ecs::prelude::*;
+    /// # use bevy_ecs::error::Result;
     /// # use bevy_oozlum::prelude::*;
     /// # #[derive(Message, Clone)]
     /// # struct MyMessage;
     /// fn my_system(
     ///     meta: Res<RevMeta>,
     ///     mut messages: MessageReader<MyMessage>,
-    ///     mut past_len_log: Local<PastLenLog>,
+    ///     mut update_log: Local<UpdateLog>,
     ///     mut message_log: Local<TransitionsLog<MyMessage>>,
     /// ) -> Result {
     ///     // always call pre_update before further mutations
-    ///     past_len_log.pre_update(&meta);
+    ///     update_log.pre_update(&meta);
     ///     message_log.pre_update(&meta);
     ///
     ///     match meta.running_direction() {
     ///         RevDirection::NOT_LOG => {
     ///             if !messages.is_empty() {
-    ///                 let past_len = past_len_log.update_get(&meta);
-    ///                 message_log.push_and_truncate_past(past_len, |mut log| {
+    ///                 let past_len = update_log.push_get_past_len(&meta);
+    ///                 message_log.push(past_len, |mut log| {
     ///                     for my_message in messages.read() {
     ///                         // use message
     ///
@@ -314,7 +318,7 @@ impl PastLenLog {
     ///             }
     ///         }
     ///         RevDirection::FORWARD_LOG => {
-    ///             if past_len_log.forward_log(&meta) {
+    ///             if update_log.forward_log(&meta) {
     ///                 let my_messages = message_log.forward_log()?;
     ///                 for my_message in my_messages {
     ///                     // use message
@@ -322,7 +326,7 @@ impl PastLenLog {
     ///             }
     ///         }
     ///         RevDirection::BackwardLog => {
-    ///             if past_len_log.backward_log(&meta) {
+    ///             if update_log.backward_log(&meta) {
     ///                 let my_messages = message_log.backward_log()?;
     ///                 for my_message in my_messages {
     ///                     // use message
@@ -334,15 +338,15 @@ impl PastLenLog {
     /// }
     /// ```
     #[track_caller]
-    pub fn update_get(&mut self, meta: &RevMeta) -> u64 {
-        self.update_get_with_caller(meta, MaybeLocation::caller())
+    pub fn push_get_past_len(&mut self, meta: &RevMeta) -> u64 {
+        self.push_with_caller(meta, MaybeLocation::caller())
     }
 
-    fn update_get_with_caller(&mut self, meta: &RevMeta, caller: MaybeLocation) -> u64 {
+    fn push_with_caller(&mut self, meta: &RevMeta, caller: MaybeLocation) -> u64 {
         self.truncate_past_and_push_offset(meta);
-        meta.past_len_limits().push_limit(
+        meta.update_log_limits().push_limit(
             &mut self.update_state,
-            PastLenLimits::new_not_log(meta.now(), caller),
+            UpdateLogLimit::new_not_log(meta.now(), caller),
         );
         self.past_len
     }
@@ -364,14 +368,14 @@ impl PastLenLog {
     /// ```
     /// # use bevy_oozlum::prelude::*;
     /// # let mut meta = RevMeta::default();
-    /// # let mut past_len_log = PastLenLog::new();
+    /// # let mut update_log = UpdateLog::new();
     /// # meta.update(|meta_value, _| {
     /// # let meta = &meta_value;
-    /// # past_len_log.pre_update(meta);
+    /// # update_log.pre_update(meta);
     /// # let updates = 10;
     /// let mut past_len = None;
     /// for _ in 0..updates {
-    ///     past_len = Some(past_len_log.update_get(meta));
+    ///     past_len = Some(update_log.push_get_past_len(meta));
     /// }
     /// past_len
     /// # ;
@@ -389,42 +393,42 @@ impl PastLenLog {
     /// or the log grows way beyond what is needed.
     ///
     /// ```
-    /// # use bevy::prelude::*;
-    /// # use bevy::ecs::error::Result;
+    /// # use bevy_ecs::prelude::*;
+    /// # use bevy_ecs::error::Result;
     /// # use bevy_oozlum::prelude::*;
     /// # #[derive(Message, Clone)]
     /// # struct MyMessage;
     /// fn my_system(
     ///     meta: Res<RevMeta>,
     ///     mut messages: MessageReader<MyMessage>,
-    ///     mut past_len_log: Local<PastLenLog>,
+    ///     mut update_log: Local<UpdateLog>,
     ///     mut message_log: Local<TransitionLog<MyMessage>>,
     /// ) -> Result {
     ///     // always call pre_update before further mutations
-    ///     past_len_log.pre_update(&meta);
+    ///     update_log.pre_update(&meta);
     ///     message_log.pre_update(&meta);
     ///
     ///     match meta.running_direction() {
     ///         RevDirection::NOT_LOG => {
     ///             // message_log potentially gets updated multiple times
     ///             // this method returns the log len for the last message
-    ///             if let Some(past_len) = past_len_log.update_many_get(&meta, messages.len() as u64) {
+    ///             if let Some(past_len) = update_log.push_many_get_past_len(&meta, messages.len() as u64) {
     ///                 for my_message in messages.read() {
     ///                     // use message
     ///
-    ///                     message_log.push_and_truncate_past(past_len, my_message.clone());
+    ///                     message_log.push(past_len, my_message.clone());
     ///                 }
     ///             }
     ///         }
     ///         RevDirection::FORWARD_LOG => {
-    ///             let updates = past_len_log.forward_log_many(&meta);
+    ///             let updates = update_log.forward_log_many(&meta);
     ///             for _ in 0..updates {
     ///                 let my_message = message_log.forward_log()?;
     ///                 // use message
     ///             }
     ///         }
     ///         RevDirection::BackwardLog => {
-    ///             let updates = past_len_log.backward_log_many(&meta);
+    ///             let updates = update_log.backward_log_many(&meta);
     ///             for _ in 0..updates {
     ///                 let my_message = message_log.backward_log()?;
     ///                 // use message
@@ -434,11 +438,11 @@ impl PastLenLog {
     ///     Ok(())
     /// }
     /// ```
-    pub fn update_many_get(&mut self, meta: &RevMeta, updates: u64) -> Option<u64> {
-        self.update_many_get_with_caller(meta, updates, MaybeLocation::caller())
+    pub fn push_many_get_past_len(&mut self, meta: &RevMeta, updates: u64) -> Option<u64> {
+        self.push_many_with_caller(meta, updates, MaybeLocation::caller())
     }
 
-    fn update_many_get_with_caller(
+    fn push_many_with_caller(
         &mut self,
         meta: &RevMeta,
         updates: u64,
@@ -462,9 +466,9 @@ impl PastLenLog {
             );
         }
         self.past_len += remaining_updates;
-        meta.past_len_limits().push_limit(
+        meta.update_log_limits().push_limit(
             &mut self.update_state,
-            PastLenLimits::new_not_log(meta.now(), caller),
+            UpdateLogLimit::new_not_log(meta.now(), caller),
         );
 
         Some(self.past_len)
@@ -473,7 +477,7 @@ impl PastLenLog {
     /// Shortens the log if possible and pushes the present frame.
     ///
     /// Does not verify if [`Self::pre_update`] was called previously this frame as that is done by
-    /// [`PastLenLogLimits::push_limit`].
+    /// [`UpdateLogLimits::push_limit`].
     fn truncate_past_and_push_offset(&mut self, meta: &RevMeta) {
         let iter = OffsetIter(self.offset_bytes.iter());
 
@@ -563,9 +567,9 @@ impl PastLenLog {
             }
         };
         self.past_len -= 1;
-        meta.past_len_limits().push_limit(
+        meta.update_log_limits().push_limit(
             &mut self.update_state,
-            PastLenLimits::new_log(backward_limit, meta.now(), caller),
+            UpdateLogLimit::new_log(backward_limit, meta.now(), caller),
         );
 
         true
@@ -583,7 +587,7 @@ impl PastLenLog {
     /// If this log is updated exactly once in the scope this method is used, prefer
     /// [`backward_log`](Self::backward_log) over this method.
     ///
-    /// See [`update_many_get`](Self::update_many_get) for an example.
+    /// See [`push_many_get_past_len`](Self::push_many_get_past_len) for an example.
     pub fn backward_log_many(&mut self, meta: &RevMeta) -> u64 {
         self.backward_log_many_with_caller(meta, MaybeLocation::caller())
     }
@@ -608,9 +612,9 @@ impl PastLenLog {
             updates += item.len.get() as u64;
         }
         self.past_len -= updates;
-        meta.past_len_limits().push_limit(
+        meta.update_log_limits().push_limit(
             &mut self.update_state,
-            PastLenLimits::new_log(self.last_update, meta.now(), caller),
+            UpdateLogLimit::new_log(self.last_update, meta.now(), caller),
         );
 
         updates
@@ -685,9 +689,9 @@ impl PastLenLog {
             None => return false,
         };
         self.past_len += 1;
-        meta.past_len_limits().push_limit(
+        meta.update_log_limits().push_limit(
             &mut self.update_state,
-            PastLenLimits::new_log(meta.now(), forward_limit, caller),
+            UpdateLogLimit::new_log(meta.now(), forward_limit, caller),
         );
         true
     }
@@ -704,7 +708,7 @@ impl PastLenLog {
     /// If this log is updated exactly once in the scope this method is used, prefer
     /// [`forward_log`](Self::forward_log) over this method.
     ///
-    /// See [`update_many_get`](Self::update_many_get) for an example.
+    /// See [`push_many_get_past_len`](Self::push_many_get_past_len) for an example.
     pub fn forward_log_many(&mut self, meta: &RevMeta) -> u64 {
         self.forward_log_many_with_caller(meta, MaybeLocation::caller())
     }
@@ -759,9 +763,9 @@ impl PastLenLog {
             return 0;
         }
         self.past_len += updates;
-        meta.past_len_limits().push_limit(
+        meta.update_log_limits().push_limit(
             &mut self.update_state,
-            PastLenLimits::new_log(meta.now(), forward_limit, caller),
+            UpdateLogLimit::new_log(meta.now(), forward_limit, caller),
         );
         updates
     }
@@ -776,7 +780,7 @@ impl PastLenLog {
     /// log with the [`id`](Self::id) is written alongside the location where this was called.
     #[track_caller]
     pub fn pre_update(&mut self, meta: &RevMeta) {
-        match meta.update_past_len_state(&mut self.update_state) {
+        match meta.set_update_state(&mut self.update_state) {
             PreUpdateKind::RemoveLog => {
                 self.offset_bytes.clear();
                 self.out_of_or_past_end_log = 0;
@@ -800,15 +804,13 @@ impl PastLenLog {
 
 #[cfg(test)]
 mod test {
-    use bevy::ecs::change_detection::MaybeLocation;
-
     use crate::meta::{RevDirection, RevQueue};
 
     use super::*;
 
     struct MetaAndLog {
         meta: RevMeta,
-        past_len_log: PastLenLog,
+        update_log: UpdateLog,
         last_update: MaybeLocation,
     }
 
@@ -816,7 +818,7 @@ mod test {
         fn new(max_world_states: u64) -> Self {
             Self {
                 meta: RevMeta::new(core::num::NonZeroU64::new(max_world_states), false),
-                past_len_log: PastLenLog::new(),
+                update_log: UpdateLog::new(),
                 last_update: MaybeLocation::caller(),
             }
         }
@@ -831,13 +833,13 @@ mod test {
             self.meta.set_queue(queue);
             self.meta.update_ref(Ok(true), |meta, direction| {
                 assert_eq!(direction, RevDirection::NOT_LOG);
-                self.past_len_log.pre_update(meta);
+                self.update_log.pre_update(meta);
                 for past_len in past_lens {
                     assert_eq!(
-                        self.past_len_log.update_get_with_caller(meta, caller),
+                        self.update_log.push_with_caller(meta, caller),
                         past_len,
                         "{:#?}",
-                        self.past_len_log
+                        self.update_log
                     );
                     self.last_update = caller;
                 }
@@ -858,12 +860,9 @@ mod test {
                     self.meta.set_queue(RevQueue::RUN_FORWARD_LOG);
                     self.meta.update_ref(Err(missed), |meta, direction| {
                         assert_eq!(direction, RevDirection::FORWARD_LOG);
-                        self.past_len_log.pre_update(meta);
+                        self.update_log.pre_update(meta);
                         for _ in 0..insufficient_updates {
-                            assert_eq!(
-                                self.past_len_log.forward_log_with_caller(meta, caller),
-                                true
-                            );
+                            assert_eq!(self.update_log.forward_log_with_caller(meta, caller), true);
                         }
                     });
                     self.revert(insufficient_updates, false);
@@ -876,13 +875,13 @@ mod test {
             self.meta.set_queue(RevQueue::RUN_FORWARD_LOG);
             self.meta.update_ref(Ok(true), |meta, direction| {
                 assert_eq!(direction, RevDirection::FORWARD_LOG);
-                self.past_len_log.pre_update(meta);
+                self.update_log.pre_update(meta);
                 for _ in 0..updates {
-                    assert!(self.past_len_log.forward_log_with_caller(meta, caller));
+                    assert!(self.update_log.forward_log_with_caller(meta, caller));
                 }
                 // assert no more updates would run
-                assert_eq!(self.past_len_log.forward_log(meta), false);
-                assert_eq!(self.past_len_log.forward_log_many(meta), 0);
+                assert_eq!(self.update_log.forward_log(meta), false);
+                assert_eq!(self.update_log.forward_log_many(meta), 0);
             });
             self.revert(updates, false);
 
@@ -890,12 +889,12 @@ mod test {
             self.meta.set_queue(RevQueue::RUN_FORWARD_LOG);
             self.meta.update_ref(Ok(true), |meta, direction| {
                 assert_eq!(direction, RevDirection::FORWARD_LOG);
-                self.past_len_log.pre_update(meta);
-                let actual = self.past_len_log.forward_log_many_with_caller(meta, caller);
-                assert_eq!(actual, updates, "after many: {:#?}", self.past_len_log);
+                self.update_log.pre_update(meta);
+                let actual = self.update_log.forward_log_many_with_caller(meta, caller);
+                assert_eq!(actual, updates, "after many: {:#?}", self.update_log);
                 // assert no more updates would run
-                assert_eq!(self.past_len_log.forward_log(meta), false);
-                assert_eq!(self.past_len_log.forward_log_many(meta), 0);
+                assert_eq!(self.update_log.forward_log(meta), false);
+                assert_eq!(self.update_log.forward_log_many(meta), 0);
             });
 
             if updates != 0 {
@@ -905,13 +904,13 @@ mod test {
                 self.meta.set_queue(RevQueue::RUN_FORWARD_LOG);
                 self.meta.update_ref(Ok(true), |meta, direction| {
                     assert_eq!(direction, RevDirection::FORWARD_LOG);
-                    self.past_len_log.pre_update(meta);
-                    assert!(self.past_len_log.forward_log_with_caller(meta, caller));
-                    let actual = self.past_len_log.forward_log_many_with_caller(meta, caller);
+                    self.update_log.pre_update(meta);
+                    assert!(self.update_log.forward_log_with_caller(meta, caller));
+                    let actual = self.update_log.forward_log_many_with_caller(meta, caller);
                     assert_eq!(actual + 1, updates);
                     // assert no more updates would run
-                    assert_eq!(self.past_len_log.forward_log(meta), false);
-                    assert_eq!(self.past_len_log.forward_log_many(meta), 0);
+                    assert_eq!(self.update_log.forward_log(meta), false);
+                    assert_eq!(self.update_log.forward_log_many(meta), 0);
                 });
 
                 self.last_update = caller;
@@ -932,10 +931,10 @@ mod test {
                     self.meta.set_queue(RevQueue::RUN_BACKWARD_LOG);
                     self.meta.update_ref(Err(missed), |meta, direction| {
                         assert_eq!(direction, RevDirection::BackwardLog);
-                        self.past_len_log.pre_update(meta);
+                        self.update_log.pre_update(meta);
                         for _ in 0..insufficient_updates {
                             assert_eq!(
-                                self.past_len_log.backward_log_with_caller(meta, caller),
+                                self.update_log.backward_log_with_caller(meta, caller),
                                 true
                             );
                         }
@@ -950,13 +949,13 @@ mod test {
             self.meta.set_queue(RevQueue::RUN_BACKWARD_LOG);
             self.meta.update_ref(Ok(true), |meta, direction| {
                 assert_eq!(direction, RevDirection::BackwardLog);
-                self.past_len_log.pre_update(meta);
+                self.update_log.pre_update(meta);
                 for _ in 0..updates {
-                    assert!(self.past_len_log.backward_log_with_caller(meta, caller));
+                    assert!(self.update_log.backward_log_with_caller(meta, caller));
                 }
                 // assert no more updates would run
-                assert_eq!(self.past_len_log.backward_log(meta), false);
-                assert_eq!(self.past_len_log.backward_log_many(meta), 0);
+                assert_eq!(self.update_log.backward_log(meta), false);
+                assert_eq!(self.update_log.backward_log_many(meta), 0);
             });
             self.revert(updates, true);
 
@@ -964,14 +963,12 @@ mod test {
             self.meta.set_queue(RevQueue::RUN_BACKWARD_LOG);
             self.meta.update_ref(Ok(true), |meta, direction| {
                 assert_eq!(direction, RevDirection::BackwardLog);
-                self.past_len_log.pre_update(meta);
-                let actual = self
-                    .past_len_log
-                    .backward_log_many_with_caller(meta, caller);
+                self.update_log.pre_update(meta);
+                let actual = self.update_log.backward_log_many_with_caller(meta, caller);
                 assert_eq!(actual, updates);
                 // assert no more updates would run
-                assert_eq!(self.past_len_log.backward_log(meta), false);
-                assert_eq!(self.past_len_log.backward_log_many(meta), 0);
+                assert_eq!(self.update_log.backward_log(meta), false);
+                assert_eq!(self.update_log.backward_log_many(meta), 0);
             });
 
             if updates != 0 {
@@ -981,23 +978,21 @@ mod test {
                 self.meta.set_queue(RevQueue::RUN_BACKWARD_LOG);
                 self.meta.update_ref(Ok(true), |meta, direction| {
                     assert_eq!(direction, RevDirection::BackwardLog);
-                    self.past_len_log.pre_update(meta);
-                    assert!(self.past_len_log.backward_log_with_caller(meta, caller));
-                    let actual = self
-                        .past_len_log
-                        .backward_log_many_with_caller(meta, caller);
+                    self.update_log.pre_update(meta);
+                    assert!(self.update_log.backward_log_with_caller(meta, caller));
+                    let actual = self.update_log.backward_log_many_with_caller(meta, caller);
                     assert_eq!(actual + 1, updates);
                     // assert no more updates would run
-                    assert_eq!(self.past_len_log.backward_log(meta), false);
-                    assert_eq!(self.past_len_log.backward_log_many(meta), 0);
+                    assert_eq!(self.update_log.backward_log(meta), false);
+                    assert_eq!(self.update_log.backward_log_many(meta), 0);
                 });
 
                 self.last_update = caller;
             }
         }
-        fn new_missed(&self) -> PastLenLogMissed {
-            PastLenLogMissed {
-                id: self.past_len_log.update_state.unwrap().id.get(),
+        fn new_missed(&self) -> UpdateLogMissed {
+            UpdateLogMissed {
+                id: self.update_log.update_state.unwrap().id.get(),
                 last_update: self.last_update,
             }
         }
@@ -1009,11 +1004,11 @@ mod test {
             };
             self.meta.set_queue(queue);
             self.meta.update_ref(Ok(true), |meta, _| {
-                self.past_len_log.pre_update(meta);
+                self.update_log.pre_update(meta);
                 if forward {
                     for _ in 0..updates {
                         assert_eq!(
-                            self.past_len_log
+                            self.update_log
                                 .forward_log_with_caller(meta, self.last_update),
                             true,
                         );
@@ -1021,7 +1016,7 @@ mod test {
                 } else {
                     for _ in 0..updates {
                         assert_eq!(
-                            self.past_len_log
+                            self.update_log
                                 .backward_log_with_caller(meta, self.last_update),
                             true,
                         );

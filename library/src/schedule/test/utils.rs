@@ -1,24 +1,18 @@
-use std::mem::take;
-
-use bevy::{
-    app::FixedUpdate,
-    ecs::{
-        change_detection::ResMut,
-        observer::On,
-        schedule::{ApplyDeferred, IntoSystemSet, LogLevel, ScheduleBuildSettings},
-        system::IntoSystem,
-        world::{DeferredWorld, World},
-    },
-};
-
+use super::*;
 use crate::{
     meta::RevDirection,
     panic_on_error_events,
     schedule::RevUpdate,
     undo_redo::{BuffersUndoRedo, UndoRedoBuffer},
 };
-
-use super::*;
+use bevy_app::FixedUpdate;
+use bevy_ecs::{
+    change_detection::ResMut,
+    observer::On,
+    schedule::{ApplyDeferred, IntoSystemSet, LogLevel, ScheduleBuildSettings},
+    system::IntoSystem,
+    world::{DeferredWorld, World},
+};
 
 pub(super) fn test_run<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
     configs: Vec<C>,
@@ -237,7 +231,7 @@ fn test_step(
     direction: RevDirection,
 ) {
     world.run_schedule(FixedUpdate);
-    let actual_tests = take(&mut world.resource_mut::<TestLog>().0);
+    let actual_tests = core::mem::take(&mut world.resource_mut::<TestLog>().0);
     let iter = expected
         .iter()
         .flat_map(|bundle| bundle.into_iter())

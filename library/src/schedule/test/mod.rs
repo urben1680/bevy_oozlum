@@ -1,20 +1,4 @@
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-};
-
-use bevy::{
-    app::{App, Update},
-    ecs::{
-        change_detection::{Res, ResMut},
-        component::Component,
-        event::Event,
-        resource::Resource,
-        system::{Commands, IntoSystem, Local},
-        world::World,
-    },
-};
-
+use super::*;
 use crate::{
     app::{RevApp, RevPlugin},
     meta::{RevDirection, RevQueue},
@@ -22,8 +6,19 @@ use crate::{
     schedule::RevUpdate,
     undo_redo::{BuffersUndoRedo, RevCommands, UndoRedo},
 };
-
-use super::*;
+use bevy_app::{App, Update};
+use bevy_ecs::{
+    change_detection::{Res, ResMut},
+    component::Component,
+    event::Event,
+    resource::Resource,
+    system::{Commands, IntoSystem, Local},
+    world::World,
+};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
 mod utils;
 

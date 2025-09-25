@@ -1,12 +1,10 @@
-use bevy::ecs::component::Component;
-
+use super::*;
 use crate::{
     meta::RevMeta,
     panic_on_error_events,
     undo_redo::{RevIsDespawned, UndoRedoBuffer},
 };
-
-use super::*;
+use bevy_ecs::component::Component;
 
 #[derive(Component, PartialEq, Debug, Default, Copy, Clone)]
 #[require(Required)]

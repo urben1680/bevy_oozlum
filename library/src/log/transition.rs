@@ -41,7 +41,7 @@ use std::collections::{
 /// Usually transition types are just plain data the log can truncate when it is no longer needed.
 ///
 /// ```
-/// # use bevy::prelude::*;
+/// # use bevy_ecs::prelude::*;
 /// # use bevy_oozlum::prelude::*;
 /// # #[derive(Clone)]
 /// # struct MyTransition;
@@ -58,7 +58,7 @@ use std::collections::{
 ///             // mutate some state with the new transition
 ///
 ///             // push transition to the log
-///             log.push_and_truncate_past(meta.past_len(), new_transition);
+///             log.push(meta.past_len(), new_transition);
 ///         },
 ///         RevDirection::FORWARD_LOG => {
 ///             let next_transition: MyTransition = log.forward_log()?.clone();
@@ -84,7 +84,7 @@ use std::collections::{
 /// In this example the cleanup is required for log entries that are in the future part.
 ///
 /// ```
-/// # use bevy::prelude::*;
+/// # use bevy_ecs::prelude::*;
 /// # use bevy_oozlum::prelude::*;
 /// # #[derive(Clone)]
 /// # struct MyTransition;
@@ -104,7 +104,7 @@ use std::collections::{
 ///             // mutate some state with the new transition
 ///
 ///             // push the transition to the log
-///             log.push_and_truncate_past(meta.past_len(), new_transition);
+///             log.push(meta.past_len(), new_transition);
 ///         },
 ///         RevDirection::FORWARD_LOG => todo!(), // same as first example
 ///         RevDirection::BackwardLog => todo!() // same as first example
@@ -125,7 +125,7 @@ use std::collections::{
 /// the log exceeds [`RevMeta::past_len`].
 ///
 /// ```
-/// # use bevy::prelude::*;
+/// # use bevy_ecs::prelude::*;
 /// # use bevy_oozlum::prelude::*;
 /// # #[derive(Clone)]
 /// # struct MyTransition;
@@ -145,7 +145,7 @@ use std::collections::{
 ///             // mutate some state with the new transition
 ///
 ///             // push the transition to the log
-///             let drain = log.push_and_drain_past(meta.past_len(), new_transition);
+///             let drain = log.push_drain_past(meta.past_len(), new_transition);
 ///
 ///             for past_transition in drain {
 ///
@@ -166,12 +166,12 @@ use std::collections::{
 /// optional; instead of [`past`](TransitionDrains::past) and [`future`](TransitionDrains::future),
 /// [`all`](TransitionDrains::all) can be used.
 ///
-/// The `MyTransition` may for example contain an [entity ID](bevy::ecs::entity::Entity). This could be
+/// The `MyTransition` may for example contain an [entity ID](bevy_ecs::entity::Entity). This could be
 /// the ID of a temporal entity that is associated to this transition. The cleanup then would be to
 /// despawn it.
 ///
 /// ```
-/// # use bevy::prelude::*;
+/// # use bevy_ecs::prelude::*;
 /// # use bevy_oozlum::prelude::*;
 /// # #[derive(Clone)]
 /// # struct MyTransition;
@@ -200,7 +200,7 @@ use std::collections::{
 ///             // mutate some state with the new transition
 ///
 ///             // push the transition to the log
-///             let drain = log.push_and_drain_past(meta.past_len(), new_transition);
+///             let drain = log.push_drain_past(meta.past_len(), new_transition);
 ///
 ///             for past_transition in drain {
 ///
@@ -328,7 +328,7 @@ impl<T> TransitionLog<T> {
     /// past log entries.
     ///
     /// To receive an iterator over the removed log entries that got out-of-log, use
-    /// [`push_and_drain_past`](Self::push_and_drain_past) instead. Note that the `max_past_len`
+    /// [`push_drain_past`](Self::push_drain_past) instead. Note that the `max_past_len`
     /// logic works a bit differently with that method, see its documentation.
     ///
     /// This is used during [`RevDirection::NOT_LOG`](crate::meta::RevDirection::NOT_LOG).
@@ -338,7 +338,7 @@ impl<T> TransitionLog<T> {
     /// [present reversible frame](RevMeta::now). This method may panic if this was not done.
     ///
     /// For examples, see the [type level documentation](TransitionLog).
-    pub fn push_and_truncate_past(&mut self, max_past_len: u64, transition: T) {
+    pub fn push(&mut self, max_past_len: u64, transition: T) {
         let to_drain = self.push_and_get_drain(max_past_len, transition);
         // todo: truncate_front https://github.com/rust-lang/rust/issues/140667
         self.transitions.drain(..to_drain);
@@ -360,7 +360,7 @@ impl<T> TransitionLog<T> {
     ///
     /// The `max_past_len` addition by one is done to ensure that drained log entries were pushed at
     /// a frame that is now out-of-log. This may not be needed in some cases, but is important in
-    /// others like when log entries contain an entity [ID](bevy::ecs::entity::Entity) that needs to
+    /// others like when log entries contain an entity [ID](bevy_ecs::entity::Entity) that needs to
     /// remain alive as long it was spawned within the global log range. This makes this method less
     /// likely a source of bugs in the user logic.
     ///
@@ -377,13 +377,13 @@ impl<T> TransitionLog<T> {
     /// preferred over a potential source of bugs.
     ///
     /// For examples, see the [type level documentation](TransitionLog).
-    pub fn push_and_drain_past(&mut self, max_past_len: u64, transition: T) -> Drain<T> {
+    pub fn push_drain_past(&mut self, max_past_len: u64, transition: T) -> Drain<T> {
         let to_drain = self.push_and_get_drain(max_past_len + 1, transition);
         self.transitions.drain(..to_drain)
     }
 
     /// Pushes the `transition` and returns how many log entries need to be removed from the past
-    /// end of the log to contain at most `may_past_len` log entries.
+    /// end of the log to contain at most `max_past_len` log entries.
     fn push_and_get_drain(&mut self, max_past_len: u64, transition: T) -> usize {
         assert_eq!(
             self.index,
@@ -396,7 +396,7 @@ impl<T> TransitionLog<T> {
         to_drain
     }
 
-    /// Behaves like [`Self::push_and_drain_past`] except `max_past_len` is not increased by `1` and
+    /// Behaves like [`Self::push_drain_past`] except `max_past_len` is not increased by `1` and
     /// the returned iterator is not yet drained.
     ///
     /// This **must** be followed by [Self::drain_past].
@@ -745,7 +745,7 @@ mod test {
                 assert_eq!(drain.future().collect::<Vec<char>>(), future_drain);
                 let drained = self
                     .with_past_drain
-                    .push_and_drain_past(meta.past_len(), push)
+                    .push_drain_past(meta.past_len(), push)
                     .collect::<Vec<char>>();
                 if clear {
                     assert_eq!(drained, []);
@@ -756,8 +756,7 @@ mod test {
                 // without_past_drain
                 let drain = self.without_past_drain.pre_update_drain(meta);
                 assert_eq!(drain.future().collect::<Vec<char>>(), future_drain);
-                self.without_past_drain
-                    .push_and_truncate_past(meta.past_len(), push);
+                self.without_past_drain.push(meta.past_len(), push);
             });
         }
         fn noop_forward_backward_log(&mut self) {

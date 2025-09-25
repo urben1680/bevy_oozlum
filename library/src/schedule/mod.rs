@@ -1,6 +1,4 @@
-use std::{fmt::Debug, hash::Hash};
-
-use bevy::ecs::{
+use bevy_ecs::{
     change_detection::Res,
     schedule::{
         Chain, InternedSystemSet, IntoScheduleConfigs, IntoSystemSet, Schedulable, Schedule,
@@ -9,7 +7,7 @@ use bevy::ecs::{
     },
     system::{IntoSystem, ScheduleSystem},
 };
-
+use core::{fmt::Debug, hash::Hash};
 use variadics_please::all_tuples;
 
 use crate::meta::RevMeta;
@@ -395,15 +393,3 @@ macro_rules! impl_into_rev_schedule_configs {
 }
 
 all_tuples!(impl_into_rev_schedule_configs, 1, 20, T, M, var);
-
-macro_rules! error_per_flag {
-    ($flag:expr, $($arg:tt)+) => ({
-        if !*$flag {
-            bevy::log::error!($($arg)+);
-            *$flag = true;
-        }
-        core::default::Default::default()
-    });
-}
-
-use error_per_flag;

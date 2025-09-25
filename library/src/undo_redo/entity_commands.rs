@@ -1,18 +1,3 @@
-use std::marker::PhantomData;
-
-use bevy::{
-    ecs::{
-        bundle::{Bundle, InsertMode},
-        change_detection::MaybeLocation,
-        component::{Component, ComponentId},
-        entity::{EntityClonerBuilder, OptIn, OptOut},
-        error::ignore,
-        system::{EntityCommand, EntityCommands, EntityEntryCommands},
-        world::{DeferredWorld, EntityWorldMut, FromWorld},
-    },
-    ptr::OwningPtr,
-};
-
 use crate::{
     meta::NonLogNow,
     prelude::UndoRedo,
@@ -22,6 +7,17 @@ use crate::{
         rev_try_insert_with_caller, rev_try_remove_with_caller, rev_try_retain_with_caller,
     },
 };
+use bevy_ecs::ptr::OwningPtr;
+use bevy_ecs::{
+    bundle::{Bundle, InsertMode},
+    change_detection::MaybeLocation,
+    component::{Component, ComponentId},
+    entity::{EntityClonerBuilder, OptIn, OptOut},
+    error::ignore,
+    system::{EntityCommand, EntityCommands, EntityEntryCommands},
+    world::{DeferredWorld, EntityWorldMut, FromWorld},
+};
+use core::marker::PhantomData;
 
 pub trait RevEntityCommands<'a> {
     fn redo_and_buffer(&mut self, now: NonLogNow, undo_redo: impl UndoRedo);
@@ -461,7 +457,7 @@ impl<T: Component> RevEntityEntryCommands<T> for EntityEntryCommands<'_, T> {
 
 type CmdOut = Result<(), EntityRevDespawnedError>;
 
-/// Reversible version of [`insert`](bevy::ecs::system::entity_command::insert).
+/// Reversible version of [`insert`](bevy_ecs::system::entity_command::insert).
 #[track_caller]
 pub fn rev_insert<B: Bundle>(
     now: NonLogNow,
@@ -482,7 +478,7 @@ pub fn rev_insert<B: Bundle>(
     }
 }
 
-/// Reversible version of [`insert_by_id`](bevy::ecs::system::entity_command::insert_by_id).
+/// Reversible version of [`insert_by_id`](bevy_ecs::system::entity_command::insert_by_id).
 ///
 /// # Safety
 ///
@@ -514,7 +510,7 @@ pub unsafe fn rev_insert_by_id<T: Send + 'static>(
     }
 }
 
-/// Reversible version of [`insert_from_world`](bevy::ecs::system::entity_command::insert_from_world).
+/// Reversible version of [`insert_from_world`](bevy_ecs::system::entity_command::insert_from_world).
 #[track_caller]
 pub fn rev_insert_from_world<T: Component + FromWorld>(
     now: NonLogNow,
@@ -539,7 +535,7 @@ pub fn rev_insert_from_world<T: Component + FromWorld>(
     }
 }
 
-/// Reversible version of [`insert_with`](bevy::ecs::system::entity_command::insert_with).
+/// Reversible version of [`insert_with`](bevy_ecs::system::entity_command::insert_with).
 #[track_caller]
 pub fn rev_insert_with<T: Component, F>(
     now: NonLogNow,
@@ -568,7 +564,7 @@ where
     }
 }
 
-/// Reversible version of [`remove`](bevy::ecs::system::entity_command::remove).
+/// Reversible version of [`remove`](bevy_ecs::system::entity_command::remove).
 #[track_caller]
 pub fn rev_remove<T: Bundle>(now: NonLogNow) -> impl EntityCommand<CmdOut> {
     let caller = MaybeLocation::caller();
@@ -578,7 +574,7 @@ pub fn rev_remove<T: Bundle>(now: NonLogNow) -> impl EntityCommand<CmdOut> {
     }
 }
 
-/// Reversible version of [`remove_with_requires`](bevy::ecs::system::entity_command::remove_with_requires).
+/// Reversible version of [`remove_with_requires`](bevy_ecs::system::entity_command::remove_with_requires).
 #[track_caller]
 pub fn rev_remove_with_requires<T: Bundle>(now: NonLogNow) -> impl EntityCommand<CmdOut> {
     let caller = MaybeLocation::caller();
@@ -588,7 +584,7 @@ pub fn rev_remove_with_requires<T: Bundle>(now: NonLogNow) -> impl EntityCommand
     }
 }
 
-/// Reversible version of [`remove_by_id`](bevy::ecs::system::entity_command::remove_by_id).
+/// Reversible version of [`remove_by_id`](bevy_ecs::system::entity_command::remove_by_id).
 #[track_caller]
 pub fn rev_remove_by_id(now: NonLogNow, component_id: ComponentId) -> impl EntityCommand<CmdOut> {
     let caller = MaybeLocation::caller();
@@ -598,7 +594,7 @@ pub fn rev_remove_by_id(now: NonLogNow, component_id: ComponentId) -> impl Entit
     }
 }
 
-/// Reversible version of [`clear`](bevy::ecs::system::entity_command::clear).
+/// Reversible version of [`clear`](bevy_ecs::system::entity_command::clear).
 #[track_caller]
 pub fn rev_clear(now: NonLogNow) -> impl EntityCommand<CmdOut> {
     let caller = MaybeLocation::caller();
@@ -607,7 +603,7 @@ pub fn rev_clear(now: NonLogNow) -> impl EntityCommand<CmdOut> {
     }
 }
 
-/// Reversible version of [`retain`](bevy::ecs::system::entity_command::retain).
+/// Reversible version of [`retain`](bevy_ecs::system::entity_command::retain).
 #[track_caller]
 pub fn rev_retain<T: Bundle>(now: NonLogNow) -> impl EntityCommand<CmdOut> {
     let caller = MaybeLocation::caller();
@@ -616,7 +612,7 @@ pub fn rev_retain<T: Bundle>(now: NonLogNow) -> impl EntityCommand<CmdOut> {
     }
 }
 
-/// Reversible version of [`despawn`](bevy::ecs::system::entity_command::despawn).
+/// Reversible version of [`despawn`](bevy_ecs::system::entity_command::despawn).
 #[track_caller]
 pub fn rev_despawn_single(now: NonLogNow) -> impl EntityCommand<CmdOut> {
     let caller = MaybeLocation::caller();

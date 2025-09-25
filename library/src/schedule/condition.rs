@@ -1,32 +1,28 @@
-use std::any::TypeId;
-
-use bevy::{
-    ecs::{
-        component::{CheckChangeTicks, ComponentId, Tick},
-        query::FilteredAccessSet,
-        schedule::{BoxedCondition, InternedSystemSet, SystemCondition},
-        system::{
-            IntoSystem, ReadOnlySystem, RunSystemError, System, SystemIn,
-            SystemParamValidationError, SystemStateFlags,
-        },
-        world::{DeferredWorld, World, unsafe_world_cell::UnsafeWorldCell},
-    },
-    utils::{default, prelude::DebugName},
-};
-
 use crate::{
-    log::{PastLenLog, TransitionLog},
+    log::{TransitionLog, UpdateLog},
     meta::{RevDirection, RevMeta},
 };
+use bevy_ecs::{
+    component::{CheckChangeTicks, ComponentId, Tick},
+    query::FilteredAccessSet,
+    schedule::{BoxedCondition, InternedSystemSet, SystemCondition},
+    system::{
+        IntoSystem, ReadOnlySystem, RunSystemError, System, SystemIn, SystemParamValidationError,
+        SystemStateFlags,
+    },
+    world::{DeferredWorld, World, unsafe_world_cell::UnsafeWorldCell},
+};
+use bevy_utils::prelude::DebugName;
+use core::any::TypeId;
 
 pub(super) fn into_rev_condition<Marker>(
     condition: impl SystemCondition<Marker>,
 ) -> BoxedCondition {
     let condition = RevCondition {
         condition: IntoSystem::into_system(condition),
-        meta_id: default(),
-        run_log: default(),
-        run_or_err_log: default(),
+        meta_id: Default::default(),
+        run_log: Default::default(),
+        run_or_err_log: Default::default(),
     };
     Box::new(condition)
 }
@@ -34,7 +30,7 @@ pub(super) fn into_rev_condition<Marker>(
 struct RevCondition<T> {
     condition: T,
     meta_id: Option<ComponentId>,
-    run_log: PastLenLog,
+    run_log: UpdateLog,
     run_or_err_log: TransitionLog<Result<(), Box<RevRunSystemError>>>,
 }
 
@@ -128,21 +124,21 @@ impl<T: ReadOnlySystem<In = (), Out = bool>> System for RevCondition<T> {
                 match result {
                     Ok(false) => Ok(false),
                     Ok(true) => {
-                        let past_len = self.run_log.update_get(meta);
-                        self.run_or_err_log.push_and_truncate_past(past_len, Ok(()));
+                        let past_len = self.run_log.push_get_past_len(meta);
+                        self.run_or_err_log.push(past_len, Ok(()));
                         Ok(true)
                     }
                     Err(RunSystemError::Skipped(skipped)) => {
-                        let past_len = self.run_log.update_get(meta);
-                        self.run_or_err_log.push_and_truncate_past(
+                        let past_len = self.run_log.push_get_past_len(meta);
+                        self.run_or_err_log.push(
                             past_len,
                             Err(Box::new(RevRunSystemError::Skipped(skipped.clone()))),
                         );
                         Err(RunSystemError::Skipped(skipped))
                     }
                     Err(RunSystemError::Failed(failed)) => {
-                        let past_len = self.run_log.update_get(meta);
-                        self.run_or_err_log.push_and_truncate_past(
+                        let past_len = self.run_log.push_get_past_len(meta);
+                        self.run_or_err_log.push(
                             past_len,
                             Err(Box::new(RevRunSystemError::Failed(format!("{failed}")))),
                         );

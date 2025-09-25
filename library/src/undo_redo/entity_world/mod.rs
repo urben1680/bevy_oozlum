@@ -1,25 +1,20 @@
-use std::{any::TypeId, hash::Hash, marker::PhantomData};
-
-use bevy::{
-    ecs::{
-        archetype::ArchetypeId,
-        bundle::{Bundle, BundleFromComponents, BundleId, InsertMode},
-        change_detection::MaybeLocation,
-        component::{Component, ComponentId},
-        entity::{Entity, EntityCloner, EntityClonerBuilder, OptIn, OptOut},
-        resource::Resource,
-        world::{DeferredWorld, EntityRef, EntityWorldMut, World},
-    },
-    platform::collections::{HashMap, HashSet},
-    ptr::OwningPtr,
-};
-
+use super::{BuffersUndoRedo, RevDespawnCleaner, RevWorld, Take, UndoRedo};
 use crate::{
     meta::{NonLogNow, RevDirection},
     undo_redo::{EntityRevDespawnedError, RevDespawned, RevOp},
 };
-
-use super::{BuffersUndoRedo, RevDespawnCleaner, RevWorld, Take, UndoRedo};
+use bevy_ecs::{
+    archetype::ArchetypeId,
+    bundle::{Bundle, BundleFromComponents, BundleId, InsertMode},
+    change_detection::MaybeLocation,
+    component::{Component, ComponentId},
+    entity::{Entity, EntityCloner, EntityClonerBuilder, OptIn, OptOut},
+    resource::Resource,
+    world::{DeferredWorld, EntityRef, EntityWorldMut, World},
+};
+use bevy_platform::collections::{HashMap, HashSet};
+use bevy_ptr::OwningPtr;
+use core::{any::TypeId, hash::Hash, marker::PhantomData};
 
 // wip, consider observer approach for to-buffer-move and linked despawn
 //pub mod relationship;
@@ -927,7 +922,7 @@ pub struct RevVacantComponentEntry<'w, 'a, T> {
 }
 
 impl<'w, 'a, T: Component> RevComponentEntry<'w, 'a, T> {
-    /// See [`Entry::target_entity`](bevy::ecs::world::Entry::insert_entry).
+    /// See [`Entry::target_entity`](bevy_ecs::world::Entry::insert_entry).
     #[track_caller]
     pub fn insert_entry(self, component: T) -> RevOccupiedComponentEntry<'w, 'a, T> {
         match self {
@@ -939,7 +934,7 @@ impl<'w, 'a, T: Component> RevComponentEntry<'w, 'a, T> {
         }
     }
 
-    /// Reversible version of [`Entry::target_entity`](bevy::ecs::world::Entry::insert_entry).
+    /// Reversible version of [`Entry::target_entity`](bevy_ecs::world::Entry::insert_entry).
     #[track_caller]
     pub fn rev_insert_entry(
         self,
@@ -955,7 +950,7 @@ impl<'w, 'a, T: Component> RevComponentEntry<'w, 'a, T> {
         }
     }
 
-    /// See [`Entry::or_insert`](bevy::ecs::world::Entry::or_insert).
+    /// See [`Entry::or_insert`](bevy_ecs::world::Entry::or_insert).
     #[track_caller]
     pub fn or_insert(self, default: T) -> RevOccupiedComponentEntry<'w, 'a, T> {
         match self {
@@ -964,7 +959,7 @@ impl<'w, 'a, T: Component> RevComponentEntry<'w, 'a, T> {
         }
     }
 
-    /// Reversible version of [`Entry::or_insert`](bevy::ecs::world::Entry::or_insert).
+    /// Reversible version of [`Entry::or_insert`](bevy_ecs::world::Entry::or_insert).
     #[track_caller]
     pub fn rev_or_insert(self, now: NonLogNow, default: T) -> RevOccupiedComponentEntry<'w, 'a, T> {
         match self {
@@ -973,7 +968,7 @@ impl<'w, 'a, T: Component> RevComponentEntry<'w, 'a, T> {
         }
     }
 
-    /// See [`Entry::or_insert_with`](bevy::ecs::world::Entry::or_insert_with).
+    /// See [`Entry::or_insert_with`](bevy_ecs::world::Entry::or_insert_with).
     #[track_caller]
     pub fn or_insert_with<F: FnOnce() -> T>(
         self,
@@ -985,7 +980,7 @@ impl<'w, 'a, T: Component> RevComponentEntry<'w, 'a, T> {
         }
     }
 
-    /// Reversible version of [`Entry::or_insert_with`](bevy::ecs::world::Entry::or_insert_with).
+    /// Reversible version of [`Entry::or_insert_with`](bevy_ecs::world::Entry::or_insert_with).
     #[track_caller]
     pub fn rev_or_insert_with<F: FnOnce() -> T>(
         self,
@@ -1000,7 +995,7 @@ impl<'w, 'a, T: Component> RevComponentEntry<'w, 'a, T> {
 }
 
 impl<'w, 'a, T: Component + Default> RevComponentEntry<'w, 'a, T> {
-    /// See [`Entry::or_insert_with`](bevy::ecs::world::Entry::or_default).
+    /// See [`Entry::or_insert_with`](bevy_ecs::world::Entry::or_default).
     #[track_caller]
     pub fn or_default(self) -> RevOccupiedComponentEntry<'w, 'a, T> {
         match self {
@@ -1009,7 +1004,7 @@ impl<'w, 'a, T: Component + Default> RevComponentEntry<'w, 'a, T> {
         }
     }
 
-    /// Reversible version of [`Entry::or_insert_with`](bevy::ecs::world::Entry::or_default).
+    /// Reversible version of [`Entry::or_insert_with`](bevy_ecs::world::Entry::or_default).
     #[track_caller]
     pub fn rev_or_default(self, now: NonLogNow) -> RevOccupiedComponentEntry<'w, 'a, T> {
         match self {
@@ -1020,26 +1015,26 @@ impl<'w, 'a, T: Component + Default> RevComponentEntry<'w, 'a, T> {
 }
 
 impl<'w, 'a, T: Component> RevOccupiedComponentEntry<'w, 'a, T> {
-    /// See [`OccupiedEntry::or_insert_with`](bevy::ecs::world::OccupiedEntry::insert).
+    /// See [`OccupiedEntry::or_insert_with`](bevy_ecs::world::OccupiedEntry::insert).
     #[track_caller]
     pub fn insert(&mut self, component: T) {
         self.entity_world_mut.insert(component);
     }
 
-    /// Reversible version of [`OccupiedEntry::or_insert_with`](bevy::ecs::world::OccupiedEntry::insert).
+    /// Reversible version of [`OccupiedEntry::or_insert_with`](bevy_ecs::world::OccupiedEntry::insert).
     #[track_caller]
     pub fn rev_insert(&mut self, now: NonLogNow, component: T) {
         self.entity_world_mut.rev_insert(now, component);
     }
 
-    /// See [`OccupiedEntry::take`](bevy::ecs::world::OccupiedEntry::take).
+    /// See [`OccupiedEntry::take`](bevy_ecs::world::OccupiedEntry::take).
     #[track_caller]
     pub fn take(self) -> T {
         // This shouldn't panic because if we have an OccupiedEntry the component must exist.
         self.entity_world_mut.take().unwrap()
     }
 
-    /// Reversible version of [`OccupiedEntry::take`](bevy::ecs::world::OccupiedEntry::take).
+    /// Reversible version of [`OccupiedEntry::take`](bevy_ecs::world::OccupiedEntry::take).
     #[track_caller]
     pub fn rev_take<Out>(self, now: NonLogNow, c: impl FnOnce(&T) -> Out) -> Out {
         // This shouldn't panic because if we have an OccupiedEntry the component must exist.
@@ -1048,7 +1043,7 @@ impl<'w, 'a, T: Component> RevOccupiedComponentEntry<'w, 'a, T> {
 }
 
 impl<'w, 'a, T: Component> RevVacantComponentEntry<'w, 'a, T> {
-    /// See [`VacantEntry::take`](bevy::ecs::world::VacantEntry::insert).
+    /// See [`VacantEntry::take`](bevy_ecs::world::VacantEntry::insert).
     #[track_caller]
     pub fn insert(self, component: T) -> RevOccupiedComponentEntry<'w, 'a, T> {
         self.entity_world_mut.insert(component);
@@ -1058,7 +1053,7 @@ impl<'w, 'a, T: Component> RevVacantComponentEntry<'w, 'a, T> {
         }
     }
 
-    /// Reversible version of [`VacantEntry::take`](bevy::ecs::world::VacantEntry::insert).
+    /// Reversible version of [`VacantEntry::take`](bevy_ecs::world::VacantEntry::insert).
     #[track_caller]
     pub fn rev_insert(self, now: NonLogNow, component: T) -> RevOccupiedComponentEntry<'w, 'a, T> {
         self.entity_world_mut.rev_insert(now, component);

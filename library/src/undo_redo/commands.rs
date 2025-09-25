@@ -1,12 +1,3 @@
-use bevy::ecs::{
-    bundle::{Bundle, DynamicBundle, NoBundleEffect},
-    change_detection::MaybeLocation,
-    entity::Entity,
-    resource::Resource,
-    system::{Command, Commands, EntityCommands},
-    world::{EntityWorldMut, FromWorld, World},
-};
-
 use crate::{
     meta::NonLogNow,
     prelude::UndoRedo,
@@ -15,6 +6,14 @@ use crate::{
         rev_insert_resource_with_caller, rev_remove_resource_with_caller,
         rev_spawn_batch_with_caller, rev_spawn_despawn_with_caller, rev_spawn_empty_inner,
     },
+};
+use bevy_ecs::{
+    bundle::{Bundle, DynamicBundle, NoBundleEffect},
+    change_detection::MaybeLocation,
+    entity::Entity,
+    resource::Resource,
+    system::{Command, Commands, EntityCommands},
+    world::{EntityWorldMut, FromWorld, World},
 };
 
 pub trait RevCommands {
@@ -124,7 +123,7 @@ impl RevCommands for Commands<'_, '_> {
     }
 }
 
-/// Reversible version of [`spawn_batch`](bevy::ecs::system::command::spawn_batch).
+/// Reversible version of [`spawn_batch`](bevy_ecs::system::command::spawn_batch).
 #[track_caller]
 pub fn rev_spawn_batch<I>(now: NonLogNow, bundles_iter: I) -> impl Command
 where
@@ -137,7 +136,7 @@ where
     }
 }
 
-/// Reversible version of [`init_resource`](bevy::ecs::system::command::init_resource).
+/// Reversible version of [`init_resource`](bevy_ecs::system::command::init_resource).
 #[track_caller]
 pub fn rev_init_resource<R: Resource + FromWorld>(now: NonLogNow) -> impl Command {
     let caller = MaybeLocation::caller();
@@ -146,7 +145,7 @@ pub fn rev_init_resource<R: Resource + FromWorld>(now: NonLogNow) -> impl Comman
     }
 }
 
-/// Reversible version of [`insert_resource`](bevy::ecs::system::command::insert_resource).
+/// Reversible version of [`insert_resource`](bevy_ecs::system::command::insert_resource).
 #[track_caller]
 pub fn rev_insert_resource<R: Resource>(now: NonLogNow, resource: R) -> impl Command {
     let caller = MaybeLocation::caller();
@@ -155,7 +154,7 @@ pub fn rev_insert_resource<R: Resource>(now: NonLogNow, resource: R) -> impl Com
     }
 }
 
-/// Reversible version of [`remove_resource`](bevy::ecs::system::command::remove_resource).
+/// Reversible version of [`remove_resource`](bevy_ecs::system::command::remove_resource).
 pub fn rev_remove_resource<R: Resource>(now: NonLogNow) -> impl Command {
     let caller = MaybeLocation::caller();
     move |world: &mut World| {

@@ -4,19 +4,17 @@ use std::{
     fmt::{Debug, Display},
 };
 
-use bevy::{
-    ecs::{error::BevyError, resource::Resource, world::World},
-    log::info,
-    reflect::Reflect,
-};
+use bevy_ecs::{error::BevyError, resource::Resource, world::World};
+use bevy_log::info;
 
 use crate::{
-    log::{PastLenLogLimits, PastLenLogMissed, PastLenState, PreUpdateKind},
+    log::{PreUpdateKind, UpdateLogLimits, UpdateLogMissed, UpdateLogState},
     prelude::RevUpdate,
     undo_redo::{BundleIdOfOpCache, DespawnCleanerErr, RevDespawnCleaner, UndoRedoBuffer},
 };
 
-#[derive(Reflect, Resource, Debug)]
+#[derive(Resource, Debug)]
+#[cfg_attr(feature = "bevy_reflect", derive(bevy_reflect::Reflect))]
 pub struct RevMeta {
     past_end: u64,
     now: u64,
@@ -26,7 +24,7 @@ pub struct RevMeta {
     queue: Option<RevQueue>,
     log_exits: u64,
     log_clears: u64,
-    past_len_limits: PastLenLogLimits,
+    update_log_limits: UpdateLogLimits,
 }
 
 impl Default for RevMeta {
@@ -35,7 +33,8 @@ impl Default for RevMeta {
     }
 }
 
-#[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "bevy_reflect", derive(bevy_reflect::Reflect))]
 pub enum RevDirection {
     Forward { log: bool },
     BackwardLog,
@@ -71,14 +70,16 @@ impl Display for RevDirection {
     }
 }
 
-#[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "bevy_reflect", derive(bevy_reflect::Reflect))]
 enum RunningOrRan {
     Running(RevDirection),
     Ran(RevDirection),
     Pause { after_log: bool },
 }
 
-#[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "bevy_reflect", derive(bevy_reflect::Reflect))]
 pub enum RevQueue {
     Run(RevDirection),
     Pause,
@@ -128,7 +129,7 @@ impl RevMeta {
             queue: None,
             log_exits: 0,
             log_clears: 0,
-            past_len_limits: PastLenLogLimits::default(),
+            update_log_limits: UpdateLogLimits::default(),
         }
     }
     #[cfg(test)]
@@ -142,7 +143,7 @@ impl RevMeta {
             queue: None,
             log_exits: 0,
             log_clears: 0,
-            past_len_limits: PastLenLogLimits::default(),
+            update_log_limits: UpdateLogLimits::default(),
         }
     }
     pub fn set_queue(&mut self, queue: RevQueue) {
@@ -247,10 +248,10 @@ impl RevMeta {
         self.past_end = self.now;
         self.future_end = self.now;
         self.log_clears += 1;
-        self.past_len_limits.clear();
+        self.update_log_limits.clear();
         self.log_exits = 0;
         info!(
-            "`RevQueue::Clear` was applied, all `PastLenLog` ids until now are invalid and will be reinitialized at their next updates"
+            "`RevQueue::Clear` was applied, all `UpdateLog` ids until now are invalid and will be reinitialized at their next updates"
         )
     }
     pub fn run_rev_update(world: &mut World) -> Result<(), BevyError> {
@@ -291,7 +292,7 @@ impl RevMeta {
                     }
                     Ok(meta) => Err(TryRunRevUpdateError::AfterRunErrors {
                         meta: Some(meta),
-                        past_len_logs_missed: Vec::new(),
+                        update_logs_missed: Vec::new(),
                         despawn_cleaner_err: cleaner_result.err(),
                     }),
                     Err(RevMetaUpdateErr::AlreadyRunning { meta, direction }) => {
@@ -300,16 +301,16 @@ impl RevMeta {
                     Err(RevMetaUpdateErr::RevMetaNotReturned) => {
                         Err(TryRunRevUpdateError::AfterRunErrors {
                             meta: None,
-                            past_len_logs_missed: Vec::new(),
+                            update_logs_missed: Vec::new(),
                             despawn_cleaner_err: cleaner_result.err(),
                         })
                     }
-                    Err(RevMetaUpdateErr::PastLenLogsMissed {
+                    Err(RevMetaUpdateErr::UpdateLogsMissed {
                         meta,
-                        past_len_logs_missed,
+                        update_logs_missed,
                     }) => Err(TryRunRevUpdateError::AfterRunErrors {
                         meta: Some(meta),
-                        past_len_logs_missed,
+                        update_logs_missed,
                         despawn_cleaner_err: cleaner_result.err(),
                     }),
                 }
@@ -413,20 +414,20 @@ impl RevMeta {
         };
         meta.direction = RunningOrRan::Ran(direction);
 
-        // check for PastLenLog instances that did missed being updated
+        // check for `UpdateLog` instances that were missed being updated
         let now = meta.now;
-        match meta.past_len_limits.update(now, direction.is_log()) {
+        match meta.update_log_limits.update(now, direction.is_log()) {
             Ok(()) => Ok(meta),
-            Err(past_len_logs_missed) => Err(RevMetaUpdateErr::PastLenLogsMissed {
+            Err(update_logs_missed) => Err(RevMetaUpdateErr::UpdateLogsMissed {
                 meta,
-                past_len_logs_missed,
+                update_logs_missed,
             }),
         }
     }
     #[cfg(test)]
     pub(crate) fn update_ref(
         &mut self,
-        should_run: Result<bool, PastLenLogMissed>,
+        should_run: Result<bool, UpdateLogMissed>,
         c: impl FnOnce(&mut Self, RevDirection),
     ) {
         let meta = core::mem::replace(self, RevMeta::new(None, true));
@@ -453,12 +454,12 @@ impl RevMeta {
                 });
                 assert_eq!(ran, true);
                 match result {
-                    Err(RevMetaUpdateErr::PastLenLogsMissed {
+                    Err(RevMetaUpdateErr::UpdateLogsMissed {
                         meta,
-                        past_len_logs_missed,
+                        update_logs_missed,
                     }) => {
                         *self = meta;
-                        assert_eq!(past_len_logs_missed, [missed]);
+                        assert_eq!(update_logs_missed, [missed]);
                     }
                     other => panic!("unexpected {other:#?}"),
                 }
@@ -466,12 +467,12 @@ impl RevMeta {
         }
     }
     #[track_caller]
-    pub(super) fn update_past_len_state(&self, state: &mut Option<PastLenState>) -> PreUpdateKind {
-        self.past_len_limits
-            .update_state(state, self.log_exits, self.log_clears)
+    pub(super) fn set_update_state(&self, state: &mut Option<UpdateLogState>) -> PreUpdateKind {
+        self.update_log_limits
+            .set_update_state(state, self.log_exits, self.log_clears)
     }
-    pub(super) fn past_len_limits(&self) -> &PastLenLogLimits {
-        &self.past_len_limits
+    pub(super) fn update_log_limits(&self) -> &UpdateLogLimits {
+        &self.update_log_limits
     }
 }
 
@@ -510,9 +511,9 @@ pub enum RevMetaUpdateErr {
         direction: RevDirection,
     },
     RevMetaNotReturned,
-    PastLenLogsMissed {
+    UpdateLogsMissed {
         meta: RevMeta,
-        past_len_logs_missed: Vec<PastLenLogMissed>,
+        update_logs_missed: Vec<UpdateLogMissed>,
     },
 }
 
@@ -528,7 +529,7 @@ enum TryRunRevUpdateError {
     },
     AfterRunErrors {
         meta: Option<RevMeta>,
-        past_len_logs_missed: Vec<PastLenLogMissed>,
+        update_logs_missed: Vec<UpdateLogMissed>,
         despawn_cleaner_err: Option<DespawnCleanerErr>,
     },
 }
@@ -545,7 +546,7 @@ impl Display for TryRunRevUpdateError {
             }
             Self::AfterRunErrors {
                 meta,
-                past_len_logs_missed,
+                update_logs_missed,
                 despawn_cleaner_err,
             } => {
                 if matches!(
@@ -554,10 +555,10 @@ impl Display for TryRunRevUpdateError {
                 ) {
                     write!(f, "RevMeta stopped running early\n")?;
                 }
-                if !past_len_logs_missed.is_empty() {
+                if !update_logs_missed.is_empty() {
                     write!(
                         f,
-                        "PastLenLog instances did not run when they were expected to:\n{past_len_logs_missed:?}\n"
+                        "UpdateLog instances did not run when they were expected to:\n{update_logs_missed:?}\n"
                     )?;
                 }
                 if matches!(

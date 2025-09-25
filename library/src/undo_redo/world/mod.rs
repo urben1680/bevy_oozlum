@@ -1,25 +1,18 @@
-use std::sync::Arc;
-
-use bevy::{
-    ecs::{
-        bundle::{Bundle, NoBundleEffect},
-        change_detection::MaybeLocation,
-        component::ComponentId,
-        entity::{Entity, EntityCloner},
-        resource::Resource,
-        world::{
-            DeferredWorld, EntityWorldMut, FromWorld, Mut, World, error::EntityMutableFetchError,
-        },
-    },
-    log::warn,
-};
-
+use super::{BuffersUndoRedo, ResourceSwap, RevDespawnCleaner, RevEntityError, UndoRedo};
 use crate::{
     meta::{NonLogNow, RevMeta},
     undo_redo::{RevDespawned, rev_spawn_despawn_with_caller, rev_spawn_empty_inner},
 };
-
-use super::{BuffersUndoRedo, ResourceSwap, RevDespawnCleaner, RevEntityError, UndoRedo};
+use bevy_ecs::{
+    bundle::{Bundle, NoBundleEffect},
+    change_detection::MaybeLocation,
+    component::ComponentId,
+    entity::{Entity, EntityCloner},
+    resource::Resource,
+    world::{DeferredWorld, EntityWorldMut, FromWorld, Mut, World, error::EntityMutableFetchError},
+};
+use bevy_log::warn;
+use std::sync::Arc;
 
 #[cfg(test)]
 mod test;
