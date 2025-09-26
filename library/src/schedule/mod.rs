@@ -82,7 +82,7 @@ struct BackwardDeferredAndSystemSet(InternedSystemSet);
 pub trait RevSchedule {
     /// Reversible version of [`Schedule::add_systems`].
     ///
-    /// This wraps passed every system `T` in an `Arc<Mutex<T>>` that is shared for:
+    /// This wraps every passed system `T` in an `Arc<Mutex<T>>` that is shared for:
     /// - A new system `F` that runs at [`RevDirection::Forward`]
     /// - A new system `B` that runs at [`RevDirection::BackwardLog`]
     ///
@@ -93,13 +93,15 @@ pub trait RevSchedule {
     /// the [`World`] state that was present when `F` finished but did not have its deferred actions
     /// applied yet.
     ///
-    /// This third system is noop for exclusive systems.
+    /// This third system is noop for exclusive systems or when `T` has no such deferred parameters
+    /// like [`Commands`].
     ///
     /// Configurations that order the systems will be reversed for the `B` variants.
     ///
     /// [`RevDirection::Forward`]: crate::meta::RevDirection::Forward
     /// [`RevDirection::BackwardLog`]: crate::meta::RevDirection::BackwardLog
     /// [`World`]: bevy_ecs::world::World
+    /// [`Commands`]: bevy_ecs::system::Commands
     fn rev_add_systems<Marker>(
         &mut self,
         systems: impl IntoRevScheduleConfigs<ScheduleSystem, Marker>,
