@@ -14,7 +14,7 @@ bevy_ptr = "=0.17.0-rc.2"
 bevy_reflect = { version = "=0.17.0-rc.2", optional = true }
 bevy_utils = "=0.17.0-rc.2"
 nonmax = { version = "0.5", default-features = false } # keep in sync with bevy
-variadics_please = "1.1"
+variadics_please = "1.1" # keep in sync with bevy
 
 [dev-dependencies]
 crossterm = "0.28"
@@ -22,5 +22,5 @@ bevy = { version = "=0.17.0-rc.2", features = ["track_location"] }
 
 [features]
 default = ["bevy_app", "bevy_reflect"]
-bevy_reflect = ["dep:bevy_reflect"]
 bevy_app = ["dep:bevy_app"]
+bevy_reflect = ["dep:bevy_reflect"]

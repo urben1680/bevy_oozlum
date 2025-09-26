@@ -7,7 +7,6 @@ use bevy_ecs::{
     world::{DeferredWorld, EntityWorldMut, FromWorld, World},
 };
 use bevy_platform::cell::SyncCell;
-use bevy_utils::prelude::DebugName;
 use core::{
     any::type_name_of_val,
     error::Error,
@@ -282,45 +281,38 @@ impl Debug for DebugHidden {
 
 #[derive(Debug)]
 pub(crate) enum UndoRedoLogError {
-    RevMetaMissing {
-        system_name: DebugName,
-    },
+    RevMetaMissing,
     UndoRedoBufferMissing {
         now: u64,
-        system_name: DebugName,
     },
     RevDirectionMismatch {
         now: u64,
         expected_forward: bool,
         direction: Option<RevDirection>,
-        system_name: DebugName,
     },
     OutOfLog {
         now: u64,
         direction: RevDirection,
-        system_name: DebugName,
     },
 }
 
 impl Display for UndoRedoLogError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::RevMetaMissing { system_name } => write!(
+            Self::RevMetaMissing => write!(f, "RevMeta is missing"),
+            Self::UndoRedoBufferMissing { now } => write!(
                 f,
-                "RevMeta was removed but is needed to update the UndoRedo log of reversible system {system_name}"
-            ),
-            Self::UndoRedoBufferMissing { now, system_name } => write!(
-                f,
-                "UndoRedoBuffer was removed at frame {now} but is needed to update the UndoRedo log of reversible system {system_name}"
+                "UndoRedoBuffer was removed at frame {now} but is needed to update the UndoRedo log"
             ),
             Self::RevDirectionMismatch {
                 now,
                 expected_forward,
                 direction,
-                system_name,
             } => {
                 let actual = match direction {
-                    Some(direction) => &format!("{direction}"),
+                    Some(RevDirection::NOT_LOG) => "forward (not log)",
+                    Some(RevDirection::FORWARD_LOG) => "forward (log)",
+                    Some(RevDirection::BackwardLog) => "backward",
                     None => "none",
                 };
                 let expected = if *expected_forward {
@@ -330,16 +322,12 @@ impl Display for UndoRedoLogError {
                 };
                 write!(
                     f,
-                    "RevDirection is {actual} when it was expected to be {expected} at frame {now} before the update of the UndoRedo log of reversible system {system_name}"
+                    "RevDirection is {actual} when it was expected to be {expected} at frame {now} before the update of the UndoRedo log"
                 )
             }
-            Self::OutOfLog {
-                now,
-                direction,
-                system_name,
-            } => write!(
+            Self::OutOfLog { now, direction } => write!(
                 f,
-                "the UndoRedo log of the reversible system {system_name} is in an invalid state at frame {now} during {direction}"
+                "UndoRedo log is in an invalid state at frame {now} during {direction}"
             ),
         }
     }
@@ -348,17 +336,10 @@ impl Display for UndoRedoLogError {
 impl Error for UndoRedoLogError {}
 
 impl UndoRedoLog {
-    pub(crate) fn forward(
-        &mut self,
-        world: &mut World,
-        system_name: &DebugName,
-    ) -> Result<(), UndoRedoLogError> {
-        let meta =
-            world
-                .get_resource::<RevMeta>()
-                .ok_or_else(|| UndoRedoLogError::RevMetaMissing {
-                    system_name: system_name.clone(),
-                })?;
+    pub(crate) fn forward(&mut self, world: &mut World) -> Result<(), UndoRedoLogError> {
+        let meta = world
+            .get_resource::<RevMeta>()
+            .ok_or(UndoRedoLogError::RevMetaMissing)?;
 
         self.past_len_log.pre_update(meta);
         self.undo_redo_log.pre_update(meta);
@@ -375,10 +356,7 @@ impl UndoRedoLog {
                         });
                     }
                 })
-                .ok_or_else(|| UndoRedoLogError::UndoRedoBufferMissing {
-                    now,
-                    system_name: system_name.clone(),
-                }),
+                .ok_or(UndoRedoLogError::UndoRedoBufferMissing { now }),
             Some(RevDirection::FORWARD_LOG) => {
                 if self.past_len_log.forward_log(meta) {
                     let iter = self
@@ -387,7 +365,6 @@ impl UndoRedoLog {
                         .map_err(|_| UndoRedoLogError::OutOfLog {
                             now,
                             direction: RevDirection::FORWARD_LOG,
-                            system_name: system_name.clone(),
                         })?
                         .map(|cell| cell.0.get());
                     for command in iter {
@@ -400,21 +377,13 @@ impl UndoRedoLog {
                 now,
                 expected_forward: true,
                 direction,
-                system_name: system_name.clone(),
             }),
         }
     }
-    pub(crate) fn backward(
-        &mut self,
-        world: &mut World,
-        system_name: &DebugName,
-    ) -> Result<(), UndoRedoLogError> {
-        let meta =
-            world
-                .get_resource::<RevMeta>()
-                .ok_or_else(|| UndoRedoLogError::RevMetaMissing {
-                    system_name: system_name.to_owned(),
-                })?;
+    pub(crate) fn backward(&mut self, world: &mut World) -> Result<(), UndoRedoLogError> {
+        let meta = world
+            .get_resource::<RevMeta>()
+            .ok_or(UndoRedoLogError::RevMetaMissing)?;
 
         self.past_len_log.pre_update(meta);
         self.undo_redo_log.pre_update(meta);
@@ -426,7 +395,6 @@ impl UndoRedoLog {
                 now,
                 expected_forward: false,
                 direction,
-                system_name: system_name.to_owned(),
             });
         }
 
@@ -437,7 +405,6 @@ impl UndoRedoLog {
                 .map_err(|_| UndoRedoLogError::OutOfLog {
                     now,
                     direction: RevDirection::BackwardLog,
-                    system_name: system_name.clone(),
                 })?
                 .map(|cell| cell.0.get())
                 .rev();

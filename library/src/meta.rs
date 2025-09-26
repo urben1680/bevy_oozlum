@@ -1,16 +1,14 @@
-use core::num::NonZeroU64;
-use std::{
-    error::Error,
-    fmt::{Debug, Display},
-};
-
-use bevy_ecs::{error::BevyError, resource::Resource, world::World};
-use bevy_log::info;
-
 use crate::{
     log::{PreUpdateKind, UpdateLogLimits, UpdateLogMissed, UpdateLogState},
     prelude::RevUpdate,
     undo_redo::{BundleIdOfOpCache, DespawnCleanerErr, RevDespawnCleaner, UndoRedoBuffer},
+};
+use bevy_ecs::{error::BevyError, resource::Resource, world::World};
+use bevy_log::info;
+use core::{
+    error::Error,
+    fmt::{Debug, Display},
+    num::NonZeroU64,
 };
 
 #[derive(Resource, Debug)]
@@ -112,8 +110,6 @@ impl NonLogNow {
 impl RevMeta {
     pub(crate) const DEFAULT_MAX_WORLD_STATES: Option<NonZeroU64> = Some(NonZeroU64::MIN);
     pub(crate) const DEFAULT_PAUSED: bool = false;
-    pub(crate) const EXPECT_IN_WORLD: &'static str = "RevMeta does not exist";
-    pub(crate) const EXPECT_RUNNING: &'static str = "RevMeta is not in a running direction";
     pub fn new(max_world_states: Option<NonZeroU64>, paused: bool) -> Self {
         let direction = if paused {
             RunningOrRan::Pause { after_log: false }

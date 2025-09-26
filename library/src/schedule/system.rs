@@ -1,5 +1,13 @@
+use crate::{
+    schedule::{
+        BackwardDeferredAndSystemSet, BackwardDeferredSet, BackwardSystemSet, BackwardSystems,
+        ForwardSystemSet, ForwardSystems,
+    },
+    undo_redo::{UndoRedoBuffer, UndoRedoLog},
+};
 use bevy_ecs::{
     component::{CheckChangeTicks, Tick},
+    error::BevyError,
     query::FilteredAccessSet,
     schedule::{ApplyDeferred, InternedSystemSet, IntoScheduleConfigs, SystemSet},
     system::{
@@ -8,22 +16,16 @@ use bevy_ecs::{
     },
     world::{DeferredWorld, World, unsafe_world_cell::UnsafeWorldCell},
 };
-use bevy_log::warn;
+use bevy_log::{error, warn};
 use bevy_utils::prelude::DebugName;
+use std::sync::{
+    Arc, Mutex, MutexGuard, TryLockError,
+    atomic::{AtomicU32, Ordering},
+};
 use std::{
     any::{TypeId, type_name},
     fmt::Debug,
     hash::Hash,
-    sync::{
-        Arc, Mutex, MutexGuard,
-        atomic::{AtomicU32, Ordering},
-    },
-};
-
-use crate::{
-    meta::RevMeta,
-    schedule::{BackwardSystems, BwdCmdSet, BwdCmdSysSet, BwdSysSet, ForwardSystems, FwdSysSet},
-    undo_redo::{UndoRedoBuffer, UndoRedoLog},
 };
 
 use super::RevScheduleConfigs;
@@ -42,32 +44,30 @@ where
     if system.type_id() == TypeId::of::<ApplyDeferred>() {
         return RevScheduleConfigs {
             forward_systems: ApplyDeferred.into_configs(),
-            backward_commands: ApplyDeferred.in_set(unified),
+            backward_deferred: ApplyDeferred.in_set(unified),
             backward_systems: ApplyDeferred.in_set(unified),
-            backward_commands_systems: unified.into_configs(),
+            backward_deferred_and_systems: unified.into_configs(),
             unified: unified.into_configs(),
         };
     }
 
-    let name = |string: &str| {
+    let name = |postfix: &str| {
         if size_of::<DebugName>() == 0 {
             return DebugName::borrowed("");
         }
-        let sys_name = format!("{sys_name}");
-        let mut name = String::with_capacity(sys_name.len() + string.len());
-        name.extend([&sys_name, string]);
-        DebugName::owned(name)
+        let sys_name: &str = sys_name.as_ref();
+        DebugName::owned(format!("{sys_name}{postfix}"))
     };
-    let forward_system_name = name(" (forward system)");
-    let backward_commands_name = name(" (backward commands)");
-    let backward_system_name = name(" (backward system)");
+    let forward_system_name = name(FORWARD_POSTFIX);
+    let backward_deferred_name = name(DEFERRED_POSTFIX);
+    let backward_system_name = name(BACKWARD_POSTFIX);
 
     let default_system_sets = system.default_system_sets();
 
     let inner = Mutex::new(Inner {
         system,
         access: None,
-        commands_log: Default::default(),
+        deferred_log: Default::default(),
     });
 
     let shared = Arc::new(Shared {
@@ -77,27 +77,27 @@ where
 
     let forward_systems = RevSystem::<_, true>::new(shared.clone(), forward_system_name)
         .in_set(unified)
-        .in_set(FwdSysSet(unified))
+        .in_set(ForwardSystemSet(unified))
         .in_set(ForwardSystems);
 
-    let backward_commands = CommandsBackward::new(shared.clone(), backward_commands_name)
+    let backward_deferred = BackwardDeferred::new(shared.clone(), backward_deferred_name)
         .in_set(unified)
-        .in_set(BwdCmdSet(unified))
-        .in_set(BwdCmdSysSet(unified))
+        .in_set(BackwardDeferredSet(unified))
+        .in_set(BackwardDeferredAndSystemSet(unified))
         .in_set(BackwardSystems);
 
     let backward_systems = RevSystem::<_, false>::new(shared, backward_system_name)
         .in_set(unified)
-        .in_set(BwdSysSet(unified))
-        .in_set(BwdCmdSysSet(unified))
+        .in_set(BackwardSystemSet(unified))
+        .in_set(BackwardDeferredAndSystemSet(unified))
         .in_set(BackwardSystems)
-        .after(BwdCmdSet(unified));
+        .after(BackwardDeferredSet(unified));
 
     let mut configs = RevScheduleConfigs {
         forward_systems,
-        backward_commands,
+        backward_deferred,
         backward_systems,
-        backward_commands_systems: BwdCmdSysSet(unified).into_configs(),
+        backward_deferred_and_systems: BackwardDeferredAndSystemSet(unified).into_configs(),
         unified: unified.into_configs(),
     };
 
@@ -107,6 +107,10 @@ where
 
     configs
 }
+
+const FORWARD_POSTFIX: &str = " (forward system)";
+const DEFERRED_POSTFIX: &str = " (backward deferred)";
+const BACKWARD_POSTFIX: &str = " (backward system)";
 
 #[derive(SystemSet, Clone, Debug, Eq)]
 struct AtomicSet {
@@ -141,12 +145,13 @@ impl AtomicSet {
     }
 }
 
+/// Is `pub(super)` for system set docs in parent module
 pub(super) struct RevSystem<T, const FORWARD: bool> {
     shared: Arc<Shared<T>>,
     name: DebugName,
     tick: Tick,
     flags: SystemStateFlags,
-    commands_err: bool,
+    lock_or_deferred_err: bool,
 }
 
 impl<T, const FORWARD: bool> RevSystem<T, FORWARD> {
@@ -156,7 +161,14 @@ impl<T, const FORWARD: bool> RevSystem<T, FORWARD> {
             name,
             tick: Default::default(),
             flags: SystemStateFlags::empty(),
-            commands_err: false,
+            lock_or_deferred_err: false,
+        }
+    }
+    fn postfix() -> &'static str {
+        if FORWARD {
+            FORWARD_POSTFIX
+        } else {
+            BACKWARD_POSTFIX
         }
     }
 }
@@ -168,33 +180,13 @@ struct Shared<T> {
 
 struct Inner<T> {
     system: T,
-    commands_log: UndoRedoLog,
+    deferred_log: UndoRedoLog,
     access: Option<Box<AccessCache>>,
 }
 
 struct AccessCache {
     access: FilteredAccessSet,
     last_access: bool,
-}
-
-impl<T, const FORWARD: bool> Debug for RevSystem<T, FORWARD> {
-    // todo: remove?
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct(type_name::<Self>())
-            .field("shared", &self.shared)
-            .field("name", &self.name)
-            .field("tick", &self.tick)
-            .field("commands_err", &self.commands_err)
-            .finish_non_exhaustive()
-    }
-}
-
-impl<T> Debug for Shared<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct(type_name::<Self>())
-            .field("default_system_sets", &self.default_system_sets)
-            .finish_non_exhaustive()
-    }
 }
 
 impl<T: System, const FORWARD: bool> System for RevSystem<T, FORWARD> {
@@ -214,23 +206,15 @@ impl<T: System, const FORWARD: bool> System for RevSystem<T, FORWARD> {
         &mut self,
         world: UnsafeWorldCell,
     ) -> Result<(), SystemParamValidationError> {
-        // commands log needs to read RevMeta
         if self.is_exclusive() {
-            let meta = unsafe {
-                // SAFETY: todo
-                world.get_resource::<RevMeta>()
-            };
-            if meta.is_none() {
-                return Err(SystemParamValidationError::invalid::<Self>(
-                    RevMeta::EXPECT_IN_WORLD,
-                ));
-            }
+            // all exclusive system params are always available
+            return Ok(());
         }
         let system = &mut self
             .shared
             .inner
             .try_lock()
-            .unwrap_or_else(expect_lock(&self.name))
+            .map_err(try_lock_validation_err(&self.name, Self::postfix()))?
             .system;
         unsafe {
             // SAFETY: todo
@@ -238,16 +222,14 @@ impl<T: System, const FORWARD: bool> System for RevSystem<T, FORWARD> {
         }
     }
     fn validate_param(&mut self, world: &World) -> Result<(), SystemParamValidationError> {
-        // commands log needs to read RevMeta
-        if self.is_exclusive() && !world.contains_resource::<RevMeta>() {
-            return Err(SystemParamValidationError::invalid::<Self>(
-                RevMeta::EXPECT_IN_WORLD,
-            ));
+        if self.is_exclusive() {
+            // all exclusive system params are always available
+            return Ok(());
         }
         self.shared
             .inner
             .try_lock()
-            .unwrap_or_else(expect_lock(&self.name))
+            .map_err(try_lock_validation_err(&self.name, Self::postfix()))?
             .system
             .validate_param(world)
     }
@@ -256,11 +238,7 @@ impl<T: System, const FORWARD: bool> System for RevSystem<T, FORWARD> {
         input: SystemIn<'_, Self>,
         world: UnsafeWorldCell,
     ) -> Result<Self::Out, RunSystemError> {
-        let mut shared = self
-            .shared
-            .inner
-            .try_lock()
-            .unwrap_or_else(expect_lock(&self.name));
+        let mut shared = self.shared.inner.try_lock().map_err(try_lock_system_err)?;
 
         if !self.is_exclusive() {
             unsafe {
@@ -276,13 +254,7 @@ impl<T: System, const FORWARD: bool> System for RevSystem<T, FORWARD> {
                 // SAFETY: exclusive systems have full unique access to the world
                 world.world_mut()
             };
-            if let Err(err) = shared.commands_log.forward(world, &self.name) {
-                error_per_flag!(
-                    &mut self.commands_err,
-                    "Reversible commands from reversible exclusive system {} could not be done/redone: {err:#?}",
-                    self.name
-                )
-            }
+            shared.deferred_log.forward(world)?;
             out
         } else {
             {
@@ -290,13 +262,7 @@ impl<T: System, const FORWARD: bool> System for RevSystem<T, FORWARD> {
                     // SAFETY: exclusive systems have full unique access to the world
                     world.world_mut()
                 };
-                if let Err(err) = shared.commands_log.backward(world, &self.name) {
-                    error_per_flag!(
-                        &mut self.commands_err,
-                        "Reversible commands from reversible exclusive system {} could not be undone: {err:#?}",
-                        self.name
-                    )
-                }
+                shared.deferred_log.backward(world)?;
             }
             unsafe {
                 // SAFETY: todo
@@ -305,34 +271,54 @@ impl<T: System, const FORWARD: bool> System for RevSystem<T, FORWARD> {
         }
     }
     fn apply_deferred(&mut self, world: &mut World) {
-        if self.is_exclusive() {
-            // ExclusiveSystemFunction::apply_deferred is noop
-            return;
-        }
+        let mut result = || -> Result<(), BevyError> {
+            let mut shared = self
+                .shared
+                .inner
+                .try_lock()
+                .map_err(|err| err.to_string())?;
 
-        let mut shared = self
-            .shared
-            .inner
-            .try_lock()
-            .unwrap_or_else(expect_lock(&self.name));
+            shared.system.apply_deferred(world);
 
-        shared.system.apply_deferred(world);
+            if !FORWARD {
+                return Ok(());
+            }
 
-        if !FORWARD {
-            return;
-        }
+            // reverisble commands are now in the buffer resource so commands_log can take them
+            shared.deferred_log.forward(world).map_err(Into::into)
+        };
 
-        // reverisble commands are now in the buffer resource so commands_log can take them
-        if let Err(err) = shared.commands_log.forward(world, &self.name) {
-            error_per_flag!(&mut self.commands_err, "{err}")
+        // ExclusiveSystemFunction::apply_deferred is noop
+        if !self.is_exclusive()
+            && !self.lock_or_deferred_err
+            && let Err(err) = result()
+        {
+            self.lock_or_deferred_err = true;
+            if size_of::<DebugName>() == 0 {
+                let name = type_name::<T>();
+                error!(
+                    "apply_deferred of reversible system {name}{} failed: {err}",
+                    Self::postfix()
+                )
+            } else {
+                error!(
+                    "apply_deferred of reversible system {} failed: {err}",
+                    self.name
+                );
+            };
         }
     }
     fn queue_deferred(&mut self, _world: DeferredWorld) {
-        unimplemented!("{} used as an observer", std::any::type_name::<T>())
+        unreachable!("reversible systems are not used as observers")
     }
     fn initialize(&mut self, world: &mut World) -> FilteredAccessSet {
-        let (shared, access) =
-            initialize_inner(&mut self.shared, &mut self.tick, &self.name, world);
+        let (shared, access) = initialize_inner(
+            &mut self.shared,
+            &mut self.tick,
+            &self.name,
+            Self::postfix(),
+            world,
+        );
         self.flags = shared.system.flags();
         access
     }
@@ -362,33 +348,34 @@ unsafe impl<T: ReadOnlySystem<In = (), Out = ()>, const FORWARD: bool> ReadOnlyS
         self.shared
             .inner
             .try_lock()
-            .unwrap_or_else(expect_lock(&self.name))
+            .map_err(try_lock_system_err)?
             .system
             .run_readonly(input, world)
     }
 }
 
-struct CommandsBackward<T> {
+/// Is `pub(super)` for system set docs in parent module
+pub(super) struct BackwardDeferred<T> {
     shared: Arc<Shared<T>>,
     name: DebugName,
     tick: Tick,
     has_deferred: bool,
-    commands_err: bool,
+    lock_or_deferred_err: bool,
 }
 
-impl<T> CommandsBackward<T> {
+impl<T> BackwardDeferred<T> {
     fn new(shared: Arc<Shared<T>>, name: DebugName) -> Self {
         Self {
             shared,
             name,
             tick: Default::default(),
             has_deferred: Default::default(),
-            commands_err: false,
+            lock_or_deferred_err: false,
         }
     }
 }
 
-impl<T: System> System for CommandsBackward<T> {
+impl<T: System> System for BackwardDeferred<T> {
     type In = ();
     type Out = ();
     fn name(&self) -> DebugName {
@@ -416,8 +403,8 @@ impl<T: System> System for CommandsBackward<T> {
     ) -> Result<(), SystemParamValidationError> {
         // noop if has no deferred
         if !self.has_deferred {
-            return Err(SystemParamValidationError::skipped::<Self>(
-                "system has no deferred",
+            return Err(SystemParamValidationError::skipped::<T>(
+                "reversible system has no deferred parameters",
             ));
         }
         // keep symmetry?
@@ -425,7 +412,7 @@ impl<T: System> System for CommandsBackward<T> {
             .shared
             .inner
             .try_lock()
-            .unwrap_or_else(expect_lock(&self.name))
+            .map_err(try_lock_validation_err(&self.name, DEFERRED_POSTFIX))?
             .system;
         unsafe {
             // SAFETY: todo
@@ -435,15 +422,15 @@ impl<T: System> System for CommandsBackward<T> {
     fn validate_param(&mut self, world: &World) -> Result<(), SystemParamValidationError> {
         // noop if has no deferred
         if !self.has_deferred {
-            return Err(SystemParamValidationError::skipped::<Self>(
-                "system has no deferred",
+            return Err(SystemParamValidationError::skipped::<T>(
+                "reversible system has no deferred parameters",
             ));
         }
         // keep symmetry?
         self.shared
             .inner
             .try_lock()
-            .unwrap_or_else(expect_lock(&self.name))
+            .map_err(try_lock_validation_err(&self.name, DEFERRED_POSTFIX))?
             .system
             .validate_param(world)
     }
@@ -455,19 +442,34 @@ impl<T: System> System for CommandsBackward<T> {
         Ok(())
     }
     fn apply_deferred(&mut self, world: &mut World) {
-        let result = self
-            .shared
-            .inner
-            .try_lock()
-            .unwrap_or_else(expect_lock(&self.name))
-            .commands_log
-            .backward(world, &self.name);
-        if let Err(err) = result {
-            error_per_flag!(&mut self.commands_err, "{err}")
+        let mut result = || -> Result<(), BevyError> {
+            self.shared
+                .inner
+                .try_lock()
+                .map_err(|err| err.to_string())?
+                .deferred_log
+                .backward(world)
+                .map_err(Into::into)
+        };
+        if !self.lock_or_deferred_err
+            && let Err(err) = result()
+        {
+            self.lock_or_deferred_err = true;
+            if size_of::<DebugName>() == 0 {
+                let name = type_name::<T>();
+                error!(
+                    "deferred actions of reversible system {name}{DEFERRED_POSTFIX} could not be undone: {err}"
+                )
+            } else {
+                error!(
+                    "deferred actions of reversible system {} could not be undone: {err}",
+                    self.name
+                );
+            };
         }
     }
     fn queue_deferred(&mut self, _world: DeferredWorld) {
-        unreachable!("{} used as an observer", std::any::type_name::<T>())
+        unreachable!("reversible systems are not used as observers")
     }
     fn check_change_tick(&mut self, check: CheckChangeTicks) {
         self.tick.check_tick(check);
@@ -482,15 +484,20 @@ impl<T: System> System for CommandsBackward<T> {
         self.shared.default_system_sets.clone()
     }
     fn initialize(&mut self, world: &mut World) -> FilteredAccessSet {
-        let (shared, access) =
-            initialize_inner(&mut self.shared, &mut self.tick, &self.name, world);
+        let (shared, access) = initialize_inner(
+            &mut self.shared,
+            &mut self.tick,
+            &self.name,
+            DEFERRED_POSTFIX,
+            world,
+        );
         self.has_deferred = shared.system.has_deferred();
         access
     }
 }
 
 // SAFETY: noop run_readonly
-unsafe impl<T: System> ReadOnlySystem for CommandsBackward<T> {
+unsafe impl<T: System> ReadOnlySystem for BackwardDeferred<T> {
     fn run_readonly(&mut self, _input: (), _world: &World) -> Result<(), RunSystemError> {
         Ok(())
     }
@@ -500,11 +507,19 @@ fn initialize_inner<'a, T: System>(
     shared: &'a mut Arc<Shared<T>>,
     tick: &mut Tick,
     name: &DebugName,
+    postfix: &'static str,
     world: &mut World,
 ) -> (MutexGuard<'a, Inner<T>>, FilteredAccessSet) {
     world.init_resource::<UndoRedoBuffer>();
     *tick = world.change_tick();
-    let mut shared = shared.inner.try_lock().unwrap_or_else(expect_lock(name));
+    let mut shared = shared.inner.try_lock().unwrap_or_else(|err| {
+        if size_of::<DebugName>() == 0 {
+            let name = type_name::<T>();
+            panic!("reversible system {name}{postfix} could not be initialized: {err}")
+        } else {
+            panic!("reversible system {name} could not be initialized: {err}");
+        };
+    });
     match shared.access.take() {
         None => {
             let access = shared.system.initialize(world);
@@ -527,21 +542,28 @@ fn initialize_inner<'a, T: System>(
     }
 }
 
-fn expect_lock<T: Debug, Out>(name: &DebugName) -> impl FnOnce(T) -> Out + '_ {
-    move |err| panic!("Could not access reversible system {name} because of {err:#?}")
+fn try_lock_system_err<T>(err: TryLockError<T>) -> RunSystemError {
+    RunSystemError::Failed(err.to_string().into())
 }
 
-macro_rules! error_per_flag {
-    ($flag:expr, $($arg:tt)+) => ({
-        if !*$flag {
-            bevy_log::error!($($arg)+);
-            *$flag = true;
+fn try_lock_validation_err<'a, T>(
+    name: &'a DebugName,
+    postfix: &'static str,
+) -> impl for<'b> FnOnce(TryLockError<MutexGuard<'b, Inner<T>>>) -> SystemParamValidationError + 'a
+{
+    move |err| {
+        if size_of::<DebugName>() == 0 {
+            let name = type_name::<T>();
+            SystemParamValidationError::invalid::<T>(format!(
+                "param validation  of reversible system {name}{postfix} failed: {err}"
+            ))
+        } else {
+            SystemParamValidationError::invalid::<T>(format!(
+                "param validation of reversible system {name} failed: {err}"
+            ))
         }
-        core::default::Default::default()
-    });
+    }
 }
-
-use error_per_flag;
 
 #[cfg(test)]
 mod test {
