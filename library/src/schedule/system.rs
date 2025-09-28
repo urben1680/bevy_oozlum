@@ -16,16 +16,16 @@ use bevy_ecs::{
     },
     world::{DeferredWorld, World, unsafe_world_cell::UnsafeWorldCell},
 };
-use bevy_log::{error, warn};
+use bevy_log::error;
 use bevy_utils::prelude::DebugName;
+use core::{
+    any::{TypeId, type_name},
+    fmt::Debug,
+    hash::{Hash, Hasher},
+};
 use std::sync::{
     Arc, Mutex, MutexGuard, TryLockError,
     atomic::{AtomicU32, Ordering},
-};
-use std::{
-    any::{TypeId, type_name},
-    fmt::Debug,
-    hash::Hash,
 };
 
 use super::RevScheduleConfigs;
@@ -39,17 +39,21 @@ where
 {
     let system = IntoSystem::into_system(system);
     let sys_name = system.name();
-    let unified = AtomicSet::new(sys_name.clone()).intern();
 
     if system.type_id() == TypeId::of::<ApplyDeferred>() {
+        // ApplyDeferred has special handling at the scheduler so this is not wrapped in RevSystems
         return RevScheduleConfigs {
             forward_systems: ApplyDeferred.into_configs(),
-            backward_deferred: ApplyDeferred.in_set(unified),
-            backward_systems: ApplyDeferred.in_set(unified),
-            backward_deferred_and_systems: unified.into_configs(),
-            unified: unified.into_configs(),
+            backward_deferred: ApplyDeferred.into_configs(),
+            backward_systems: ApplyDeferred.into_configs(),
+            backward_deferred_and_systems: EmptySet.into_configs(),
+            conditioned: EmptySet.into_configs(),
         };
     }
+
+    // this is a set that contains BackwardDeferred and both RevSystems of only this system instance
+    // which is the base for the other wrapping sets and for conditions to be used on
+    let unified = AtomicSet::new(sys_name.clone()).intern();
 
     let name = |postfix: &str| {
         if size_of::<DebugName>() == 0 {
@@ -98,9 +102,12 @@ where
         backward_deferred,
         backward_systems,
         backward_deferred_and_systems: BackwardDeferredAndSystemSet(unified).into_configs(),
-        unified: unified.into_configs(),
+        conditioned: unified.into_configs(),
     };
 
+    // all configs need to be added to all default system sets so using T as a reference for
+    // ordering works even when T consists of multiple systems in a pipe and this is ordered to one
+    // of such systems and not T as a whole
     for set in default_system_sets {
         configs.rev_in_set_inner(set)
     }
@@ -112,8 +119,15 @@ const FORWARD_POSTFIX: &str = " (forward system)";
 const DEFERRED_POSTFIX: &str = " (backward deferred)";
 const BACKWARD_POSTFIX: &str = " (backward system)";
 
+/// Set without systems
+#[derive(SystemSet, Clone, Debug, PartialEq, Eq, Hash)]
+struct EmptySet;
+
+/// Set that is unique to each system passed to [`into_rev_system`].
+///
+/// Is `pub(super)` for docs in parent module.
 #[derive(SystemSet, Clone, Debug, Eq)]
-struct AtomicSet {
+pub(super) struct AtomicSet {
     id: u32,
     #[allow(dead_code)]
     name: DebugName,
@@ -126,7 +140,7 @@ impl PartialEq for AtomicSet {
 }
 
 impl Hash for AtomicSet {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+    fn hash<H: Hasher>(&self, state: &mut H) {
         self.id.hash(state)
     }
 }
@@ -136,7 +150,9 @@ impl AtomicSet {
         static ID: AtomicU32 = AtomicU32::new(0);
         let id = ID.fetch_add(1, Ordering::Relaxed);
         if id == u32::MAX {
-            warn!(
+            // this technically is a warn and not an error, but detecting the actual first set after
+            // overflow needs another atomic with stricter Ordering for both which is not worth it
+            error!(
                 "an internal atomic counter to create reversible systems is exhausted, \
                 creating more may lead to multiple systems sharing the same run condition"
             );
@@ -145,7 +161,7 @@ impl AtomicSet {
     }
 }
 
-/// Is `pub(super)` for system set docs in parent module
+/// Is `pub(super)` for docs in parent module.
 pub(super) struct RevSystem<T, const FORWARD: bool> {
     shared: Arc<Shared<T>>,
     name: DebugName,

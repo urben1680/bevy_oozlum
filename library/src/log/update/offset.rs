@@ -1,5 +1,5 @@
 //! This module contains a way to write ([`push_offset`]) and read ([`OffsetIter`]) bytes that
-//! encode how many frames in the past or the future [`PastLenLog`](super::PastLenLog) as updated
+//! encode how many frames in the past or the future [`UpdateLog`](super::UpdateLog) as updated
 //! at.
 //!
 //! This is more compact than storing `u64`.
@@ -17,8 +17,8 @@
 //!   - This uses up to ten bytes in total for `u64::MAX`.
 //! - This encoding does not consume more bytes than `u64` for offsets below `2^55`.
 //! - These bytes or sequences of bytes can be read in reverse as well, which is needed for reading
-//!   the previous offset in [`PastLenLog::backward_log`](super::PastLenLog::backward_log)
-//!   ([`many`](super::PastLenLog::backward_log_many)).
+//!   the previous offset in [`UpdateLog::backward_log`](super::UpdateLog::backward_log)
+//!   ([`many`](super::UpdateLog::backward_log_many)).
 //! - The [`OffsetIter`] iterator is used to read the offsets. See [`IterItem`].
 
 use core::{fmt::Debug, num::NonZeroU8, ops::ControlFlow};
@@ -110,21 +110,21 @@ pub(super) fn push_zero_offset(
     *zeroes_max = *zeroes;
 }
 
-/// Iterator to read [`PastLenLog::offset_bytes`](super::PastLenLog::offset_bytes) and decode them
+/// Iterator to read [`UpdateLog::offset_bytes`](super::UpdateLog::offset_bytes) and decode them
 /// to [`IterItem`].
 #[derive(Clone)]
 pub(super) struct OffsetIter<'a>(pub(super) Iter<'a, u8>);
 
 /// Reads a byte or sequence of bytes from
-/// [`PastLenLog::offset_bytes`](super::PastLenLog::offset_bytes). Contains a single offset or, if
+/// [`UpdateLog::offset_bytes`](super::UpdateLog::offset_bytes). Contains a single offset or, if
 /// the offset is `0`, a sequence of such offsets.
 #[derive(Debug, PartialEq, Clone)]
 pub(super) struct IterItem {
-    /// Amount of frames between two updates of [`PastLenLog`](super::PastLenLog).
+    /// Amount of frames between two updates of [`UpdateLog`](super::UpdateLog).
     pub(super) offset: u64,
 
     /// The amount of bytes this offset is made of to update
-    /// [`PastLenLog::index`](super::PastLenLog::index) correctly. If [Self::offset] == `0`, this is
+    /// [`UpdateLog::index`](super::UpdateLog::index) correctly. If [Self::offset] == `0`, this is
     /// the amount of `0` offsets in this byte instead.
     pub(super) len: NonZeroU8,
 }

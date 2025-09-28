@@ -243,7 +243,7 @@ impl RevMeta {
     fn clear(&mut self) {
         self.past_end = self.now;
         self.future_end = self.now;
-        self.log_clears += 1;
+        self.log_clears = self.log_clears.checked_add(1).expect("todo");
         self.update_log_limits.clear();
         self.log_exits = 0;
         info!(

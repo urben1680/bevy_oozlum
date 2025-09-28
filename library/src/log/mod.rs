@@ -57,8 +57,8 @@
 //! at the frame `n` a component is added to an entity, then the component must be removed at frame
 //! `n-1` again when going backward and added again at frame `n` when going forward in the log.
 //!
-//! If the code where the log updates happen does not run, no log methods have a chance to detect
-//! and report that error.
+//! If the code where the log updates happen does not run, log methods have no chance to detect and
+//! report that error.
 //!
 //! The mechanisms of this crate, like [reversible scheduling] or [reversible commands], make sure
 //! this contract is fulfilled, also in regard in which order mutations happen in a frame.
@@ -83,7 +83,7 @@
 //! event is logged at the INFO level as well. Every `UpdateLog` that updates after that will get
 //! new ids which is then logged again.
 //!
-//! ## Example
+//! ### Example
 //!
 //! A [`UpdateLog::push_get_past_len`] runs at [frame `42`](crate::meta::RevMeta::now) during
 //! [`RevDirection::NOT_LOG`]. This is the first time this log updated. `UpdateLog` will then inform
@@ -122,6 +122,10 @@
 //! [reversible commands]: crate::undo_redo::RevCommands
 
 use bevy_ecs::change_detection::MaybeLocation;
+use core::{
+    error::Error,
+    fmt::{Debug, Display, Formatter, Result},
+};
 
 pub(crate) use update::limits::{UpdateLogLimits, UpdateLogState};
 pub use update::{UpdateLog, limits::UpdateLogMissed};
@@ -162,18 +166,19 @@ pub(crate) enum PreUpdateKind {
 ///
 /// See the [module level documentation](crate::log) for more information.
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
-pub struct OutOfLog(MaybeLocation);
+pub struct OutOfLog(pub MaybeLocation);
 
 impl OutOfLog {
-    /// Constructor with location tracking, if enabled.
+    /// Creates new error with location tracking, if enabled via bevy's `track_location` cargo
+    /// feature.
     #[track_caller]
-    fn new() -> Self {
+    pub fn caller() -> Self {
         Self(MaybeLocation::caller())
     }
 }
 
-impl core::fmt::Display for OutOfLog {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl Display for OutOfLog {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         write!(
             f,
             "a `Transition(s)Log` was attempted to be traversed beyond its bounds"
@@ -188,4 +193,4 @@ impl core::fmt::Display for OutOfLog {
     }
 }
 
-impl core::error::Error for OutOfLog {}
+impl Error for OutOfLog {}

@@ -5,7 +5,9 @@ use crate::{
     },
     meta::RevMeta,
 };
+use bevy_log::error;
 use core::{
+    any::type_name,
     fmt::Debug,
     iter::{FusedIterator, Take},
     marker::PhantomData,
@@ -330,6 +332,36 @@ impl<T, U> TransitionsLog<T, U> {
         }
     }
 
+    /// Returns the current poison state.
+    ///
+    /// If present, this has an effect on the following methods:
+    ///
+    /// - [`pre_update`](Self::pre_update)/[`pre_update_drain`](Self::pre_update_drain) will not
+    ///   truncate/drain any log entries except if [`RevQueue::Clear`](crate::meta::RevQueue::Clear)
+    ///   is applied, which also clears the poison.
+    /// - [`push`](Self::push) ignores the pushed log entry and [logs an error](bevy_log::error).
+    /// - [`push_drain_past`](Self::push_drain_past) ignores the pushed log entry,
+    ///   [logs an error](bevy_log::error) and always returns an drains no log entries.
+    /// - [`forward_log`](Self::forward_log)/[`backward_log`](Self::backward_log) continue to return
+    ///   the same [`OutOfLog`] error as this method here does.
+    ///
+    /// If bevy's `track_location` cargo feature is activated, the error here contains the location
+    /// where it originally occured.
+    ///
+    /// To unset the poison, [`clear_poison`](Self::clear_poison) can be called.
+    pub fn poison(&self) -> Result<(), OutOfLog> {
+        self.updates.poison()
+    }
+
+    /// Unsets the poison, see [`poison`](Self::poison).
+    ///
+    /// This happens automatically when
+    /// [`pre_update`](Self::pre_update)([`_drain`](Self::pre_update_drain)) applies a previous
+    /// [`RevQueue::Clear`](crate::meta::RevQueue::Clear).
+    pub fn clear_poison(&mut self) {
+        self.updates.clear_poison();
+    }
+
     /// Returns the number of transitions (`T`) in the log.
     ///
     /// See [`VecDeque::len`].
@@ -476,7 +508,16 @@ impl<T, U> TransitionsLog<T, U> {
     /// [present reversible frame](RevMeta::now). This method may panic if this was not done.
     ///
     /// For examples, see the [type level documentation](TransitionsLog).
+    ///
+    /// # Poisoning
+    ///
+    /// If this log [is poisoned](Self::poison), the pushed log entry will not be logged, no log
+    /// entries will be truncated and an [error will be logged](bevy_log::error).
+    #[track_caller]
     pub fn push(&mut self, max_past_len: u64, c: impl FnOnce(LogMut<T, U>) -> U) {
+        if self.poison().is_err() {
+            return Self::poison_push_err();
+        }
         let (transition_drain, amount_drain) =
             self.push_and_get_transition_and_update_drain(max_past_len, c);
         // todo: truncate_front https://github.com/rust-lang/rust/issues/140667
@@ -520,18 +561,37 @@ impl<T, U> TransitionsLog<T, U> {
     /// preferred over a potential source of bugs.
     ///
     /// For examples, see the [type level documentation](TransitionsLog).
+    ///
+    /// # Poisoning
+    ///
+    /// If this log [is poisoned](Self::poison), the pushed log entry will not be logged, no log
+    /// entries will be drained and an [error will be logged](bevy_log::error).
+    #[track_caller]
     pub fn push_drain_past(
         &mut self,
         max_past_len: u64,
         c: impl FnOnce(LogMut<T, U>) -> U,
     ) -> TransitionsDrainAll<T, U> {
-        let (transition_drain, amount_drain) =
-            self.push_and_get_transition_and_update_drain(max_past_len + 1, c);
+        let (transition_drain, amount_drain) = match self.poison() {
+            Ok(()) => self.push_and_get_transition_and_update_drain(max_past_len + 1, c),
+            Err(_) => {
+                Self::poison_push_err();
+                (0, 0)
+            }
+        };
         TransitionsDrainChunkable {
             transitions: self.transitions.drain(..transition_drain),
             updates: self.updates.drain_past(amount_drain),
             _p: PhantomData,
         }
+    }
+
+    #[track_caller]
+    fn poison_push_err() {
+        error!(
+            "did not push `{}` to `TransitionsLog` because log is poisoned",
+            type_name::<T>()
+        );
     }
 
     /// Applies the pushing closure and returns how many transitions (first tuple element) and how
@@ -582,6 +642,12 @@ impl<T, U> TransitionsLog<T, U> {
     /// [present reversible frame](RevMeta::now).
     ///
     /// For examples, see the [type level documentation](TransitionsLog).
+    ///
+    /// # Poisoning
+    ///
+    /// If this log [is poisoned](Self::poison), this always returns an error. If bevy's
+    /// `track_location` cargo feature is activated, the error here contains the location where it
+    /// originally occured.
     #[track_caller]
     pub fn backward_log(&mut self) -> Result<TransitionsLogIterMut<T, U>, OutOfLog> {
         let old_index = self.index;
@@ -613,6 +679,12 @@ impl<T, U> TransitionsLog<T, U> {
     /// [present reversible frame](RevMeta::now).
     ///
     /// For examples, see the [type level documentation](TransitionsLog).
+    ///
+    /// # Poisoning
+    ///
+    /// If this log [is poisoned](Self::poison), this always returns an error. If bevy's
+    /// `track_location` cargo feature is activated, the error here contains the location where it
+    /// originally occured.
     #[track_caller]
     pub fn forward_log(&mut self) -> Result<TransitionsLogIterMut<T, U>, OutOfLog> {
         let old_index = self.index;
@@ -632,6 +704,11 @@ impl<T, U> TransitionsLog<T, U> {
     /// [`pre_update_drain`](Self::pre_update_drain) instead.
     ///
     /// For examples, see the [type level documentation](TransitionsLog).
+    ///
+    /// # Poisoning
+    ///
+    /// If this log [is poisoned](Self::poison), this never truncates any log entries, except if
+    /// [`RevQueue::Clear`](crate::meta::RevQueue::Clear) is applied, which also clears the poison.
     pub fn pre_update(&mut self, meta: &RevMeta) {
         match self.updates.pre_update_kind(meta) {
             PreUpdateKind::RemoveLog => {
@@ -654,10 +731,12 @@ impl<T, U> TransitionsLog<T, U> {
     /// may be empty. If no iterators are required, use [`pre_update`](Self::pre_update) instead.
     ///
     /// For examples, see the [type level documentation](TransitionsLog).
-    pub fn pre_update_drain<'log, 'm>(
-        &'log mut self,
-        meta: &'m RevMeta,
-    ) -> TransitionsDrains<'log, T, U> {
+    ///
+    /// # Poisoning
+    ///
+    /// If this log [is poisoned](Self::poison), this never drains any log entries, except if
+    /// [`RevQueue::Clear`](crate::meta::RevQueue::Clear) is applied, which also clears the poison.
+    pub fn pre_update_drain<'a>(&'a mut self, meta: &RevMeta) -> TransitionsDrains<'a, T, U> {
         match self.updates.pre_update_kind(meta) {
             PreUpdateKind::RemoveLog => {
                 let past_len = self.index;
@@ -1184,8 +1263,9 @@ mod test {
                     fn assert_err(log: &mut TransitionsLog<char, char>) {
                         assert_eq!(
                             log.forward_log().map(TransitionsLogIterMut::to_tuple),
-                            Err(OutOfLog::new())
+                            Err(OutOfLog::caller())
                         );
+                        log.clear_poison();
                     }
 
                     self.meta.update_ref(Ok(false), |_, _| ());
@@ -1235,8 +1315,9 @@ mod test {
                     fn assert_err(log: &mut TransitionsLog<char, char>) {
                         assert_eq!(
                             log.backward_log().map(TransitionsLogIterMut::to_tuple),
-                            Err(OutOfLog::new())
+                            Err(OutOfLog::caller())
                         );
+                        log.clear_poison();
                     }
 
                     // with_past_drain
@@ -1252,6 +1333,8 @@ mod test {
 
                         // undoing first backward_log
                         assert!(self.with_past_drain.forward_log().is_ok());
+                    } else {
+                        self.with_past_drain.clear_poison();
                     }
 
                     // without_past_drain

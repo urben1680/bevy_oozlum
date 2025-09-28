@@ -267,8 +267,8 @@ impl<T: UndoRedo> UndoRedo for Box<[T]> {
 
 #[derive(Default, Debug)]
 pub(crate) struct UndoRedoLog {
+    update_log: UpdateLog,
     undo_redo_log: TransitionsLog<DebugHidden>,
-    past_len_log: UpdateLog,
 }
 
 struct DebugHidden(SyncCell<Box<dyn UndoRedo>>);
@@ -325,10 +325,12 @@ impl Display for UndoRedoLogError {
                     "RevDirection is {actual} when it was expected to be {expected} at frame {now} before the update of the UndoRedo log"
                 )
             }
-            Self::OutOfLog { now, direction } => write!(
-                f,
-                "UndoRedo log is in an invalid state at frame {now} during {direction}"
-            ),
+            Self::OutOfLog { now, direction } => {
+                write!(
+                    f,
+                    "UndoRedo log is in an invalid state at frame {now} during {direction}"
+                )
+            }
         }
     }
 }
@@ -341,7 +343,7 @@ impl UndoRedoLog {
             .get_resource::<RevMeta>()
             .ok_or(UndoRedoLogError::RevMetaMissing)?;
 
-        self.past_len_log.pre_update(meta);
+        self.update_log.pre_update(meta);
         self.undo_redo_log.pre_update(meta);
 
         let now = meta.now();
@@ -350,7 +352,7 @@ impl UndoRedoLog {
                 .try_resource_scope::<UndoRedoBuffer, _>(|world, mut buffer| {
                     if !buffer.0.is_empty() {
                         let meta = world.resource::<RevMeta>();
-                        let past_len = self.past_len_log.push_get_past_len(meta);
+                        let past_len = self.update_log.push_get_past_len(meta);
                         self.undo_redo_log.push(past_len, |mut log| {
                             log.extend(buffer.0.drain(..).map(|boxed| DebugHidden(boxed.undo_redo)))
                         });
@@ -358,7 +360,7 @@ impl UndoRedoLog {
                 })
                 .ok_or(UndoRedoLogError::UndoRedoBufferMissing { now }),
             Some(RevDirection::FORWARD_LOG) => {
-                if self.past_len_log.forward_log(meta) {
+                if self.update_log.forward_log(meta) {
                     let iter = self
                         .undo_redo_log
                         .forward_log()
@@ -385,7 +387,7 @@ impl UndoRedoLog {
             .get_resource::<RevMeta>()
             .ok_or(UndoRedoLogError::RevMetaMissing)?;
 
-        self.past_len_log.pre_update(meta);
+        self.update_log.pre_update(meta);
         self.undo_redo_log.pre_update(meta);
 
         let now = meta.now();
@@ -398,7 +400,7 @@ impl UndoRedoLog {
             });
         }
 
-        if self.past_len_log.backward_log(meta) {
+        if self.update_log.backward_log(meta) {
             let iter = self
                 .undo_redo_log
                 .backward_log()
@@ -518,4 +520,9 @@ fn rev_spawn_empty_inner(entity_mut: &mut EntityWorldMut, now: NonLogNow, caller
     entity_mut
         .resource_mut::<RevDespawnCleaner>()
         .log_spawn(entity, caller, now);
+}
+
+#[cfg(test)]
+mod test {
+    // todo
 }

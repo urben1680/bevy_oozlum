@@ -4,6 +4,7 @@ use crate::{
 };
 use bevy_ecs::{
     component::{CheckChangeTicks, ComponentId, Tick},
+    error::BevyError,
     query::FilteredAccessSet,
     schedule::{BoxedCondition, InternedSystemSet, SystemCondition},
     system::{
@@ -12,8 +13,19 @@ use bevy_ecs::{
     },
     world::{DeferredWorld, World, unsafe_world_cell::UnsafeWorldCell},
 };
+use bevy_platform::{
+    collections::{
+        HashMap,
+        hash_map::{Entry, RawEntryMut},
+    },
+    hash::{FixedState, PassHash},
+};
 use bevy_utils::prelude::DebugName;
-use core::any::TypeId;
+use core::{
+    any::TypeId,
+    hash::{BuildHasher, Hasher},
+};
+use std::{collections::vec_deque::Drain, hash::Hash};
 
 /// Wrap a `condition` into a reversivle `BoxedCondition` that logs the system output at
 /// [`RevDirection::NOT_LOG`] and traverses the log during [log directions](RevDirection::is_log),
@@ -24,9 +36,7 @@ pub(super) fn into_rev_condition<Marker>(
     let condition = RevCondition {
         condition: IntoSystem::into_system(condition),
         meta_id: Default::default(),
-        ok_true_log: Default::default(),
-        err_failed_log: Default::default(),
-        failed_log: Default::default(),
+        logs: Default::default(),
     };
     Box::new(condition)
 }
@@ -40,16 +50,7 @@ struct RevCondition<T> {
     /// [`ComponentId`] of [`RevMeta`].
     meta_id: Option<ComponentId>,
 
-    /// A `bool`-like log for frames in which [`Self::condition`] returned `Ok(true)`.
-    ok_true_log: UpdateLog,
-
-    /// A `bool`-like log for frames in which [`Self::condition`] returned
-    /// [`Err(RunSystemError::Failed(_))`](RunSystemError::Failed).
-    err_failed_log: UpdateLog,
-
-    /// A log that contains [`BevyError`](bevy_ecs::error::BevyError) from [`Self::condition`] as
-    /// `String`s.
-    failed_log: TransitionLog<String>,
+    logs: ConditionLogs,
 }
 
 impl<T: ReadOnlySystem<In = (), Out = bool>> System for RevCondition<T> {
@@ -105,52 +106,23 @@ impl<T: ReadOnlySystem<In = (), Out = bool>> System for RevCondition<T> {
             )
         })?;
 
-        self.ok_true_log.pre_update(meta);
-        self.err_failed_log.pre_update(meta);
-        self.failed_log.pre_update(meta);
+        self.logs.pre_update(meta);
 
         match direction {
             RevDirection::NOT_LOG => {
                 let result = unsafe {
                     // SAFETY:
                     // - in `initialize` T returned the required access to make this safe
-                    // - T is readonly so meta reference is allowed to exist while T runs
+                    // - T is readonly so the meta reference is allowed to exist while T runs
                     self.condition.run_unsafe((), world)
                 };
 
-                match result {
-                    Ok(false) | Err(RunSystemError::Skipped(_)) => Ok(false),
-                    Ok(true) => {
-                        self.ok_true_log.push_get_past_len(meta);
-                        Ok(true)
-                    }
-                    Err(RunSystemError::Failed(failed)) => {
-                        let past_len = self.err_failed_log.push_get_past_len(meta);
-                        self.failed_log.push(past_len, failed.to_string());
-                        Err(RunSystemError::Failed(failed))
-                    }
-                }
+                self.logs.insert(meta, &result);
+
+                result
             }
-            RevDirection::FORWARD_LOG => {
-                if self.ok_true_log.forward_log(meta) {
-                    return Ok(true);
-                }
-                if self.err_failed_log.forward_log(meta) {
-                    let failed = self.failed_log.forward_log().unwrap();
-                    return Err(RunSystemError::Failed(failed.as_str().into()));
-                }
-                Ok(false)
-            }
-            RevDirection::BackwardLog => {
-                if self.ok_true_log.backward_log(meta) {
-                    return Ok(true);
-                }
-                if self.err_failed_log.backward_log(meta) {
-                    let failed = self.failed_log.backward_log().unwrap();
-                    return Err(RunSystemError::Failed(failed.as_str().into()));
-                }
-                Ok(false)
-            }
+            RevDirection::FORWARD_LOG => self.logs.get(meta, true),
+            RevDirection::BackwardLog => self.logs.get(meta, false),
         }
     }
     fn apply_deferred(&mut self, _world: &mut World) {
@@ -177,3 +149,280 @@ impl<T: ReadOnlySystem<In = (), Out = bool>> System for RevCondition<T> {
 // - T is `ReadOnlySystem`
 // - RevCondition additionally only reads `RevMeta` resource
 unsafe impl<T: ReadOnlySystem<In = (), Out = bool>> ReadOnlySystem for RevCondition<T> {}
+
+#[derive(Default)]
+struct ConditionLogs {
+    /// A `bool`-like log for frames in which [`Self::condition`] returned `Ok(true)`.
+    ok_true_log: UpdateLog,
+
+    failed_log: Option<Box<FailedLogs>>,
+}
+
+impl ConditionLogs {
+    fn pre_update(&mut self, meta: &RevMeta) {
+        self.ok_true_log.pre_update(meta);
+        if let Some(failed_log) = self.failed_log.as_mut() {
+            failed_log.pre_update(meta);
+        }
+    }
+    fn insert(&mut self, meta: &RevMeta, result: &Result<bool, RunSystemError>) {
+        match result {
+            Ok(false) | Err(RunSystemError::Skipped(_)) => {}
+            Ok(true) => {
+                self.ok_true_log.push_get_past_len(meta);
+            }
+            Err(RunSystemError::Failed(failed)) => {
+                self.failed_log
+                    .get_or_insert_with(|| FailedLogs::new(meta))
+                    .insert(meta, failed);
+            }
+        }
+    }
+    fn get(&mut self, meta: &RevMeta, forward: bool) -> Result<bool, RunSystemError> {
+        match self.failed_log.as_mut() {
+            None if forward => Ok(self.ok_true_log.forward_log(meta)),
+            None => Ok(self.ok_true_log.backward_log(meta)),
+            Some(failed_log) => failed_log.get(&mut self.ok_true_log, meta, forward),
+        }
+    }
+}
+
+struct FailedLogs {
+    err_failed_log: UpdateLog,
+
+    failed_log: TransitionLog<u64>,
+
+    failed_cache: FailedCache,
+}
+
+impl FailedLogs {
+    fn new(meta: &RevMeta) -> Box<Self> {
+        let mut this = Self {
+            err_failed_log: Default::default(),
+            failed_log: Default::default(),
+            failed_cache: Default::default(),
+        };
+        this.err_failed_log.pre_update(meta);
+        Box::new(this)
+    }
+    fn pre_update(&mut self, meta: &RevMeta) {
+        self.err_failed_log.pre_update(meta);
+        let keys = self.failed_log.pre_update_drain(meta).all();
+        self.failed_cache.cleanup(keys);
+    }
+    fn insert(&mut self, meta: &RevMeta, failed: &BevyError) {
+        // insert log value if vacant, increase usages if occupied
+        let key = self.failed_cache.insert_get_key(failed);
+
+        // log hash as transition, reduce usages for drained, remove if unused
+        let past_len = self.err_failed_log.push_get_past_len(meta);
+        let keys = self.failed_log.push_drain_past(past_len, key);
+        self.failed_cache.cleanup(keys);
+    }
+    fn get(
+        &mut self,
+        ok_true_log: &mut UpdateLog,
+        meta: &RevMeta,
+        forward: bool,
+    ) -> Result<bool, RunSystemError> {
+        let failed_log_result = if forward {
+            if ok_true_log.forward_log(meta) {
+                return Ok(true);
+            }
+            if !self.err_failed_log.forward_log(meta) {
+                return Ok(false);
+            }
+            self.failed_log.forward_log()
+        } else {
+            if ok_true_log.backward_log(meta) {
+                return Ok(true);
+            }
+            if !self.err_failed_log.backward_log(meta) {
+                return Ok(false);
+            }
+            self.failed_log.backward_log()
+        };
+
+        let err = match failed_log_result {
+            Ok(key) => self.failed_cache.get(*key).into(),
+            Err(out_of_log) => out_of_log.into(),
+        };
+
+        Err(RunSystemError::Failed(err))
+    }
+}
+
+#[derive(Default)]
+struct FailedCache(HashMap<u64, Failed, PassHash>);
+
+impl FailedCache {
+    fn cleanup(&mut self, keys: Drain<u64>) {
+        for hash in keys {
+            if let Entry::Occupied(mut occupied) = self.0.entry(hash) {
+                let usages = &mut occupied.get_mut().usages;
+                match usages.checked_sub(1) {
+                    Some(reduced) => *usages = reduced,
+                    None => {
+                        occupied.remove();
+                    }
+                }
+            };
+        }
+    }
+    fn get(&self, key: u64) -> &str {
+        self.0
+            .get(&key)
+            .map(|Failed { string, .. }| string.as_str())
+            .unwrap_or("reversible condition could not load logged error")
+    }
+    fn insert_get_key(&mut self, failed: &BevyError) -> u64 {
+        let string = failed.to_string();
+
+        let hash_state = FixedState::default();
+        let mut hasher = hash_state.build_hasher();
+        string.hash(&mut hasher);
+        let hash = hasher.finish();
+
+        let entry = self.0.raw_entry_mut().from_key_hashed_nocheck(hash, &hash);
+        match entry {
+            RawEntryMut::Vacant(entry) => {
+                entry.insert_hashed_nocheck(hash, hash, Failed { string, usages: 0 });
+            }
+            RawEntryMut::Occupied(entry) => {
+                entry.into_mut().usages += 1;
+            }
+        };
+
+        hash
+    }
+}
+
+struct Failed {
+    string: String,
+    usages: usize,
+}
+
+#[cfg(test)]
+mod test {
+    use crate::meta::RevQueue;
+
+    use super::*;
+
+    struct MetaAndLogs {
+        meta: RevMeta,
+        logs: ConditionLogs,
+    }
+
+    impl MetaAndLogs {
+        fn new() -> Self {
+            Self {
+                meta: RevMeta::new(None, false),
+                logs: Default::default(),
+            }
+        }
+        fn forward(&mut self, result: Result<bool, RunSystemError>) {
+            self.meta.set_queue(RevQueue::RUN_NOT_LOG);
+            self.meta.update_ref(Ok(true), |meta, _| {
+                self.logs.pre_update(meta);
+                self.logs.insert(meta, &result);
+            });
+        }
+        fn noop_forward(&mut self) {
+            self.meta.set_queue(RevQueue::RUN_NOT_LOG);
+            self.meta.update_ref(Ok(true), |_, _| ());
+        }
+        fn forward_log(&mut self, expected: Result<bool, &str>) {
+            self.meta.set_queue(RevQueue::RUN_FORWARD_LOG);
+            self.log(true, expected);
+        }
+        fn backward_log(&mut self, expected: Result<bool, &str>) {
+            self.meta.set_queue(RevQueue::RUN_BACKWARD_LOG);
+            self.log(false, expected);
+        }
+        fn log(&mut self, forward: bool, expected: Result<bool, &str>) {
+            self.meta.update_ref(Ok(true), |meta, _| {
+                self.logs.pre_update(meta);
+                match (self.logs.get(meta, forward), expected) {
+                    (Ok(actual), Ok(expected)) => assert_eq!(actual, expected),
+                    (Err(RunSystemError::Failed(actual)), Err(expected)) => {
+                        let mut actual = actual.to_string();
+                        actual.truncate(expected.len());
+                        assert_eq!(actual, expected);
+                    }
+                    (actual, expected) => panic!("{actual:?} not equal to {expected:?}"),
+                }
+            });
+        }
+        fn clear(mut self) {
+            self.assert_failed_cache_emptiness(false);
+            self.meta.set_queue(RevQueue::CLEAR_THEN_RUN);
+            self.meta.update_ref(Ok(true), |meta, _| {
+                self.logs.pre_update(meta);
+            });
+            self.assert_failed_cache_emptiness(true);
+        }
+        fn assert_failed_cache_emptiness(&self, expected: bool) {
+            assert!(
+                self.logs
+                    .failed_log
+                    .as_ref()
+                    .is_some_and(|failed_logs| failed_logs.failed_cache.0.is_empty() == expected)
+            );
+        }
+    }
+
+    #[test]
+    fn traverses_log() {
+        let skipped_skipped =
+            RunSystemError::Skipped(SystemParamValidationError::skipped::<()>("unreachable"));
+        let skipped_failed =
+            RunSystemError::Skipped(SystemParamValidationError::invalid::<()>("unreachable"));
+        let failed = |msg: &str| RunSystemError::Failed(msg.into());
+
+        let mut meta_and_log = MetaAndLogs::new();
+
+        meta_and_log.forward(Err(failed("first error")));
+        meta_and_log.forward(Ok(true));
+        meta_and_log.forward(Err(skipped_skipped));
+        meta_and_log.forward(Err(skipped_failed));
+        meta_and_log.forward(Ok(false));
+        meta_and_log.noop_forward();
+        meta_and_log.forward(Err(failed("second error")));
+
+        meta_and_log.backward_log(Err("second error"));
+        meta_and_log.backward_log(Ok(false));
+        meta_and_log.backward_log(Ok(false));
+        meta_and_log.backward_log(Ok(false));
+        meta_and_log.backward_log(Ok(false));
+        meta_and_log.backward_log(Ok(true));
+        meta_and_log.backward_log(Err("first error"));
+
+        meta_and_log.forward_log(Err("first error"));
+        meta_and_log.forward_log(Ok(true));
+        meta_and_log.forward_log(Ok(false));
+        meta_and_log.forward_log(Ok(false));
+        meta_and_log.forward_log(Ok(false));
+        meta_and_log.forward_log(Ok(false));
+        meta_and_log.forward_log(Err("second error"));
+
+        meta_and_log.backward_log(Err("second error"));
+        meta_and_log.backward_log(Ok(false));
+        meta_and_log.backward_log(Ok(false));
+
+        meta_and_log.forward(Err(failed("third error")));
+
+        meta_and_log.backward_log(Err("third error"));
+        meta_and_log.backward_log(Ok(false));
+        meta_and_log.backward_log(Ok(false));
+        meta_and_log.backward_log(Ok(true));
+        meta_and_log.backward_log(Err("first error"));
+
+        meta_and_log.forward_log(Err("first error"));
+        meta_and_log.forward_log(Ok(true));
+        meta_and_log.forward_log(Ok(false));
+        meta_and_log.forward_log(Ok(false));
+        meta_and_log.forward_log(Err("third error"));
+
+        meta_and_log.clear();
+    }
+}

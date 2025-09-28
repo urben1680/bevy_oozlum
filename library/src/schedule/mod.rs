@@ -1,3 +1,4 @@
+use crate::meta::RevMeta;
 use bevy_ecs::{
     change_detection::Res,
     schedule::{
@@ -7,12 +8,10 @@ use bevy_ecs::{
     },
     system::{IntoSystem, ScheduleSystem},
 };
-use core::{fmt::Debug, hash::Hash};
-use variadics_please::all_tuples;
-
-use crate::meta::RevMeta;
 use condition::into_rev_condition;
+use core::{fmt::Debug, hash::Hash};
 use system::into_rev_system;
+use variadics_please::all_tuples;
 
 mod condition;
 mod system;
@@ -130,7 +129,7 @@ impl RevSchedule for Schedule {
             configs.backward_deferred,
             configs.backward_systems,
         ));
-        self.configure_sets((configs.backward_deferred_and_systems, configs.unified));
+        self.configure_sets((configs.backward_deferred_and_systems, configs.conditioned));
         self
     }
     fn rev_configure_sets<Marker>(
@@ -144,7 +143,7 @@ impl RevSchedule for Schedule {
             configs.backward_deferred,
             configs.backward_systems,
             configs.backward_deferred_and_systems,
-            configs.unified,
+            configs.conditioned,
         ));
         self
     }
@@ -169,19 +168,31 @@ fn set_base_sets(schedule: &mut Schedule) {
     }
 }
 
+/// Reversible variant of [`ScheduleConfigs<T>`].
 pub struct RevScheduleConfigs<T: Schedulable> {
-    /// contains the ArcSystems for the forward set
+    /// Configurations of [`RevSystem::<_, true>`](system::RevSystem)s or
+    /// [`ForwardSystemSet`]s depending on `T`.
     forward_systems: ScheduleConfigs<T>,
-    /// contains the BackwardCommands for the backward set
+
+    /// Configurations of [`BackwardDeferred`](system::BackwardDeferred)s or
+    /// [`BackwardDeferredSet`]s depending on `T`.
     backward_deferred: ScheduleConfigs<T>,
-    /// contains the ArcSystems for the backward set
+
+    /// Configurations of [`RevSystem::<_, false>`](system::RevSystem)s or
+    /// [`BackwardSystemSet`]s depending on `T`.
     backward_systems: ScheduleConfigs<T>,
-    /// contains the sets that unify the two backward systems
+
+    /// Configurations of [`BackwardDeferredAndSystemSet`]s.
     backward_deferred_and_systems: ScheduleConfigs<InternedSystemSet>,
-    /// contains the sets that unify all three systems
-    unified: ScheduleConfigs<InternedSystemSet>,
+
+    /// Contains [`AtomicSet`](system::AtomicSet)s and default sets of a reversible system or custom
+    /// sets depending on `T`.
+    ///
+    /// Used for run conditions.
+    conditioned: ScheduleConfigs<InternedSystemSet>,
 }
 
+/// Reversible variant of [`IntoScheduleConfigs`].
 pub trait IntoRevScheduleConfigs<
     T: Schedulable<Metadata = GraphInfo, GroupMetadata = Chain>,
     Marker,
@@ -189,17 +200,22 @@ pub trait IntoRevScheduleConfigs<
 {
     #[doc(hidden)]
     fn into_rev_configs(self) -> RevScheduleConfigs<T>;
+
+    /// Reversible variant of [`IntoScheduleConfigs::in_set`].
     fn rev_in_set(self, set: impl SystemSet) -> RevScheduleConfigs<T> {
         let mut configs = self.into_rev_configs();
         configs.rev_in_set_inner(set.intern());
         configs
     }
+
+    /// Reversible variant of [`IntoScheduleConfigs::before`].
     fn rev_before<M>(self, set: impl IntoSystemSet<M>) -> RevScheduleConfigs<T> {
         // Example for a system A in self and a system B in set:
+        //
         // Forward
-        //  sys A -> sync -> sys B -> sync
+        //  system A -> sync -> system B -> sync
         // Backward
-        //  cmd B -> sync -> sys B -> cmd A -> sync -> sys A
+        //  deferred B -> sync -> system B -> deferred A -> sync -> system A
         let set = set.into_system_set().intern();
         let mut configs = self.into_rev_configs();
         configs.forward_systems = configs.forward_systems.before(ForwardSystemSet(set));
@@ -208,12 +224,15 @@ pub trait IntoRevScheduleConfigs<
             .after_ignore_deferred(BackwardDeferredAndSystemSet(set));
         configs
     }
+
+    /// Reversible variant of [`IntoScheduleConfigs::after`].
     fn rev_after<M>(self, set: impl IntoSystemSet<M>) -> RevScheduleConfigs<T> {
         // Example for a system A in self and a system B in set:
+        //
         // Forward
-        //  sys B -> sync -> sys A -> sync
+        //  system B -> sync -> system A -> sync
         // Backward
-        //  cmd A -> sync -> sys A -> cmd B -> sync -> sys B
+        //  deferred A -> sync -> system A -> deferred B -> sync -> system B
         let set = set.into_system_set().intern();
         let mut configs = self.into_rev_configs();
         configs.forward_systems = configs.forward_systems.after(ForwardSystemSet(set));
@@ -222,12 +241,15 @@ pub trait IntoRevScheduleConfigs<
             .before_ignore_deferred(BackwardDeferredAndSystemSet(set));
         configs
     }
+
+    /// Reversible variant of [`IntoScheduleConfigs::before_ignore_deferred`].
     fn rev_before_ignore_deferred<M>(self, set: impl IntoSystemSet<M>) -> RevScheduleConfigs<T> {
         // Example for a system A in self and a system B in set:
+        //
         // Forward
-        //  sys A -> sys B -> sync
+        //  system A -> system B -> sync
         // Backward
-        //  cmd B -> cmd A -> sync -> sys B -> sys A
+        //  deferred B -> deferred A -> sync -> system B -> system A
         let set = set.into_system_set().intern();
         let mut configs = self.into_rev_configs();
         configs.forward_systems = configs
@@ -241,12 +263,15 @@ pub trait IntoRevScheduleConfigs<
             .after_ignore_deferred(BackwardSystemSet(set));
         configs
     }
+
+    /// Reversible variant of [`IntoScheduleConfigs::after_ignore_deferred`].
     fn rev_after_ignore_deferred<M>(self, set: impl IntoSystemSet<M>) -> RevScheduleConfigs<T> {
         // Example for a system A in self and a system B in set:
+        //
         // Forward
-        //  sys B -> sys A -> sync
+        //  system B -> system A -> sync
         // Backward
-        //  cmd A -> cmd B -> sync -> sys A -> sys B
+        //  deferred A -> deferred B -> sync -> system A -> system B
         let set = set.into_system_set().intern();
         let mut configs = self.into_rev_configs();
         configs.forward_systems = configs
@@ -260,11 +285,17 @@ pub trait IntoRevScheduleConfigs<
             .before_ignore_deferred(BackwardSystemSet(set));
         configs
     }
+
+    /// Reversible variant of [`IntoScheduleConfigs::run_if`].
     fn rev_run_if<M>(self, condition: impl SystemCondition<M>) -> RevScheduleConfigs<T> {
         let mut configs = self.into_rev_configs();
-        configs.unified.run_if_dyn(into_rev_condition(condition));
+        configs
+            .conditioned
+            .run_if_dyn(into_rev_condition(condition));
         configs
     }
+
+    /// Reversible variant of [`IntoScheduleConfigs::distributive_run_if`].
     fn rev_distributive_run_if<M>(
         self,
         condition: impl SystemCondition<M> + Clone,
@@ -286,9 +317,11 @@ pub trait IntoRevScheduleConfigs<
         }
 
         let mut configs = self.into_rev_configs();
-        distribute(&mut configs.unified, condition);
+        distribute(&mut configs.conditioned, condition);
         configs
     }
+
+    /// Reversible variant of [`IntoScheduleConfigs::ambiguous_with`].
     fn rev_ambiguous_with<M>(self, set: impl IntoSystemSet<M>) -> RevScheduleConfigs<T> {
         let set = set.into_system_set().intern();
         let mut configs = self.into_rev_configs();
@@ -300,18 +333,23 @@ pub trait IntoRevScheduleConfigs<
             .ambiguous_with(BackwardSystemSet(set));
         configs
     }
+
+    /// Reversible variant of [`IntoScheduleConfigs::ambiguous_with_all`].
     fn rev_ambiguous_with_all(self) -> RevScheduleConfigs<T> {
         let mut configs = self.into_rev_configs();
         configs.forward_systems = configs.forward_systems.ambiguous_with_all();
         configs.backward_systems = configs.backward_systems.ambiguous_with_all();
         configs
     }
+
+    /// Reversible variant of [`IntoScheduleConfigs::chain`].
     fn rev_chain(self) -> RevScheduleConfigs<T> {
         // Example for systems A and B in self:
+        //
         // Forward
-        //  sys A -> sync -> sys B -> sync
+        //  system A -> sync -> system B -> sync
         // Backward
-        //  cmd B -> sync -> sys B -> cmd A -> sync -> sys A
+        //  deferred B -> sync -> system B -> deferred A -> sync -> system A
         let mut configs = self.into_rev_configs();
         configs.forward_systems = configs.forward_systems.chain();
         configs.backward_deferred_and_systems = configs
@@ -319,12 +357,15 @@ pub trait IntoRevScheduleConfigs<
             .chain_ignore_deferred();
         configs
     }
+
+    /// Reversible variant of [`IntoScheduleConfigs::chain_ignore_deferred`].
     fn rev_chain_ignore_deferred(self) -> RevScheduleConfigs<T> {
         // Example for systems A and B in self:
+        //
         // Forward
-        //  sys A -> sys B -> sync
+        //  system A -> system B -> sync
         // Backward
-        //  cmd B -> cmd A -> sync -> sys B -> sys A
+        //  deferred B -> deferred A -> sync -> system B -> system A
         let mut configs = self.into_rev_configs();
         configs.forward_systems = configs.forward_systems.chain_ignore_deferred();
         configs.backward_deferred = configs.backward_deferred.chain_ignore_deferred();
@@ -346,10 +387,10 @@ impl<S: SystemSet> IntoRevScheduleConfigs<InternedSystemSet, ()> for S {
         let set = self.intern();
         RevScheduleConfigs {
             forward_systems: ForwardSystemSet(set).in_set(set),
-            backward_deferred: BackwardDeferredSet(set).into_configs(),
-            backward_systems: BackwardSystemSet(set).into_configs(),
+            backward_deferred: BackwardDeferredSet(set).in_set(set),
+            backward_systems: BackwardSystemSet(set).in_set(set),
             backward_deferred_and_systems: BackwardDeferredAndSystemSet(set).in_set(set),
-            unified: set.into_configs(),
+            conditioned: set.into_configs(),
         }
     }
 }
@@ -364,6 +405,7 @@ where
 }
 
 impl<T: Schedulable<Metadata = GraphInfo, GroupMetadata = Chain>> RevScheduleConfigs<T> {
+    /// Reversible variant of [`ScheduleConfigs::in_set_inner`].
     pub fn rev_in_set_inner(&mut self, set: InternedSystemSet) {
         self.forward_systems
             .in_set_inner(ForwardSystemSet(set).intern());
@@ -374,11 +416,13 @@ impl<T: Schedulable<Metadata = GraphInfo, GroupMetadata = Chain>> RevScheduleCon
         self.backward_deferred_and_systems
             .in_set_inner(BackwardDeferredAndSystemSet(set).intern());
     }
+
+    /// Split configuration for [`impl_into_rev_schedule_configs`].
     fn split(self) -> (ForwardConfigs<T>, BackwardConfigs<T>) {
         (
             ForwardConfigs {
                 forward_systems: self.forward_systems,
-                unified: self.unified,
+                conditioned: self.conditioned,
             },
             BackwardConfigs {
                 backward_deferred: self.backward_deferred,
@@ -391,7 +435,9 @@ impl<T: Schedulable<Metadata = GraphInfo, GroupMetadata = Chain>> RevScheduleCon
 
 struct ForwardConfigs<T: Schedulable> {
     forward_systems: ScheduleConfigs<T>,
-    unified: ScheduleConfigs<InternedSystemSet>,
+
+    /// Not strongly required to be here and not in [`BackwardConfigs`].
+    conditioned: ScheduleConfigs<InternedSystemSet>,
 }
 
 struct BackwardConfigs<T: Schedulable> {
@@ -419,7 +465,7 @@ macro_rules! impl_into_rev_schedule_configs {
                 let ($($var,)*) = ($($var.into_rev_configs().split(),)*);
 
                 let forward_systems = ($($var.0.forward_systems,)*).into_configs();
-                let unified = ($($var.0.unified,)*).into_configs();
+                let conditioned = ($($var.0.conditioned,)*).into_configs();
 
                 // let [var0, ..., varN]
                 //  : [BackwardConfigs, ..., BackwardConfigs]
@@ -437,7 +483,7 @@ macro_rules! impl_into_rev_schedule_configs {
                     backward_deferred,
                     backward_systems,
                     backward_deferred_and_systems,
-                    unified
+                    conditioned
                 }
             }
         }
