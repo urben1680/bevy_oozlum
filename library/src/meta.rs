@@ -247,7 +247,9 @@ impl RevMeta {
         self.update_log_limits.clear();
         self.log_exits = 0;
         info!(
-            "`RevQueue::Clear` was applied, all `UpdateLog` ids until now are invalid and will be reinitialized at their next updates"
+            "`RevQueue::Clear` was applied, `RevMeta::log_clears` is now {},  all `UpdateLog::id` \
+            until now are invalid and will be reinitialized at their next `UpdateLog::pre_update`",
+            self.log_clears
         )
     }
     pub fn run_rev_update(world: &mut World) -> Result<(), BevyError> {

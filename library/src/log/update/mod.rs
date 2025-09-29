@@ -4,6 +4,7 @@ use core::fmt::{Debug, Display};
 use std::collections::{TryReserveError, VecDeque};
 
 use limits::*;
+pub use limits::UpdateLogId;
 use offset::*;
 
 pub(super) mod limits;
@@ -81,8 +82,8 @@ impl Debug for UpdateLog {
 impl Display for UpdateLog {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self.id() {
-            None => write!(f, "UpdateLog #Uninit"),
-            Some(id) => write!(f, "UpdateLog #{id} (maybe outdated)"),
+            None => Display::fmt(UpdateLogId::PLACEHOLDER, f),
+            Some(id) => Display::fmt(&id, f),
         }
     }
 }
@@ -205,8 +206,8 @@ impl UpdateLog {
     ///
     /// This id is useful to identify missed updates from [`RevMeta::update`]. If
     /// [`RevMeta::run_rev_update`] is used, such errors are handled by the default error handler.
-    pub fn id(&self) -> Option<u32> {
-        self.update_state.map(|state| state.id.get())
+    pub fn id(&self) -> Option<UpdateLogId> {
+        self.update_state.map(|update_state| update_state.get_id())
     }
 
     /// Update the log and return the updated length of the log as an alternative to

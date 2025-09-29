@@ -128,7 +128,7 @@ use core::{
 };
 
 pub(crate) use update::limits::{UpdateLogLimits, UpdateLogState};
-pub use update::{UpdateLog, limits::UpdateLogMissed};
+pub use update::{UpdateLog, limits::UpdateLogMissed, limits::UpdateLogId};
 
 pub use transition::{
     TransitionDrainAll, TransitionDrainFuture, TransitionDrainPast, TransitionDrains, TransitionLog,

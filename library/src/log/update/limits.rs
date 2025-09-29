@@ -15,7 +15,7 @@
 use super::PreUpdateKind;
 use bevy_ecs::change_detection::MaybeLocation;
 use bevy_utils::Parallel;
-use core::{fmt::Debug, panic::Location, sync::atomic::AtomicU32};
+use core::{fmt::{Debug, Display, Formatter, Result as FmtResult}, panic::Location, sync::atomic::AtomicU32};
 use nonmax::NonMaxU32;
 
 /// Part of [`RevMeta`](crate::meta::RevMeta) that keeps track of [`UpdateLog`](super::UpdateLog)
@@ -75,7 +75,7 @@ impl UpdateLogLimits {
                 .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
             let id = NonMaxU32::new(id).expect("exhausted maximum number of `UpdateLog`");
             bevy_log::info!(
-                "A `UpdateLog` with the id {id} was initiated at {caller}, \
+                "A `UpdateLog` with the id {id}v{meta_log_clears} was initiated at {caller}, \
                 this id remains valid until a `RevQueue::Clear` is applied"
             );
             UpdateLogState {
@@ -247,6 +247,65 @@ pub(crate) struct UpdateLogState {
     ///
     /// See [`RevMeta::log_clears`](crate::meta::RevMeta::log_clears).
     meta_log_clears: u64,
+}
+
+impl UpdateLogState {
+    pub(super) fn get_id(&self) -> UpdateLogId {
+        UpdateLogId { id: self.id, meta_log_clears: self.meta_log_clears.to_ne_bytes() }
+    }
+}
+
+/// Unique ID of an [`UpdateLog`](super::UpdateLog) from [`RevUpdate::id`](super::UpdateLog::id).
+/// 
+/// When [`UpdateLog::pre_update`](super::UpdateLog::pre_update) is called after
+/// [`RevQueue::Clear`](crate::meta::RevQueue::Clear) is applied, this id will change for the log.
+/// This Id is not reused when outdated.
+/// 
+/// The [`Debug`] implementation will return the id as `UpdateLog {int}v{int}` where the first value
+/// is [`id`](Self::id) and the second [`meta_log_clears`](Self::meta_log_clears).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct UpdateLogId {
+    id: NonMaxU32,
+    meta_log_clears: [u8; 8],
+}
+
+impl UpdateLogId {
+    pub(super) const PLACEHOLDER: &str = "UpdateLog PLACEHOLDER";
+
+    /// The index of this log in [`RevMeta`](crate::meta::RevMeta).
+    /// 
+    /// Other logs with this index may exist at the same time if:
+    /// 
+    /// 1. [`RevQueue::Clear`](crate::meta::RevQueue::Clear) was applied
+    /// 2. This log did not update after that
+    /// 3. Another log was updated after that
+    /// 
+    /// Only with [`meta_log_clears`](Self::meta_log_clears) this ID is unique.
+    pub fn index(self) -> u32 {
+        self.id.get()
+    }
+
+    /// The latest value of [`RevMeta::log_clears`](crate::meta::RevMeta::log_clears) this log has
+    /// witnessed.
+    /// 
+    /// This log will be cleared if this value is outdated and
+    /// [`UpdateLog::pre_update`](super::UpdateLog::pre_update) is called, which changes
+    /// [`index`](Self::index) as well.
+    pub fn meta_log_clears(self) -> u64 {
+        u64::from_ne_bytes(self.meta_log_clears)
+    }
+}
+
+impl Display for UpdateLogId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        write!(f, "UpdateLog {}v{}", self.index(), self.meta_log_clears())
+    }
+}
+
+impl Debug for UpdateLogId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        Display::fmt(self, f)
+    }
 }
 
 /// A limit for [`RevMeta::now`](crate::meta::RevMeta::now) that, if breached, indicates that a
