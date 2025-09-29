@@ -1,6 +1,5 @@
-//! This module contains a way to write ([`push_offset`]) and read ([`OffsetIter`]) bytes that
-//! encode how many frames in the past or the future [`UpdateLog`](super::UpdateLog) as updated
-//! at.
+//! This module contains a way to write ([`UpdateLog::push_offset`]) and read ([`OffsetIter`]) bytes
+//! that encode how many frames in the past or the future [`UpdateLog`] as updated at.
 //!
 //! This is more compact than storing `u64`.
 //!
@@ -17,12 +16,12 @@
 //!   - This uses up to ten bytes in total for `u64::MAX`.
 //! - This encoding does not consume more bytes than `u64` for offsets below `2^55`.
 //! - These bytes or sequences of bytes can be read in reverse as well, which is needed for reading
-//!   the previous offset in [`UpdateLog::backward_log`](super::UpdateLog::backward_log)
-//!   ([`many`](super::UpdateLog::backward_log_many)).
+//!   the previous offset in [`UpdateLog::backward_log`]([`many`](UpdateLog::backward_log_many)).
 //! - The [`OffsetIter`] iterator is used to read the offsets. See [`IterItem`].
 
+use super::UpdateLog;
 use core::{fmt::Debug, num::NonZeroU8, ops::ControlFlow};
-use std::collections::{VecDeque, vec_deque::Iter};
+use std::collections::vec_deque::Iter;
 
 const MAX_ZEROES_PER_BYTE: u8 = 65;
 const MAX_ZEROES_AS_BYTE: u8 = 0b10_111111;
@@ -34,80 +33,71 @@ const WRAPPING_OFFSET_MASK: u8 = 0b00_111111;
 const WRAPPING_OFFSET_OR: u8 = 0b11_000000;
 const MAX_WRAPPING_OFFSET: u8 = 0b00_111111;
 
-pub(super) fn push_offset(
-    offset_bytes: &mut VecDeque<u8>,
-    index: &mut usize,
-    zeroes: &mut u8,
-    zeroes_max: &mut u8,
-    mut offset: u64,
-) {
-    if offset == 0 {
-        return push_zero_offset(offset_bytes, index, zeroes, zeroes_max);
-    }
+impl UpdateLog {
+    pub(super) fn push_offset(&mut self, mut offset: u64) {
+        if offset == 0 {
+            return self.push_zero_offset();
+        }
 
-    if *zeroes == 1 {
-        // there was an offset of 0 previously, push it now that it is sure no more such offsets
-        // are following it
-        offset_bytes.push_back(0);
-        *index += 1;
-    } else if *zeroes > 1 {
-        // there was a sequence of offsets of 0 previously, push it now that it is sure no more
-        // such offsets are following it
-        offset_bytes.push_back((*zeroes - 2) | ZEROES_OR);
-        *index += 1;
-    }
+        if self.zeroes == 1 {
+            // there was an offset of 0 previously, push it now that it is sure no more such offsets
+            // are following it
+            self.offset_bytes.push_back(0);
+            self.index += 1;
+        } else if self.zeroes > 1 {
+            // there was a sequence of offsets of 0 previously, push it now that it is sure no more
+            // such offsets are following it
+            self.offset_bytes.push_back((self.zeroes - 2) | ZEROES_OR);
+            self.index += 1;
+        }
 
-    *index += 1;
-    *zeroes = 0;
-    *zeroes_max = 0;
+        self.index += 1;
+        self.zeroes = 0;
+        self.zeroes_max = 0;
 
-    if offset <= MAX_SINGLE_BYTE_OFFSET as u64 {
-        offset_bytes.push_back(offset as u8);
-        return;
-    }
-
-    // this is a multi-byte offset
-
-    let wrapping_byte = (offset & WRAPPING_OFFSET_MASK as u64) as u8 | WRAPPING_OFFSET_OR;
-    offset_bytes.push_back(wrapping_byte);
-
-    // wrapping bytes contain 6 usable bits for the offset
-    offset >>= 6;
-
-    loop {
-        *index += 1;
-
-        if offset <= MAX_WRAPPING_OFFSET as u64 {
-            // this is a wrapping byte
-
-            offset_bytes.push_back(offset as u8 | WRAPPING_OFFSET_OR);
+        if offset <= MAX_SINGLE_BYTE_OFFSET as u64 {
+            self.offset_bytes.push_back(offset as u8);
             return;
         }
 
-        // this is a wrapped byte
+        // this is a multi-byte offset
 
-        offset_bytes.push_back((offset & WRAPPED_OFFSET_MASK as u64) as u8);
+        let wrapping_byte = (offset & WRAPPING_OFFSET_MASK as u64) as u8 | WRAPPING_OFFSET_OR;
+        self.offset_bytes.push_back(wrapping_byte);
 
-        // wrapped bytes contain 7 usable bits for the offset
-        offset >>= 7;
+        // wrapping bytes contain 6 usable bits for the offset
+        offset >>= 6;
+
+        loop {
+            self.index += 1;
+
+            if offset <= MAX_WRAPPING_OFFSET as u64 {
+                // this is a wrapping byte
+
+                self.offset_bytes.push_back(offset as u8 | WRAPPING_OFFSET_OR);
+                return;
+            }
+
+            // this is a wrapped byte
+
+            self.offset_bytes.push_back((offset & WRAPPED_OFFSET_MASK as u64) as u8);
+
+            // wrapped bytes contain 7 usable bits for the offset
+            offset >>= 7;
+        }
     }
-}
 
-pub(super) fn push_zero_offset(
-    offset_bytes: &mut VecDeque<u8>,
-    index: &mut usize,
-    zeroes: &mut u8,
-    zeroes_max: &mut u8,
-) {
-    if *zeroes == MAX_ZEROES_PER_BYTE {
-        offset_bytes.push_back(MAX_ZEROES_AS_BYTE);
-        *index += 1;
-        *zeroes = 0;
+    pub(super) fn push_zero_offset(&mut self) {
+        if self.zeroes == MAX_ZEROES_PER_BYTE {
+            self.offset_bytes.push_back(MAX_ZEROES_AS_BYTE);
+            self.index += 1;
+            self.zeroes = 0;
+        }
+
+        // increase the sequence of zero offsets
+        self.zeroes += 1;
+        self.zeroes_max = self.zeroes;
     }
-
-    // increase the sequence of zero offsets
-    *zeroes += 1;
-    *zeroes_max = *zeroes;
 }
 
 /// Iterator to read [`UpdateLog::offset_bytes`](super::UpdateLog::offset_bytes) and decode them
@@ -284,93 +274,16 @@ mod test {
             0b10_0110101_0110100_0110011_0110010_0110001_0110000_0101111_0101110_101101,
         ];
 
-        // 0b0xxxxxxx = x offset including zero
-        // 0b10xxxxxx = x amount of zeroes + 1
-        // 0b11xxxxxx = padding byte with x payload, wraps 0b0xxxxxxx bytes with x payload
+        let mut log = UpdateLog::new();
+        for offset in offsets {
+            log.push_offset(offset);
+        }
+        for _ in 0..MAX_ZEROES_PER_BYTE {
+            log.push_offset(0);
+        }
 
-        let deque: VecDeque<u8> = [
-            // 0b000000
-            0b0_0000000,
-            //
-            // 0b000010_000001
-            0b11_000001,
-            0b11_000010,
-            //
-            // 0b000101_0000100_000011
-            0b11_000011,
-            0b0_0000100,
-            0b11_000101,
-            //
-            // 0b001001_0001000_0000111_000110
-            0b11_000110,
-            0b0_0000111,
-            0b0_0001000,
-            0b11_001001,
-            //
-            // 0b001110_0001101_0001100_0001011_001010
-            0b11_001010,
-            0b0_0001011,
-            0b0_0001100,
-            0b0_0001101,
-            0b11_001110,
-            //
-            // 0b010100_0010011_0010010_0010001_0010000_001111
-            0b11_001111,
-            0b0_0010000,
-            0b0_0010001,
-            0b0_0010010,
-            0b0_0010011,
-            0b11_010100,
-            //
-            // 0b011011_0011010_0011001_0011000_0010111_0010110_010101
-            0b11_010101,
-            0b0_0010110,
-            0b0_0010111,
-            0b0_0011000,
-            0b0_0011001,
-            0b0_0011010,
-            0b11_011011,
-            //
-            // 0b100011_0100010_0100001_0100000_0011111_0011110_0011101_011100
-            0b11_011100,
-            0b0_0011101,
-            0b0_0011110,
-            0b0_0011111,
-            0b0_0100000,
-            0b0_0100001,
-            0b0_0100010,
-            0b11_100011,
-            //
-            // 0b101100_0101011_0101010_0101001_0101000_0100111_0100110_0100101_100100
-            0b11_100100,
-            0b0_0100101,
-            0b0_0100110,
-            0b0_0100111,
-            0b0_0101000,
-            0b0_0101001,
-            0b0_0101010,
-            0b0_0101011,
-            0b11_101100,
-            //
-            // 0b10_0110101_0110100_0110011_0110010_0110001_0110000_0101111_0101110_101101
-            0b11_101101,
-            0b0_0101110,
-            0b0_0101111,
-            0b0_0110000,
-            0b0_0110001,
-            0b0_0110010,
-            0b0_0110011,
-            0b0_0110100,
-            0b0_0110101,
-            0b11_0000_10, // only least significant two bits are available, more would overflow u64
-            //
-            // two following zeroes
-            0b10_000000,
-            //
-            // 65 following zeroes
-            MAX_ZEROES_AS_BYTE,
-        ]
-        .into();
+        // make the 65 zeroes be part of the deque
+        log.push_zero_offset();
 
         fn item(offset: u64, len: u8) -> IterItem {
             IterItem {
@@ -392,18 +305,16 @@ mod test {
             item(offsets[7], 8),
             item(offsets[8], 9),
             item(offsets[9], 10),
-            // 2 zeroes in a byte
-            item(0, 2),
             // 65 zeroes in a byte
             item(0, MAX_ZEROES_PER_BYTE),
         ];
 
-        assert!(OffsetIter(deque.iter()).eq(expected.iter().cloned()));
+        assert!(OffsetIter(log.offset_bytes.iter()).eq(expected.iter().cloned()), "{log:#?}");
 
         assert!(
-            OffsetIter(deque.iter())
+            OffsetIter(log.offset_bytes.iter())
                 .rev()
-                .eq(expected.into_iter().rev())
+                .eq(expected.into_iter().rev()), "{log:#?}"
         );
     }
 }

@@ -458,12 +458,7 @@ impl UpdateLog {
         // remaining updates
         let remaining_updates = updates - 1;
         for _ in 0..remaining_updates {
-            push_zero_offset(
-                &mut self.offset_bytes,
-                &mut self.index,
-                &mut self.zeroes,
-                &mut self.zeroes_max,
-            );
+            self.push_zero_offset();
         }
         self.past_len += remaining_updates;
         meta.update_log_limits().push_limit(
@@ -515,13 +510,7 @@ impl UpdateLog {
         self.last_update = meta.now();
         self.past_len += 1;
 
-        push_offset(
-            &mut self.offset_bytes,
-            &mut self.index,
-            &mut self.zeroes,
-            &mut self.zeroes_max,
-            offset,
-        );
+        self.push_offset(offset);
     }
 
     /// Checks at [`RevDirection::BackwardLog`](crate::meta::RevDirection::BackwardLog) if this log
