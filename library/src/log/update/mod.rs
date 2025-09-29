@@ -3,8 +3,8 @@ use bevy_ecs::change_detection::MaybeLocation;
 use core::fmt::{Debug, Display};
 use std::collections::{TryReserveError, VecDeque};
 
-use limits::*;
 pub use limits::UpdateLogId;
+use limits::*;
 use offset::*;
 
 pub(super) mod limits;
@@ -82,7 +82,7 @@ impl Debug for UpdateLog {
 impl Display for UpdateLog {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self.id() {
-            None => Display::fmt(UpdateLogId::PLACEHOLDER, f),
+            None => Display::fmt(UpdateLogId::UNINIT, f),
             Some(id) => Display::fmt(&id, f),
         }
     }
@@ -207,7 +207,7 @@ impl UpdateLog {
     /// This id is useful to identify missed updates from [`RevMeta::update`]. If
     /// [`RevMeta::run_rev_update`] is used, such errors are handled by the default error handler.
     pub fn id(&self) -> Option<UpdateLogId> {
-        self.update_state.map(|update_state| update_state.get_id())
+        self.update_state.map(|update_state| update_state.id())
     }
 
     /// Update the log and return the updated length of the log as an alternative to
@@ -927,7 +927,7 @@ mod test {
         }
         fn new_missed(&self) -> UpdateLogMissed {
             UpdateLogMissed {
-                id: self.update_log.update_state.unwrap().id.get(),
+                id: self.update_log.id().unwrap(),
                 last_update: self.last_update,
             }
         }

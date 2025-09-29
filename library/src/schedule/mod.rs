@@ -20,14 +20,14 @@
 //!                 // reversible commands are queued only here
 //!             } else {
 //!                 // logic specific for when this is traversing the log
-//!                 // this frame already happened with `log == false`
+//!                 // this frame already ran with `RevDirection::Forward { log: true }`
 //!             }
 //!             // forward logic where it does not matter if this is a log traversal
 //!             // does not need to be below the if-else blocks, can also be placed above
 //!         },
 //!         RevDirection::BackwardLog => {
 //!             // backward logic
-//!             // this frame already happened with `RevDirection::Forward { log: true }`
+//!             // this frame already ran with `RevDirection::Forward { log: true }`
 //!         }
 //!     }
 //!     // logic where it does not matter which direction this runs at
@@ -41,9 +41,9 @@
 //! - a new system `B` that runs at [`RevDirection::BackwardLog`]
 //!
 //! Additionally, another new system per `T` is added that runs at [`RevDirection::BackwardLog`]
-//! but before `B` which undoes deferred actions such as [reversible commands]. This way, `B` will
-//! start with the [`World`] state that was present when `F` finished but did not have its deferred
-//! actions applied yet. This third system is otherwise noop.
+//! but before `B` which undoes deferred actions such as [reversible commands]. With a sync point in
+//! between, `B` will start with the [`World`] state that was present when `F` finished but did not
+//! have its deferred actions applied yet. This third system is otherwise noop.
 //!
 //! Configurations that order the systems will be reversed for the `B` variants.
 //!
@@ -55,7 +55,7 @@
 //! wrapper only calls them at [`RevDirection::NOT_LOG`], logs their outputs and and only uses these
 //! log entries during [log directions].
 //!
-//! # Reversible configurations of systems and sets
+//! # Reversible configurations
 //!
 //! [`RevSchedule`] automatically handles this aspect in the `rev_*` methods.
 //!

@@ -414,7 +414,10 @@ impl RevMeta {
 
         // check for `UpdateLog` instances that were missed being updated
         let now = meta.now;
-        match meta.update_log_limits.update(now, direction.is_log()) {
+        match meta
+            .update_log_limits
+            .update(now, meta.log_clears, direction.is_log())
+        {
             Ok(()) => Ok(meta),
             Err(update_logs_missed) => Err(RevMetaUpdateErr::UpdateLogsMissed {
                 meta,
