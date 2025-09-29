@@ -1,6 +1,6 @@
-//! # Log variants
+//! This module contains the types around log variants the can be used in reversible systems.
 //!
-//! This module contains the types around the three log variants:
+//! # Log variants
 //!
 //! - [`TransitionLog`], for storing singular values to transition a state forward or backward.
 //! - [`TransitionsLog`], for storing multiple values to transition a state forward or backward.

@@ -5,7 +5,7 @@ use bevy::{
     },
     prelude::*,
 };
-use bevy_oozlum::prelude::*;
+use bevy_oozlum::{meta::NonLogNow, prelude::*};
 use crossterm::{ExecutableCommand, cursor::*, terminal::*};
 use std::{io::stdout, num::NonZeroU64, time::Duration};
 

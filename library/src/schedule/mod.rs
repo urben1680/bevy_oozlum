@@ -1,10 +1,89 @@
+//! This module contains extension traits and accompanying types to add regular systems, conditions
+//! and sets to make their effect reversible.
+//! 
+//! The main reversible schedule that is run by [`RevMeta::run_rev_update`] is [`RevUpdate`].
+//!
+//! # Reversible systems
+//!
+//! This crate cannot magically make systems reversible, they have to be written in that way. This
+//! is usually done by matching the value from [`RevMeta::running_direction`] to implement their
+//! reversible logic:
+//!
+//! ```
+//! # use bevy_ecs::system::Res;
+//! # use bevy_oozlum::prelude::*;
+//! fn reversible_system(meta: Res<RevMeta>) {
+//!     match meta.running_direction() {
+//!         RevDirection::Forward { log } => {
+//!             if !log {
+//!                 // logic specific for changes that happen for the first time
+//!                 // reversible commands are queued only here
+//!             } else {
+//!                 // logic specific for when this is traversing the log
+//!                 // this frame already happened with `log == false`
+//!             }
+//!             // forward logic where it does not matter if this is a log traversal
+//!             // does not need to be below the if-else blocks, can also be placed above
+//!         },
+//!         RevDirection::BackwardLog => {
+//!             // backward logic
+//!             // this frame already happened with `RevDirection::Forward { log: true }`
+//!         }
+//!     }
+//!     // logic where it does not matter which direction this runs at
+//!     // should not require a specific ordering to reversible logic
+//! }
+//! ```
+//!
+//! [`RevSchedule::rev_add_systems`] wraps every passed system `T` in an `Arc<Mutex<T>>` that is
+//! shared for:
+//! - a new system `F` that runs at [`RevDirection::Forward`]
+//! - a new system `B` that runs at [`RevDirection::BackwardLog`]
+//!
+//! Additionally, another new system per `T` is added that runs at [`RevDirection::BackwardLog`]
+//! but before `B` which undoes deferred actions such as [reversible commands]. This way, `B` will
+//! start with the [`World`] state that was present when `F` finished but did not have its deferred
+//! actions applied yet. This third system is otherwise noop.
+//!
+//! Configurations that order the systems will be reversed for the `B` variants.
+//! 
+//! Reversible systems work best in fixed intervals.
+//!
+//! # Reversible conditions
+//!
+//! Conditions do not need to be redesigned, they can be used as they are because the internal
+//! wrapper only calls them at [`RevDirection::NOT_LOG`], logs their outputs and and only uses these
+//! log entries during [log directions].
+//!
+//! # Reversible configurations of systems and sets
+//!
+//! [`RevSchedule`] automatically handles this aspect in the `rev_*` methods.
+//! 
+//! Be aware that reversible configurations **must not** overlap with non-reversible configurations.
+//! For example if `MySet` is configured with [`rev_after`] it should not also be configured with
+//! [`before`]. Ideally schedules are populated with either strictly reversible or non-reversible
+//! configurations.
+//!
+//! If this is not possible, reversible systems are always part of the [`RevSystems`] set that
+//! can be used for non-reversible ordering.
+//!
+//! [`RevDirection::Forward`]: crate::meta::RevDirection::Forward
+//! [`RevDirection::BackwardLog`]: crate::meta::RevDirection::BackwardLog
+//! [`RevDirection::NOT_LOG`]: crate::meta::RevDirection::NOT_LOG
+//! [log directions]: crate::meta::RevDirection::is_log
+//! [reversible commands]: crate::undo_redo::RevCommands
+//! [`rev_after`]: IntoRevScheduleConfigs::rev_after
+//! [`before`]: IntoScheduleConfigs::before
+//! [`World`]: bevy_ecs::world::World
+//! [`Commands`]: bevy_ecs::system::Commands
+
 use crate::meta::RevMeta;
 use bevy_ecs::{
     change_detection::Res,
     schedule::{
-        Chain, InternedSystemSet, IntoScheduleConfigs, IntoSystemSet, Schedulable, Schedule,
-        ScheduleConfigTupleMarker, ScheduleConfigs, ScheduleLabel, SystemCondition, SystemSet,
-        graph::GraphInfo,
+        ApplyDeferred, Chain, InternedSystemSet, IntoScheduleConfigs, IntoSystemSet, Schedulable,
+        Schedule, ScheduleConfigTupleMarker, ScheduleConfigs, ScheduleLabel, SystemCondition,
+        SystemSet, graph::GraphInfo,
     },
     system::{IntoSystem, ScheduleSystem},
 };
@@ -30,11 +109,25 @@ pub struct RevUpdate;
 
 /// Contains a forward and a backward set that run depending on the current
 /// [`RevMeta::running_direction`].
-///
-/// Do not use this set when using the `rev_*` configuration methods. This is intended for use in
-/// the regular bevy configuraton methods.
-#[derive(SystemSet, Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub struct RevSystems;
+
+/// [`RevSystems`] does not implement [`SystemSet`] because it is not meant to be configured but
+/// only to order other sets and systems relative to itself using
+/// [non-reversible configurations](IntoScheduleConfigs).
+impl IntoSystemSet<()> for RevSystems {
+    /// Refrain from using this type in user code.
+    type Set = RevSystemsSet;
+    fn into_system_set(self) -> Self::Set {
+        RevSystemsSet
+    }
+}
+
+mod rev_systems_private {
+    #[derive(super::SystemSet, Debug, Copy, Clone, Hash, PartialEq, Eq)]
+    pub struct RevSystemsSet;
+}
+
+use rev_systems_private::RevSystemsSet;
 
 /// Subset of [`RevSystems`].
 ///
@@ -80,37 +173,12 @@ struct BackwardDeferredAndSystemSet(InternedSystemSet);
 /// Extension trait for [`Schedule`] for adding reversible systems and configurations.
 pub trait RevSchedule {
     /// Reversible version of [`Schedule::add_systems`].
-    ///
-    /// This wraps every passed system `T` in an `Arc<Mutex<T>>` that is shared for:
-    /// - A new system `F` that runs at [`RevDirection::Forward`]
-    /// - A new system `B` that runs at [`RevDirection::BackwardLog`]
-    ///
-    /// Systems can read the direction value from [`RevMeta::running_direction`].
-    ///
-    /// Additionally, another new system per `T` is added that runs at [`RevDirection::BackwardLog`]
-    /// but before `B` which undoes deferred actions such as commands. This way, `B` will start with
-    /// the [`World`] state that was present when `F` finished but did not have its deferred actions
-    /// applied yet.
-    ///
-    /// This third system is noop for exclusive systems or when `T` has no such deferred parameters
-    /// like [`Commands`].
-    ///
-    /// Configurations that order the systems will be reversed for the `B` variants.
-    ///
-    /// [`RevDirection::Forward`]: crate::meta::RevDirection::Forward
-    /// [`RevDirection::BackwardLog`]: crate::meta::RevDirection::BackwardLog
-    /// [`World`]: bevy_ecs::world::World
-    /// [`Commands`]: bevy_ecs::system::Commands
     fn rev_add_systems<Marker>(
         &mut self,
         systems: impl IntoRevScheduleConfigs<ScheduleSystem, Marker>,
     ) -> &mut Self;
 
     /// Reversible version of [`Schedule::configure_sets`].
-    ///
-    /// Configurations that order the systems or sets will be reversed for when
-    /// [`RevDirection::BackwardLog`](crate::meta::RevDirection::BackwardLog) is
-    /// [running](`RevMeta::running_direction`).
     fn rev_configure_sets<Marker>(
         &mut self,
         sets: impl IntoRevScheduleConfigs<InternedSystemSet, Marker>,
@@ -163,7 +231,7 @@ fn set_base_sets(schedule: &mut Schedule) {
                 BackwardSystems.run_if(is_forward::<false>),
             )
                 .chain() // todo: remove chain to reduce sync points
-                .in_set(RevSystems),
+                .in_set(RevSystemsSet),
         );
     }
 }
@@ -185,11 +253,27 @@ pub struct RevScheduleConfigs<T: Schedulable> {
     /// Configurations of [`BackwardDeferredAndSystemSet`]s.
     backward_deferred_and_systems: ScheduleConfigs<InternedSystemSet>,
 
-    /// Contains [`AtomicSet`](system::AtomicSet)s and default sets of a reversible system or custom
-    /// sets depending on `T`.
+    /// Contains [`RevSystemTypeSet`](system::RevSystemTypeSet)s and
+    /// [default sets](bevy_ecs::system::System::default_system_sets) of a reversible system or
+    /// custom sets depending on `T`.
     ///
     /// Used for run conditions.
     conditioned: ScheduleConfigs<InternedSystemSet>,
+}
+
+impl From<ApplyDeferred> for RevScheduleConfigs<ScheduleSystem> {
+    fn from(_: ApplyDeferred) -> Self {
+        #[derive(SystemSet, Clone, Debug, PartialEq, Eq, Hash)]
+        struct EmptySet;
+
+        Self {
+            forward_systems: ApplyDeferred.into_configs(),
+            backward_deferred: ApplyDeferred.into_configs(),
+            backward_systems: ApplyDeferred.into_configs(),
+            backward_deferred_and_systems: EmptySet.into_configs(),
+            conditioned: EmptySet.into_configs(),
+        }
+    }
 }
 
 /// Reversible variant of [`IntoScheduleConfigs`].
@@ -417,7 +501,7 @@ impl<T: Schedulable<Metadata = GraphInfo, GroupMetadata = Chain>> RevScheduleCon
             .in_set_inner(BackwardDeferredAndSystemSet(set).intern());
     }
 
-    /// Split configuration for [`impl_into_rev_schedule_configs`].
+    /// Split configurations for [`impl_into_rev_schedule_configs`].
     fn split(self) -> (ForwardConfigs<T>, BackwardConfigs<T>) {
         (
             ForwardConfigs {

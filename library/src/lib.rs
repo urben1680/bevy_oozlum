@@ -57,12 +57,12 @@ pub mod meta;
 pub mod schedule;
 pub mod undo_redo;
 
-/// Contains common types an all extension traits `as _`.
+/// Contains common types and all extension traits `as _`.
 pub mod prelude {
     #[cfg(feature = "bevy_app")]
     pub use crate::app::{RevApp as _, RevPlugin};
     pub use crate::log::{TransitionLog, TransitionsLog, UpdateLog};
-    pub use crate::meta::{NonLogNow, RevDirection, RevMeta, RevQueue};
+    pub use crate::meta::{RevDirection, RevMeta, RevQueue};
     pub use crate::schedule::{
         IntoRevScheduleConfigs as _, RevSchedule as _, RevSystems, RevUpdate,
     };

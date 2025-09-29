@@ -252,5 +252,3 @@ fn rev_retain() {
     assert_eq!(entity_ref.get::<Explicit<4>>(), None);
     assert_eq!(entity_ref.get::<Required<4>>(), None);
 }
-
-// todo: test noop situations
