@@ -65,10 +65,8 @@ impl Debug for UpdateLog {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("UpdateLog")
             .field("offset_bytes", &self.offset_bytes)
-            .field(
-                "offset_bytes (decoded)",
-                &OffsetIter(self.offset_bytes.iter()),
-            )
+            .field("offsets (decoded)", &OffsetIter(self.offset_bytes.iter()))
+            .field("updated at (decoded)", &self.updated_at())
             .field("out_of_or_past_end_log", &self.out_of_or_past_end_log)
             .field("last_update", &self.last_update)
             .field("index", &self.index)
@@ -209,59 +207,6 @@ impl UpdateLog {
     /// [`RevMeta::run_rev_update`] is used, such errors are handled by the default error handler.
     pub fn id(&self) -> Option<u32> {
         self.update_state.map(|state| state.id.get())
-    }
-
-    /// Get an iterator that returns the [reversible frames](RevMeta::now) this log was updated at.
-    ///
-    /// If the log was updated multiple times at one frame, that frame will occur as many times in
-    /// sequence.
-    pub fn updated_at(&self) -> impl Iterator<Item = u64> + '_ {
-        struct Iter<'a> {
-            offsets: OffsetIter<'a>,
-            frame: u64,
-            zeroes: u8,
-            zeroes_max: u8,
-        }
-
-        impl Iterator for Iter<'_> {
-            type Item = u64;
-            fn next(&mut self) -> Option<Self::Item> {
-                if self.zeroes > 0 {
-                    self.zeroes -= 1;
-                    return Some(self.frame);
-                }
-                match self.offsets.next() {
-                    Some(IterItem { offset: 0, len }) => {
-                        self.zeroes = len.get() - 1;
-                        Some(self.frame)
-                    }
-                    Some(IterItem { offset, .. }) => {
-                        self.zeroes = 0;
-                        self.frame += offset;
-                        Some(self.frame)
-                    }
-                    None if self.zeroes_max > 0 => {
-                        self.zeroes_max -= 1;
-                        Some(self.frame)
-                    }
-                    None => None,
-                }
-            }
-            fn size_hint(&self) -> (usize, Option<usize>) {
-                let (mut min, mut max) = self.offsets.size_hint();
-                let zeroes_max = self.zeroes_max as usize;
-                min = min.saturating_add(zeroes_max);
-                max = max.and_then(|max| max.checked_add(zeroes_max));
-                (min, max)
-            }
-        }
-
-        Iter {
-            offsets: OffsetIter(self.offset_bytes.iter()),
-            frame: self.out_of_or_past_end_log,
-            zeroes: 0,
-            zeroes_max: self.zeroes_max,
-        }
     }
 
     /// Update the log and return the updated length of the log as an alternative to

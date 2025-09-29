@@ -1,6 +1,6 @@
 //! This module contains extension traits and accompanying types to add regular systems, conditions
 //! and sets to make their effect reversible.
-//! 
+//!
 //! The main reversible schedule that is run by [`RevMeta::run_rev_update`] is [`RevUpdate`].
 //!
 //! # Reversible systems
@@ -46,7 +46,7 @@
 //! actions applied yet. This third system is otherwise noop.
 //!
 //! Configurations that order the systems will be reversed for the `B` variants.
-//! 
+//!
 //! Reversible systems work best in fixed intervals.
 //!
 //! # Reversible conditions
@@ -58,7 +58,7 @@
 //! # Reversible configurations of systems and sets
 //!
 //! [`RevSchedule`] automatically handles this aspect in the `rev_*` methods.
-//! 
+//!
 //! Be aware that reversible configurations **must not** overlap with non-reversible configurations.
 //! For example if `MySet` is configured with [`rev_after`] it should not also be configured with
 //! [`before`]. Ideally schedules are populated with either strictly reversible or non-reversible
