@@ -9,10 +9,9 @@ use core::{
     iter::{FusedIterator, Rev, Skip, Take},
     mem::take,
 };
-use std::collections::{
-    TryReserveError, VecDeque,
-    vec_deque::{Drain, Iter},
-};
+use std::{collections::{
+    vec_deque::{Drain, Iter}, TryReserveError, VecDeque
+}, usize};
 
 /// A log that is updated with exactly one transition type `T` that is used to transition a state
 /// forward or backward in time.
@@ -226,7 +225,7 @@ pub struct TransitionLog<T> {
     /// the length of it, the log reached its future end.
     index: usize,
 
-    truncated_future: usize,
+    to_truncate: usize,
 
     /// Contains the most recent global count of log exits that was witnessed.
     ///
@@ -253,7 +252,7 @@ impl<T> TransitionLog<T> {
         Self {
             transitions: VecDeque::new(),
             index: 0,
-            truncated_future: 0,
+            to_truncate: 0,
             meta_log_exits: 0,
             meta_log_clears: 0,
             poison: Ok(()),
@@ -363,12 +362,14 @@ impl<T> TransitionLog<T> {
         self.transitions.shrink_to_fit()
     }
 
+    #[track_caller]
     pub fn push<const VALUE: bool>(
         &mut self,
         meta: &RevMeta,
         max_past_len: u64,
         transition: impl ValueOrClosure<T, VALUE>,
     ) {
+        let max_past_len = usize::try_from(max_past_len).unwrap_or(usize::MAX);
         transition.push(self, meta, max_past_len);
     }
 
@@ -440,7 +441,7 @@ impl<T> TransitionLog<T> {
 
         if self.meta_log_clears < meta.log_clears()
             || self.meta_log_exits < meta.log_exits()
-            || self.index >= self.truncated_future.min(self.transitions.len())
+            || self.index >= self.to_truncate.min(self.transitions.len())
         {
             return Err(self.set_poison());
         }
@@ -462,52 +463,53 @@ impl<T> TransitionLog<T> {
 }
 
 pub trait ValueOrClosure<T, const VALUE: bool> {
-    fn push(self, log: &mut TransitionLog<T>, meta: &RevMeta, max_past_len: u64);
+    fn push(self, log: &mut TransitionLog<T>, meta: &RevMeta, max_past_len: usize);
 }
 
 impl<T> ValueOrClosure<T, true> for T {
     #[track_caller]
-    fn push(self, log: &mut TransitionLog<T>, meta: &RevMeta, max_past_len: u64) {
+    fn push(self, log: &mut TransitionLog<T>, meta: &RevMeta, max_past_len: usize) {
         if log.meta_log_clears < meta.log_clears() {
             log.poison = Ok(());
-            log.meta_log_clears = meta.log_clears();
-            log.meta_log_exits = meta.log_exits();
             log.transitions.clear();
         } else if log.poison.is_err() {
             return poison_push_err::<T>();
         } else {
-            log.meta_log_exits = meta.log_exits();
             log.transitions.truncate(log.index);
-            let to_drain = (log.transitions.len() + 1).saturating_sub(max_past_len as usize);
+            let to_drain = log
+                .transitions
+                .len()
+                .saturating_sub(max_past_len.saturating_sub(1));
             // todo: truncate_front https://github.com/rust-lang/rust/issues/140667
             log.transitions.drain(..to_drain);
         }
+        log.meta_log_clears = meta.log_clears();
+        log.meta_log_exits = meta.log_exits();
         if max_past_len > 0 {
             log.transitions.push_back(self);
         }
         log.index = log.transitions.len();
-        log.truncated_future = log.index;
+        log.to_truncate = log.index;
     }
 }
 
 impl<T, F: for<'a> FnOnce(TransitionLogMut<'a, T>) -> T> ValueOrClosure<T, false> for F {
     #[track_caller]
-    fn push(self, log: &mut TransitionLog<T>, meta: &RevMeta, max_past_len: u64) {
-        let (past_drain, future_drain);
-        if log.meta_log_clears < meta.log_clears() {
+    fn push(self, log: &mut TransitionLog<T>, meta: &RevMeta, max_past_len: usize) {
+        let past_drain = if log.meta_log_clears < meta.log_clears() {
             log.poison = Ok(());
-            log.meta_log_clears = meta.log_clears();
-            log.meta_log_exits = meta.log_exits();
-            past_drain = log.index;
-            future_drain = log.transitions.len() - log.index;
+            log.index
         } else if log.poison.is_err() {
             return poison_push_err::<T>();
         } else {
-            log.meta_log_exits = meta.log_exits();
-            past_drain = (log.transitions.len() + 1)
-                .saturating_sub((max_past_len as usize).saturating_add(1));
-            future_drain = log.transitions.len() - log.index;
-        }
+            log
+                .transitions
+                .len()
+                .saturating_sub(max_past_len)
+        };
+        log.meta_log_clears = meta.log_clears();
+        log.meta_log_exits = meta.log_exits();
+        let future_drain = log.transitions.len() - log.index;
         let mut buffer = [].into();
         let transition = self(TransitionLogMut {
             transitions: &mut log.transitions,
@@ -515,11 +517,10 @@ impl<T, F: for<'a> FnOnce(TransitionLogMut<'a, T>) -> T> ValueOrClosure<T, false
             past_drain,
             future_drain,
         });
-        log.transitions.reserve(buffer.len() + 1);
         log.transitions.extend(buffer);
         log.transitions.push_back(transition);
         log.index = log.transitions.len();
-        log.truncated_future = log.index;
+        log.to_truncate = log.index;
     }
 }
 
@@ -714,7 +715,6 @@ impl<T> Drop for TransitionAll<'_, T> {
     }
 }
 
-/*
 #[cfg(test)]
 mod test {
     use core::num::NonZeroU64;
@@ -723,6 +723,22 @@ mod test {
 
     use super::*;
 
+    #[test]
+    fn meta_clear_also_clears_log() {
+
+    }
+
+    #[test]
+    fn meta_clear_full_drain() {
+
+    }
+
+    #[test]
+    fn meta_clear_separate_drains() {
+
+    }
+
+    /* 
     struct MetaAndLogs {
         meta: RevMeta,
         with_past_drain: TransitionLog<char>,
@@ -938,4 +954,5 @@ mod test {
         meta_and_logs.backward_log(['i'], Ok('h'));
         meta_and_logs.backward_log([], Err(()));
     }
-}*/
+    */
+}
