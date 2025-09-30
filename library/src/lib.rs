@@ -8,6 +8,24 @@ TODO:
 - StrLog
 -- https://github.com/rust-lang/rust/issues/133253
 
+log Idee:
+- Nothing works everywhere
+- RemoveLog only works at non-log
+- RemoveFuture works at non-log and backward log
+-- backward lock could postpone it with another usize where it behaves like this is the log end
+-- that way only non-log needs a draining API
+-- .forward_log(meta)
+-- .backward_log(meta)
+-- TransitionLog
+--- .push(meta, max_past_len, transition)
+--- .push(meta, max_past_len, |_log| transition)
+-- TransitionsLog
+--- .push(meta, max_past_len, |_log| update)
+- wenn bei TransitionsLog TransitionsLogMut und LogDrains kombiniert werden, braucht es keine neue API
+- wenn bei TransitionLog TransitionLogMut und LogDrains erfunden und kombiniert werden
+  und transition T beide als valide parameter angenommen werden, braucht es keine neue API
+- UpdateLog integriert einfach pre_update in die anderen Methoden
+
 Enhancements:
 - reduce todo!() and //todo and unwrap (in favor of expect)
 - #[inline]s
@@ -53,6 +71,7 @@ ISSUES/DISCUSSIONS:
 #[cfg(feature = "bevy_app")]
 pub mod app;
 pub mod log;
+pub mod log2;
 pub mod meta;
 pub mod schedule;
 pub mod undo_redo;

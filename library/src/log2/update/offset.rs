@@ -1,0 +1,409 @@
+//! This module contains a way to write ([`UpdateLog::push_offset`]) and read ([`OffsetIter`]) bytes
+//! that encode how many frames in the past or the future [`UpdateLog`] as updated at.
+//!
+//! This is more compact than storing `u64`.
+//!
+//! - Offsets from `0` to `127` are encoded in a single byte as `x` bits in the pattern of
+//!   `0b0_xxxxxxx`.
+//! - Up to `65` sequential offsets of `0` are encoded in a single byte as `x` bits in the pattern
+//!   of `0b10_xxxxxx`. The numeric value of the `x` is actually read plus 2. This is because:
+//!   - There is no concept of "zero times an offset of `0`" so `0b10_000000` makes no sense to be
+//!     interpreted as "zero times".
+//!   - The value of "one time an offset of `0`" is already encoded in `0b0_0000000`.
+//! - Offsets larger than `127` are encoded in multiple bytes and are split in chunks of `x` bits:
+//!   - The first and last byte of this sequence use the pattern `0b11_xxxxxx`.
+//!   - If more bits are needed, in between are bytes that use the pattern `0b0_xxxxxxx`.
+//!   - This uses up to ten bytes in total for `u64::MAX`.
+//! - This encoding does not consume more bytes than `u64` for offsets below `2^55`.
+//! - These bytes or sequences of bytes can be read in reverse as well, which is needed for reading
+//!   the previous offset in [`UpdateLog::backward_log`]([`many`](UpdateLog::backward_log_many)).
+//! - The [`OffsetIter`] iterator is used to read the offsets. See [`IterItem`].
+
+use super::UpdateLog;
+use core::{
+    fmt::{Debug, Formatter, Result},
+    iter::repeat_n,
+    num::NonZeroU8,
+    ops::ControlFlow,
+};
+use std::collections::vec_deque::Iter;
+
+const MAX_ZEROES_PER_BYTE: u8 = 65;
+const MAX_ZEROES_AS_BYTE: u8 = 0b10_111111;
+const ZEROES_MASK: u8 = 0b00_111111;
+const ZEROES_OR: u8 = 0b10_000000;
+const MAX_SINGLE_BYTE_OFFSET: u8 = 0b0_1111111;
+const WRAPPED_OFFSET_MASK: u8 = 0b0_1111111;
+const WRAPPING_OFFSET_MASK: u8 = 0b00_111111;
+const WRAPPING_OFFSET_OR: u8 = 0b11_000000;
+const MAX_WRAPPING_OFFSET: u8 = 0b00_111111;
+
+impl UpdateLog {
+    /// Get an iterator that returns the [reversible frames](RevMeta::now) this log was updated at.
+    ///
+    /// If the log was updated multiple times at one frame, that frame will occur as many times in
+    /// sequence.
+    pub fn updated_at(&self) -> impl Iterator<Item = u64> + Debug + '_ {
+        UpdatedAtIter {
+            offsets: OffsetIter(self.offset_bytes.iter()),
+            frame: self.out_of_or_past_end_log,
+            zeroes: 0,
+            zeroes_max: self.zeroes_max,
+        }
+    }
+
+    pub(super) fn push_offset(&mut self, mut offset: u64) {
+        if offset == 0 {
+            return self.push_zero_offset();
+        }
+
+        if self.zeroes == 1 {
+            // there was an offset of 0 previously, push it now that it is sure no more such offsets
+            // are following it
+            self.offset_bytes.push_back(0);
+            self.index += 1;
+        } else if self.zeroes > 1 {
+            // there was a sequence of offsets of 0 previously, push it now that it is sure no more
+            // such offsets are following it
+            self.offset_bytes.push_back((self.zeroes - 2) | ZEROES_OR);
+            self.index += 1;
+        }
+
+        self.index += 1;
+        self.zeroes = 0;
+        self.zeroes_max = 0;
+
+        if offset <= MAX_SINGLE_BYTE_OFFSET as u64 {
+            self.offset_bytes.push_back(offset as u8);
+            return;
+        }
+
+        // this is a multi-byte offset
+
+        let wrapping_byte = (offset & WRAPPING_OFFSET_MASK as u64) as u8 | WRAPPING_OFFSET_OR;
+        self.offset_bytes.push_back(wrapping_byte);
+
+        // wrapping bytes contain 6 usable bits for the offset
+        offset >>= 6;
+
+        loop {
+            self.index += 1;
+
+            if offset <= MAX_WRAPPING_OFFSET as u64 {
+                // this is a wrapping byte
+
+                self.offset_bytes
+                    .push_back(offset as u8 | WRAPPING_OFFSET_OR);
+                return;
+            }
+
+            // this is a wrapped byte
+
+            self.offset_bytes
+                .push_back((offset & WRAPPED_OFFSET_MASK as u64) as u8);
+
+            // wrapped bytes contain 7 usable bits for the offset
+            offset >>= 7;
+        }
+    }
+
+    pub(super) fn push_zero_offset(&mut self) {
+        if self.zeroes == MAX_ZEROES_PER_BYTE {
+            self.offset_bytes.push_back(MAX_ZEROES_AS_BYTE);
+            self.index += 1;
+            self.zeroes = 0;
+        }
+
+        // increase the sequence of zero offsets
+        self.zeroes += 1;
+        self.zeroes_max = self.zeroes;
+    }
+}
+
+/// Iterator to read [`UpdateLog::offset_bytes`](super::UpdateLog::offset_bytes) and decode them
+/// to [`IterItem`].
+#[derive(Clone)]
+pub(super) struct OffsetIter<'a>(pub(super) Iter<'a, u8>);
+
+/// Reads a byte or sequence of bytes from
+/// [`UpdateLog::offset_bytes`](super::UpdateLog::offset_bytes). Contains a single offset or, if
+/// the offset is `0`, a sequence of such offsets.
+#[derive(Debug, PartialEq, Clone)]
+pub(super) struct IterItem {
+    /// Amount of frames between two updates of [`UpdateLog`](super::UpdateLog).
+    pub(super) offset: u64,
+
+    /// The amount of bytes this offset is made of to update
+    /// [`UpdateLog::index`](super::UpdateLog::index) correctly. If [Self::offset] == `0`, this is
+    /// the amount of `0` offsets in this byte instead.
+    pub(super) len: NonZeroU8,
+}
+
+impl Debug for OffsetIter<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
+        f.debug_list()
+            .entries(self.clone().flat_map(|IterItem { offset, len }| {
+                let count = if offset == 0 { len.get() } else { 1 };
+                repeat_n(offset, count as usize)
+            }))
+            .finish()
+    }
+}
+
+/// Decode first byte that is read by [`OffsetIter`], may be the last byte in the sequence if the
+/// iterator goes backwards. Returns [`ControlFlow::Break`] if the offset consists of only one byte.
+/// Otherwise returns [`ControlFlow::Continue`] with the first bits of the offset that the iterator
+/// has to complete.
+fn check_first_byte(byte: u8) -> ControlFlow<IterItem, u64> {
+    match byte.leading_ones() {
+        // 0b0_xxxxxxx => a single-byte offset
+        0 => ControlFlow::Break(IterItem {
+            offset: byte as u64,
+            len: NonZeroU8::MIN,
+        }),
+        // 0b10_xxxxxx => sequence of offsets of 0 in a single byte
+        1 => {
+            // up to 65 zeroes, composed of 0b00_111111 = 63 ...
+            // ... + 1 because it is always at least one zero
+            // ... + 1 because above match arm already decodes 0b0_0000000 to len 1
+            let zeroes = (byte & ZEROES_MASK) + 2;
+            ControlFlow::Break(IterItem {
+                offset: 0,
+                // SAFETY: `zeroes` cannot be zero, +2 could not overflow with MSBs masked away
+                len: unsafe { NonZeroU8::new_unchecked(zeroes) },
+            })
+        }
+        // 0b11_xxxxxx => wrapping byte of a multi-byte offset
+        _ => ControlFlow::Continue((byte & WRAPPING_OFFSET_MASK) as u64),
+    }
+}
+
+impl Iterator for OffsetIter<'_> {
+    type Item = IterItem;
+    fn next(&mut self) -> Option<Self::Item> {
+        // check first byte
+        let byte = *self.0.next()?;
+        let mut offset = match check_first_byte(byte) {
+            ControlFlow::Break(item) => return Some(item),
+            ControlFlow::Continue(offset) => offset,
+        };
+
+        // this is a multi-byte offset
+
+        let mut len = 1;
+
+        // wrapping bytes contain 6 usable bits for the offset
+        let mut shift = 6;
+
+        loop {
+            let byte = *self.0.next().unwrap(); // encoding expects more bytes to follow
+
+            len += 1;
+
+            if byte.leading_zeros() == 0 {
+                // this is a wrapping byte
+
+                // the added bits are more significant
+                offset |= ((byte & WRAPPING_OFFSET_MASK) as u64) << shift;
+                return Some(IterItem {
+                    offset,
+                    // SAFETY: len started with 1, could be at most 10, never overflows
+                    len: unsafe { NonZeroU8::new_unchecked(len) },
+                });
+            }
+
+            // this is a wrapped byte
+
+            // the added bits are more significant, has no marker bits that need to be masked away
+            offset |= (byte as u64) << shift;
+
+            // wrapped bytes contain 7 usable bits for the offset
+            shift += 7;
+        }
+    }
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let len = self.0.len();
+
+        // at most 10 bytes are used to store a u64
+        let min = len.div_ceil(10);
+
+        // up to 65 zeroes can be stored in a byte
+        let max = len.checked_mul(MAX_ZEROES_PER_BYTE as usize);
+
+        (min, max)
+    }
+}
+
+impl DoubleEndedIterator for OffsetIter<'_> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        // check first byte
+        let byte = *self.0.next_back()?;
+        let mut offset = match check_first_byte(byte) {
+            ControlFlow::Break(item) => return Some(item),
+            ControlFlow::Continue(offset) => offset,
+        };
+
+        // this is a multi-byte offset
+
+        let mut len = 1;
+
+        loop {
+            let byte = *self.0.next_back().unwrap(); // encoding expects more bytes to follow
+
+            len += 1;
+
+            if byte.leading_zeros() == 0 {
+                // this is a wrapping byte
+
+                // the added bits are less significant, wrapping bytes contain 6 usable bits for the
+                // offset
+                offset = (offset << 6) | (byte & WRAPPING_OFFSET_MASK) as u64;
+
+                return Some(IterItem {
+                    offset,
+                    // SAFETY: len started with 1, could be at most 10, never overflows
+                    len: unsafe { NonZeroU8::new_unchecked(len) },
+                });
+            }
+
+            // this is a wrapped byte
+
+            // the added bits are less significant, has no marker bits that need to be masked away,
+            // wrapped bytes contain 7 usable bits for the offset
+            offset = (offset << 7) | byte as u64;
+        }
+    }
+}
+
+/// Iterator read frames at which [`UpdateLog`] updated.
+#[derive(Clone)]
+pub(super) struct UpdatedAtIter<'a> {
+    offsets: OffsetIter<'a>,
+    frame: u64,
+    zeroes: u8,
+    zeroes_max: u8,
+}
+
+impl Debug for UpdatedAtIter<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
+        f.debug_list().entries(self.clone()).finish()
+    }
+}
+
+impl Iterator for UpdatedAtIter<'_> {
+    type Item = u64;
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.zeroes > 0 {
+            self.zeroes -= 1;
+            return Some(self.frame);
+        }
+        match self.offsets.next() {
+            Some(IterItem { offset: 0, len }) => {
+                self.zeroes = len.get() - 1;
+                Some(self.frame)
+            }
+            Some(IterItem { offset, .. }) => {
+                self.zeroes = 0;
+                self.frame += offset;
+                Some(self.frame)
+            }
+            None if self.zeroes_max > 0 => {
+                self.zeroes_max -= 1;
+                Some(self.frame)
+            }
+            None => None,
+        }
+    }
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let (mut min, mut max) = self.offsets.size_hint();
+        let zeroes_max = self.zeroes_max as usize;
+        min = min.saturating_add(zeroes_max);
+        max = max.and_then(|max| max.checked_add(zeroes_max));
+        (min, max)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn offset_iter_works() {
+        let offsets = [
+            0b___________________________________________________________________000000,
+            0b____________________________________________________________000010_000001,
+            0b____________________________________________________000101_0000100_000011,
+            0b____________________________________________001001_0001000_0000111_000110,
+            0b____________________________________001110_0001101_0001100_0001011_001010,
+            0b____________________________010100_0010011_0010010_0010001_0010000_001111,
+            0b____________________011011_0011010_0011001_0011000_0010111_0010110_010101,
+            0b____________100011_0100010_0100001_0100000_0011111_0011110_0011101_011100,
+            0b____101100_0101011_0101010_0101001_0101000_0100111_0100110_0100101_100100,
+            0b10_0110101_0110100_0110011_0110010_0110001_0110000_0101111_0101110_101101,
+        ];
+
+        let mut log = UpdateLog::new();
+        for offset in offsets {
+            log.push_offset(offset);
+        }
+        for _ in 0..MAX_ZEROES_PER_BYTE {
+            log.push_offset(0);
+        }
+
+        // test frames
+
+        let mut frame = 0;
+        let expected_a = offsets.map(|offset| {
+            frame += offset;
+            frame
+        });
+        let expected_b = [expected_a[9]; MAX_ZEROES_PER_BYTE as usize];
+
+        assert!(
+            log.updated_at()
+                .eq(expected_a.iter().chain(expected_b.iter()).cloned()),
+            "{log:#?}\n{expected_a:?}{expected_b:?}"
+        );
+
+        // make the 65 zeroes be part of the deque
+        log.push_zero_offset();
+
+        // test offsets
+
+        fn item(offset: u64, len: u8) -> IterItem {
+            IterItem {
+                offset,
+                len: NonZeroU8::new(len).unwrap(),
+            }
+        }
+
+        let expected = [
+            // single byte value
+            item(offsets[0], 1),
+            // multi byte values
+            item(offsets[1], 2),
+            item(offsets[2], 3),
+            item(offsets[3], 4),
+            item(offsets[4], 5),
+            item(offsets[5], 6),
+            item(offsets[6], 7),
+            item(offsets[7], 8),
+            item(offsets[8], 9),
+            item(offsets[9], 10),
+            // 65 zeroes in a byte
+            item(0, MAX_ZEROES_PER_BYTE),
+        ];
+
+        assert!(
+            OffsetIter(log.offset_bytes.iter()).eq(expected.iter().cloned()),
+            "{log:#?}\n{expected:?}"
+        );
+
+        assert!(
+            OffsetIter(log.offset_bytes.iter())
+                .rev()
+                .eq(expected.iter().cloned().rev()),
+            "{log:#?}\n{expected:?}"
+        );
+    }
+}
