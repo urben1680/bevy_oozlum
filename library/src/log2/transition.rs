@@ -414,7 +414,6 @@ impl<T> TransitionLog<T> {
             keep_buffer: &mut keep_buffer,
             keep: start..self.index,
         });
-        assert!(keep_buffer.is_empty());
         self.transitions.extend(keep_buffer);
         self.transitions.push_back(transition);
         self.index = self.transitions.len();
@@ -538,6 +537,13 @@ impl<T> TransitionLogMut<'_, T> {
     }
 
     pub fn drain_all(&mut self) -> TransitionAll<'_, T> {
+        if !self.keep_buffer.is_empty() {
+            return TransitionAll {
+                drain: self.transitions.drain(..0),
+                keep_buffer: self.keep_buffer,
+                keep: 0..0,
+            };
+        }
         let mut keep = self.keep.clone();
         keep.start = keep.start.saturating_sub(1);
         self.keep = 0..(self.keep.end - keep.start);
@@ -629,13 +635,18 @@ mod test {
 
     use super::*;
 
+    #[derive(Debug)]
     struct MetaAndLogs {
         meta: RevMeta,
         truncate: TransitionLog<char>,
         drop_drain: TransitionLog<char>,
         past_drain: TransitionLog<char>,
         future_drain: TransitionLog<char>,
+        past_future_drain: TransitionLog<char>,
+        future_past_drain: TransitionLog<char>,
         all_drain: TransitionLog<char>,
+        past_all_drain: TransitionLog<char>,
+        future_all_drain: TransitionLog<char>,
     }
 
     impl MetaAndLogs {
@@ -646,7 +657,11 @@ mod test {
                 drop_drain: TransitionLog::new(),
                 past_drain: TransitionLog::new(),
                 future_drain: TransitionLog::new(),
+                past_future_drain: TransitionLog::new(),
+                future_past_drain: TransitionLog::new(),
                 all_drain: TransitionLog::new(),
+                past_all_drain: TransitionLog::new(),
+                future_all_drain: TransitionLog::new(),
             }
         }
         fn forward<const N: usize, const M: usize>(
@@ -673,6 +688,7 @@ mod test {
                         let actual: Vec<char> = log.drain_past().collect();
                         assert_eq!(actual, past_drain, "{log:#?}");
                         assert_eq!(log.drain_past().count(), 0, "{log:#?}");
+
                         push
                     })
                     .unwrap();
@@ -681,22 +697,76 @@ mod test {
                         let actual: Vec<char> = log.drain_future().collect();
                         assert_eq!(actual, future_drain, "{log:#?}");
                         assert_eq!(log.drain_future().count(), 0, "{log:#?}");
+
+                        push
+                    })
+                    .unwrap();
+                self.past_future_drain
+                    .drain_push(meta, meta.past_len(), |mut log| {
+                        let actual: Vec<char> = log.drain_past().collect();
+                        assert_eq!(actual, past_drain, "{log:#?}");
+                        assert_eq!(log.drain_past().count(), 0, "{log:#?}");
+
+                        let actual: Vec<char> = log.drain_future().collect();
+                        assert_eq!(actual, future_drain, "{log:#?}");
+                        assert_eq!(log.drain_future().count(), 0, "{log:#?}");
+                        assert_eq!(log.drain_all().count(), 0, "{log:#?}");
+
+                        push
+                    })
+                    .unwrap();
+                self.future_past_drain
+                    .drain_push(meta, meta.past_len(), |mut log| {
+                        let actual: Vec<char> = log.drain_future().collect();
+                        assert_eq!(actual, future_drain, "{log:#?}");
+                        assert_eq!(log.drain_future().count(), 0, "{log:#?}");
+
+                        let actual: Vec<char> = log.drain_past().collect();
+                        assert_eq!(actual, past_drain, "{log:#?}");
+                        assert_eq!(log.drain_past().count(), 0, "{log:#?}");
+                        assert_eq!(log.drain_all().count(), 0, "{log:#?}");
+
                         push
                     })
                     .unwrap();
                 self.all_drain
                     .drain_push(meta, meta.past_len(), |mut log| {
-                        if push == 'm' {
-                            println!("{log:#?}");
-                        }
                         let actual: Vec<char> = log.drain_all().collect();
                         let expected: Vec<char> =
                             past_drain.into_iter().chain(future_drain).collect();
                         assert_eq!(actual, expected, "{log:#?}");
-                        if push == 'm' {
-                            println!("{log:#?}");
-                        }
+                        assert_eq!(log.drain_past().count(), 0, "{log:#?}");
+                        assert_eq!(log.drain_future().count(), 0, "{log:#?}");
                         assert_eq!(log.drain_all().count(), 0, "{log:#?}");
+
+                        push
+                    })
+                    .unwrap();
+                self.past_all_drain
+                    .drain_push(meta, meta.past_len(), |mut log| {
+                        let actual: Vec<char> = log.drain_past().collect();
+                        assert_eq!(actual, past_drain, "{log:#?}");
+                        assert_eq!(log.drain_past().count(), 0, "{log:#?}");
+
+                        let actual: Vec<char> = log.drain_all().collect();
+                        assert_eq!(actual, future_drain, "{log:#?}");
+                        assert_eq!(log.drain_future().count(), 0, "{log:#?}");
+                        assert_eq!(log.drain_all().count(), 0, "{log:#?}");
+
+                        push
+                    })
+                    .unwrap();
+                self.future_all_drain
+                    .drain_push(meta, meta.past_len(), |mut log| {
+                        let actual: Vec<char> = log.drain_future().collect();
+                        assert_eq!(actual, future_drain, "{log:#?}");
+                        assert_eq!(log.drain_future().count(), 0, "{log:#?}");
+
+                        let actual: Vec<char> = log.drain_all().collect();
+                        assert_eq!(actual, past_drain, "{log:#?}");
+                        assert_eq!(log.drain_past().count(), 0, "{log:#?}");
+                        assert_eq!(log.drain_all().count(), 0, "{log:#?}");
+
                         push
                     })
                     .unwrap();
@@ -715,7 +785,11 @@ mod test {
                 &mut self.drop_drain,
                 &mut self.past_drain,
                 &mut self.future_drain,
+                &mut self.past_future_drain,
+                &mut self.future_past_drain,
                 &mut self.all_drain,
+                &mut self.past_all_drain,
+                &mut self.future_all_drain,
             ];
             self.meta.set_queue(RevQueue::RUN_FORWARD_LOG);
             match expected {
@@ -747,15 +821,17 @@ mod test {
                     self.meta.update_ref(Ok(true), |meta, direction| {
                         assert_eq!(direction, RevDirection::BackwardLog);
 
-                        let logs = [
+                        for log in [
                             &mut self.truncate,
                             &mut self.drop_drain,
                             &mut self.past_drain,
                             &mut self.future_drain,
+                            &mut self.past_future_drain,
+                            &mut self.future_past_drain,
                             &mut self.all_drain,
-                        ];
-
-                        for log in logs {
+                            &mut self.past_all_drain,
+                            &mut self.future_all_drain,
+                        ] {
                             let actual = log.backward_log(meta).map(|char| *char);
                             assert_eq!(actual, Ok(expected));
                         }
@@ -773,19 +849,26 @@ mod test {
                         log.clear_poison();
                     }
 
-                    for log in [&mut self.past_drain, &mut self.all_drain] {
+                    for (i, log) in [
+                        &mut self.past_drain,
+                        &mut self.past_future_drain,
+                        &mut self.future_past_drain,
+                        &mut self.all_drain,
+                        &mut self.past_all_drain,
+                        &mut self.future_all_drain,
+                    ].into_iter().enumerate() {
                         match log.backward_log(&self.meta) {
                             Ok(expected) => {
                                 let expected = *expected;
-                                assert_eq!(log.backward_log(&self.meta), Err(OutOfLog::caller()));
+                                assert_eq!(log.backward_log(&self.meta), Err(OutOfLog::caller()), "{i}");
                                 log.clear_poison();
 
                                 // undo Ok
                                 let actual = log.forward_log(&self.meta).map(|char| *char);
-                                assert_eq!(actual, Ok(expected));
+                                assert_eq!(actual, Ok(expected), "{i}");
                             }
                             Err(out_of_log) => {
-                                assert_eq!(out_of_log, OutOfLog::caller());
+                                assert_eq!(out_of_log, OutOfLog::caller(), "{i}");
                                 log.clear_poison();
                             }
                         }
