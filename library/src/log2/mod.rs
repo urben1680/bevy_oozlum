@@ -125,7 +125,9 @@ use bevy_ecs::change_detection::MaybeLocation;
 use core::{
     error::Error,
     fmt::{Debug, Display, Formatter, Result},
+    ops::Range
 };
+use std::{collections::{vec_deque::Drain, VecDeque}, iter::FusedIterator};
 
 //pub(crate) use update::limits::{UpdateLogLimits, UpdateLogState};
 //pub use update::{UpdateLog, limits::UpdateLogId, limits::UpdateLogMissed};
@@ -192,3 +194,294 @@ impl Display for OutOfLog {
 }
 
 impl Error for OutOfLog {}
+
+pub struct DrainAll<'a, T> {
+    /// A draining iterator of all log entries, if there is a gap ...
+    drain: Drain<'a, T>,
+    
+    gap: &'a mut Gap<T>
+}
+
+impl<'a, T> DrainAll<'a, T> {
+    fn new(deque: &'a mut VecDeque<T>, gap: &'a mut Gap<T>) -> Self {
+        if gap.is_negative() {
+            return Self {
+                drain: deque.drain(..),
+                gap
+            };
+        }
+
+        gap.range.start = gap.range.start.min(deque.len());
+        gap.range.end = gap.range.end.min(deque.len());
+        
+        let drain;
+        if gap.range.end == deque.len() {
+            drain = deque.drain(..gap.range.start);
+        } else if gap.range.start == 0 {
+            drain = deque.drain(gap.range.end..);
+            gap.range.end = 0;
+        } else {
+            drain = deque.drain(..);
+        }
+        Self {
+            drain,
+            gap
+        }
+    }
+}
+
+impl<T> Iterator for DrainAll<'_, T> {
+    type Item = T;
+    fn next(&mut self) -> Option<T> {
+        let Range { start, end } = self.gap.range;
+        if !self.gap.is_negative() && start > 0 {
+            if start == 1 {
+                debug_assert!(self.gap.buffer.is_empty());
+                self.gap.buffer = self.drain.by_ref().take(end).collect();
+            }
+            self.gap.range = (start - 1)..(end - 1);
+        }
+        self.drain.next()
+    }
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let len = self.len();
+        (len, Some(len))
+    }
+}
+
+impl<T> ExactSizeIterator for DrainAll<'_, T> {
+    fn len(&self) -> usize {
+        println!("{} - {:?}", self.drain.len(), self.gap.range);
+        if self.gap.is_negative() || self.gap.range.start == 0 {
+            self.drain.len()
+        } else {
+            self.drain.len().saturating_sub(self.gap.range.len() + 1)
+        }
+    }
+}
+
+impl<T> FusedIterator for DrainAll<'_, T> {}
+
+impl<T> Drop for DrainAll<'_, T> {
+    fn drop(&mut self) {
+        let len = self.gap.range.len();
+        let Range { start, end } = self.gap.range;
+        if len > 0 && start > 0 {
+            // iterator did not exhaust past yet
+            debug_assert!(self.gap.buffer.is_empty());
+            self.gap.range = 0..(end - start);
+            self.gap.buffer = self.drain.by_ref().skip(start).take(len).collect();
+        }
+    }
+}
+
+struct Gap<T> {
+    range: Range<usize>,
+    buffer: Box<[T]>
+}
+
+impl<T> Gap<T> {
+    fn new(range: Range<usize>) -> Self {
+        Self {
+            range,
+            buffer: [].into()
+        }
+    }
+    fn is_negative(&self) -> bool {
+        self.range.start > self.range.end
+    }
+    fn return_into(&mut self, deque: &mut VecDeque<T>) {
+        let mut buffer = core::mem::take(&mut self.buffer).into_iter();
+        if deque.is_empty() {
+            deque.extend(buffer);
+        } else if let Some(entry) = buffer.next() {
+            // - deque was originally not fully drained
+            // - DrainAll contained only past entries
+            // - only the most recent entry, if any, is kept if the user iterated DrainAll
+            debug_assert_eq!(buffer.len(), 0);
+            deque.push_front(entry);
+        }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn repeated_drain_all_keep_deque_unchanged() {
+        static EMPTY: &[char] = &[];
+        static A: &[char] = &['a'];
+        static AB: &[char] = &['a', 'b'];
+        static AC: &[char] = &['a', 'c'];
+        static ABC: &[char] = &['a', 'b', 'c'];
+        static B: &[char] = &['b'];
+        static BC: &[char] = &['b', 'c'];
+        static C: &[char] = &['c'];
+
+        #[derive(Debug, Clone)]
+        struct Test {
+            drained: &'static [char],
+            kept: &'static [char],
+            buffer: &'static [char],
+            buffer_drop: &'static [char]
+        }
+
+        impl Test {
+            fn gap_negative() -> Self {
+                Self {
+                    drained: ABC,
+                    kept: EMPTY,
+                    buffer: EMPTY,
+                    buffer_drop: EMPTY
+                }
+            }
+            fn gap_empty(drained: &'static [char], buffer: &'static [char]) -> Self {
+                Self {
+                    drained,
+                    kept: EMPTY,
+                    buffer,
+                    buffer_drop: EMPTY
+                }
+            }
+            fn gap_a() -> Self {
+                Self {
+                    drained: BC,
+                    kept: A,
+                    buffer: EMPTY,
+                    buffer_drop: EMPTY
+                }
+            }
+            fn gap_b() -> Self {
+                Self {
+                    drained: C,
+                    kept: EMPTY,
+                    buffer: AB,
+                    buffer_drop: B
+                }
+            }
+            fn gap_c() -> Self {
+                Self {
+                    drained: A,
+                    kept: C,
+                    buffer: B,
+                    buffer_drop: EMPTY
+                }
+            }
+            fn gap_ab() -> Self {
+                Self {
+                    drained: C,
+                    kept: AB,
+                    buffer: EMPTY,
+                    buffer_drop: EMPTY
+                }
+            }
+            fn gap_bc() -> Self {
+                Self {
+                    drained: EMPTY,
+                    kept: BC,
+                    buffer: A,
+                    buffer_drop: EMPTY
+                }
+            }
+            fn gap_abc() -> Self {
+                Self {
+                    drained: EMPTY,
+                    kept: ABC,
+                    buffer: EMPTY,
+                    buffer_drop: EMPTY
+                }
+            }
+        }
+
+        let tests = [
+            (0..0, Test::gap_empty(ABC, EMPTY)),
+            (0..1, Test::gap_a()),
+            (0..2, Test::gap_ab()),
+            (0..3, Test::gap_abc()),
+            (0..4, Test::gap_abc()),
+
+            (1..0, Test::gap_negative()),
+            (1..1, Test::gap_empty(BC, A)),
+            (1..2, Test::gap_b()),
+            (1..3, Test::gap_bc()),
+            (1..4, Test::gap_bc()),
+
+            (2..0, Test::gap_negative()),
+            (2..1, Test::gap_negative()),
+            (2..2, Test::gap_empty(AC, B)),
+            (2..3, Test::gap_c()),
+            (2..4, Test::gap_c()),
+
+            (3..0, Test::gap_negative()),
+            (3..1, Test::gap_negative()),
+            (3..2, Test::gap_negative()),
+            (3..3, Test::gap_empty(AB, C)),
+            (3..4, Test::gap_empty(AB, C)),
+
+            (4..0, Test::gap_negative()),
+            (4..1, Test::gap_negative()),
+            (4..2, Test::gap_negative()),
+            (4..3, Test::gap_negative()),
+            (4..4, Test::gap_negative()),
+        ];
+
+        for (i, (range, test)) in tests.into_iter().enumerate() {
+            for collect_first in [false, true] {
+                for collect_second in [false, true] {
+                    let mut deque = ABC.iter().cloned().collect::<VecDeque<_>>();
+                    let mut gap = Gap::new(range.clone());
+                    let drain_all = DrainAll::new(&mut deque, &mut gap);
+
+                    if collect_first {
+                        let drained = drain_all.collect::<Vec<_>>();
+
+                        assert_eq!(deque, test.kept, "#{i}");
+                        assert_eq!(drained, test.drained, "#{i}");
+                        assert_eq!(&*gap.buffer, test.buffer, "#{i}");
+
+                        let drain_all = DrainAll::new(&mut deque, &mut gap);
+
+                        if collect_second {
+                            let drained = drain_all.collect::<Vec<_>>();
+                            assert_eq!(deque, test.kept, "#{i}");
+                            assert_eq!(drained, [], "#{i}");
+                            assert_eq!(&*gap.buffer, test.buffer, "#{i}");
+                        } else {
+                            let drain_len = drain_all.len();
+                            drop(drain_all);
+                            assert_eq!(deque, test.kept, "#{i}");
+                            assert_eq!(drain_len, 0, "#{i}");
+                            assert_eq!(&*gap.buffer, test.buffer, "#{i}");
+                        }
+                    } else {
+                        let drain_len = drain_all.len();
+                        drop(drain_all);
+
+                        assert_eq!(deque, test.kept, "#{i}");
+                        assert_eq!(drain_len, test.drained.len(), "#{i}");
+                        assert_eq!(&*gap.buffer, test.buffer_drop, "#{i}");
+
+                        let drain_all = DrainAll::new(&mut deque, &mut gap);
+
+                        if collect_second {
+                            let drained = drain_all.collect::<Vec<_>>();
+                            assert_eq!(deque, test.kept, "#{i}");
+                            assert_eq!(drained, [], "#{i}");
+                            assert_eq!(&*gap.buffer, test.buffer_drop, "#{i}");
+                        } else {
+                            let drain_len = drain_all.len();
+                            drop(drain_all);
+                            assert_eq!(deque, test.kept, "#{i}");
+                            assert_eq!(drain_len, 0, "#{i}");
+                            assert_eq!(&*gap.buffer, test.buffer_drop, "#{i}");
+                        }
+                    }
+
+                    gap.return_into(&mut deque);
+                    assert!(deque.iter().is_sorted(), "#{i}")
+                }
+            }
+        }
+    }
+}
