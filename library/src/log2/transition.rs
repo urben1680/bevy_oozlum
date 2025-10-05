@@ -1,5 +1,5 @@
 use crate::{
-    log2::{OutOfLog, PreUpdateKind},
+    log2::{DrainAll, GapBuffer, GapRange, OutOfLog, PreUpdateKind},
     meta::{RevDirection, RevMeta},
 };
 use bevy_log::error;
@@ -10,9 +10,13 @@ use core::{
     mem::take,
     ops::Range,
 };
-use std::collections::{
-    TryReserveError, VecDeque,
-    vec_deque::{Drain, Iter},
+use std::{
+    collections::{
+        TryReserveError, VecDeque,
+        vec_deque::{Drain, Iter},
+    },
+    mem::ManuallyDrop,
+    usize,
 };
 
 /// A log that is updated with exactly one transition type `T` that is used to transition a state
@@ -369,56 +373,31 @@ impl<T> TransitionLog<T> {
         meta: &RevMeta,
         max_past_len: u64,
         transition: T,
-    ) -> Result<(), OutOfLog> {
-        if self.meta_log_clears < meta.log_clears() {
+    ) -> Result<TransitionDrain<T>, OutOfLog> {
+        let gap_range = if self.meta_log_clears < meta.log_clears() {
             self.poison = Ok(());
-            self.transitions.clear();
-        } else if self.poison.is_err() {
-            return self.poison;
+            GapRange::new_clear(self.index)
+        } else if let Err(out_of_log) = self.poison {
+            return Err(out_of_log);
         } else {
-            self.transitions.truncate(self.index);
-            let past_truncate = self.pre_push_past_excess(max_past_len);
-            // todo: truncate_front https://github.com/rust-lang/rust/issues/140667
-            self.transitions.drain(..past_truncate);
-        }
-        self.meta_log_clears = meta.log_clears();
-        self.meta_log_exits = meta.log_exits();
-        if max_past_len > 0 {
-            self.transitions.push_back(transition);
-        }
-        self.index = self.transitions.len();
-        self.index_max = self.index;
-        Ok(())
-    }
-
-    pub fn drain_push(
-        &mut self,
-        meta: &RevMeta,
-        max_past_len: u64,
-        c: impl FnOnce(TransitionLogMut<T>) -> T,
-    ) -> Result<(), OutOfLog> {
-        let start = if self.meta_log_clears < meta.log_clears() {
-            self.poison = Ok(());
-            // this offset undoes the logic in TransitionLogMut to keep one last transition
-            self.index + 1
-        } else if self.poison.is_err() {
-            return self.poison;
-        } else {
-            self.pre_push_past_excess(max_past_len)
+            let max_past_len = usize::try_from(max_past_len)
+                .unwrap_or(usize::MAX)
+                .saturating_sub(1);
+            GapRange {
+                start: self.index.saturating_sub(max_past_len),
+                start_offset: (),
+                end: self.index,
+            }
         };
         self.meta_log_clears = meta.log_clears();
         self.meta_log_exits = meta.log_exits();
-        let mut keep_buffer = [].into();
-        let transition = c(TransitionLogMut {
-            transitions: &mut self.transitions,
-            keep_buffer: &mut keep_buffer,
-            keep: start..self.index,
-        });
-        self.transitions.extend(keep_buffer);
-        self.transitions.push_back(transition);
-        self.index = self.transitions.len();
-        self.index_max = self.index;
-        Ok(())
+        Ok(TransitionDrain {
+            log: self,
+            transition: ManuallyDrop::new(transition),
+            push: max_past_len > 0,
+            gap_range,
+            gap_buffer: GapBuffer::default(),
+        })
     }
 
     /// Returns a reference to the log entry that was logged at the chronologically previous push.
@@ -508,122 +487,74 @@ impl<T> TransitionLog<T> {
         self.poison = Err(out_of_log);
         out_of_log
     }
-
-    /// Returns how many transitions have to be removed while considering a new one to be pushed
-    fn pre_push_past_excess(&self, max_past_len: u64) -> usize {
-        let max_past_len = usize::try_from(max_past_len)
-            .unwrap_or(usize::MAX)
-            .saturating_sub(1);
-        self.index.saturating_sub(max_past_len)
-    }
 }
 
 #[derive(Debug)]
-pub struct TransitionLogMut<'a, T> {
-    transitions: &'a mut VecDeque<T>,
-    keep_buffer: &'a mut Box<[T]>,
-    keep: Range<usize>,
+pub struct TransitionDrain<'a, T> {
+    log: &'a mut TransitionLog<T>,
+    transition: ManuallyDrop<T>,
+    push: bool,
+    gap_range: GapRange<()>,
+    gap_buffer: GapBuffer<T>,
 }
 
-impl<T> TransitionLogMut<'_, T> {
+impl<'a, T> TransitionDrain<'a, T> {
     pub fn drain_past(&mut self) -> Drain<'_, T> {
-        let past_drain = self.keep.start.saturating_sub(1);
-        self.keep = 0..(self.keep.end - past_drain);
-        self.transitions.drain(..past_drain)
+        self.push = true;
+        let end = self.gap_range.drain_past_end();
+        self.log.transitions.drain(..end)
     }
 
     pub fn drain_future(&mut self) -> Drain<'_, T> {
-        self.transitions.drain(self.keep.end..)
+        let start = self.gap_range.drain_future_start();
+        self.log.transitions.drain(start..)
     }
 
-    pub fn drain_all(&mut self) -> TransitionAll<'_, T> {
-        if !self.keep_buffer.is_empty() {
-            return TransitionAll {
-                drain: self.transitions.drain(..0),
-                keep_buffer: self.keep_buffer,
-                keep: 0..0,
-            };
-        }
-        let mut keep = self.keep.clone();
-        keep.start = keep.start.saturating_sub(1);
-        self.keep = 0..(self.keep.end - keep.start);
-        let drain = if keep.start == 0 {
-            self.transitions.drain(keep.end..)
-        } else if keep.end == self.transitions.len() {
-            self.transitions.drain(..keep.start)
+    pub fn drain_all(&mut self) -> DrainAll<'_, T, ()> {
+        self.push = true;
+        DrainAll::new(
+            &mut self.log.transitions,
+            &mut self.gap_range,
+            &mut self.gap_buffer,
+        )
+    }
+
+    pub(super) fn is_clear(&self) -> bool {
+        self.gap_range.is_clear()
+    }
+
+    pub(super) fn iter_past(&self) -> Iter<T> {
+        self.log.transitions.range(..self.gap_range.start)
+    }
+
+    pub(super) fn transition_mut(&mut self) -> &mut T {
+        &mut self.transition
+    }
+
+    pub(super) fn does_push(&self) -> bool {
+        self.push
+    }
+}
+
+impl<T> Drop for TransitionDrain<'_, T> {
+    fn drop(&mut self) {
+        if self.gap_range.is_clear() || self.gap_range.start == self.gap_range.end {
+            self.log.transitions.clear();
         } else {
-            return TransitionAll {
-                drain: self.transitions.drain(..),
-                keep_buffer: self.keep_buffer,
-                keep,
-            };
+            self.log.transitions.truncate(self.gap_range.end);
+            // todo: truncate_front https://github.com/rust-lang/rust/issues/140667
+            self.log.transitions.drain(..self.gap_range.start);
+        }
+        self.gap_buffer.prepend_in(&mut self.log.transitions);
+        let transition = unsafe {
+            // SAFETY: only called this once in Drop
+            ManuallyDrop::take(&mut self.transition)
         };
-        TransitionAll {
-            drain,
-            keep_buffer: self.keep_buffer,
-            keep: 0..0,
+        if self.push {
+            self.log.transitions.push_back(transition);
         }
-    }
-}
-
-impl<T> Drop for TransitionLogMut<'_, T> {
-    fn drop(&mut self) {
-        if self.keep.is_empty() {
-            return self.transitions.clear();
-        }
-        self.transitions.truncate(self.keep.end);
-        // todo: truncate_front https://github.com/rust-lang/rust/issues/140667
-        self.transitions.drain(..self.keep.start);
-    }
-}
-
-#[derive(Debug)]
-pub struct TransitionAll<'a, T> {
-    drain: Drain<'a, T>,
-    keep_buffer: &'a mut Box<[T]>,
-    keep: Range<usize>,
-}
-
-impl<T> Iterator for TransitionAll<'_, T> {
-    type Item = T;
-    fn next(&mut self) -> Option<Self::Item> {
-        match &mut self.keep {
-            Range { end: 0, .. } => {}
-            Range { start: 0, end } => {
-                *self.keep_buffer = self.drain.by_ref().take(*end).collect();
-                *end = 0;
-            }
-            Range { start, end } => {
-                *start -= 1;
-                *end -= 1;
-            }
-        }
-        self.drain.next()
-    }
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        let len = self.len();
-        (len, Some(len))
-    }
-}
-
-impl<T> ExactSizeIterator for TransitionAll<'_, T> {
-    fn len(&self) -> usize {
-        self.drain.len() - self.keep.len()
-    }
-}
-
-impl<T> FusedIterator for TransitionAll<'_, T> {}
-
-impl<T> Drop for TransitionAll<'_, T> {
-    fn drop(&mut self) {
-        if !self.keep.is_empty() {
-            *self.keep_buffer = self
-                .drain
-                .by_ref()
-                .take(self.keep.end)
-                .skip(self.keep.start)
-                .collect();
-        }
+        self.log.index = self.log.transitions.len();
+        self.log.index_max = self.log.transitions.len();
     }
 }
 
@@ -638,7 +569,6 @@ mod test {
     #[derive(Debug)]
     struct MetaAndLogs {
         meta: RevMeta,
-        truncate: TransitionLog<char>,
         drop_drain: TransitionLog<char>,
         past_drain: TransitionLog<char>,
         future_drain: TransitionLog<char>,
@@ -653,7 +583,6 @@ mod test {
         fn new(max_world_states: u64) -> Self {
             Self {
                 meta: RevMeta::new(NonZeroU64::new(max_world_states), false),
-                truncate: TransitionLog::new(),
                 drop_drain: TransitionLog::new(),
                 past_drain: TransitionLog::new(),
                 future_drain: TransitionLog::new(),
@@ -679,97 +608,77 @@ mod test {
             self.meta.set_queue(queue);
             self.meta.update_ref(Ok(true), |meta, direction| {
                 assert_eq!(direction, RevDirection::NOT_LOG);
-                self.truncate.push(meta, meta.past_len(), push).unwrap();
-                self.drop_drain
-                    .drain_push(meta, meta.past_len(), |_| push)
+
+                self.drop_drain.push(meta, meta.past_len(), push).unwrap();
+
+                let mut drain = self.past_drain.push(meta, meta.past_len(), push).unwrap();
+                let actual = drain.drain_past();
+                assert_eq!(actual.len(), N);
+                let actual: Vec<char> = actual.collect();
+                assert_eq!(actual, past_drain);
+                let actual = drain.drain_past();
+                assert_eq!(actual.len(), 0);
+                assert_eq!(actual.count(), 0);
+                // todo: assert len and count at others too
+
+                let mut drain = self.future_drain.push(meta, meta.past_len(), push).unwrap();
+                let actual: Vec<char> = drain.drain_future().collect();
+                assert_eq!(actual, future_drain);
+                assert_eq!(drain.drain_future().count(), 0);
+
+                let mut drain = self
+                    .past_future_drain
+                    .push(meta, meta.past_len(), push)
                     .unwrap();
-                self.past_drain
-                    .drain_push(meta, meta.past_len(), |mut log| {
-                        let actual: Vec<char> = log.drain_past().collect();
-                        assert_eq!(actual, past_drain, "{log:#?}");
-                        assert_eq!(log.drain_past().count(), 0, "{log:#?}");
+                let actual: Vec<char> = drain.drain_past().collect();
+                assert_eq!(actual, past_drain);
+                assert_eq!(drain.drain_past().count(), 0);
+                let actual: Vec<char> = drain.drain_future().collect();
+                assert_eq!(actual, future_drain);
+                assert_eq!(drain.drain_future().count(), 0);
+                assert_eq!(drain.drain_all().count(), 0);
 
-                        push
-                    })
+                let mut drain = self
+                    .future_past_drain
+                    .push(meta, meta.past_len(), push)
                     .unwrap();
-                self.future_drain
-                    .drain_push(meta, meta.past_len(), |mut log| {
-                        let actual: Vec<char> = log.drain_future().collect();
-                        assert_eq!(actual, future_drain, "{log:#?}");
-                        assert_eq!(log.drain_future().count(), 0, "{log:#?}");
+                let actual: Vec<char> = drain.drain_future().collect();
+                assert_eq!(actual, future_drain);
+                assert_eq!(drain.drain_future().count(), 0);
+                let actual: Vec<char> = drain.drain_past().collect();
+                assert_eq!(actual, past_drain);
+                assert_eq!(drain.drain_past().count(), 0);
+                assert_eq!(drain.drain_all().count(), 0);
 
-                        push
-                    })
+                let mut drain = self.all_drain.push(meta, meta.past_len(), push).unwrap();
+                let actual: Vec<char> = drain.drain_all().collect();
+                let expected: Vec<char> = past_drain.into_iter().chain(future_drain).collect();
+                assert_eq!(actual, expected);
+                assert_eq!(drain.drain_future().count(), 0);
+
+                let mut drain = self
+                    .past_all_drain
+                    .push(meta, meta.past_len(), push)
                     .unwrap();
-                self.past_future_drain
-                    .drain_push(meta, meta.past_len(), |mut log| {
-                        let actual: Vec<char> = log.drain_past().collect();
-                        assert_eq!(actual, past_drain, "{log:#?}");
-                        assert_eq!(log.drain_past().count(), 0, "{log:#?}");
+                let actual: Vec<char> = drain.drain_past().collect();
+                assert_eq!(actual, past_drain);
+                assert_eq!(drain.drain_past().count(), 0);
+                let actual: Vec<char> = drain.drain_all().collect();
+                assert_eq!(actual, future_drain);
+                assert_eq!(drain.drain_future().count(), 0);
+                assert_eq!(drain.drain_all().count(), 0);
 
-                        let actual: Vec<char> = log.drain_future().collect();
-                        assert_eq!(actual, future_drain, "{log:#?}");
-                        assert_eq!(log.drain_future().count(), 0, "{log:#?}");
-                        assert_eq!(log.drain_all().count(), 0, "{log:#?}");
-
-                        push
-                    })
+                let mut drain = self
+                    .future_all_drain
+                    .push(meta, meta.past_len(), push)
                     .unwrap();
-                self.future_past_drain
-                    .drain_push(meta, meta.past_len(), |mut log| {
-                        let actual: Vec<char> = log.drain_future().collect();
-                        assert_eq!(actual, future_drain, "{log:#?}");
-                        assert_eq!(log.drain_future().count(), 0, "{log:#?}");
-
-                        let actual: Vec<char> = log.drain_past().collect();
-                        assert_eq!(actual, past_drain, "{log:#?}");
-                        assert_eq!(log.drain_past().count(), 0, "{log:#?}");
-                        assert_eq!(log.drain_all().count(), 0, "{log:#?}");
-
-                        push
-                    })
-                    .unwrap();
-                self.all_drain
-                    .drain_push(meta, meta.past_len(), |mut log| {
-                        let actual: Vec<char> = log.drain_all().collect();
-                        let expected: Vec<char> =
-                            past_drain.into_iter().chain(future_drain).collect();
-                        assert_eq!(actual, expected, "{log:#?}");
-                        assert_eq!(log.drain_past().count(), 0, "{log:#?}");
-                        assert_eq!(log.drain_future().count(), 0, "{log:#?}");
-                        assert_eq!(log.drain_all().count(), 0, "{log:#?}");
-
-                        push
-                    })
-                    .unwrap();
-                self.past_all_drain
-                    .drain_push(meta, meta.past_len(), |mut log| {
-                        let actual: Vec<char> = log.drain_past().collect();
-                        assert_eq!(actual, past_drain, "{log:#?}");
-                        assert_eq!(log.drain_past().count(), 0, "{log:#?}");
-
-                        let actual: Vec<char> = log.drain_all().collect();
-                        assert_eq!(actual, future_drain, "{log:#?}");
-                        assert_eq!(log.drain_future().count(), 0, "{log:#?}");
-                        assert_eq!(log.drain_all().count(), 0, "{log:#?}");
-
-                        push
-                    })
-                    .unwrap();
-                self.future_all_drain
-                    .drain_push(meta, meta.past_len(), |mut log| {
-                        let actual: Vec<char> = log.drain_future().collect();
-                        assert_eq!(actual, future_drain, "{log:#?}");
-                        assert_eq!(log.drain_future().count(), 0, "{log:#?}");
-
-                        let actual: Vec<char> = log.drain_all().collect();
-                        assert_eq!(actual, past_drain, "{log:#?}");
-                        assert_eq!(log.drain_past().count(), 0, "{log:#?}");
-                        assert_eq!(log.drain_all().count(), 0, "{log:#?}");
-
-                        push
-                    })
-                    .unwrap();
+                let actual: Vec<char> = drain.drain_future().collect();
+                assert_eq!(actual, future_drain);
+                assert_eq!(drain.drain_future().count(), 0);
+                let actual: Vec<char> = drain.drain_all().collect();
+                assert_eq!(actual, past_drain);
+                assert_eq!(drain.drain_past().count(), 0);
+                assert_eq!(drain.drain_future().count(), 0);
             });
         }
         fn noop_forward_backward_log(&mut self) {
@@ -781,7 +690,6 @@ mod test {
         #[track_caller]
         fn forward_log(&mut self, expected: Result<char, ()>) {
             let logs = [
-                &mut self.truncate,
                 &mut self.drop_drain,
                 &mut self.past_drain,
                 &mut self.future_drain,
@@ -822,7 +730,6 @@ mod test {
                         assert_eq!(direction, RevDirection::BackwardLog);
 
                         for log in [
-                            &mut self.truncate,
                             &mut self.drop_drain,
                             &mut self.past_drain,
                             &mut self.future_drain,
@@ -840,11 +747,7 @@ mod test {
                 Err(()) => {
                     self.meta.update_ref(Ok(false), |_, _| ());
 
-                    for log in [
-                        &mut self.truncate,
-                        &mut self.drop_drain,
-                        &mut self.future_drain,
-                    ] {
+                    for log in [&mut self.drop_drain, &mut self.future_drain] {
                         assert_eq!(log.backward_log(&self.meta), Err(OutOfLog::caller()));
                         log.clear_poison();
                     }
@@ -856,11 +759,18 @@ mod test {
                         &mut self.all_drain,
                         &mut self.past_all_drain,
                         &mut self.future_all_drain,
-                    ].into_iter().enumerate() {
+                    ]
+                    .into_iter()
+                    .enumerate()
+                    {
                         match log.backward_log(&self.meta) {
                             Ok(expected) => {
                                 let expected = *expected;
-                                assert_eq!(log.backward_log(&self.meta), Err(OutOfLog::caller()), "{i}");
+                                assert_eq!(
+                                    log.backward_log(&self.meta),
+                                    Err(OutOfLog::caller()),
+                                    "{i}"
+                                );
                                 log.clear_poison();
 
                                 // undo Ok
@@ -938,10 +848,12 @@ mod test {
         meta_and_logs.forward([], ['h', 'i'], 'j', false);
         meta_and_logs.forward([], [], 'k', false);
         meta_and_logs.forward([], [], 'l', false);
-        
+
         meta_and_logs.backward_log(Ok('l'));
 
-        meta_and_logs.meta.set_max_world_states(NonZeroU64::new(2).unwrap());
+        meta_and_logs
+            .meta
+            .set_max_world_states(NonZeroU64::new(2).unwrap());
         meta_and_logs.forward(['j'], ['l'], 'm', false);
     }
 }

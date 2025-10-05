@@ -1,7 +1,6 @@
 use crate::{
     log2::{
-        OutOfLog, PreUpdateKind, TransitionDrainAll, TransitionDrainFuture, TransitionDrainPast,
-        TransitionLog, transition::TransitionDrains,
+        DrainAll, GapBuffer, GapRange, OutOfLog, PreUpdateKind, TransitionDrain, TransitionLog,
     },
     meta::RevMeta,
 };
@@ -12,9 +11,13 @@ use core::{
     iter::{FusedIterator, Take},
     marker::PhantomData,
 };
-use std::collections::{
-    TryReserveError, VecDeque,
-    vec_deque::{Drain, IterMut},
+use std::{
+    collections::{
+        TryReserveError, VecDeque,
+        vec_deque::{Drain, IterMut},
+    },
+    mem::ManuallyDrop,
+    ops::Range,
 };
 
 /// A log that is updated with with a variable amount of transition type `T` which are used to
@@ -491,136 +494,46 @@ impl<T, U> TransitionsLog<T, U> {
         self.updates.shrink_to_fit()
     }
 
-    /// Pushes transitions (`T`) and an update (`U`) to the log and then shortens the log to contain
-    /// past log entries.
-    ///
-    /// The closure offers different ways to push the transitions, see [`LogMut`], but also allows
-    /// to not push any at all. This is still considered as an update however.
-    ///
-    /// To receive an iterator over the removed log entries that got out-of-log, use
-    /// [`push_drain_past`](Self::push_drain_past) instead. Note that the `max_past_len`
-    /// logic works a bit differently with that method, see its documentation.
-    ///
-    /// This is used during [`RevDirection::NOT_LOG`](crate::meta::RevDirection::NOT_LOG).
-    ///
-    /// Before calling this, [`pre_update`](Self::pre_update) or
-    /// [`pre_update_drain`](Self::pre_update_drain) **must** be called at least once in the
-    /// [present reversible frame](RevMeta::now). This method may panic if this was not done.
-    ///
-    /// For examples, see the [type level documentation](TransitionsLog).
-    ///
-    /// # Poisoning
-    ///
-    /// If this log [is poisoned](Self::poison), the pushed log entry will not be logged, no log
-    /// entries will be truncated and an [error will be logged](bevy_log::error).
-    #[track_caller]
-    pub fn push(&mut self, max_past_len: u64, c: impl FnOnce(LogMut<T, U>) -> U) {
-        if self.poison().is_err() {
-            return Self::poison_push_err();
-        }
-        let (transition_drain, amount_drain) =
-            self.push_and_get_transition_and_update_drain(max_past_len, c);
-        // todo: truncate_front https://github.com/rust-lang/rust/issues/140667
-        self.transitions.drain(..transition_drain);
-        self.updates.drain_past(amount_drain);
-    }
-
-    /// Pushes transitions (`T`) and an update (`U`) to the log and then shortens the log to contain
-    /// at most `max_past_len + 1` past updates.
-    ///
-    /// The closure offers different ways to push the transitions, see [`LogMut`], but also allows
-    /// to not push any at all. This is still considered as an update however.
-    ///
-    /// This is used during [`RevDirection::NOT_LOG`](crate::meta::RevDirection::NOT_LOG).
-    ///
-    /// Before calling this, [`pre_update_drain`](Self::pre_update_drain) **must** be called at
-    /// least once in the [present reversible frame](RevMeta::now). This method may panic if this
-    /// was not done. Do not use [`pre_update`](Self::pre_update) because that method is needed as
-    /// well to receive past log entries that are now out-of-log.
-    ///
-    /// This methods returns log entries that got out-of-log because the push of `transition` and a
-    /// potential reduction of `max_past_len` form the last update exceed the current
-    /// `max_past_len` value. If there are no such log entries, the iterator is empty.
-    ///
-    /// The `max_past_len` addition by one is done to ensure that drained log entries were pushed at
-    /// a frame that is now out-of-log. This may not be needed in some cases, but is important in
-    /// others like when log entries contain an entity [ID](bevy_ecs::entity::Entity) that needs to
-    /// remain alive as long it was spawned within the global log range. This makes this method less
-    /// likely a source of bugs in the user logic.
-    ///
-    /// As an explaination why this log type would drain log entries earlier: Only the log entry to
-    /// transition _from the very first state_ that can be reverted to _to the second state_ is
-    /// required to be stored to cover a past length of `max_past_len`. The log entry to transition
-    /// _to the first state_ is otherwise not useful because it would only be used to transition to
-    /// and from the state before that which is now out-of-log.
-    ///
-    /// So if this addition by one was not done, the log entry pushed at [`RevMeta::past_end`], a
-    /// frame that is still in-log, would be drained here.
-    ///
-    /// It is assumed that storing one additionally log entry is not an issue for the user and is
-    /// preferred over a potential source of bugs.
-    ///
-    /// For examples, see the [type level documentation](TransitionsLog).
-    ///
-    /// # Poisoning
-    ///
-    /// If this log [is poisoned](Self::poison), the pushed log entry will not be logged, no log
-    /// entries will be drained and an [error will be logged](bevy_log::error).
-    #[track_caller]
-    pub fn push_drain_past(
+    pub fn extend_with<I: IntoIterator<Item = T>>(
         &mut self,
+        meta: &RevMeta,
         max_past_len: u64,
-        c: impl FnOnce(LogMut<T, U>) -> U,
-    ) -> TransitionsDrainAll<T, U> {
-        let (transition_drain, amount_drain) = match self.poison() {
-            Ok(()) => self.push_and_get_transition_and_update_drain(max_past_len + 1, c),
-            Err(_) => {
-                Self::poison_push_err();
-                (0, 0)
+        transitions: I,
+        update: U,
+    ) -> Result<TransitionsDrain<T, U, I>, OutOfLog> {
+        let updates = self.updates.push(
+            meta,
+            max_past_len,
+            TransitionsLogUpdate {
+                update,
+                transitions: usize::MAX,
+            },
+        )?;
+        let gap_range = if updates.is_clear() {
+            GapRange::new_clear(self.index)
+        } else {
+            let mut start_offset = 0;
+            let start = updates
+                .iter_past()
+                .map(|update| {
+                    start_offset = update.transitions;
+                    start_offset
+                })
+                .sum::<usize>();
+            GapRange {
+                start,
+                start_offset,
+                end: self.index,
             }
         };
-        TransitionsDrainChunkable {
-            transitions: self.transitions.drain(..transition_drain),
-            updates: self.updates.drain_past(amount_drain),
-            _p: PhantomData,
-        }
-    }
-
-    #[track_caller]
-    fn poison_push_err() {
-        error!(
-            "did not push `{}` to `TransitionsLog` because log is poisoned",
-            type_name::<T>()
-        );
-    }
-
-    /// Applies the pushing closure and returns how many transitions (first tuple element) and how
-    /// many updates (second tuple element) need to be removed from the past end of the log to
-    /// contain at most `max_past_len` elements.
-    fn push_and_get_transition_and_update_drain(
-        &mut self,
-        max_past_len: u64,
-        c: impl FnOnce(LogMut<T, U>) -> U,
-    ) -> (usize, usize) {
-        assert_eq!(self.index, self.transitions.len()); // do not truncate here, call pre_update!
-        let log_mut = LogMut {
+        Ok(TransitionsDrain {
             transitions: &mut self.transitions,
-            updates: &mut self.updates,
-        };
-        let update = c(log_mut);
-        let pushed_amount = self.transitions.len() - self.index;
-        let update = TransitionsLogUpdate {
-            update,
-            transitions: pushed_amount,
-        };
-        self.index = self.transitions.len();
-        let to_drain = self
-            .updates
-            .push_and_iter_to_drain_past(max_past_len, update);
-        let update_drain = to_drain.len();
-        let transition_drain: usize = to_drain.map(|update| update.transitions).sum();
-        self.index -= transition_drain;
-        (transition_drain, update_drain)
+            updates,
+            index: &mut self.index,
+            transitions_iter: ManuallyDrop::new(transitions),
+            gap_range,
+            gap_buffer: GapBuffer::default(),
+        })
     }
 
     /// Returns references to the log entry that was logged at the chronologically previous push. If
@@ -649,9 +562,12 @@ impl<T, U> TransitionsLog<T, U> {
     /// `track_location` cargo feature is activated, the error here contains the location where it
     /// originally occured.
     #[track_caller]
-    pub fn backward_log(&mut self) -> Result<TransitionsLogIterMut<T, U>, OutOfLog> {
+    pub fn backward_log(
+        &mut self,
+        meta: &RevMeta,
+    ) -> Result<TransitionsLogIterMut<T, U>, OutOfLog> {
         let old_index = self.index;
-        let update_mut = self.updates.backward_log()?;
+        let update_mut = self.updates.backward_log(meta)?;
         self.index -= update_mut.transitions;
         let iter = self.transitions.range_mut(self.index..old_index);
         Ok(TransitionsLogIterMut {
@@ -686,9 +602,9 @@ impl<T, U> TransitionsLog<T, U> {
     /// `track_location` cargo feature is activated, the error here contains the location where it
     /// originally occured.
     #[track_caller]
-    pub fn forward_log(&mut self) -> Result<TransitionsLogIterMut<T, U>, OutOfLog> {
+    pub fn forward_log(&mut self, meta: &RevMeta) -> Result<TransitionsLogIterMut<T, U>, OutOfLog> {
         let old_index = self.index;
-        let update_mut = self.updates.forward_log()?;
+        let update_mut = self.updates.forward_log(meta)?;
         self.index += update_mut.transitions;
         let iter = self.transitions.range_mut(old_index..self.index);
         Ok(TransitionsLogIterMut {
@@ -696,237 +612,128 @@ impl<T, U> TransitionsLog<T, U> {
             update: &mut update_mut.update,
         })
     }
-
-    /// This method **must** be called once per [reversible frame](RevMeta::now) before any other
-    /// mutation.
-    ///
-    /// This may remove log entries. If a draining iterator for these entries is required, use
-    /// [`pre_update_drain`](Self::pre_update_drain) instead.
-    ///
-    /// For examples, see the [type level documentation](TransitionsLog).
-    ///
-    /// # Poisoning
-    ///
-    /// If this log [is poisoned](Self::poison), this never truncates any log entries, except if
-    /// [`RevQueue::Clear`](crate::meta::RevQueue::Clear) is applied, which also clears the poison.
-    pub fn pre_update(&mut self, meta: &RevMeta) {
-        match self.updates.pre_update_kind(meta) {
-            PreUpdateKind::RemoveLog => {
-                self.transitions.clear();
-                self.updates.clear();
-                self.index = 0;
-            }
-            PreUpdateKind::RemoveFuture => {
-                self.transitions.truncate(self.index);
-                self.updates.truncate_future();
-            }
-            PreUpdateKind::Nothing => {}
-        }
-    }
-
-    /// This method **must** be called once per [reversible frame](RevMeta::now) before any other
-    /// mutation.
-    ///
-    /// This may remove log entries which can be received with the returned iterators. The iterators
-    /// may be empty. If no iterators are required, use [`pre_update`](Self::pre_update) instead.
-    ///
-    /// For examples, see the [type level documentation](TransitionsLog).
-    ///
-    /// # Poisoning
-    ///
-    /// If this log [is poisoned](Self::poison), this never drains any log entries, except if
-    /// [`RevQueue::Clear`](crate::meta::RevQueue::Clear) is applied, which also clears the poison.
-    pub fn pre_update_drain<'a>(&'a mut self, meta: &RevMeta) -> TransitionsDrains<'a, T, U> {
-        match self.updates.pre_update_kind(meta) {
-            PreUpdateKind::RemoveLog => {
-                let past_len = self.index;
-                self.index = 0;
-                TransitionsDrains {
-                    transitions: self.transitions.drain(..),
-                    updates: self.updates.full_drain(),
-                    past_len,
-                }
-            }
-            PreUpdateKind::RemoveFuture => TransitionsDrains {
-                transitions: self.transitions.drain(self.index..),
-                updates: self.updates.drain_future(),
-                past_len: 0,
-            },
-            PreUpdateKind::Nothing => TransitionsDrains {
-                transitions: self.transitions.drain(..0),
-                updates: self.updates.empty_drain(),
-                past_len: 0,
-            },
-        }
-    }
 }
 
-/// A [`&mut VecDeque<T>`](VecDeque) wrapper that only exposes methods which add to the deque.
-///
-/// Also offers length and capacity methods for transitions (`T`) and updates (`U`) that do not
-/// affect the stored log entries.
-pub struct LogMut<'a, T, U> {
-    transitions: &'a mut VecDeque<T>,
-    updates: &'a mut TransitionLog<TransitionsLogUpdate<U>>,
-}
-
-impl<'a, T, U> LogMut<'a, T, U> {
-    /// Moves all `transitions` into the log, leaving `transitions` empty.
-    ///
-    /// See [`VecDeque::append`].
-    pub fn append(&mut self, transitions: &mut VecDeque<T>) {
-        self.transitions.append(transitions);
-    }
-
-    /// Pushes the `transition` into the log.
-    ///
-    /// See [`VecDeque::push_back`].
-    pub fn push(&mut self, transition: T) {
-        self.transitions.push_back(transition);
-    }
-
-    /// Returns the number of transitions (`T`) in the log.
-    ///
-    /// See [`VecDeque::len`].
-    pub fn transitions_len(&self) -> usize {
-        self.transitions.len()
-    }
-
-    /// Returns the number of updates (`U`) in the log.
-    ///
-    /// See [`VecDeque::len`].
-    pub fn updates_len(&self) -> usize {
-        self.updates.len()
-    }
-
-    /// Returns the number of transitions (`T`) the log can hold without reallocating.
-    ///
-    /// See [`VecDeque::capacity`].
-    pub fn transitions_capacity(&self) -> usize {
-        self.transitions.capacity()
-    }
-
-    /// Returns the number of updates (`U`) the log can hold without reallocating.
-    ///
-    /// See [`VecDeque::capacity`].
-    pub fn updates_capacity(&self) -> usize {
-        self.updates.capacity()
-    }
-
-    /// Returns `true` if the log contains no transitions (`T`).
-    ///
-    /// See [`VecDeque::is_empty`].
-    pub fn transitions_is_empty(&self) -> bool {
-        self.transitions.is_empty()
-    }
-
-    /// Returns `true` if the log contains no updates (`U`).
-    ///
-    /// See [`VecDeque::is_empty`].
-    pub fn updates_is_empty(&self) -> bool {
-        self.updates.is_empty()
-    }
-
-    /// Reserves capacity for at least `additional` more transitions (`T`).
-    ///
-    /// See [`VecDeque::reserve`].
-    pub fn transitions_reserve(&mut self, additional: usize) {
-        self.transitions.reserve(additional)
-    }
-
-    /// Reserves capacity for at least `additional` more updates (`U`).
-    ///
-    /// See [`VecDeque::reserve`].
-    pub fn updates_reserve(&mut self, additional: usize) {
-        self.updates.reserve(additional)
-    }
-
-    /// Reserves capacity for at least `additional` more transitions (`T`).
-    ///
-    /// See [`VecDeque::reserve_exact`].
-    pub fn transitions_reserve_exact(&mut self, additional: usize) {
-        self.transitions.reserve_exact(additional)
-    }
-
-    /// Reserves capacity for at least `additional` more updates (`U`).
-    ///
-    /// See [`VecDeque::reserve_exact`].
-    pub fn updates_reserve_exact(&mut self, additional: usize) {
-        self.updates.reserve_exact(additional)
-    }
-
-    /// Tries to reserve capacity for at least `additional` more transitions (`T`).
-    ///
-    /// See [`VecDeque::try_reserve`].
-    pub fn transitions_try_reserve(&mut self, additional: usize) -> Result<(), TryReserveError> {
-        self.transitions.try_reserve(additional)
-    }
-
-    /// Tries to reserve capacity for at least `additional` more updates (`U`).
-    ///
-    /// See [`VecDeque::try_reserve`].
-    pub fn updates_try_reserve(&mut self, additional: usize) -> Result<(), TryReserveError> {
-        self.updates.try_reserve(additional)
-    }
-
-    /// Tries to reserve capacity for at least `additional` more transitions (`T`).
-    ///
-    /// See [`VecDeque::try_reserve_exact`].
-    pub fn transitions_try_reserve_exact(
+impl<T> TransitionsLog<T, ()> {
+    pub fn extend<I: IntoIterator<Item = T>>(
         &mut self,
-        additional: usize,
-    ) -> Result<(), TryReserveError> {
-        self.transitions.try_reserve_exact(additional)
-    }
-
-    /// Tries to reserve capacity for at least `additional` more updates (`U`).
-    ///
-    /// See [`VecDeque::try_reserve_exact`].
-    pub fn updates_try_reserve_exact(&mut self, additional: usize) -> Result<(), TryReserveError> {
-        self.updates.try_reserve_exact(additional)
-    }
-
-    /// Shrinks the capacity of the log's transitions (`T`) with a lower bound.
-    ///
-    /// See [`VecDeque::shrink_to`].
-    pub fn transitions_shrink_to(&mut self, min_capacity: usize) {
-        self.transitions.shrink_to(min_capacity)
-    }
-
-    /// Shrinks the capacity of the log's updates (`U`) with a lower bound.
-    ///
-    /// See [`VecDeque::shrink_to`].
-    pub fn updates_shrink_to(&mut self, min_capacity: usize) {
-        self.updates.shrink_to(min_capacity)
-    }
-
-    /// Shrinks the capacity of the log's transitions (`T`) as much as possible.
-    ///
-    /// See [`VecDeque::shrink_to_fit`].
-    pub fn transitions_shrink_to_fit(&mut self) {
-        self.transitions.shrink_to_fit()
-    }
-
-    /// Shrinks the capacity of the log's updates (`U`) as much as possible.
-    ///
-    /// See [`VecDeque::shrink_to_fit`].
-    pub fn updates_shrink_to_fit(&mut self) {
-        self.updates.shrink_to_fit()
+        meta: &RevMeta,
+        max_past_len: u64,
+        transitions: I,
+    ) -> Result<TransitionsDrain<T, (), I>, OutOfLog> {
+        self.extend_with(meta, max_past_len, transitions, ())
     }
 }
 
-impl<'a, T, U> Extend<T> for LogMut<'a, T, U> {
-    fn extend<I: IntoIterator<Item = T>>(&mut self, iter: I) {
-        self.transitions.extend(iter);
-    }
-}
-
-impl<'a, T, U> Extend<&'a T> for LogMut<'a, T, U>
+#[derive(Debug)]
+pub struct TransitionsDrain<'a, T, U, I>
 where
-    T: 'a + Copy,
+    I: IntoIterator<Item = T>,
 {
-    fn extend<I: IntoIterator<Item = &'a T>>(&mut self, iter: I) {
-        self.transitions.extend(iter);
+    transitions: &'a mut VecDeque<T>,
+    updates: TransitionDrain<'a, TransitionsLogUpdate<U>>,
+    index: &'a mut usize,
+    transitions_iter: ManuallyDrop<I>,
+    gap_range: GapRange<usize>,
+    gap_buffer: GapBuffer<T>,
+}
+
+impl<'a, T, U, I> TransitionsDrain<'a, T, U, I>
+where
+    I: IntoIterator<Item = T>,
+{
+    pub fn drain_past(
+        &mut self,
+    ) -> TransitionsDrainIters<Drain<T>, Drain<TransitionsLogUpdate<U>>, U> {
+        let end = self.gap_range.drain_past_end();
+        let transitions = self.transitions.drain(..end);
+        let updates = self.updates.drain_past();
+        TransitionsDrainIters {
+            transitions,
+            updates,
+            _m: PhantomData,
+        }
+    }
+
+    pub fn drain_future(
+        &mut self,
+    ) -> TransitionsDrainIters<Drain<T>, Drain<TransitionsLogUpdate<U>>, U> {
+        let start = self.gap_range.drain_future_start();
+        let transitions = self.transitions.drain(start..);
+        let updates = self.updates.drain_future();
+        TransitionsDrainIters {
+            transitions,
+            updates,
+            _m: PhantomData,
+        }
+    }
+
+    pub fn drain_all(
+        &mut self,
+    ) -> TransitionsDrainIters<DrainAll<T, usize>, DrainAll<TransitionsLogUpdate<U>, ()>, U> {
+        let transitions = DrainAll::new(
+            &mut self.transitions,
+            &mut self.gap_range,
+            &mut self.gap_buffer,
+        );
+        let updates = self.updates.drain_all();
+        TransitionsDrainIters {
+            transitions,
+            updates,
+            _m: PhantomData,
+        }
+    }
+}
+
+impl<'a, T, U, I> Drop for TransitionsDrain<'a, T, U, I>
+where
+    I: IntoIterator<Item = T>,
+{
+    fn drop(&mut self) {
+        if self.gap_range.is_clear() || self.gap_range.start == self.gap_range.end {
+            self.transitions.clear();
+        } else {
+            self.transitions.truncate(self.gap_range.end);
+            // todo: truncate_front https://github.com/rust-lang/rust/issues/140667
+            self.transitions.drain(..self.gap_range.start);
+        }
+        self.gap_buffer.prepend_in(&mut self.transitions);
+        let transitions_iter = unsafe {
+            // SAFETY: only called this once in Drop
+            ManuallyDrop::take(&mut self.transitions_iter)
+        };
+        if self.updates.does_push() {
+            let mut len = self.transitions.len();
+            self.transitions.extend(transitions_iter);
+            len = self.transitions.len() - len;
+            self.updates.transition_mut().transitions = len;
+        }
+        *self.index = self.transitions.len();
+    }
+}
+
+#[derive(Debug)]
+pub struct TransitionsDrainIters<TI, UI, U> {
+    pub transitions: TI,
+    pub updates: UI,
+    _m: PhantomData<U>,
+}
+
+impl<TI, UI, U> TransitionsDrainIters<TI, UI, U>
+where
+    TI: ExactSizeIterator,
+    UI: ExactSizeIterator<Item = TransitionsLogUpdate<U>>,
+{
+    /// Returns the transitions and the update of the next log entry from the draining iterators.
+    ///
+    /// Returns `None` if no more log entries are to drain.
+    pub fn next_log_entry(&mut self) -> Option<(Take<&'_ mut TI>, U)> {
+        self.updates.next().map(|update| {
+            (
+                self.transitions.by_ref().take(update.transitions),
+                update.update,
+            )
+        })
     }
 }
 
@@ -1005,137 +812,6 @@ pub struct TransitionsLogUpdate<U> {
     transitions: usize,
 }
 
-/// Contains iterators for the past and future log entries that need to be removed at this frame.
-///
-/// These iterators may be empty if there is nothing out-of-log to drain.
-///
-/// Returned by [`TransitionsLog::pre_update_drain`].
-pub struct TransitionsDrains<'log, T, U> {
-    /// Draining iterator containing transitions of either the future or the whole log, or is empty.
-    transitions: Drain<'log, T>,
-
-    /// Draining iterator containing updates of either the future or the whole log, or is empty.
-    updates: TransitionDrains<'log, TransitionsLogUpdate<U>>,
-
-    /// Amount of transitions in [`Self::transitions`] that are in the past. [`Self::updates`]
-    /// tracks its past length itself.
-    past_len: usize,
-}
-
-impl<'log, T, U> TransitionsDrains<'log, T, U> {
-    /// Drains all transitions (`T`) and updates (`U`) that are so far in the past that they are
-    /// out-of-log.
-    ///
-    /// The values are returned in chronological order.
-    ///
-    /// Calling this method a second time will return empty iterators.
-    ///
-    /// See [`VecDeque::drain`].
-    pub fn past<'a>(&'a mut self) -> TransitionsDrainPast<'a, 'log, T, U> {
-        TransitionsDrainChunkable {
-            transitions: TransitionDrainPast::new(&mut self.transitions, &mut self.past_len),
-            updates: self.updates.past(),
-            _p: PhantomData,
-        }
-    }
-
-    /// Drains all transitions (`T`) and updates (`U`) that are in the future and thus became
-    /// out-of-log.
-    ///
-    /// The values are returned in chronological order.
-    ///
-    /// This consumes `self`. If the past values are of interest, use [`past`](Self::past) first.
-    ///
-    /// See [`VecDeque::drain`].
-    pub fn future(self) -> TransitionsDrainFuture<'log, T, U> {
-        TransitionsDrainChunkable {
-            transitions: self.transitions.skip(self.past_len),
-            updates: self.updates.future(),
-            _p: PhantomData,
-        }
-    }
-
-    /// Drains all transitions (`T`) and updates (`U`) that are so far in the past that they are
-    /// out-of-log, or are in the future and thus became out-of-log.
-    ///
-    /// The values are returned in chronological order.
-    ///
-    /// If the past and future values need to be separated or one or the other are not of interest,
-    /// use [`past`](Self::past) and/or [`future`](Self::future).
-    ///
-    /// See [`VecDeque::drain`].
-    pub fn all(self) -> TransitionsDrainAll<'log, T, U> {
-        TransitionsDrainChunkable {
-            transitions: self.transitions,
-            updates: self.updates.all(),
-            _p: PhantomData,
-        }
-    }
-}
-
-/// Draining transition iterator returned by [`TransitionsDrains::past`].
-pub type TransitionsDrainPast<'a, 'log, T, U> = TransitionsDrainChunkable<
-    TransitionDrainPast<'a, 'log, T>,
-    TransitionDrainPast<'a, 'log, TransitionsLogUpdate<U>>,
-    U,
->;
-
-/// Draining transition iterator returned by [`TransitionsDrains::future`].
-pub type TransitionsDrainFuture<'log, T, U> = TransitionsDrainChunkable<
-    TransitionDrainFuture<'log, T>,
-    TransitionDrainFuture<'log, TransitionsLogUpdate<U>>,
-    U,
->;
-
-/// Draining transition iterator returned by [`TransitionsDrains::all`].
-///
-/// Is also returned by [`TransitionsLog::push_drain_past`] but in that case contains only
-/// past log entries.
-pub type TransitionsDrainAll<'log, T, U> = TransitionsDrainChunkable<
-    TransitionDrainAll<'log, T>,
-    TransitionDrainAll<'log, TransitionsLogUpdate<U>>,
-    U,
->;
-
-/// A wrapper of iterators returned by [`TransitionsDrains`] methods.
-///
-/// The fields [`transitions`](Self::transitions) and [`updates`](Self::updates) allow direct
-/// access to the values of all drained log entries.
-///
-/// To drain transitions and updates in steps of log entries, the
-/// [`next_log_entry`](Self::next_log_entry) method in a `while` loop.
-pub struct TransitionsDrainChunkable<TI, UI, U>
-where
-    TI: ExactSizeIterator,
-    UI: ExactSizeIterator<Item = TransitionsLogUpdate<U>>,
-{
-    /// Draining iterator of transitions from potentially multiple log entries.
-    pub transitions: TI,
-
-    /// Draining iterator of updates from potentially multiple log entries.
-    pub updates: UI,
-
-    _p: PhantomData<U>,
-}
-
-impl<TI, UI, U> TransitionsDrainChunkable<TI, UI, U>
-where
-    TI: ExactSizeIterator,
-    UI: ExactSizeIterator<Item = TransitionsLogUpdate<U>>,
-{
-    /// Returns the transitions and the update of the next log entry from the draining iterators.
-    ///
-    /// Returns `None` if no more log entries are to drain.
-    pub fn next_log_entry(&mut self) -> Option<(Take<&'_ mut TI>, U)> {
-        self.updates.next().map(|update| {
-            (
-                self.transitions.by_ref().take(update.transitions),
-                update.update,
-            )
-        })
-    }
-}
-
 #[cfg(test)]
 mod test {
     use core::num::NonZeroU64;
@@ -1144,13 +820,20 @@ mod test {
 
     use super::*;
 
+    #[derive(Debug)]
     struct MetaAndLogs {
         meta: RevMeta,
-        with_past_drain: TransitionsLog<char, char>,
-        without_past_drain: TransitionsLog<char, char>,
+        drop_drain: TransitionsLog<char, char>,
+        past_drain: TransitionsLog<char, char>,
+        future_drain: TransitionsLog<char, char>,
+        past_future_drain: TransitionsLog<char, char>,
+        future_past_drain: TransitionsLog<char, char>,
+        all_drain: TransitionsLog<char, char>,
+        past_all_drain: TransitionsLog<char, char>,
+        future_all_drain: TransitionsLog<char, char>,
     }
 
-    impl<TI, UI> TransitionsDrainChunkable<TI, UI, char>
+    impl<TI, UI> TransitionsDrainIters<TI, UI, char>
     where
         TI: ExactSizeIterator<Item = char>,
         UI: ExactSizeIterator<Item = TransitionsLogUpdate<char>>,
@@ -1175,15 +858,21 @@ mod test {
         fn new(max_world_states: u64) -> Self {
             Self {
                 meta: RevMeta::new(NonZeroU64::new(max_world_states), false),
-                with_past_drain: TransitionsLog::new(),
-                without_past_drain: TransitionsLog::new(),
+                drop_drain: TransitionsLog::new(),
+                past_drain: TransitionsLog::new(),
+                future_drain: TransitionsLog::new(),
+                past_future_drain: TransitionsLog::new(),
+                future_past_drain: TransitionsLog::new(),
+                all_drain: TransitionsLog::new(),
+                past_all_drain: TransitionsLog::new(),
+                future_all_drain: TransitionsLog::new(),
             }
         }
         fn forward<const N: usize, const M: usize>(
             &mut self,
             past_drain: [(String, char); N],
             future_drain: [(String, char); M],
-            push: (String, char),
+            (transitions, update): (String, char),
             clear: bool,
         ) {
             let queue = if clear {
@@ -1191,37 +880,115 @@ mod test {
             } else {
                 RevQueue::RUN_NOT_LOG
             };
+            //println!("new step\n{self:#?}");
             self.meta.set_queue(queue);
             self.meta.update_ref(Ok(true), |meta, direction| {
                 assert_eq!(direction, RevDirection::NOT_LOG);
 
-                // with_past_drain
-                let mut drain = self.with_past_drain.pre_update_drain(meta);
-                if clear {
-                    assert_eq!(drain.past().to_tuples(), past_drain);
-                } else {
-                    assert_eq!(drain.past().to_tuples(), []);
-                }
-                assert_eq!(drain.future().to_tuples(), future_drain);
-                let drain = self
-                    .with_past_drain
-                    .push_drain_past(meta.past_len(), |mut log| {
-                        log.extend(push.0.chars());
-                        push.1
-                    });
-                if clear {
-                    assert_eq!(drain.to_tuples(), []);
-                } else {
-                    assert_eq!(drain.to_tuples(), past_drain)
-                }
+                
+                let all_drain = past_drain
+                    .iter()
+                    .cloned()
+                    .chain(future_drain.iter().cloned())
+                    .collect::<Vec<_>>();
 
-                // without_past_drain
-                let drain = self.without_past_drain.pre_update_drain(meta);
-                assert_eq!(drain.future().to_tuples(), future_drain);
-                self.without_past_drain.push(meta.past_len(), |mut log| {
-                    log.extend(push.0.chars());
-                    push.1
-                });
+                self.drop_drain
+                    .extend_with(meta, meta.past_len(), transitions.chars(), update)
+                    .unwrap();
+
+                let mut drain = self
+                    .past_drain
+                    .extend_with(meta, meta.past_len(), transitions.chars(), update)
+                    .unwrap();
+                let actual = drain.drain_past().to_tuples();
+                assert_eq!(actual, past_drain);
+                assert_eq!(drain.drain_past().transitions.count(), 0);
+                assert_eq!(drain.drain_past().updates.count(), 0);
+
+                let mut drain = self
+                    .future_drain
+                    .extend_with(meta, meta.past_len(), transitions.chars(), update)
+                    .unwrap();
+                let actual = drain.drain_future().to_tuples();
+                assert_eq!(actual, future_drain);
+                assert_eq!(drain.drain_future().transitions.count(), 0);
+                assert_eq!(drain.drain_future().updates.count(), 0);
+
+                let mut drain = self
+                    .past_future_drain
+                    .extend_with(meta, meta.past_len(), transitions.chars(), update)
+                    .unwrap();
+                let actual = drain.drain_past().to_tuples();
+                assert_eq!(actual, past_drain);
+                assert_eq!(drain.drain_past().transitions.count(), 0);
+                assert_eq!(drain.drain_past().updates.count(), 0);
+                let actual = drain.drain_future().to_tuples();
+                assert_eq!(actual, future_drain);
+                assert_eq!(drain.drain_future().transitions.count(), 0);
+                assert_eq!(drain.drain_future().updates.count(), 0);
+                assert_eq!(drain.drain_all().transitions.count(), 0);
+                assert_eq!(drain.drain_all().updates.count(), 0);
+
+                let mut drain = self
+                    .future_past_drain
+                    .extend_with(meta, meta.past_len(), transitions.chars(), update)
+                    .unwrap();
+                let actual = drain.drain_future().to_tuples();
+                assert_eq!(actual, future_drain);
+                assert_eq!(drain.drain_future().transitions.count(), 0);
+                assert_eq!(drain.drain_future().updates.count(), 0);
+                let actual = drain.drain_past().to_tuples();
+                assert_eq!(actual, past_drain);
+                assert_eq!(drain.drain_past().transitions.count(), 0);
+                assert_eq!(drain.drain_past().updates.count(), 0);
+                assert_eq!(drain.drain_all().transitions.count(), 0);
+                assert_eq!(drain.drain_all().updates.count(), 0);
+
+                println!("\n all_drain from\n{:#?}", self.all_drain);
+                let mut drain = self
+                    .all_drain
+                    .extend_with(meta, meta.past_len(), transitions.chars(), update)
+                    .unwrap();
+                println!("with drains {drain:#?}");
+                let all_drains = drain.drain_all();
+                println!("with drain_all {all_drains:#?}");
+                let actual = all_drains.to_tuples();
+                println!("to drains {drain:#?}");
+                assert_eq!(actual, all_drain);
+                assert_eq!(drain.drain_future().transitions.count(), 0);
+                assert_eq!(drain.drain_future().updates.count(), 0);
+                drop(drain);
+                println!("to\n{:#?}", self.all_drain);
+
+                let mut drain = self
+                    .past_all_drain
+                    .extend_with(meta, meta.past_len(), transitions.chars(), update)
+                    .unwrap();
+                let actual = drain.drain_past().to_tuples();
+                assert_eq!(actual, past_drain);
+                assert_eq!(drain.drain_past().transitions.count(), 0);
+                assert_eq!(drain.drain_past().updates.count(), 0);
+                let actual = drain.drain_all().to_tuples();
+                assert_eq!(actual, future_drain);
+                assert_eq!(drain.drain_future().transitions.count(), 0);
+                assert_eq!(drain.drain_future().updates.count(), 0);
+                assert_eq!(drain.drain_all().transitions.count(), 0);
+                assert_eq!(drain.drain_all().updates.count(), 0);
+
+                let mut drain = self
+                    .future_all_drain
+                    .extend_with(meta, meta.past_len(), transitions.chars(), update)
+                    .unwrap();
+                let actual = drain.drain_future().to_tuples();
+                assert_eq!(actual, future_drain);
+                assert_eq!(drain.drain_future().transitions.count(), 0);
+                assert_eq!(drain.drain_future().updates.count(), 0);
+                let actual = drain.drain_all().to_tuples();
+                assert_eq!(actual, past_drain);
+                assert_eq!(drain.drain_past().transitions.count(), 0);
+                assert_eq!(drain.drain_past().updates.count(), 0);
+                assert_eq!(drain.drain_all().transitions.count(), 0);
+                assert_eq!(drain.drain_all().updates.count(), 0);
             });
         }
         fn noop_forward_backward_log(&mut self) {
@@ -1230,115 +997,114 @@ mod test {
             self.meta.set_queue(RevQueue::RUN_BACKWARD_LOG);
             self.meta.update_ref(Ok(true), |_, _| ());
         }
-        fn forward_log(&mut self, get: Result<(String, char), ()>) {
+        #[track_caller]
+        fn forward_log(&mut self, expected: Result<(String, char), ()>) {
+            let logs = [
+                &mut self.drop_drain,
+                &mut self.past_drain,
+                &mut self.future_drain,
+                &mut self.past_future_drain,
+                &mut self.future_past_drain,
+                &mut self.all_drain,
+                &mut self.past_all_drain,
+                &mut self.future_all_drain,
+            ];
             self.meta.set_queue(RevQueue::RUN_FORWARD_LOG);
-            match get {
-                Ok(get) => {
+            match expected {
+                Ok(expected) => {
                     self.meta.update_ref(Ok(true), |meta, direction| {
                         assert_eq!(direction, RevDirection::FORWARD_LOG);
 
-                        // with_past_drain
-                        let drain = self.with_past_drain.pre_update_drain(meta);
-                        assert_eq!(drain.all().to_tuples(), []);
-                        assert_eq!(
-                            self.with_past_drain
-                                .forward_log()
-                                .map(TransitionsLogIterMut::to_tuple),
-                            Ok(get.clone())
-                        );
-
-                        // without_past_drain
-                        let drain = self.without_past_drain.pre_update_drain(meta);
-                        assert_eq!(drain.future().to_tuples(), []);
-                        assert_eq!(
-                            self.without_past_drain
-                                .forward_log()
-                                .map(TransitionsLogIterMut::to_tuple),
-                            Ok(get)
-                        );
+                        for log in logs {
+                            let actual = log.forward_log(meta).map(TransitionsLogIterMut::to_tuple);
+                            assert_eq!(actual, Ok(expected.clone()));
+                        }
                     });
                 }
                 Err(()) => {
-                    #[track_caller]
-                    fn assert_err(log: &mut TransitionsLog<char, char>) {
+                    self.meta.update_ref(Ok(false), |_, _| ());
+
+                    for log in logs {
                         assert_eq!(
-                            log.forward_log().map(TransitionsLogIterMut::to_tuple),
+                            log.forward_log(&self.meta)
+                                .map(TransitionsLogIterMut::to_tuple),
                             Err(OutOfLog::caller())
                         );
                         log.clear_poison();
                     }
-
-                    self.meta.update_ref(Ok(false), |_, _| ());
-                    assert_err(&mut self.with_past_drain);
-                    assert_err(&mut self.without_past_drain);
                 }
             }
         }
-        fn backward_log<const N: usize>(
-            &mut self,
-            future_drain: [(String, char); N],
-            get: Result<(String, char), ()>,
-        ) {
+        #[track_caller]
+        fn backward_log(&mut self, expected: Result<(String, char), ()>) {
             self.meta.set_queue(RevQueue::RUN_BACKWARD_LOG);
-            match get {
-                Ok(get) => {
+            match expected {
+                Ok(expected) => {
                     self.meta.update_ref(Ok(true), |meta, direction| {
                         assert_eq!(direction, RevDirection::BackwardLog);
 
-                        // with_past_drain
-                        let mut drain = self.with_past_drain.pre_update_drain(meta);
-                        assert_eq!(drain.past().to_tuples(), []);
-                        assert_eq!(drain.future().to_tuples(), future_drain);
-                        assert_eq!(
-                            self.with_past_drain
-                                .backward_log()
-                                .map(TransitionsLogIterMut::to_tuple),
-                            Ok(get.clone())
-                        );
-
-                        // without_past_drain
-                        let drain = self.without_past_drain.pre_update_drain(meta);
-                        assert_eq!(drain.future().to_tuples(), future_drain);
-                        assert_eq!(
-                            self.without_past_drain
-                                .backward_log()
-                                .map(TransitionsLogIterMut::to_tuple),
-                            Ok(get)
-                        );
+                        for log in [
+                            &mut self.drop_drain,
+                            &mut self.past_drain,
+                            &mut self.future_drain,
+                            &mut self.past_future_drain,
+                            &mut self.future_past_drain,
+                            &mut self.all_drain,
+                            &mut self.past_all_drain,
+                            &mut self.future_all_drain,
+                        ] {
+                            let actual =
+                                log.backward_log(meta).map(TransitionsLogIterMut::to_tuple);
+                            assert_eq!(actual, Ok(expected.clone()));
+                        }
                     });
                 }
                 Err(()) => {
-                    assert_eq!(N, 0);
                     self.meta.update_ref(Ok(false), |_, _| ());
 
-                    #[track_caller]
-                    fn assert_err(log: &mut TransitionsLog<char, char>) {
+                    for log in [&mut self.drop_drain, &mut self.future_drain] {
                         assert_eq!(
-                            log.backward_log().map(TransitionsLogIterMut::to_tuple),
+                            log.backward_log(&self.meta)
+                                .map(TransitionsLogIterMut::to_tuple),
                             Err(OutOfLog::caller())
                         );
                         log.clear_poison();
                     }
 
-                    // with_past_drain
-                    if self.with_past_drain.backward_log().is_ok() {
-                        // Because this past-draining log secretly keeps one more transition than
-                        // needed, OutOfLog will only be triggered if going backward twice past what
-                        // the user might suspect to be in log.
-                        // This is not true when clearing is involved however, which is why the
-                        // first backward_log is not asserted to be Ok here.
+                    for (i, log) in [
+                        &mut self.past_drain,
+                        &mut self.past_future_drain,
+                        &mut self.future_past_drain,
+                        &mut self.all_drain,
+                        &mut self.past_all_drain,
+                        &mut self.future_all_drain,
+                    ]
+                    .into_iter()
+                    .enumerate()
+                    {
+                        match log.backward_log(&self.meta) {
+                            Ok(expected) => {
+                                let expected = expected.to_tuple();
+                                assert_eq!(
+                                    log.backward_log(&self.meta)
+                                        .map(TransitionsLogIterMut::to_tuple),
+                                    Err(OutOfLog::caller()),
+                                    "{i}"
+                                );
+                                log.clear_poison();
 
-                        // test again
-                        assert_err(&mut self.with_past_drain);
-
-                        // undoing first backward_log
-                        assert!(self.with_past_drain.forward_log().is_ok());
-                    } else {
-                        self.with_past_drain.clear_poison();
+                                // undo Ok
+                                let actual = log
+                                    .forward_log(&self.meta)
+                                    .map(TransitionsLogIterMut::to_tuple);
+                                assert_eq!(actual, Ok(expected), "{i}");
+                            }
+                            Err(out_of_log) => {
+                                assert_eq!(out_of_log, OutOfLog::caller(), "{i}");
+                                log.clear_poison();
+                            }
+                        }
                     }
-
-                    // without_past_drain
-                    assert_err(&mut self.without_past_drain);
                 }
             }
         }
@@ -1357,6 +1123,10 @@ mod test {
         let g = || ("g".repeat(7), 'G');
         let h = || ("h".repeat(8), 'H');
         let i = || ("i".repeat(9), 'I');
+        let j = || ("j".repeat(10), 'J');
+        let k = || ("k".repeat(11), 'K');
+        let l = || ("l".repeat(12), 'L');
+        let m = || ("m".repeat(13), 'M');
 
         meta_and_logs.forward([], [], a(), false);
         meta_and_logs.forward([], [], b(), false);
@@ -1365,11 +1135,11 @@ mod test {
         meta_and_logs.forward([], [], e(), false);
         meta_and_logs.forward([a()], [], f(), false);
 
-        meta_and_logs.backward_log([], Ok(f()));
-        meta_and_logs.backward_log([], Ok(e()));
-        meta_and_logs.backward_log([], Ok(d()));
-        meta_and_logs.backward_log([], Ok(c()));
-        meta_and_logs.backward_log([], Err(())); // b() is unreachable but not yet drained
+        meta_and_logs.backward_log(Ok(f()));
+        meta_and_logs.backward_log(Ok(e()));
+        meta_and_logs.backward_log(Ok(d()));
+        meta_and_logs.backward_log(Ok(c()));
+        meta_and_logs.backward_log(Err(())); // b() is unreachable but not yet drained
 
         meta_and_logs.forward_log(Ok(c()));
         meta_and_logs.forward_log(Ok(d()));
@@ -1377,39 +1147,50 @@ mod test {
         meta_and_logs.forward_log(Ok(f()));
         meta_and_logs.forward_log(Err(()));
 
-        meta_and_logs.backward_log([], Ok(f()));
-        meta_and_logs.backward_log([], Ok(e()));
+        meta_and_logs.backward_log(Ok(f()));
+        meta_and_logs.backward_log(Ok(e()));
 
         meta_and_logs.forward([], [e(), f()], g(), false);
 
-        meta_and_logs.backward_log([], Ok(g()));
-        meta_and_logs.backward_log([], Ok(d()));
-        meta_and_logs.backward_log([], Ok(c()));
-        meta_and_logs.backward_log([], Err(()));
+        meta_and_logs.backward_log(Ok(g()));
+        meta_and_logs.backward_log(Ok(d()));
+        meta_and_logs.backward_log(Ok(c()));
+        meta_and_logs.backward_log(Err(()));
 
         meta_and_logs.forward_log(Ok(c()));
         meta_and_logs.forward_log(Ok(d()));
         meta_and_logs.forward_log(Ok(g()));
         meta_and_logs.forward_log(Err(()));
 
-        meta_and_logs.backward_log([], Ok(g()));
-        meta_and_logs.backward_log([], Ok(d()));
+        meta_and_logs.backward_log(Ok(g()));
+        meta_and_logs.backward_log(Ok(d()));
 
         meta_and_logs.forward([b(), c()], [d(), g()], h(), true);
 
-        meta_and_logs.backward_log([], Ok(h()));
-        meta_and_logs.backward_log([], Err(()));
+        meta_and_logs.backward_log(Ok(h()));
+        meta_and_logs.backward_log(Err(()));
 
         meta_and_logs.forward_log(Ok(h()));
         meta_and_logs.forward_log(Err(()));
 
         meta_and_logs.forward([], [], i(), false);
 
-        meta_and_logs.backward_log([], Ok(i()));
+        meta_and_logs.backward_log(Ok(i()));
 
         meta_and_logs.noop_forward_backward_log();
 
-        meta_and_logs.backward_log([i()], Ok(h()));
-        meta_and_logs.backward_log([], Err(()));
+        meta_and_logs.backward_log(Ok(h()));
+        meta_and_logs.backward_log(Err(()));
+
+        meta_and_logs.forward([], [h(), i()], j(), false);
+        meta_and_logs.forward([], [], k(), false);
+        meta_and_logs.forward([], [], l(), false);
+
+        meta_and_logs.backward_log(Ok(l()));
+
+        meta_and_logs
+            .meta
+            .set_max_world_states(NonZeroU64::new(2).unwrap());
+        meta_and_logs.forward([j()], [l()], m(), false);
     }
 }
