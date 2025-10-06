@@ -503,7 +503,7 @@ impl<T, U> TransitionsLog<T, U> {
             max_past_len,
             TransitionsLogUpdate {
                 update,
-                transitions: usize::MAX,
+                transitions: usize::MAX, // will be overwritten when transititons are counted
             },
         )?;
         let gap_range = if updates.is_clear() {
@@ -622,6 +622,7 @@ impl<T> TransitionsLog<T, ()> {
     }
 }
 
+#[derive(Debug)]
 pub struct TransitionsDrain<'a, T, U, I>
 where
     I: IntoIterator<Item = T>,
@@ -644,6 +645,7 @@ where
         let end = self.gap_range.drain_past_end();
         let transitions = self.transitions.drain(..end);
         let updates = self.updates.drain_past();
+        println!("drain_past end: {end}, transitions.len(): {}, updates.len(): {}", transitions.len(), updates.len());
         TransitionsDrainIters {
             transitions,
             updates,
@@ -852,6 +854,7 @@ mod test {
 
     impl TransitionsDrain<'_, char, char, Chars<'_>> {
         fn assert_past<const N: usize>(&mut self, expected: [(String, char); N]) -> &mut Self {
+            println!("{self:#?}");
             let iter = self.drain_past();
             let len = expected
                 .iter()
@@ -950,10 +953,13 @@ mod test {
                     .extend_with(meta, meta.past_len(), transitions.chars(), update)
                     .unwrap();
 
+                println!();
                 self.past_drain
                     .extend_with(meta, meta.past_len(), transitions.chars(), update)
                     .unwrap()
                     .assert_past(past_drain.clone());
+                println!("{past_drain:?} -> {:#?}", self.past_drain);
+                assert_ne!(update, 'B');
 
                 self.future_drain
                     .extend_with(meta, meta.past_len(), transitions.chars(), update)

@@ -212,15 +212,6 @@ impl<'a, T> DrainAll<'a, T> {
     ) -> Self {
         let mut this_range = gap_range.clone();
 
-        if gap_range.is_clear() {
-            gap_range.start = 0;
-            return Self {
-                drain: log.drain(..),
-                gap_range: this_range,
-                gap_buffer,
-            };
-        }
-
         debug_assert!(gap_range.start <= log.len());
         debug_assert!(gap_range.end <= log.len());
         debug_assert!(gap_range.start <= gap_range.end);
@@ -253,8 +244,7 @@ impl<T> Iterator for DrainAll<'_, T> {
     type Item = T;
     fn next(&mut self) -> Option<T> {
         if !self.gap_range.is_clear() && self.gap_range.start > 0 {
-            let offset = self.gap_range.start_offset;
-            if self.gap_range.start == offset {
+            if self.gap_range.start == self.gap_range.start_offset {
                 *self.gap_buffer = self.drain.by_ref().take(self.gap_range.end).collect();
                 self.gap_range.end -= self.gap_range.start;
                 self.gap_range.start = 0;
@@ -297,7 +287,7 @@ impl<T> Drop for DrainAll<'_, T> {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct GapRange {
     start: usize,
     start_offset: usize,
@@ -310,29 +300,20 @@ impl GapRange {
         Self {
             start: index,
             start_offset: 0,
-            end: usize::MAX,
+            end: index,
         }
     }
     fn is_clear(self) -> bool {
-        self.end == usize::MAX
+        self.start_offset == 0
     }
     fn drain_past_end(&mut self) -> usize {
-        let end;
-        if self.is_clear() {
-            end = self.start;
-        } else {
-            end = self.start.saturating_sub(self.start_offset);
-            self.end -= end;
-        };
+        let end = self.start.saturating_sub(self.start_offset);
+        self.end -= end;
         self.start = 0;
         end
     }
     fn drain_future_start(&self) -> usize {
-        if self.is_clear() {
-            self.start
-        } else {
-            self.end
-        }
+        self.end
     }
 }
 

@@ -482,6 +482,7 @@ impl<T> TransitionLog<T> {
     }
 }
 
+#[derive(Debug)]
 pub struct TransitionDrain<'a, T> {
     log: &'a mut TransitionLog<T>,
     transition: ManuallyDrop<T>,
