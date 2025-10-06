@@ -23,9 +23,8 @@ use bevy_platform::{
 use bevy_utils::prelude::DebugName;
 use core::{
     any::TypeId,
-    hash::{BuildHasher, Hasher},
+    hash::{BuildHasher, Hasher, Hash},
 };
-use std::{collections::vec_deque::Drain, hash::Hash};
 
 /// Wrap a `condition` into a reversivle `BoxedCondition` that logs the system output at
 /// [`RevDirection::NOT_LOG`] and traverses the log during [log directions](RevDirection::is_log),
@@ -106,8 +105,6 @@ impl<T: ReadOnlySystem<In = (), Out = bool>> System for RevCondition<T> {
             )
         })?;
 
-        self.logs.pre_update(meta);
-
         match direction {
             RevDirection::NOT_LOG => {
                 let result = unsafe {
@@ -117,7 +114,7 @@ impl<T: ReadOnlySystem<In = (), Out = bool>> System for RevCondition<T> {
                     self.condition.run_unsafe((), world)
                 };
 
-                self.logs.insert(meta, &result);
+                self.logs.insert(meta, &result)?;
 
                 result
             }
@@ -159,22 +156,17 @@ struct ConditionLogs {
 }
 
 impl ConditionLogs {
-    fn pre_update(&mut self, meta: &RevMeta) {
-        self.ok_true_log.pre_update(meta);
-        if let Some(failed_log) = self.failed_log.as_mut() {
-            failed_log.pre_update(meta);
-        }
-    }
-    fn insert(&mut self, meta: &RevMeta, result: &Result<bool, RunSystemError>) {
+    fn insert(&mut self, meta: &RevMeta, result: &Result<bool, RunSystemError>) -> Result<(), RunSystemError> {
         match result {
-            Ok(false) | Err(RunSystemError::Skipped(_)) => {}
+            Ok(false) | Err(RunSystemError::Skipped(_)) => Ok(()),
             Ok(true) => {
                 self.ok_true_log.push_get_past_len(meta);
+                Ok(())
             }
             Err(RunSystemError::Failed(failed)) => {
                 self.failed_log
-                    .get_or_insert_with(|| FailedLogs::new(meta))
-                    .insert(meta, failed);
+                    .get_or_insert_default()
+                    .insert(meta, failed)
             }
         }
     }
@@ -187,6 +179,7 @@ impl ConditionLogs {
     }
 }
 
+#[derive(Default)]
 struct FailedLogs {
     err_failed_log: UpdateLog,
 
@@ -196,28 +189,28 @@ struct FailedLogs {
 }
 
 impl FailedLogs {
-    fn new(meta: &RevMeta) -> Box<Self> {
-        let mut this = Self {
-            err_failed_log: Default::default(),
-            failed_log: Default::default(),
-            failed_cache: Default::default(),
-        };
-        this.err_failed_log.pre_update(meta);
-        Box::new(this)
-    }
-    fn pre_update(&mut self, meta: &RevMeta) {
-        self.err_failed_log.pre_update(meta);
-        let keys = self.failed_log.pre_update_drain(meta).all();
-        self.failed_cache.cleanup(keys);
-    }
-    fn insert(&mut self, meta: &RevMeta, failed: &BevyError) {
+    fn insert(&mut self, meta: &RevMeta, failed: &BevyError) -> Result<(), RunSystemError> {
         // insert log value if vacant, increase usages if occupied
         let key = self.failed_cache.insert_get_key(failed);
 
         // log hash as transition, reduce usages for drained, remove if unused
         let past_len = self.err_failed_log.push_get_past_len(meta);
-        let keys = self.failed_log.push_drain_past(past_len, key);
-        self.failed_cache.cleanup(keys);
+        let mut drain = self.failed_log.push(meta, past_len, key).map_err(|err| RunSystemError::Failed(err.into()))?;
+        let keys = drain.drain_all();
+       
+        for hash in keys {
+            if let Entry::Occupied(mut occupied) = self.failed_cache.0.entry(hash) {
+                let usages = &mut occupied.get_mut().usages;
+                match usages.checked_sub(1) {
+                    Some(reduced) => *usages = reduced,
+                    None => {
+                        occupied.remove();
+                    }
+                }
+            };
+        }
+
+        Ok(())
     }
     fn get(
         &mut self,
@@ -232,7 +225,7 @@ impl FailedLogs {
             if !self.err_failed_log.forward_log(meta) {
                 return Ok(false);
             }
-            self.failed_log.forward_log()
+            self.failed_log.forward_log(meta)
         } else {
             if ok_true_log.backward_log(meta) {
                 return Ok(true);
@@ -240,7 +233,7 @@ impl FailedLogs {
             if !self.err_failed_log.backward_log(meta) {
                 return Ok(false);
             }
-            self.failed_log.backward_log()
+            self.failed_log.backward_log(meta)
         };
 
         let err = match failed_log_result {
@@ -256,19 +249,6 @@ impl FailedLogs {
 struct FailedCache(HashMap<u64, Failed, PassHash>);
 
 impl FailedCache {
-    fn cleanup(&mut self, keys: Drain<u64>) {
-        for hash in keys {
-            if let Entry::Occupied(mut occupied) = self.0.entry(hash) {
-                let usages = &mut occupied.get_mut().usages;
-                match usages.checked_sub(1) {
-                    Some(reduced) => *usages = reduced,
-                    None => {
-                        occupied.remove();
-                    }
-                }
-            };
-        }
-    }
     fn get(&self, key: u64) -> &str {
         self.0
             .get(&key)
@@ -323,8 +303,7 @@ mod test {
         fn forward(&mut self, result: Result<bool, RunSystemError>) {
             self.meta.set_queue(RevQueue::RUN_NOT_LOG);
             self.meta.update_ref(Ok(true), |meta, _| {
-                self.logs.pre_update(meta);
-                self.logs.insert(meta, &result);
+                self.logs.insert(meta, &result).unwrap();
             });
         }
         fn noop_forward(&mut self) {
@@ -341,7 +320,6 @@ mod test {
         }
         fn log(&mut self, forward: bool, expected: Result<bool, &str>) {
             self.meta.update_ref(Ok(true), |meta, _| {
-                self.logs.pre_update(meta);
                 match (self.logs.get(meta, forward), expected) {
                     (Ok(actual), Ok(expected)) => assert_eq!(actual, expected),
                     (Err(RunSystemError::Failed(actual)), Err(expected)) => {
@@ -353,21 +331,23 @@ mod test {
                 }
             });
         }
-        fn clear(mut self) {
-            self.assert_failed_cache_emptiness(false);
-            self.meta.set_queue(RevQueue::CLEAR_THEN_RUN);
-            self.meta.update_ref(Ok(true), |meta, _| {
-                self.logs.pre_update(meta);
-            });
-            self.assert_failed_cache_emptiness(true);
-        }
-        fn assert_failed_cache_emptiness(&self, expected: bool) {
+        fn forward_clear(mut self, err: &'static str) {
             assert!(
                 self.logs
                     .failed_log
                     .as_ref()
-                    .is_some_and(|failed_logs| failed_logs.failed_cache.0.is_empty() == expected)
+                    .is_some_and(|failed_logs| failed_logs.failed_cache.0.len() > 1)
             );
+            self.meta.set_queue(RevQueue::CLEAR_THEN_RUN);
+            self.meta.update_ref(Ok(true), |meta, _| {
+                self.logs.insert(meta, &Err(RunSystemError::Failed(err.into()))).unwrap();
+            });
+            let failed_logs = self.logs.failed_log.unwrap();
+            let mut values = failed_logs.failed_cache.0.values();
+            let mut actual = values.next().unwrap().string.clone();
+            actual.truncate(err.len());
+            assert_eq!(actual, err);
+            assert!(values.next().is_none());
         }
     }
 
@@ -423,6 +403,6 @@ mod test {
         meta_and_log.forward_log(Ok(false));
         meta_and_log.forward_log(Err("third error"));
 
-        meta_and_log.clear();
+        meta_and_log.forward_clear("fourth error");
     }
 }

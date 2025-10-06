@@ -37,6 +37,12 @@ pub(crate) enum DespawnCleanerErr {
     CleanerOutOfLog,
 }
 
+impl From<OutOfLog> for DespawnCleanerErr {
+    fn from(_: OutOfLog) -> Self {
+        Self::CleanerOutOfLog
+    }
+}
+
 impl RevDespawnCleaner {
     pub(crate) fn log_spawn(&mut self, entity: Entity, location: MaybeLocation, _: NonLogNow) {
         self.spawn_queue.push((entity, location));
@@ -90,75 +96,44 @@ impl RevDespawnCleaner {
                 let direction = meta
                     .get_running_direction()
                     .ok_or(DespawnCleanerErr::MetaNotRunning)?;
-                let past_len = meta.past_len();
-
-                {
-                    let drain_buffer = this.spawn_buffer.pre_update_drain(&meta);
-                    let drain_spawn = this.spawn.pre_update_drain(&meta);
-                    let mut drain_despawn = this.despawn.pre_update_drain(&meta);
-                    let iter = drain_buffer
-                        .all()
-                        .transitions
-                        .flat_map(|buffer| buffer.0)
-                        .chain(drain_spawn.future().transitions)
-                        .chain(drain_despawn.past().transitions);
-
-                    for entity in iter {
-                        let _ = world.try_despawn(entity); // todo: upstream a way to set the location
-                    }
-                }
 
                 match direction {
-                    RevDirection::NOT_LOG => Ok(this.forward(world, past_len)),
-                    RevDirection::FORWARD_LOG => this.forward_log(),
-                    RevDirection::BackwardLog => this.backward_log(),
+                    RevDirection::NOT_LOG => {
+                        let past_len = meta.past_len();
+
+                        let spawn = this.spawn_queue.drain(..).map(|(entity, _)| entity);
+                        let mut drain = this.spawn.extend(meta, past_len, spawn)?;
+                        let spawn = drain.drain_future().transitions;
+
+                        let despawn = this.despawn_queue.drain(..).map(|(entity, _)| entity);
+                        let mut drain = this.despawn.extend(meta, past_len, despawn).unwrap();
+                        let despawn = drain.drain_past().transitions;
+
+                        let buffer = this.spawn_buffer_queue.drain(..).chain(this.spawn_buffer_queue_fallback
+                            .drain(..)
+                            .map(|(entity, location)| (Some(entity), location)));
+                        let mut drain = this.spawn_buffer.extend(meta, past_len, buffer).unwrap();
+                        let buffer = drain.drain_all().transitions.flat_map(|(entity, _)| entity);
+                        
+                        let iter = spawn.chain(despawn).chain(buffer);
+                        
+                        for entity in iter {
+                            let _ = world.try_despawn(entity); // todo: upstream a way to set the location
+                        }
+
+                        Ok(())
+                    }
+                    RevDirection::FORWARD_LOG => this.forward_log(meta),
+                    RevDirection::BackwardLog => this.backward_log(meta),
                 }
-                .map_err(|_| DespawnCleanerErr::CleanerOutOfLog)
             })
             .unwrap_or(Err(DespawnCleanerErr::CleanerMissing))
     }
 
-    fn forward(&mut self, world: &mut World, max_past_len: u64) {
-        let progress = RevOp::FinalDespawn { buffer: false };
-        progress.scope(world, |world| {
-            self.spawn.push(max_past_len, |mut log| {
-                log.extend(self.spawn_queue.drain(..).map(|(entity, _)| entity));
-            });
-
-            let despawned = self
-                .despawn
-                .push_drain_past(max_past_len, |mut log| {
-                    log.extend(self.despawn_queue.drain(..).map(|(entity, _)| entity));
-                })
-                .transitions;
-            for entity in despawned {
-                let _ = world.try_despawn(entity); // todo: upstream a way to set the location
-            }
-
-            world.insert_resource(RevOp::FinalDespawn { buffer: true });
-
-            let buffer = self
-                .spawn_buffer
-                .push_drain_past(max_past_len, |mut log| {
-                    log.extend(self.spawn_buffer_queue.drain(..));
-                    log.extend(
-                        self.spawn_buffer_queue_fallback
-                            .drain(..)
-                            .map(|(entity, location)| (Some(entity), location)),
-                    );
-                })
-                .transitions
-                .flat_map(|buffer| buffer.0);
-            for entity in buffer {
-                let _ = world.try_despawn(entity); // todo: upstream a way to set the location
-            }
-        });
-    }
-
-    fn forward_log(&mut self) -> Result<(), OutOfLog> {
-        self.spawn.forward_log()?;
-        self.despawn.forward_log().unwrap();
-        self.spawn_buffer.forward_log().unwrap();
+    fn forward_log(&mut self, meta: &RevMeta) -> Result<(), DespawnCleanerErr> {
+        self.spawn.forward_log(meta)?;
+        self.despawn.forward_log(meta).unwrap();
+        self.spawn_buffer.forward_log(meta).unwrap();
 
         if size_of::<MaybeLocation>() == 0 {
             if !self.spawn_queue.is_empty() {
@@ -197,10 +172,10 @@ impl RevDespawnCleaner {
         Ok(())
     }
 
-    fn backward_log(&mut self) -> Result<(), OutOfLog> {
-        self.spawn.backward_log()?;
-        self.despawn.backward_log().unwrap();
-        let mut buffer_iter = self.spawn_buffer.backward_log().unwrap(); // should not be out-of-log like `Self::spawn` as they get called identically in `forward`
+    fn backward_log(&mut self, meta: &RevMeta) -> Result<(), DespawnCleanerErr> {
+        self.spawn.backward_log(meta)?;
+        self.despawn.backward_log(meta).unwrap();
+        let mut buffer_iter = self.spawn_buffer.backward_log(meta).unwrap(); // should not be out-of-log like `Self::spawn` as they get called identically in `forward`
         let mut delayed_iter = self.spawn_buffer_queue.drain(..);
 
         'delayed_loop: for (delayed, location) in delayed_iter.by_ref() {

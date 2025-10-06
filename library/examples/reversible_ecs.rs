@@ -298,37 +298,10 @@ fn row4(app: &mut App) {
             row: 4,
         };
 
-        // Any logs in the future of the log, for example after going backward in time and resuming
-        // the NOT_LOG phase, should be despawned as they are no longer part of our reality as we
-        // rewrite the future now! (TODO: rewrite, was in NOT_LOG match previously)
-        for entity in log.pre_update_drain(&meta).future().flatten() {
-            commands.entity(entity).despawn();
-        }
-
         // Depending on the current RevDirection, the system has different behavior
         match meta.running_direction() {
             // During NOT_LOG we want to react on the pressed keys to spawn Waste entities and to log that.
             RevDirection::NOT_LOG => {
-                // Note that, while the despawn_waste system further above already deals with despawning
-                // waste entities that are out of log, this system does that itself. This is done because
-                // there is a detail about TransitionLog one should be aware of if the popped log
-                // entries are used and not just ignored.
-
-                // A quirk of Transition logs is that they need one less log entry compared to State logs.
-                // For example if the global log can be up to 3 states, then...
-                // - State logs need to have these three states
-                // - Transition logs only need to have the two transitions that are used for transitioning
-                //   from the first to the second state and from the second to the third state
-                //
-                // So, the transition log would just pop transitions in push_and_pop_past earlier as the log
-                // itself does not need that transition anymore.
-                // In our case however this popped transition is used to despawn a Waste entity. But we dont
-                // want that to happen a frame earlier as otherwise the waste would vanish before it went past
-                // the right edge of the water.
-                //
-                // That is why we add a + 1 here to compensate that behavior.
-                // TODO: remove this
-                let past_len = meta.past_len() + 1;
 
                 // If the key is pressed, we spawn another Waste entity.
                 // If not, we still need to push a None to advance the log.
@@ -336,7 +309,8 @@ fn row4(app: &mut App) {
 
                 // Pushing potential Waste entities may also pop an entity that got out-of-log now.
                 // These need to be despawned as they are now past the edge of the screen and cannot come back.
-                for entity in log.push_drain_past(past_len, entity).flatten() {
+                let mut drain = log.push(&meta, meta.past_len(), entity)?;
+                for entity in drain.drain_all().flatten() {
                     commands.entity(entity).despawn();
 
                     // The player missed undoing this littering in time and the lost waste counter is increased.
@@ -348,12 +322,12 @@ fn row4(app: &mut App) {
             // this frame. When we go forward in log, we reinsert the component.
             // This way we dont need to despawn and respawn during the log phase.
             RevDirection::BackwardLog => {
-                if let Some(entity) = log.backward_log()? {
+                if let Some(entity) = log.backward_log(&meta)? {
                     commands.entity(*entity).remove::<Waste>();
                 }
             }
             RevDirection::FORWARD_LOG => {
-                if let Some(entity) = log.forward_log()? {
+                if let Some(entity) = log.forward_log(&meta)? {
                     commands.entity(*entity).insert(waste);
                 }
             }
@@ -395,11 +369,6 @@ fn row5(app: &mut App) {
             row: 5,
         };
 
-        past_len_log.pre_update(&meta);
-        for entity in entity_log.pre_update_drain(&meta).future() {
-            commands.entity(entity).despawn();
-        }
-
         match meta.running_direction() {
             // Note that no despawns happen in this system as the system does not necessarily run when an entity
             // spawned from here gets out-of-log.
@@ -418,7 +387,7 @@ fn row5(app: &mut App) {
 
                 // We do not use the push_and_pop_past method because, as this system does not run every frame,
                 // multiple log entries may be out of log now.
-                entity_log.push_drain_past(past_len, entity);
+                entity_log.push(&meta, past_len, entity)?;
             }
 
             // As before, the log behavior is just removing and readding the Waste component.
@@ -426,14 +395,16 @@ fn row5(app: &mut App) {
                 // We also need to update the frame log. As the frame log is advanced every time this system runs,
                 // this method should always return true as well because the run condition makes sure it only runs
                 // in these frames, also during the log.
-                let _true = past_len_log.forward_log(&meta);
-                let entity = *entity_log.forward_log()?;
-                commands.entity(entity).insert(waste);
+                if past_len_log.forward_log(&meta) {
+                    let entity = *entity_log.forward_log(&meta)?;
+                    commands.entity(entity).insert(waste);
+                }
             }
             RevDirection::BackwardLog => {
-                let _true = past_len_log.backward_log(&meta);
-                let entity = *entity_log.backward_log()?;
-                commands.entity(entity).remove::<Waste>();
+                if past_len_log.backward_log(&meta) {
+                    let entity = *entity_log.backward_log(&meta)?;
+                    commands.entity(entity).remove::<Waste>();
+                }
             }
         }
 

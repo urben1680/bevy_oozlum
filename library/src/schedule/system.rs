@@ -3,7 +3,7 @@ use crate::{
         BackwardDeferredAndSystemSet, BackwardDeferredSet, BackwardSystemSet, BackwardSystems,
         ForwardSystemSet, ForwardSystems,
     },
-    undo_redo::{UndoRedoBuffer, UndoRedoLog},
+    undo_redo::UndoRedoLog,
 };
 use bevy_ecs::{
     component::{CheckChangeTicks, Tick},
@@ -147,7 +147,6 @@ impl RevSystemTypeSet {
 pub(super) struct RevSystem<T, const FORWARD: bool> {
     shared: Arc<Shared<T>>,
     name: DebugName,
-    tick: Tick,
     flags: SystemStateFlags,
 }
 
@@ -156,7 +155,6 @@ impl<T, const FORWARD: bool> RevSystem<T, FORWARD> {
         Self {
             shared,
             name,
-            tick: Default::default(),
             flags: SystemStateFlags::empty(),
         }
     }
@@ -179,15 +177,13 @@ impl<T> Shared<T> {
         &'a self,
         name: &DebugName,
         postfix: &'static str,
-        world: &mut World,
     ) -> MutexGuard<'a, Inner<T>> {
-        world.init_resource::<UndoRedoBuffer>();
         self.inner.try_lock().unwrap_or_else(|err| {
             if size_of::<DebugName>() == 0 {
                 let name = type_name::<T>();
-                panic!("reversible system {name}{postfix} could not be initialized: {err}")
+                panic!("reversible system {name}{postfix} could not be accessed: {err}")
             } else {
-                panic!("reversible system {name} could not be initialized: {err}");
+                panic!("reversible system {name} could not be accessed: {err}");
             };
         })
     }
@@ -331,23 +327,26 @@ impl<T: System, const FORWARD: bool> System for RevSystem<T, FORWARD> {
         unreachable!("reversible systems are not used as observers")
     }
     fn initialize(&mut self, world: &mut World) -> FilteredAccessSet {
-        let mut inner = self.shared.get_inner(&self.name, Self::postfix(), world);
+        let mut inner = self.shared.get_inner(&self.name, Self::postfix());
         let access = inner.system.initialize(world);
         inner.initialized = true;
         self.flags = inner.system.flags();
         access
     }
     fn check_change_tick(&mut self, check: CheckChangeTicks) {
-        self.tick.check_tick(check);
+        let mut inner = self.shared.get_inner(&self.name, Self::postfix());
+        inner.system.check_change_tick(check);
     }
     fn default_system_sets(&self) -> Vec<InternedSystemSet> {
         self.shared.default_system_sets.clone()
     }
     fn get_last_run(&self) -> Tick {
-        tick_panic()
+        let inner = self.shared.get_inner(&self.name, Self::postfix());
+        inner.system.get_last_run()
     }
-    fn set_last_run(&mut self, _last_run: Tick) {
-        tick_panic();
+    fn set_last_run(&mut self, last_run: Tick) {
+        let mut inner = self.shared.get_inner(&self.name, Self::postfix());
+        inner.system.set_last_run(last_run);
     }
 }
 
@@ -374,6 +373,7 @@ unsafe impl<T: ReadOnlySystem<In = (), Out = ()>, const FORWARD: bool> ReadOnlyS
 // is `pub(super)` for docs in parent module
 pub(super) struct BackwardDeferred<T> {
     shared: Arc<Shared<T>>,
+    tick: Tick,
     name: DebugName,
     has_deferred: bool,
 }
@@ -382,6 +382,7 @@ impl<T> BackwardDeferred<T> {
     fn new(shared: Arc<Shared<T>>, name: DebugName) -> Self {
         Self {
             shared,
+            tick: Tick::new(u32::MAX),
             name,
             has_deferred: Default::default(),
         }
@@ -428,8 +429,9 @@ impl<T: System> System for BackwardDeferred<T> {
     unsafe fn run_unsafe(
         &mut self,
         _input: (),
-        _world: UnsafeWorldCell,
+        world: UnsafeWorldCell,
     ) -> Result<(), RunSystemError> {
+        self.tick = world.increment_change_tick();
         Ok(())
     }
     fn apply_deferred(&mut self, world: &mut World) {
@@ -461,7 +463,7 @@ impl<T: System> System for BackwardDeferred<T> {
         unreachable!("reversible systems are not used as observers")
     }
     fn initialize(&mut self, world: &mut World) -> FilteredAccessSet {
-        let mut inner = self.shared.get_inner(&self.name, DEFERRED_POSTFIX, world);
+        let mut inner = self.shared.get_inner(&self.name, DEFERRED_POSTFIX);
         if !inner.initialized {
             inner.system.initialize(world);
         }
@@ -471,12 +473,14 @@ impl<T: System> System for BackwardDeferred<T> {
     fn default_system_sets(&self) -> Vec<InternedSystemSet> {
         self.shared.default_system_sets.clone()
     }
-    fn check_change_tick(&mut self, _check: CheckChangeTicks) {}
-    fn get_last_run(&self) -> Tick {
-        tick_panic()
+    fn check_change_tick(&mut self, check: CheckChangeTicks) {
+        self.tick.check_tick(check);
     }
-    fn set_last_run(&mut self, _last_run: Tick) {
-        tick_panic();
+    fn get_last_run(&self) -> Tick {
+        self.tick
+    }
+    fn set_last_run(&mut self, last_run: Tick) {
+        self.tick = last_run;
     }
 }
 
@@ -485,14 +489,6 @@ unsafe impl<T: System> ReadOnlySystem for BackwardDeferred<T> {
     fn run_readonly(&mut self, _input: (), _world: &World) -> Result<(), RunSystemError> {
         Ok(())
     }
-}
-
-fn tick_panic() -> Tick {
-    // setting the tick could result in unpredictable effects across the instances of this system
-    panic!(
-        "reversible systems do not support getting or setting the system Tick, \
-        the system needs to actively put and get it in the world if needed"
-    )
 }
 
 fn try_lock_system_err<T>(err: TryLockError<T>) -> RunSystemError {

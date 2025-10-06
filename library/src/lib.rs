@@ -71,7 +71,6 @@ ISSUES/DISCUSSIONS:
 #[cfg(feature = "bevy_app")]
 pub mod app;
 pub mod log;
-pub mod log2;
 pub mod meta;
 pub mod schedule;
 pub mod undo_redo;

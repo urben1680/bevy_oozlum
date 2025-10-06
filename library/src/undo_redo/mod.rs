@@ -343,9 +343,6 @@ impl UndoRedoLog {
             .get_resource::<RevMeta>()
             .ok_or(UndoRedoLogError::RevMetaMissing)?;
 
-        self.update_log.pre_update(meta);
-        self.undo_redo_log.pre_update(meta);
-
         let now = meta.now();
         match meta.get_running_direction() {
             Some(RevDirection::NOT_LOG) => world
@@ -353,9 +350,8 @@ impl UndoRedoLog {
                     if !buffer.0.is_empty() {
                         let meta = world.resource::<RevMeta>();
                         let past_len = self.update_log.push_get_past_len(meta);
-                        self.undo_redo_log.push(past_len, |mut log| {
-                            log.extend(buffer.0.drain(..).map(|boxed| DebugHidden(boxed.undo_redo)))
-                        });
+                        let buffers = buffer.0.drain(..).map(|boxed| DebugHidden(boxed.undo_redo));
+                        self.undo_redo_log.extend(meta, past_len, buffers);
                     }
                 })
                 .ok_or(UndoRedoLogError::UndoRedoBufferMissing { now }),
@@ -363,7 +359,7 @@ impl UndoRedoLog {
                 if self.update_log.forward_log(meta) {
                     let iter = self
                         .undo_redo_log
-                        .forward_log()
+                        .forward_log(meta)
                         .map_err(|_| UndoRedoLogError::OutOfLog {
                             now,
                             direction: RevDirection::FORWARD_LOG,
@@ -387,9 +383,6 @@ impl UndoRedoLog {
             .get_resource::<RevMeta>()
             .ok_or(UndoRedoLogError::RevMetaMissing)?;
 
-        self.update_log.pre_update(meta);
-        self.undo_redo_log.pre_update(meta);
-
         let now = meta.now();
         let direction = meta.get_running_direction();
         if direction != Some(RevDirection::BackwardLog) {
@@ -403,7 +396,7 @@ impl UndoRedoLog {
         if self.update_log.backward_log(meta) {
             let iter = self
                 .undo_redo_log
-                .backward_log()
+                .backward_log(meta)
                 .map_err(|_| UndoRedoLogError::OutOfLog {
                     now,
                     direction: RevDirection::BackwardLog,
@@ -437,11 +430,12 @@ impl RevOp {
             Self::FinalDespawn { .. } => RevDirection::NOT_LOG,
         }
     }
-    pub(crate) fn scope(self, world: &mut World, c: impl FnOnce(&mut World)) {
+    pub(crate) fn scope<Out>(self, world: &mut World, c: impl FnOnce(&mut World) -> Out) -> Out {
         let mut swap = ResourceSwap(Some(self));
         swap.redo(world);
-        c(world);
+        let out = c(world);
         swap.undo(world);
+        out
     }
 }
 
