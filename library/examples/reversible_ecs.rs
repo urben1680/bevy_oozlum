@@ -302,7 +302,6 @@ fn row4(app: &mut App) {
         match meta.running_direction() {
             // During NOT_LOG we want to react on the pressed keys to spawn Waste entities and to log that.
             RevDirection::NOT_LOG => {
-
                 // If the key is pressed, we spawn another Waste entity.
                 // If not, we still need to push a None to advance the log.
                 let entity = pressed.num4.then(|| commands.spawn(waste).id());
@@ -310,7 +309,7 @@ fn row4(app: &mut App) {
                 // Pushing potential Waste entities may also pop an entity that got out-of-log now.
                 // These need to be despawned as they are now past the edge of the screen and cannot come back.
                 let mut drain = log.push(&meta, meta.past_len(), entity)?;
-                for entity in drain.drain_all().flatten() {
+                for entity in drain.all().flatten() {
                     commands.entity(entity).despawn();
 
                     // The player missed undoing this littering in time and the lost waste counter is increased.

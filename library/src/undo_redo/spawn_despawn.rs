@@ -101,23 +101,26 @@ impl RevDespawnCleaner {
                     RevDirection::NOT_LOG => {
                         let past_len = meta.past_len();
 
-                        let spawn = this.spawn_queue.drain(..).map(|(entity, _)| entity);
-                        let mut drain = this.spawn.extend(meta, past_len, spawn)?;
-                        let spawn = drain.drain_future().transitions;
+                        let new_spawn = this.spawn_queue.drain(..).map(|(entity, _)| entity);
+                        let mut drain = this.spawn.extend(meta, past_len, new_spawn)?;
+                        let old_spawn = drain.future();
 
-                        let despawn = this.despawn_queue.drain(..).map(|(entity, _)| entity);
-                        let mut drain = this.despawn.extend(meta, past_len, despawn).unwrap();
-                        let despawn = drain.drain_past().transitions;
+                        let new_despawn = this.despawn_queue.drain(..).map(|(entity, _)| entity);
+                        let mut drain = this.despawn.extend(meta, past_len, new_despawn).unwrap();
+                        let old_despawn = drain.past();
 
-                        let buffer = this.spawn_buffer_queue.drain(..).chain(this.spawn_buffer_queue_fallback
+                        let new_buffer = this
+                            .spawn_buffer_queue_fallback
                             .drain(..)
-                            .map(|(entity, location)| (Some(entity), location)));
-                        let mut drain = this.spawn_buffer.extend(meta, past_len, buffer).unwrap();
-                        let buffer = drain.drain_all().transitions.flat_map(|(entity, _)| entity);
-                        
-                        let iter = spawn.chain(despawn).chain(buffer);
-                        
-                        for entity in iter {
+                            .map(|(entity, location)| (Some(entity), location))
+                            .chain(this.spawn_buffer_queue.drain(..));
+                        let mut drain = this
+                            .spawn_buffer
+                            .extend(meta, past_len, new_buffer)
+                            .unwrap();
+                        let old_buffer = drain.all().flat_map(|(entity, _)| entity);
+
+                        for entity in old_spawn.chain(old_despawn).chain(old_buffer) {
                             let _ = world.try_despawn(entity); // todo: upstream a way to set the location
                         }
 

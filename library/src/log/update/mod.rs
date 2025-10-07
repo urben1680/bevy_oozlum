@@ -328,7 +328,7 @@ impl UpdateLog {
         self.past_len += 1;
 
         self.push_offset(offset);
-        
+
         meta.update_log_limits().push_limit(
             &mut self.update_state,
             UpdateLogLimit::new_not_log(meta.now(), caller),
