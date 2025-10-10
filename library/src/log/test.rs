@@ -17,12 +17,12 @@ pub(super) struct Logs<T> {
 }
 
 impl TransitionDrain<'_, char> {
-    pub(super) fn assert_past<const N: usize>(&mut self, expected: [char; N]) -> &mut Self {
+    pub(super) fn assert_past(&mut self, expected: &[char]) -> &mut Self {
         let iter = self.past();
-        assert_eq!(iter.len(), N);
+        assert_eq!(iter.len(), expected.len());
         let actual = iter.collect::<Vec<_>>();
         assert_eq!(actual, expected);
-        if N != 0 {
+        if expected.len() != 0 {
             let iter = self.past();
             assert_eq!(iter.len(), 0);
             assert_eq!(iter.count(), 0);
@@ -30,12 +30,12 @@ impl TransitionDrain<'_, char> {
         self
     }
 
-    pub(super) fn assert_future<const N: usize>(&mut self, expected: [char; N]) -> &mut Self {
+    pub(super) fn assert_future(&mut self, expected: &[char]) -> &mut Self {
         let iter = self.future();
-        assert_eq!(iter.len(), N);
+        assert_eq!(iter.len(), expected.len());
         let actual = iter.collect::<Vec<_>>();
         assert_eq!(actual, expected);
-        if N != 0 {
+        if expected.len() != 0 {
             let iter = self.future();
             assert_eq!(iter.len(), 0);
             assert_eq!(iter.count(), 0);
@@ -43,17 +43,18 @@ impl TransitionDrain<'_, char> {
         self
     }
 
-    pub(super) fn assert_all<const N: usize, const M: usize>(
-        &mut self,
-        past: [char; N],
-        future: [char; M],
-    ) -> &mut Self {
+    pub(super) fn assert_all(&mut self, past: &[char], future: &[char]) -> &mut Self {
+        let drain_len_sum = past.len() + future.len();
         let iter = self.all();
-        assert_eq!(iter.len(), N + M);
+        assert_eq!(iter.len(), drain_len_sum);
         let actual = iter.collect::<Vec<_>>();
-        let expected = past.into_iter().chain(future).collect::<Vec<_>>();
+        let expected = past
+            .iter()
+            .cloned()
+            .chain(future.iter().cloned())
+            .collect::<Vec<_>>();
         assert_eq!(actual, expected);
-        if N + M != 0 {
+        if drain_len_sum != 0 {
             let iter = self.all();
             assert_eq!(iter.len(), 0);
             assert_eq!(iter.count(), 0);
@@ -63,12 +64,12 @@ impl TransitionDrain<'_, char> {
 }
 
 impl Logs<TransitionLog<char>> {
-    pub(super) fn assert_forward_transition<const N: usize, const M: usize>(
+    pub(super) fn assert_forward_transition(
         &mut self,
         meta: &RevMeta,
         max_past_len: u64,
-        past_drain: [char; N],
-        future_drain: [char; M],
+        past_drain: &[char],
+        future_drain: &[char],
         push: char,
     ) {
         self.drop_drain.push(meta, max_past_len, push).unwrap();
@@ -88,35 +89,35 @@ impl Logs<TransitionLog<char>> {
             .unwrap()
             .assert_past(past_drain)
             .assert_future(future_drain)
-            .assert_all([], []);
+            .assert_all(&[], &[]);
 
         self.future_past_drain
             .push(meta, max_past_len, push)
             .unwrap()
             .assert_future(future_drain)
             .assert_past(past_drain)
-            .assert_all([], []);
+            .assert_all(&[], &[]);
 
         self.all_drain
             .push(meta, max_past_len, push)
             .unwrap()
             .assert_all(past_drain, future_drain)
-            .assert_past([])
-            .assert_future([]);
+            .assert_past(&[])
+            .assert_future(&[]);
 
         self.past_all_drain
             .push(meta, max_past_len, push)
             .unwrap()
             .assert_past(past_drain)
-            .assert_all([], future_drain)
-            .assert_future([]);
+            .assert_all(&[], future_drain)
+            .assert_future(&[]);
 
         self.future_all_drain
             .push(meta, max_past_len, push)
             .unwrap()
             .assert_future(future_drain)
-            .assert_all(past_drain, [])
-            .assert_future([]);
+            .assert_all(past_drain, &[])
+            .assert_future(&[]);
     }
 
     #[track_caller]
@@ -218,12 +219,12 @@ impl Logs<TransitionLog<char>> {
 }
 
 impl Logs<TransitionsLog<char, char>> {
-    pub(super) fn assert_forward_transitions<const N: usize, const M: usize>(
+    pub(super) fn assert_forward_transitions(
         &mut self,
         meta: &RevMeta,
         max_past_len: u64,
-        past_drain: [(String, char); N],
-        future_drain: [(String, char); M],
+        past_drain: &[(String, char)],
+        future_drain: &[(String, char)],
         (transitions, update): (String, char),
     ) {
         self.drop_drain
@@ -233,45 +234,45 @@ impl Logs<TransitionsLog<char, char>> {
         self.past_drain
             .extend_with(meta, max_past_len, transitions.chars(), update)
             .unwrap()
-            .assert_past(past_drain.clone());
+            .assert_past(past_drain);
 
         self.future_drain
             .extend_with(meta, max_past_len, transitions.chars(), update)
             .unwrap()
-            .assert_future(future_drain.clone());
+            .assert_future(future_drain);
 
         self.past_future_drain
             .extend_with(meta, max_past_len, transitions.chars(), update)
             .unwrap()
-            .assert_past(past_drain.clone())
-            .assert_future(future_drain.clone())
-            .assert_all([], []);
+            .assert_past(past_drain)
+            .assert_future(future_drain)
+            .assert_all(&[], &[]);
 
         self.future_past_drain
             .extend_with(meta, max_past_len, transitions.chars(), update)
             .unwrap()
-            .assert_future(future_drain.clone())
-            .assert_past(past_drain.clone())
-            .assert_all([], []);
+            .assert_future(future_drain)
+            .assert_past(past_drain)
+            .assert_all(&[], &[]);
 
         self.all_drain
             .extend_with(meta, max_past_len, transitions.chars(), update)
             .unwrap()
-            .assert_all(past_drain.clone(), future_drain.clone());
+            .assert_all(past_drain, future_drain);
 
         self.past_all_drain
             .extend_with(meta, max_past_len, transitions.chars(), update)
             .unwrap()
-            .assert_past(past_drain.clone())
-            .assert_all([], future_drain.clone())
-            .assert_future([]);
+            .assert_past(past_drain)
+            .assert_all(&[], future_drain)
+            .assert_future(&[]);
 
         self.future_all_drain
             .extend_with(meta, max_past_len, transitions.chars(), update)
             .unwrap()
             .assert_future(future_drain)
-            .assert_all(past_drain, [])
-            .assert_future([]);
+            .assert_all(past_drain, &[])
+            .assert_future(&[]);
     }
 
     #[track_caller]
@@ -377,20 +378,17 @@ impl Logs<TransitionsLog<char, char>> {
 }
 
 impl TransitionsDrain<'_, char, char, Chars<'_>> {
-    pub(super) fn assert_past<const N: usize>(
-        &mut self,
-        expected: [(String, char); N],
-    ) -> &mut Self {
+    pub(super) fn assert_past(&mut self, expected: &[(String, char)]) -> &mut Self {
         let iter = self.past();
         let len = expected
             .iter()
             .map(|(s, _)| s.chars().count())
             .sum::<usize>();
         assert_eq!(iter.transitions.len(), len);
-        assert_eq!(iter.updates.len(), N);
+        assert_eq!(iter.updates.len(), expected.len());
         let actual = iter.to_tuples();
         assert_eq!(actual, expected);
-        if N != 0 {
+        if expected.len() != 0 {
             let iter = self.past();
             assert_eq!(iter.transitions.len(), 0);
             assert_eq!(iter.transitions.count(), 0);
@@ -399,20 +397,17 @@ impl TransitionsDrain<'_, char, char, Chars<'_>> {
         }
         self
     }
-    pub(super) fn assert_future<const N: usize>(
-        &mut self,
-        expected: [(String, char); N],
-    ) -> &mut Self {
+    pub(super) fn assert_future(&mut self, expected: &[(String, char)]) -> &mut Self {
         let iter = self.future();
         let len = expected
             .iter()
             .map(|(s, _)| s.chars().count())
             .sum::<usize>();
         assert_eq!(iter.transitions.len(), len);
-        assert_eq!(iter.updates.len(), N);
+        assert_eq!(iter.updates.len(), expected.len());
         let actual = iter.to_tuples();
         assert_eq!(actual, expected);
-        if N != 0 {
+        if expected.len() != 0 {
             let iter = self.future();
             assert_eq!(iter.transitions.len(), 0);
             assert_eq!(iter.transitions.count(), 0);
@@ -421,11 +416,12 @@ impl TransitionsDrain<'_, char, char, Chars<'_>> {
         }
         self
     }
-    pub(super) fn assert_all<const N: usize, const M: usize>(
+    pub(super) fn assert_all(
         &mut self,
-        past: [(String, char); N],
-        future: [(String, char); M],
+        past: &[(String, char)],
+        future: &[(String, char)],
     ) -> &mut Self {
+        let drain_sum_len = past.len() + future.len();
         let iter = self.all();
         let len = past
             .iter()
@@ -433,11 +429,15 @@ impl TransitionsDrain<'_, char, char, Chars<'_>> {
             .map(|(s, _)| s.chars().count())
             .sum::<usize>();
         assert_eq!(iter.transitions.len(), len);
-        assert_eq!(iter.updates.len(), N + M);
+        assert_eq!(iter.updates.len(), drain_sum_len);
         let actual = iter.to_tuples();
-        let expected = past.into_iter().chain(future).collect::<Vec<_>>();
+        let expected = past
+            .iter()
+            .cloned()
+            .chain(future.iter().cloned())
+            .collect::<Vec<_>>();
         assert_eq!(actual, expected);
-        if N + M != 0 {
+        if drain_sum_len != 0 {
             let iter = self.all();
             assert_eq!(iter.transitions.len(), 0);
             assert_eq!(iter.transitions.count(), 0);
@@ -599,4 +599,169 @@ struct MetaAndLogs {
     transitions_logs: Logs<TransitionsLog<char, char>>,
 }
 
-// todo
+struct Entries {
+    past_drain: Vec<(String, char)>,
+    future_drain: Vec<(String, char)>,
+    push: (String, char),
+}
+
+fn entries<const N: usize, const M: usize>(
+    past_drain: [(String, char); N],
+    future_drain: [(String, char); M],
+    push: (String, char),
+) -> Entries {
+    Entries {
+        past_drain: past_drain.into(),
+        future_drain: future_drain.into(),
+        push,
+    }
+}
+
+impl MetaAndLogs {
+    fn new(max_world_states: u64) -> Self {
+        Self {
+            meta: RevMeta::new(NonZeroU64::new(max_world_states), false),
+            updates: UpdateLog::new(),
+            transition_logs: Logs::default(),
+            transitions_logs: Logs::default(),
+        }
+    }
+    fn forward<const N: usize>(&mut self, entries: [Entries; N], clear: bool) {
+        let queue = if clear {
+            RevQueue::CLEAR_THEN_RUN
+        } else {
+            RevQueue::RUN_NOT_LOG
+        };
+        self.meta.set_queue(queue);
+        self.meta.update_ref(Ok(true), |meta, direction| {
+            println!("past_end: {}", meta.past_end());
+            assert_eq!(direction, RevDirection::NOT_LOG);
+            for Entries {
+                past_drain,
+                future_drain,
+                push,
+            } in entries
+            {
+                let past_len = self.updates.push_get_past_len(meta);
+                println!("{past_len} <= {}", meta.past_len());
+                let past_transition = past_drain
+                    .iter()
+                    .map(|(_, update)| *update)
+                    .collect::<Vec<_>>();
+                let future_transition = future_drain
+                    .iter()
+                    .map(|(_, update)| *update)
+                    .collect::<Vec<_>>();
+                self.transition_logs.assert_forward_transition(
+                    meta,
+                    past_len,
+                    &past_transition,
+                    &future_transition,
+                    push.1,
+                );
+                self.transitions_logs.assert_forward_transitions(
+                    meta,
+                    past_len,
+                    &past_drain,
+                    &future_drain,
+                    push,
+                );
+            }
+        });
+    }
+    fn forward_log<const N: usize>(&mut self, entries: [(String, char); N]) {
+        self.meta.set_queue(RevQueue::RUN_FORWARD_LOG);
+        self.meta.update_ref(Ok(true), |meta, direction| {
+            assert_eq!(direction, RevDirection::BackwardLog);
+            let mut entries = entries.into_iter();
+            while self.updates.forward_log(meta) {
+                let entry = entries.by_ref().next().unwrap();
+                self.transition_logs
+                    .assert_forward_log_transition(meta, Ok(entry.1));
+                self.transitions_logs
+                    .assert_forward_log_transitions(meta, Ok(entry));
+            }
+            assert_eq!(entries.len(), 0);
+        });
+    }
+    fn backward_log<const N: usize>(&mut self, entries: [(String, char); N]) {
+        self.meta.set_queue(RevQueue::RUN_BACKWARD_LOG);
+        self.meta.update_ref(Ok(true), |meta, direction| {
+            assert_eq!(direction, RevDirection::BackwardLog);
+            let mut entries = entries.into_iter();
+            while self.updates.backward_log(meta) {
+                let entry = entries.by_ref().next().unwrap();
+                self.transition_logs
+                    .assert_backward_log_transition(meta, Ok(entry.1));
+                self.transitions_logs
+                    .assert_backward_log_transitions(meta, Ok(entry));
+            }
+            assert_eq!(entries.len(), 0);
+        });
+    }
+}
+
+#[test]
+fn traverses_logs() {
+    use transitions_constructors::*;
+
+    let mut meta_and_logs = MetaAndLogs::new(5);
+
+    meta_and_logs.forward([entries([], [], a())], false);
+    meta_and_logs.forward([], false);
+    meta_and_logs.forward([], false);
+    meta_and_logs.forward([], false);
+    meta_and_logs.forward([entries([], [], b())], false);
+    meta_and_logs.forward([entries([], [], c())], false); // can this pop a?
+    meta_and_logs.forward([entries([], [], d())], false);
+    meta_and_logs.forward([entries([], [], e())], false);
+    meta_and_logs.forward([entries([a()], [], f())], false);
+}
+
+pub(super) mod transitions_constructors {
+    fn new(c: char) -> (String, char) {
+        (
+            c.to_string().repeat(u32::from(c) as usize),
+            c.to_ascii_uppercase(),
+        )
+    }
+    pub fn a() -> (String, char) {
+        new('a')
+    }
+    pub fn b() -> (String, char) {
+        new('b')
+    }
+    pub fn c() -> (String, char) {
+        new('c')
+    }
+    pub fn d() -> (String, char) {
+        new('d')
+    }
+    pub fn e() -> (String, char) {
+        new('e')
+    }
+    pub fn f() -> (String, char) {
+        new('f')
+    }
+    pub fn g() -> (String, char) {
+        new('g')
+    }
+    pub fn h() -> (String, char) {
+        new('h')
+    }
+    pub fn i() -> (String, char) {
+        new('i')
+    }
+    pub fn j() -> (String, char) {
+        new('j')
+    }
+    pub fn k() -> (String, char) {
+        new('k')
+    }
+    pub fn l() -> (String, char) {
+        new('l')
+    }
+    pub fn m() -> (String, char) {
+        new('m')
+    }
+}

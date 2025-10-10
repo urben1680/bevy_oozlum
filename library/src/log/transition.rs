@@ -134,8 +134,8 @@ impl<T> TransitionLog<T> {
     ///   [`RevQueue::Clear`](crate::meta::RevQueue::Clear) was applied previously, then the poison
     ///   will be cleared and `push` works again.
     /// - [`forward_log`](Self::forward_log)/[`backward_log`](Self::backward_log) continue to return
-    ///   the same [`OutOfLog`] error as this method here does and will not traverse the log, even
-    ///   if it would be possible otherwise.
+    ///   the same [`OutOfLog`] error and will not traverse the log, even if it would be possible
+    ///   otherwise.
     ///
     /// If bevy's `track_location` cargo feature is activated, the error here contains the location
     /// where it originally occured.
@@ -147,12 +147,12 @@ impl<T> TransitionLog<T> {
 
     /// Unsets the poison, see [`poison`](Self::poison).
     ///
-    /// This should only be done if it is sure this leaves the log in a valid state, like
-    /// immediately after the error first occured with
-    /// [`forward_log`](Self::forward_log)/[`backward_log`](Self::backward_log).
+    /// This should only be done if it is sure this leaves the log in a valid state that is in sync
+    /// with the global log.
     ///
     /// This happens automatically when [`push`](Self::push) applies a previous
-    /// [`RevQueue::Clear`](crate::meta::RevQueue::Clear).
+    /// [`RevQueue::Clear`](crate::meta::RevQueue::Clear) as that removes all log entries so far
+    /// that could be out-of-sync.
     pub fn clear_poison(&mut self) {
         self.poison = Ok(());
     }
@@ -340,6 +340,37 @@ impl<T> TransitionLog<T> {
 
 /// A container returned by [`TransitionLog::push`] that can be used to iterate the log entried that
 /// are to be truncated because they are out of log.
+///
+/// The content of the available drains look like this:
+///
+/// The letters are all stored log entries with the number below indicating how many updates ago the
+/// entry was pushed. Positive numbers are in the future, which is the case after
+/// [`TransitionLog::backward_log`] was used three times. When the drains are performed, the actual
+/// new entry `X` is pushed.
+///
+/// The `max_past_len` value would be `3` in this example.
+///
+/// ```text
+/// [A] [B] [C] [D] [E] [F] [G] [H] [I]
+/// -5  -4  -3  -2  -1   0   1   2   3
+/// |_________|             |_________|
+/// past drain              future drain
+///             [D] [E] [F] [X]
+///             -3  -2   1   0
+/// ```
+///
+/// Note that `D` is actually not needed for this log anymore but may still be kept:
+///
+/// A log entry is used to transition between two states. Because of this, `N` log entries are
+/// needed for `N+1` states. If `max_past_len` is now `3`, that means plus the present state there
+/// are 4 global states. Transitioning between them would need only three log entries, but as the
+/// above scheme shows, the final amount of log entries with `X` is four.
+///
+/// The reason is it may lead to subtle bugs in the cleanup logic if `D` was included in the past
+/// drain. `D` was pushed at a frame that is still >= [`RevMeta::past_end`] and that may be
+/// unexpected. Because of this, `D` is kept if the past is actively drained via
+/// [`past`](Self::past) or [`all`](Self::all). If only [`future`](Self::future) is used or this
+/// container is dropped unused, `D` will be truncated.
 #[derive(Debug)]
 pub struct TransitionDrain<'a, T> {
     log: &'a mut TransitionLog<T>,
@@ -458,8 +489,8 @@ mod test {
                 self.logs.assert_forward_transition(
                     meta,
                     meta.past_len(),
-                    past_drain,
-                    future_drain,
+                    &past_drain,
+                    &future_drain,
                     push,
                 );
             });

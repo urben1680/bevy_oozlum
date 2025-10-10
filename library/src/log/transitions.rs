@@ -701,8 +701,8 @@ mod test {
                 self.logs.assert_forward_transitions(
                     meta,
                     meta.past_len(),
-                    past_drain,
-                    future_drain,
+                    &past_drain,
+                    &future_drain,
                     push,
                 );
             });
@@ -751,21 +751,9 @@ mod test {
 
     #[test]
     fn traverses_log() {
-        let mut meta_and_logs = MetaAndLogs::new(5);
+        use crate::log::test::transitions_constructors::*;
 
-        let a = || ("a".repeat(1), 'A');
-        let b = || ("b".repeat(2), 'B');
-        let c = || ("c".repeat(3), 'C');
-        let d = || ("d".repeat(4), 'D');
-        let e = || ("e".repeat(5), 'E');
-        let f = || ("f".repeat(6), 'F');
-        let g = || ("g".repeat(7), 'G');
-        let h = || ("h".repeat(8), 'H');
-        let i = || ("i".repeat(9), 'I');
-        let j = || ("j".repeat(10), 'J');
-        let k = || ("k".repeat(11), 'K');
-        let l = || ("l".repeat(12), 'L');
-        let m = || ("m".repeat(13), 'M');
+        let mut meta_and_logs = MetaAndLogs::new(5);
 
         meta_and_logs.forward([], [], a(), false);
         meta_and_logs.forward([], [], b(), false);
