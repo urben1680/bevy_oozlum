@@ -19,6 +19,8 @@
 //!   the previous offset in [`UpdateLog::backward_log`]([`many`](UpdateLog::backward_log_many)).
 //! - The [`OffsetIter`] iterator is used to read the offsets. See [`IterItem`].
 
+use nonmax::NonMaxUsize;
+
 use super::UpdateLog;
 use core::{
     fmt::{Debug, Formatter, Result},
@@ -61,15 +63,15 @@ impl UpdateLog {
             // there was an offset of 0 previously, push it now that it is sure no more such offsets
             // are following it
             self.offset_bytes.push_back(0);
-            self.index += 1;
+            self.increase_index();
         } else if self.zeroes > 1 {
             // there was a sequence of offsets of 0 previously, push it now that it is sure no more
             // such offsets are following it
             self.offset_bytes.push_back((self.zeroes - 2) | ZEROES_OR);
-            self.index += 1;
+            self.increase_index();
         }
 
-        self.index += 1;
+        self.increase_index();
         self.zeroes = 0;
         self.zeroes_max = 0;
 
@@ -87,7 +89,7 @@ impl UpdateLog {
         offset >>= 6;
 
         loop {
-            self.index += 1;
+            self.increase_index();
 
             if offset <= MAX_WRAPPING_OFFSET as u64 {
                 // this is a wrapping byte
@@ -110,7 +112,7 @@ impl UpdateLog {
     pub(super) fn push_zero_offset(&mut self) {
         if self.zeroes == MAX_ZEROES_PER_BYTE {
             self.offset_bytes.push_back(MAX_ZEROES_AS_BYTE);
-            self.index += 1;
+            self.increase_index();
             self.zeroes = 0;
         }
 

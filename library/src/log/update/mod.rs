@@ -1,5 +1,6 @@
 use crate::{log::PreUpdateKind, meta::RevMeta};
 use bevy_ecs::change_detection::MaybeLocation;
+use nonmax::NonMaxUsize;
 use core::fmt::{Debug, Display};
 use std::collections::{TryReserveError, VecDeque};
 
@@ -46,7 +47,7 @@ pub struct UpdateLog {
 
     /// The current index into [`Self::offset_bytes`]. Always points to the first byte of an
     /// offset sequence or, when at the end of the log, is equal to the `len` of `offset_bytes`.
-    index: usize,
+    index: Option<NonMaxUsize>,
 
     /// The length of the log which is what this log is keeping track of.
     past_len: u64,
@@ -95,7 +96,7 @@ impl UpdateLog {
             offset_bytes: VecDeque::new(),
             out_of_or_past_end_log: 0,
             last_update: 0,
-            index: 0,
+            index: None,
             past_len: 0,
             zeroes: 0,
             zeroes_max: 0,
@@ -291,49 +292,65 @@ impl UpdateLog {
     fn push_with_caller(&mut self, meta: &RevMeta, caller: MaybeLocation) -> u64 {
         self.pre_update(meta);
 
-        let iter = OffsetIter(self.offset_bytes.iter());
-
-        let mut to_drain = 0;
-
-        for IterItem { offset, len } in iter {
-            if offset == 0 {
-                // Offsets of 0 are encoded differently, len is not the amount of bytes,
-                // which is actually always 1 here, but the amount of zero offsets in this
-                // one byte.
-                // We want to get rid of these offsets as well as they dont bring
-                // self.out_of_or_past_end_log any closer the limit.
-                to_drain += 1;
-                self.past_len -= len.get() as u64;
-                continue;
+        let push = match self.index {
+            _ if self.out_of_or_past_end_log >= meta.past_end() => {
+                true
+            },
+            None => {
+                self.out_of_or_past_end_log = meta.now();
+                self.last_update = meta.now();
+                self.index = Some(NonMaxUsize::ZERO);
+                false
             }
-
-            let next_oldest = self.out_of_or_past_end_log + offset;
-            if next_oldest > meta.past_end() {
-                // next_oldest is reachable by log traversion, which is undesired because
-                // Self::backward_log stops working there
-                break;
+            Some(index) => {
+                let iter = OffsetIter(self.offset_bytes.iter());
+                let mut to_drain = 0;
+                for IterItem { offset, len } in iter {
+                    if offset == 0 {
+                        // Offsets of 0 are encoded differently, len is not the amount of bytes,
+                        // which is actually always 1 here, but the amount of zero offsets in this
+                        // one byte.
+                        // We want to get rid of these offsets as well as they dont bring
+                        // self.out_of_or_past_end_log any closer the limit.
+                        to_drain += 1;
+                        self.past_len -= len.get() as u64;
+                        continue;
+                    }
+                    to_drain += len.get() as usize;
+                    self.past_len -= 1;
+                    self.out_of_or_past_end_log += offset;
+        
+                    if self.out_of_or_past_end_log >= meta.past_end() {
+                        break;
+                    }
+                }
+                self.index = NonMaxUsize::new(index.get().wrapping_sub(to_drain));
+                // todo: use truncate_front when https://github.com/rust-lang/rust/issues/140667 stabilizes
+                self.offset_bytes.drain(..to_drain);
+                
+                true
             }
+        };
 
-            to_drain += len.get() as usize;
-            self.out_of_or_past_end_log = next_oldest;
-            self.past_len -= 1;
+        if push {
+            let offset = meta.now() - self.last_update;
+            self.last_update = meta.now();
+            self.past_len += 1;
+            self.push_offset(offset);
         }
-
-        self.index -= to_drain;
-        // todo: use truncate_front when https://github.com/rust-lang/rust/issues/140667 stabilizes
-        self.offset_bytes.drain(..to_drain);
-
-        let offset = meta.now() - self.last_update;
-        self.last_update = meta.now();
-        self.past_len += 1;
-
-        self.push_offset(offset);
         
         meta.update_log_limits().push_limit(
             &mut self.update_state,
             UpdateLogLimit::new_not_log(meta.now(), caller),
         );
+
         self.past_len
+    }
+
+    fn increase_index(&mut self) {
+        self.index = self.index
+            .and_then(|index| NonMaxUsize::new(index.get() + 1))
+            .or(Some(NonMaxUsize::ZERO));
     }
 
     /// Checks at [`RevDirection::BackwardLog`](crate::meta::RevDirection::BackwardLog) if this log
@@ -356,6 +373,9 @@ impl UpdateLog {
 
     fn backward_log_with_caller(&mut self, meta: &RevMeta, caller: MaybeLocation) -> bool {
         self.pre_update(meta);
+        let Some(index) = self.index else {
+            return false;
+        };
         let now_plus_1 = meta.now() + 1;
         // set next backward_limit if this method returns true
         if self.last_update != now_plus_1 {
@@ -365,16 +385,16 @@ impl UpdateLog {
             self.zeroes -= 1;
             now_plus_1
         } else {
-            let item = OffsetIter(self.offset_bytes.range(..self.index))
+            let item = OffsetIter(self.offset_bytes.range(..index.get()))
                 .next_back()
                 .unwrap(); // self.out_of_or_past_end_log should be the last, unreachable log entry
             if item.offset == 0 {
-                self.index -= 1;
+                self.index = NonMaxUsize::new(index.get().wrapping_sub(1));
                 self.zeroes = item.len.get() - 1;
                 now_plus_1
             } else {
                 self.last_update -= item.offset;
-                self.index -= item.len.get() as usize;
+                self.index = NonMaxUsize::new(index.get().wrapping_sub(item.len.get() as usize));
                 self.zeroes = 0;
                 self.last_update
             }
@@ -409,53 +429,68 @@ impl UpdateLog {
     fn forward_log_with_caller(&mut self, meta: &RevMeta, caller: MaybeLocation) -> bool {
         self.pre_update(meta);
         let now_minus_1 = meta.now() - 1;
-        // set next forward_limit if this method returns true
-        let mut iter = OffsetIter(self.offset_bytes.range(self.index..));
-        let forward_limit = match iter.next() {
-            Some(IterItem { offset: 0, len }) => {
-                if self.last_update != meta.now() {
+
+        let forward_limit = match self.index {
+            None => {
+                if self.out_of_or_past_end_log != meta.now() {
                     return false;
                 }
-                if self.zeroes < len.get() as u8 - 1 {
-                    self.zeroes += 1;
-                    now_minus_1
-                } else {
-                    self.index += 1;
-                    self.zeroes = 0;
-                    match iter.next() {
-                        Some(IterItem { offset, .. }) => now_minus_1 + offset,
-                        None if self.zeroes_max == 0 => u64::MAX,
-                        None => now_minus_1,
-                    }
-                }
-            }
-            Some(IterItem { offset, len }) => {
-                let frame = self.last_update + offset;
-                if frame != meta.now() {
-                    return false;
-                }
-                self.last_update = frame;
-                self.index += len.get() as usize;
-                self.zeroes = 0;
+                self.index = Some(NonMaxUsize::ZERO);
+                OffsetIter(self.offset_bytes.iter())
+                    .next()
+                    .map(|IterItem { offset, .. }| offset + meta.now())
+                    .unwrap_or(u64::MAX)
+            },
+            Some(index) => {
+                let index = index.get();
+                let mut iter = OffsetIter(self.offset_bytes.range(index..));
                 match iter.next() {
-                    Some(IterItem { offset, .. }) => frame - 1 + offset,
-                    None if self.zeroes_max == 0 => u64::MAX,
-                    None => frame - 1,
+                    Some(IterItem { offset: 0, len }) => {
+                        if self.last_update != meta.now() {
+                            return false;
+                        }
+                        if self.zeroes < len.get() as u8 - 1 {
+                            self.zeroes += 1;
+                            now_minus_1
+                        } else {
+                            self.index = NonMaxUsize::new(index + 1);
+                            self.zeroes = 0;
+                            match iter.next() {
+                                Some(IterItem { offset, .. }) => now_minus_1 + offset,
+                                None if self.zeroes_max == 0 => u64::MAX,
+                                None => now_minus_1,
+                            }
+                        }
+                    }
+                    Some(IterItem { offset, len }) => {
+                        let frame = self.last_update + offset;
+                        if frame != meta.now() {
+                            return false;
+                        }
+                        self.last_update = frame;
+                        self.index = NonMaxUsize::new(index + len.get() as usize);
+                        self.zeroes = 0;
+                        match iter.next() {
+                            Some(IterItem { offset, .. }) => frame - 1 + offset,
+                            None if self.zeroes_max == 0 => u64::MAX,
+                            None => frame - 1,
+                        }
+                    }
+                    None if self.zeroes < self.zeroes_max => {
+                        if self.last_update != meta.now() {
+                            return false;
+                        }
+                        self.zeroes += 1;
+                        if self.zeroes == self.zeroes_max {
+                            u64::MAX
+                        } else {
+                            now_minus_1
+                        }
+                    }
+                    // reached end of log
+                    None => return false,
                 }
             }
-            None if self.zeroes < self.zeroes_max => {
-                if self.last_update != meta.now() {
-                    return false;
-                }
-                self.zeroes += 1;
-                if self.zeroes == self.zeroes_max {
-                    u64::MAX
-                } else {
-                    now_minus_1
-                }
-            }
-            // reached end of log
-            None => return false,
         };
         self.past_len += 1;
         meta.update_log_limits().push_limit(
@@ -480,14 +515,14 @@ impl UpdateLog {
                 self.offset_bytes.clear();
                 self.out_of_or_past_end_log = 0;
                 self.last_update = 0;
-                self.index = 0;
+                self.index = None;
                 self.past_len = 0;
                 self.zeroes = 0;
                 self.zeroes_max = 0;
             }
             PreUpdateKind::RemoveFuture => {
-                if self.offset_bytes.len() > self.index {
-                    self.offset_bytes.truncate(self.index);
+                if let Some(index) = self.index && self.offset_bytes.len() > index.get() {
+                    self.offset_bytes.truncate(index.get());
                     self.zeroes = 0;
                 }
                 self.zeroes_max = self.zeroes;
@@ -530,12 +565,8 @@ mod test {
                 assert_eq!(direction, RevDirection::NOT_LOG);
                 self.update_log.pre_update(meta);
                 for past_len in past_lens {
-                    assert_eq!(
-                        self.update_log.push_with_caller(meta, caller),
-                        past_len,
-                        "{:#?}",
-                        self.update_log
-                    );
+                    let actual = self.update_log.push_with_caller(meta, caller);
+                    assert_eq!(actual, past_len, "{:#?}\n{meta:#?}", self.update_log);
                     self.last_update = caller;
                 }
             });
