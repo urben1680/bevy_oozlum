@@ -124,8 +124,8 @@
 use bevy_ecs::change_detection::MaybeLocation;
 use core::{
     error::Error,
-    fmt::{Debug, Display, Formatter, Result},
-    iter::FusedIterator
+    fmt::{Debug, Display, Formatter, Result as FmtResult},
+    iter::FusedIterator,
 };
 use std::collections::{VecDeque, vec_deque::Drain};
 
@@ -134,12 +134,15 @@ pub use update::{UpdateLog, limits::UpdateLogId, limits::UpdateLogMissed};
 
 pub use transition::{TransitionDrain, TransitionLog};
 pub use transitions::{
-    TransitionsLog, TransitionsLogIterMut,
-    TransitionsLogUpdate, TransitionsDrainIters, TransitionsDrain
+    TransitionsDrain, TransitionsDrainIters, TransitionsLog, TransitionsLogIterMut,
+    TransitionsLogUpdate,
 };
 mod transition;
 mod transitions;
 mod update;
+
+#[cfg(test)]
+mod test;
 
 // todo: remove Debug impls from Drainers
 
@@ -177,7 +180,7 @@ impl OutOfLog {
 }
 
 impl Display for OutOfLog {
-    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         write!(
             f,
             "a `Transition(s)Log` was attempted to be traversed beyond its bounds"
@@ -243,7 +246,7 @@ impl<'a, T> DrainAll<'a, T> {
 impl<T> Iterator for DrainAll<'_, T> {
     type Item = T;
     fn next(&mut self) -> Option<T> {
-        if !self.gap_range.is_clear() && self.gap_range.start > 0 {
+        if self.gap_range.buffer_pending() {
             if self.gap_range.start == self.gap_range.start_offset {
                 *self.gap_buffer = self.drain.by_ref().take(self.gap_range.end).collect();
                 self.gap_range.end -= self.gap_range.start;
@@ -263,13 +266,12 @@ impl<T> Iterator for DrainAll<'_, T> {
 
 impl<T> ExactSizeIterator for DrainAll<'_, T> {
     fn len(&self) -> usize {
-        if self.gap_range.is_clear() || self.gap_range.start == 0 {
-            self.drain.len()
+        if self.gap_range.buffer_pending() {
+            self.drain.len().saturating_sub(
+                self.gap_range.end - self.gap_range.start + self.gap_range.start_offset,
+            )
         } else {
-            let offset = self.gap_range.start_offset;
-            self.drain
-                .len()
-                .saturating_sub(self.gap_range.end - self.gap_range.start + offset)
+            self.drain.len()
         }
     }
 }
@@ -278,7 +280,7 @@ impl<T> FusedIterator for DrainAll<'_, T> {}
 
 impl<T> Drop for DrainAll<'_, T> {
     fn drop(&mut self) {
-        if !self.gap_range.is_clear() && self.gap_range.start > 0 {
+        if self.gap_range.buffer_pending() {
             let offset = self.gap_range.start_offset;
             let start = self.gap_range.start - offset;
             let len = self.gap_range.end - start;
@@ -295,7 +297,13 @@ struct GapRange {
 }
 
 impl GapRange {
-    // todo: try to implement clear logic without magic number + if branches
+    fn new_offset_one(start: usize, end: usize) -> Self {
+        Self {
+            start,
+            start_offset: 1,
+            end,
+        }
+    }
     fn new_clear(index: usize) -> Self {
         Self {
             start: index,
@@ -304,7 +312,10 @@ impl GapRange {
         }
     }
     fn is_clear(self) -> bool {
-        self.start_offset == 0
+        self.start_offset == 0 && self.start == self.end
+    }
+    fn buffer_pending(self) -> bool {
+        !self.is_clear() && self.start > 0
     }
     fn drain_past_end(&mut self) -> usize {
         let end = self.start.saturating_sub(self.start_offset);
@@ -332,137 +343,6 @@ fn prepend<T>(gap_buffer: &mut Box<[T]>, deque: &mut VecDeque<T>) {
         len => {
             deque.extend(buffer);
             deque.rotate_right(len);
-        }
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use super::*;
-
-    static EMPTY: &[char] = &[];
-    static A: &[char] = &['a'];
-    static AB: &[char] = &['a', 'b'];
-    static AC: &[char] = &['a', 'c'];
-    static ABC: &[char] = &['a', 'b', 'c'];
-    static B: &[char] = &['b'];
-    static BC: &[char] = &['b', 'c'];
-    static C: &[char] = &['c'];
-
-    #[derive(Debug, Clone)]
-    struct Test {
-        drained: &'static [char],
-        kept: &'static [char],
-        buffer: &'static [char],
-    }
-
-    impl Test {
-        fn gap_negative() -> Self {
-            Self {
-                drained: ABC,
-                kept: EMPTY,
-                buffer: EMPTY,
-            }
-        }
-        fn gap_empty(drained: &'static [char], buffer: &'static [char]) -> Self {
-            Self {
-                drained,
-                kept: EMPTY,
-                buffer,
-            }
-        }
-        fn gap_a() -> Self {
-            Self {
-                drained: BC,
-                kept: A,
-                buffer: EMPTY,
-            }
-        }
-        fn gap_b() -> Self {
-            Self {
-                drained: C,
-                kept: EMPTY,
-                buffer: AB,
-            }
-        }
-        fn gap_c() -> Self {
-            Self {
-                drained: A,
-                kept: C,
-                buffer: B,
-            }
-        }
-        fn gap_ab() -> Self {
-            Self {
-                drained: C,
-                kept: AB,
-                buffer: EMPTY,
-            }
-        }
-        fn gap_bc() -> Self {
-            Self {
-                drained: EMPTY,
-                kept: BC,
-                buffer: A,
-            }
-        }
-        fn gap_abc() -> Self {
-            Self {
-                drained: EMPTY,
-                kept: ABC,
-                buffer: EMPTY,
-            }
-        }
-    }
-
-    #[test]
-    fn drain_all_iterator_works() {
-
-        let tests = [
-            (0..0, Test::gap_empty(ABC, EMPTY)),
-            (0..1, Test::gap_a()),
-            (0..2, Test::gap_ab()),
-            (0..3, Test::gap_abc()),
-            (0..usize::MAX, Test::gap_negative()),
-            (1..1, Test::gap_empty(BC, A)),
-            (1..2, Test::gap_b()),
-            (1..3, Test::gap_bc()),
-            (1..usize::MAX, Test::gap_negative()),
-            (2..2, Test::gap_empty(AC, B)),
-            (2..3, Test::gap_c()),
-            (2..usize::MAX, Test::gap_negative()),
-            (3..3, Test::gap_empty(AB, C)),
-            (3..usize::MAX, Test::gap_negative()),
-        ];
-
-        for (i, (gap, test)) in tests.into_iter().enumerate() {
-            let mut gap_range = GapRange {
-                start: gap.start,
-                start_offset: 1,
-                end: gap.end,
-            };
-            let mut deque = ABC.iter().cloned().collect::<VecDeque<_>>();
-            let mut gap_buffer = Default::default();
-            let drain_all = DrainAll::new(&mut deque, &mut gap_range, &mut gap_buffer);
-            let updated_gap = gap_range.clone();
-        
-            let drained = drain_all.collect::<Vec<_>>();
-
-            assert_eq!(deque, test.kept, "#{i}");
-            assert_eq!(drained, test.drained, "#{i}");
-            assert_eq!(&*gap_buffer, test.buffer, "#{i}");
-
-            let drain_all = DrainAll::new(&mut deque, &mut gap_range, &mut gap_buffer);
-
-            let drained = drain_all.collect::<Vec<_>>();
-            assert_eq!(deque, test.kept, "#{i}");
-            assert_eq!(drained, [], "#{i}");
-            assert_eq!(&*gap_buffer, test.buffer, "#{i}");
-
-            assert_eq!(gap_range.start, updated_gap.start, "#{i}");
-            assert_eq!(gap_range.end, updated_gap.end, "#{i}");
-            prepend(&mut gap_buffer, &mut deque);
-            assert!(deque.iter().is_sorted(), "#{i}");
         }
     }
 }

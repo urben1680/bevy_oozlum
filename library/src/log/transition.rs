@@ -1,5 +1,5 @@
 use crate::{
-    log::{prepend, DrainAll, GapRange, OutOfLog},
+    log::{DrainAll, GapRange, OutOfLog, prepend},
     meta::RevMeta,
 };
 use core::fmt::Debug;
@@ -15,31 +15,14 @@ use std::{
 /// A log that is updated with exactly one transition type `T` that is used to transition a state
 /// forward or backward in time.
 ///
-/// # Examples
-///
-/// Generally, [`pre_update`](Self::pre_update) or [`pre_update_drain`](Self::pre_update_drain)
-/// need to be called before any other mutation. These methods handle when
-/// [`RevQueue::Clear`](crate::meta::RevQueue::Clear) was queued and applied or the
-/// [`RevDirection`](crate::meta::RevDirection) changed from a
-/// [log variant](crate::meta::RevDirection::is_log) to the
-/// [`RevDirection::NOT_LOG`](crate::meta::RevDirection::NOT_LOG) one.
-///
-/// These methods make sure the log catches such changes even if the current system does not run in
-/// the very same frame they took effect, like when that frame was missed because of run conditions.
-///
-/// If the log is mutated multiple times per frame, these `pre_update` methods only need to called
-/// once at the beginning.
-///
-/// After that, depending on the direction, either a new transition is pushed into the log or it is
-/// traversed forwards or backwards, yielding a transition reference.
-///
 /// This log alone is only suited for a constant amount of updates per frame. For a variable amount
-/// of updates, like when the system is skipped completely sometimes, consider pairing it with a
-/// [`PastLenLog`](crate::log::PastLenLog).
+/// of updates, like when the system is skipped completely sometimes, consider pairing it with an
+/// [`UpdateLog`](crate::log::UpdateLog).
 ///
-/// ## Basic `Local` usage
+/// # Example
 ///
-/// Usually transition types are just plain data the log can truncate when it is no longer needed.
+/// Depending on the direction, either a new transition is pushed into the log or it is traversed
+/// forwards or backwards, yielding a mutable transition reference.
 ///
 /// ```
 /// # use bevy_ecs::prelude::*;
@@ -50,8 +33,6 @@ use std::{
 ///     meta: Res<RevMeta>,
 ///     mut log: Local<TransitionLog<MyTransition>>
 /// ) -> Result<(), BevyError> {
-///     log.pre_update(&meta);
-///
 ///     match meta.running_direction() {
 ///         RevDirection::NOT_LOG => {
 ///             let new_transition: MyTransition = todo!();
@@ -59,157 +40,24 @@ use std::{
 ///             // mutate some state with the new transition
 ///
 ///             // push transition to the log
-///             log.push(meta.past_len(), new_transition);
+///             let mut drain = log.push(&meta, meta.past_len(), new_transition)?;
+///
+///             // optional, iterate log entries that are now out-of-log
+///             for old_transition in drain.past() {
+///                 // clean-up logic
+///             }
+///             // `drain.future()` or `drain.all()` are also available
 ///         },
 ///         RevDirection::FORWARD_LOG => {
-///             let next_transition: MyTransition = log.forward_log()?.clone();
+///             let next_transition: MyTransition = log.forward_log(&meta)?.clone();
 ///
 ///             // mutate some state with the logged transition
 ///         },
 ///         RevDirection::BackwardLog => {
-///             let previous_transition: MyTransition = log.backward_log()?.clone();
+///             let previous_transition: MyTransition = log.backward_log(&meta)?.clone();
 ///
 ///             // mutate some state with the logged transition
 ///         }
-///     }
-///
-///     Ok(())
-/// }
-/// ```
-///
-/// ## Draining future
-///
-/// There may be cases where extra cleanup is needed in which case the transitions that the log no
-/// longer needs should be drained with in an iterator.
-///
-/// In this example the cleanup is required for log entries that are in the future part.
-///
-/// ```
-/// # use bevy_ecs::prelude::*;
-/// # use bevy_oozlum::prelude::*;
-/// # #[derive(Clone)]
-/// # struct MyTransition;
-/// fn system(
-///     meta: Res<RevMeta>,
-///     mut log: Local<TransitionLog<MyTransition>>
-/// ) -> Result<(), BevyError> {
-///     for future_transition in log.pre_update_drain(&meta).future() {
-///
-///         // do cleanup tasks with future transitions
-///     }
-///
-///     match meta.running_direction() {
-///         RevDirection::NOT_LOG => {
-///             let new_transition: MyTransition = todo!();
-///
-///             // mutate some state with the new transition
-///
-///             // push the transition to the log
-///             log.push(meta.past_len(), new_transition);
-///         },
-///         RevDirection::FORWARD_LOG => todo!(), // same as first example
-///         RevDirection::BackwardLog => todo!() // same as first example
-///     }
-///
-///     Ok(())
-/// }
-/// ```
-///
-/// ## Draining past
-///
-/// Like the _Draining future_ example, but here the relevant transitions for cleanup work are in
-/// the past part of the log.
-///
-/// There are two iterations in the example where cleanup work has to happen. This is because either
-/// of the two could happen in isolation, the first because
-/// [`RevQueue::Clear`](crate::meta::RevQueue::Clear) was queued and applied and the second because
-/// the log exceeds [`RevMeta::past_len`].
-///
-/// ```
-/// # use bevy_ecs::prelude::*;
-/// # use bevy_oozlum::prelude::*;
-/// # #[derive(Clone)]
-/// # struct MyTransition;
-/// fn system(
-///     meta: Res<RevMeta>,
-///     mut log: Local<TransitionLog<MyTransition>>
-/// ) -> Result<(), BevyError> {
-///     for past_transition in log.pre_update_drain(&meta).past() {
-///
-///         // do cleanup tasks with past transitions
-///     }
-///
-///     match meta.running_direction() {
-///         RevDirection::NOT_LOG => {
-///             let new_transition: MyTransition = todo!();
-///
-///             // mutate some state with the new transition
-///
-///             // push the transition to the log
-///             let drain = log.push_drain_past(meta.past_len(), new_transition);
-///
-///             for past_transition in drain {
-///
-///                 // do cleanup tasks with past transitions
-///             }
-///         },
-///         RevDirection::FORWARD_LOG => todo!(), // same as first example
-///         RevDirection::BackwardLog => todo!() // same as first example
-///     }
-///
-///     Ok(())
-/// }
-/// ```
-///
-/// ## Draining future and past
-///
-/// Combination of the two examples above. The distinction between future and past transitions is
-/// optional; instead of [`past`](TransitionDrains::past) and [`future`](TransitionDrains::future),
-/// [`all`](TransitionDrains::all) can be used.
-///
-/// The `MyTransition` may for example contain an [entity ID](bevy_ecs::entity::Entity). This could be
-/// the ID of a temporal entity that is associated to this transition. The cleanup then would be to
-/// despawn it.
-///
-/// ```
-/// # use bevy_ecs::prelude::*;
-/// # use bevy_oozlum::prelude::*;
-/// # #[derive(Clone)]
-/// # struct MyTransition;
-/// fn system(
-///     meta: Res<RevMeta>,
-///     mut log: Local<TransitionLog<MyTransition>>
-/// ) -> Result<(), BevyError> {
-///     let mut drains = log.pre_update_drain(&meta);
-///
-///     for past_transition in drains.past() {
-///
-///         // do cleanup tasks with past transitions
-///     }
-///
-///     for future_transition in drains.future() {
-///
-///         // do cleanup tasks with future transitions
-///     }
-///
-///     // or, instead of the two above: `for transition in drain.all() { ... }`
-///
-///     match meta.running_direction() {
-///         RevDirection::NOT_LOG => {
-///             let new_transition: MyTransition = todo!();
-///
-///             // mutate some state with the new transition
-///
-///             // push the transition to the log
-///             let drain = log.push_drain_past(meta.past_len(), new_transition);
-///
-///             for past_transition in drain {
-///
-///                 // do cleanup tasks with past transitions
-///             }
-///         },
-///         RevDirection::FORWARD_LOG => todo!(), // same as first example
-///         RevDirection::BackwardLog => todo!() // same as first example
 ///     }
 ///
 ///     Ok(())
@@ -224,6 +72,11 @@ pub struct TransitionLog<T> {
     /// the length of it, the log reached its future end.
     index: usize,
 
+    /// The maximum value for [`Self::index`]. Is usually equal to `transitions.len()` but can be
+    /// lower when this log is updated during
+    /// [`RevDirection::BackwardLog`](crate::meta::RevDirection::BackwardLog) and
+    /// [`Self::meta_log_exits`] is outdated. This way the draining of future transitions that got
+    /// out-of-log can be postponed to the next [`Self::push`] call.
     index_max: usize,
 
     /// Contains the most recent global count of log exits that was witnessed.
@@ -236,6 +89,7 @@ pub struct TransitionLog<T> {
     /// See [`RevMeta::log_clears`].
     meta_log_clears: u64,
 
+    /// The last error of [`Self::backward_log`]/[`Self::forward_log`].
     poison: Result<(), OutOfLog>,
 }
 
@@ -270,16 +124,18 @@ impl<T> TransitionLog<T> {
 
     /// Returns the current poison state.
     ///
+    /// When a log is poisoned, then the stored log entries are considered out-of-sync with the
+    /// global log that is tracked by [`RevMeta`].
+    ///
     /// If present, this has an effect on the following methods:
     ///
-    /// - [`pre_update`](Self::pre_update)/[`pre_update_drain`](Self::pre_update_drain) will not
-    ///   truncate/drain any log entries except if [`RevQueue::Clear`](crate::meta::RevQueue::Clear)
-    ///   is applied, which also clears the poison.
-    /// - [`push`](Self::push) ignores the pushed log entry and [logs an error](bevy_log::error).
-    /// - [`push_drain_past`](Self::push_drain_past) ignores the pushed log entry,
-    ///   [logs an error](bevy_log::error) and always returns an drains no log entries.
+    /// - [`push`](Self::push) ignores the pushed log entry and will not truncate/drain any log
+    ///   entries and [logs an error](bevy_log::error). If
+    ///   [`RevQueue::Clear`](crate::meta::RevQueue::Clear) was applied previously, then the poison
+    ///   will be cleared and `push` works again.
     /// - [`forward_log`](Self::forward_log)/[`backward_log`](Self::backward_log) continue to return
-    ///   the same [`OutOfLog`] error as this method here does.
+    ///   the same [`OutOfLog`] error and will not traverse the log, even if it would be possible
+    ///   otherwise.
     ///
     /// If bevy's `track_location` cargo feature is activated, the error here contains the location
     /// where it originally occured.
@@ -291,9 +147,12 @@ impl<T> TransitionLog<T> {
 
     /// Unsets the poison, see [`poison`](Self::poison).
     ///
-    /// This happens automatically when
-    /// [`pre_update`](Self::pre_update)([`_drain`](Self::pre_update_drain)) applies a previous
-    /// [`RevQueue::Clear`](crate::meta::RevQueue::Clear).
+    /// This should only be done if it is sure this leaves the log in a valid state that is in sync
+    /// with the global log.
+    ///
+    /// This happens automatically when [`push`](Self::push) applies a previous
+    /// [`RevQueue::Clear`](crate::meta::RevQueue::Clear) as that removes all log entries so far
+    /// that could be out-of-sync.
     pub fn clear_poison(&mut self) {
         self.poison = Ok(());
     }
@@ -361,6 +220,20 @@ impl<T> TransitionLog<T> {
         self.transitions.shrink_to_fit()
     }
 
+    /// Updates the log with a new `transition` and returns [`TransitionDrain`] that can be used to
+    /// iterate log entries that got out-of-log with this push.
+    ///
+    /// If [`backward_log`](Self::backward_log)/[`forward_log`](Self::forward_log) returned an
+    /// [`OutOfLog`] error previously, the same error will be returned here as well and `transition`
+    /// will not be pushed.
+    ///
+    /// If [`RevQueue::Clear`](crate::meta::RevQueue::Clear) was applied in the meantime, any
+    /// previous error will be cleared and this log is mutable again. Alternatively
+    /// [`Self::clear_poison`] can be used to undo the error.
+    ///
+    /// This is used during [`RevDirection::NOT_LOG`](crate::meta::RevDirection::NOT_LOG).
+    ///
+    /// For an example, see the [type level docs](TransitionLog).
     pub fn push<'a>(
         &'a mut self,
         meta: &RevMeta,
@@ -368,6 +241,7 @@ impl<T> TransitionLog<T> {
         transition: T,
     ) -> Result<TransitionDrain<'a, T>, OutOfLog> {
         let gap_range = if self.meta_log_clears < meta.log_clears() {
+            self.meta_log_clears = meta.log_clears();
             self.poison = Ok(());
             GapRange::new_clear(self.index)
         } else if let Err(out_of_log) = self.poison {
@@ -376,13 +250,8 @@ impl<T> TransitionLog<T> {
             let max_past_len = usize::try_from(max_past_len)
                 .unwrap_or(usize::MAX)
                 .saturating_sub(1);
-            GapRange {
-                start: self.index.saturating_sub(max_past_len),
-                start_offset: 1,
-                end: self.index,
-            }
+            GapRange::new_offset_one(self.index.saturating_sub(max_past_len), self.index)
         };
-        self.meta_log_clears = meta.log_clears();
         self.meta_log_exits = meta.log_exits();
         Ok(TransitionDrain {
             log: self,
@@ -395,7 +264,9 @@ impl<T> TransitionLog<T> {
 
     /// Returns a reference to the log entry that was logged at the chronologically previous push.
     /// If the log is at the past end before this call, this method returns an [`OutOfLog`] error,
-    /// leaving the log unchanged.
+    /// leaving the log unchanged. The same is true if a previous error was not cleared yet
+    /// [manually](Self::clear_poison) or by an applied
+    /// [`RevQueue::Clear`](crate::meta::RevQueue::Clear) followed by a [`push`](Self::push) call.
     ///
     /// The log entry can be mutated in case applying it is not only changing the state but also the
     /// log entry itself. This may be needed if a previously added value is taken again and stored
@@ -404,17 +275,7 @@ impl<T> TransitionLog<T> {
     ///
     /// This is used during [`RevDirection::BackwardLog`](crate::meta::RevDirection::BackwardLog).
     ///
-    /// Before calling this, [`pre_update`](Self::pre_update) or
-    /// [`pre_update_drain`](Self::pre_update_drain) **must** be called at least once in the
-    /// [present reversible frame](RevMeta::now).
-    ///
-    /// For examples, see the [type level documentation](TransitionLog).
-    ///
-    /// # Poisoning
-    ///
-    /// If this log [is poisoned](Self::poison), this always returns an error. If bevy's
-    /// `track_location` cargo feature is activated, the error here contains the location where it
-    /// originally occured.
+    /// For an example, see the [type level docs](TransitionLog).
     #[track_caller]
     pub fn backward_log(&mut self, meta: &RevMeta) -> Result<&mut T, OutOfLog> {
         self.poison?;
@@ -422,6 +283,10 @@ impl<T> TransitionLog<T> {
         if self.meta_log_clears >= meta.log_clears()
             && let Some(index) = self.index.checked_sub(1)
         {
+            if self.meta_log_exits < meta.log_exits() {
+                self.meta_log_exits = meta.log_exits();
+                self.index_max = self.index;
+            }
             // self.index should always be <= the deque len, so successfully reducing the index
             // without underflow is expected to result in a valid index into the log. If this is
             // not the case here, this would be a crate bug.
@@ -435,7 +300,9 @@ impl<T> TransitionLog<T> {
 
     /// Returns a reference to the log entry that was logged at the chronologically next push. If
     /// the log is at the future end before this call, this method returns an [`OutOfLog`] error,
-    /// leaving the log unchanged.
+    /// leaving the log unchanged. The same is true if a previous error was not cleared yet
+    /// [manually](Self::clear_poison) or by an applied
+    /// [`RevQueue::Clear`](crate::meta::RevQueue::Clear) followed by a [`push`](Self::push) call.
     ///
     /// The log entry can be mutated in case applying it is not only changing the state but also the
     /// log entry itself. This may be needed if a previously added value is taken again
@@ -444,36 +311,25 @@ impl<T> TransitionLog<T> {
     ///
     /// This is used during [`RevDirection::FORWARD_LOG`](crate::meta::RevDirection::FORWARD_LOG).
     ///
-    /// Before calling this, [`pre_update`](Self::pre_update) or
-    /// [`pre_update_drain`](Self::pre_update_drain) **must** be called at least once in the
-    /// [present reversible frame](RevMeta::now).
-    ///
-    /// For examples, see the [type level documentation](TransitionLog).
-    ///
-    /// # Poisoning
-    ///
-    /// If this log [is poisoned](Self::poison), this always returns an error. If bevy's
-    /// `track_location` cargo feature is activated, the error here contains the location where it
-    /// originally occured.
+    /// For an example, see the [type level docs](TransitionLog).
     #[track_caller]
     pub fn forward_log<'a, 'm>(&'a mut self, meta: &'m RevMeta) -> Result<&'a mut T, OutOfLog> {
         self.poison?;
 
         if self.meta_log_clears < meta.log_clears()
             || self.meta_log_exits < meta.log_exits()
-            || self.index >= self.index_max.min(self.transitions.len())
+            || self.index >= self.index_max
         {
             return Err(self.set_poison());
         }
 
-        let transition = unsafe {
-            // SAFETY: self.index >= self.transitions.len() returned before
-            self.transitions.get_mut(self.index).unwrap_unchecked()
-        };
+        // should not panic: self.transitions.len() >= self.index_max > self.index
+        let transition = self.transitions.get_mut(self.index).unwrap();
         self.index += 1;
         Ok(transition)
     }
 
+    /// Set and return [`OutOfLog`] with the current caller.
     #[track_caller]
     fn set_poison(&mut self) -> OutOfLog {
         let out_of_log = OutOfLog::caller();
@@ -482,6 +338,39 @@ impl<T> TransitionLog<T> {
     }
 }
 
+/// A container returned by [`TransitionLog::push`] that can be used to iterate the log entried that
+/// are to be truncated because they are out of log.
+///
+/// The content of the available drains look like this:
+///
+/// The letters are all stored log entries with the number below indicating how many updates ago the
+/// entry was pushed. Positive numbers are in the future, which is the case after
+/// [`TransitionLog::backward_log`] was used three times. When the drains are performed, the actual
+/// new entry `X` is pushed.
+///
+/// The `max_past_len` value would be `3` in this example.
+///
+/// ```text
+/// [A] [B] [C] [D] [E] [F] [G] [H] [I]
+/// -5  -4  -3  -2  -1   0   1   2   3
+/// |_________|             |_________|
+/// past drain              future drain
+///             [D] [E] [F] [X]
+///             -3  -2   1   0
+/// ```
+///
+/// Note that `D` is actually not needed for this log anymore but may still be kept:
+///
+/// A log entry is used to transition between two states. Because of this, `N` log entries are
+/// needed for `N+1` states. If `max_past_len` is now `3`, that means plus the present state there
+/// are 4 global states. Transitioning between them would need only three log entries, but as the
+/// above scheme shows, the final amount of log entries with `X` is four.
+///
+/// The reason is it may lead to subtle bugs in the cleanup logic if `D` was included in the past
+/// drain. `D` was pushed at a frame that is still >= [`RevMeta::past_end`] and that may be
+/// unexpected. Because of this, `D` is kept if the past is actively drained via
+/// [`past`](Self::past) or [`all`](Self::all). If only [`future`](Self::future) is used or this
+/// container is dropped unused, `D` will be truncated.
 #[derive(Debug)]
 pub struct TransitionDrain<'a, T> {
     log: &'a mut TransitionLog<T>,
@@ -492,18 +381,23 @@ pub struct TransitionDrain<'a, T> {
 }
 
 impl<'a, T> TransitionDrain<'a, T> {
-    pub fn drain_past(&mut self) -> Drain<'_, T> {
+    /// Returns log entries that were pushed before [`RevMeta::past_end`].
+    pub fn past(&mut self) -> Drain<'_, T> {
         self.push = true;
         let end = self.gap_range.drain_past_end();
         self.log.transitions.drain(..end)
     }
 
-    pub fn drain_future(&mut self) -> Drain<'_, T> {
+    /// Returns log entries that were pushed after [`RevMeta::now`] which, at this point of time,
+    /// is equal to [`RevMeta::future_end`].
+    pub fn future(&mut self) -> Drain<'_, T> {
         let start = self.gap_range.drain_future_start();
         self.log.transitions.drain(start..)
     }
 
-    pub fn drain_all(&mut self) -> DrainAll<'_, T> {
+    /// Returns log entries that were pushed before [`RevMeta::past_end`] or after [`RevMeta::now`]
+    /// which, at this point of time, is equal to [`RevMeta::future_end`].
+    pub fn all(&mut self) -> DrainAll<'_, T> {
         self.push = true;
         DrainAll::new(
             &mut self.log.transitions,
@@ -512,6 +406,8 @@ impl<'a, T> TransitionDrain<'a, T> {
         )
     }
 
+    /// Returns `true` if all log entries are to be cleared, regardless of the user actively drains
+    /// them.
     pub(super) fn is_clear(&self) -> bool {
         self.gap_range.is_clear()
     }
@@ -531,7 +427,7 @@ impl<'a, T> TransitionDrain<'a, T> {
 
 impl<T> Drop for TransitionDrain<'_, T> {
     fn drop(&mut self) {
-        if self.gap_range.is_clear() || self.gap_range.start == self.gap_range.end {
+        if self.gap_range.is_clear() {
             self.log.transitions.clear();
         } else {
             self.log.transitions.truncate(self.gap_range.end);
@@ -555,81 +451,24 @@ impl<T> Drop for TransitionDrain<'_, T> {
 mod test {
     use core::num::NonZeroU64;
 
-    use crate::meta::{RevDirection, RevQueue};
+    use crate::{
+        log::test::Logs,
+        meta::{RevDirection, RevQueue},
+    };
 
     use super::*;
 
     #[derive(Debug)]
     struct MetaAndLogs {
         meta: RevMeta,
-        drop_drain: TransitionLog<char>,
-        past_drain: TransitionLog<char>,
-        future_drain: TransitionLog<char>,
-        past_future_drain: TransitionLog<char>,
-        future_past_drain: TransitionLog<char>,
-        all_drain: TransitionLog<char>,
-        past_all_drain: TransitionLog<char>,
-        future_all_drain: TransitionLog<char>,
-    }
-
-    impl TransitionDrain<'_, char> {
-        fn assert_past<const N: usize>(&mut self, expected: [char; N]) -> &mut Self {
-            let iter = self.drain_past();
-            assert_eq!(iter.len(), N);
-            let actual = iter.collect::<Vec<_>>();
-            assert_eq!(actual, expected);
-            if N != 0 {
-                let iter = self.drain_past();
-                assert_eq!(iter.len(), 0);
-                assert_eq!(iter.count(), 0);
-            }
-            self
-        }
-
-        fn assert_future<const N: usize>(&mut self, expected: [char; N]) -> &mut Self {
-            let iter = self.drain_future();
-            assert_eq!(iter.len(), N);
-            let actual = iter.collect::<Vec<_>>();
-            assert_eq!(actual, expected);
-            if N != 0 {
-                let iter = self.drain_future();
-                assert_eq!(iter.len(), 0);
-                assert_eq!(iter.count(), 0);
-            }
-            self
-        }
-
-        fn assert_all<const N: usize, const M: usize>(
-            &mut self,
-            past: [char; N],
-            future: [char; M],
-        ) -> &mut Self {
-            let iter = self.drain_all();
-            assert_eq!(iter.len(), N + M);
-            let actual = iter.collect::<Vec<_>>();
-            let expected = past.into_iter().chain(future).collect::<Vec<_>>();
-            assert_eq!(actual, expected);
-            if N + M != 0 {
-                let iter = self.drain_all();
-                assert_eq!(iter.len(), 0);
-                assert_eq!(iter.count(), 0);
-            }
-            self
-        }
+        logs: Logs<TransitionLog<char>>,
     }
 
     impl MetaAndLogs {
         fn new(max_world_states: u64) -> Self {
             Self {
                 meta: RevMeta::new(NonZeroU64::new(max_world_states), false),
-                drop_drain: TransitionLog::new(),
-                past_drain: TransitionLog::new(),
-                future_drain: TransitionLog::new(),
-                past_future_drain: TransitionLog::new(),
-                future_past_drain: TransitionLog::new(),
-                all_drain: TransitionLog::new(),
-                past_all_drain: TransitionLog::new(),
-                future_all_drain: TransitionLog::new(),
+                logs: Logs::default(),
             }
         }
         fn forward<const N: usize, const M: usize>(
@@ -647,53 +486,13 @@ mod test {
             self.meta.set_queue(queue);
             self.meta.update_ref(Ok(true), |meta, direction| {
                 assert_eq!(direction, RevDirection::NOT_LOG);
-
-                self.drop_drain.push(meta, meta.past_len(), push).unwrap();
-
-                self.past_drain
-                    .push(meta, meta.past_len(), push)
-                    .unwrap()
-                    .assert_past(past_drain);
-
-                self.future_drain
-                    .push(meta, meta.past_len(), push)
-                    .unwrap()
-                    .assert_future(future_drain);
-
-                self.past_future_drain
-                    .push(meta, meta.past_len(), push)
-                    .unwrap()
-                    .assert_past(past_drain)
-                    .assert_future(future_drain)
-                    .assert_all([], []);
-
-                self.future_past_drain
-                    .push(meta, meta.past_len(), push)
-                    .unwrap()
-                    .assert_future(future_drain)
-                    .assert_past(past_drain)
-                    .assert_all([], []);
-
-                self.all_drain
-                    .push(meta, meta.past_len(), push)
-                    .unwrap()
-                    .assert_all(past_drain, future_drain)
-                    .assert_past([])
-                    .assert_future([]);
-
-                self.past_all_drain
-                    .push(meta, meta.past_len(), push)
-                    .unwrap()
-                    .assert_past(past_drain)
-                    .assert_all([], future_drain)
-                    .assert_future([]);
-
-                self.future_all_drain
-                    .push(meta, meta.past_len(), push)
-                    .unwrap()
-                    .assert_future(future_drain)
-                    .assert_all(past_drain, [])
-                    .assert_future([]);
+                self.logs.assert_forward_transition(
+                    meta,
+                    meta.past_len(),
+                    &past_drain,
+                    &future_drain,
+                    push,
+                );
             });
         }
         fn noop_forward_backward_log(&mut self) {
@@ -704,103 +503,41 @@ mod test {
         }
         #[track_caller]
         fn forward_log(&mut self, expected: Result<char, ()>) {
-            let logs = [
-                &mut self.drop_drain,
-                &mut self.past_drain,
-                &mut self.future_drain,
-                &mut self.past_future_drain,
-                &mut self.future_past_drain,
-                &mut self.all_drain,
-                &mut self.past_all_drain,
-                &mut self.future_all_drain,
-            ].into_iter()
-                        .enumerate();
             self.meta.set_queue(RevQueue::RUN_FORWARD_LOG);
             match expected {
-                Ok(expected) => {
+                Ok(_) => {
                     self.meta.update_ref(Ok(true), |meta, direction| {
                         assert_eq!(direction, RevDirection::FORWARD_LOG);
-
-                        for (i, log) in logs {
-                            let actual = log.forward_log(meta).map(|char| *char);
-                            assert_eq!(actual, Ok(expected), "{i}");
-                        }
+                        self.logs.assert_forward_log_transition(meta, expected);
                     });
                 }
                 Err(()) => {
                     self.meta.update_ref(Ok(false), |_, _| ());
-
-                    for (i, log) in logs {
-                        assert_eq!(log.forward_log(&self.meta), Err(OutOfLog::caller()), "{i}");
-                        log.clear_poison();
-                    }
+                    self.logs
+                        .assert_forward_log_transition(&self.meta, expected);
                 }
             }
+        }
+        fn forward_log_err_in_global_log(&mut self) {
+            self.meta.update_ref(Ok(true), |meta, direction| {
+                assert_eq!(direction, RevDirection::FORWARD_LOG);
+                self.logs.assert_forward_log_transition(meta, Err(()));
+            });
         }
         #[track_caller]
         fn backward_log(&mut self, expected: Result<char, ()>) {
             self.meta.set_queue(RevQueue::RUN_BACKWARD_LOG);
             match expected {
-                Ok(expected) => {
+                Ok(_) => {
                     self.meta.update_ref(Ok(true), |meta, direction| {
                         assert_eq!(direction, RevDirection::BackwardLog);
-
-                        for (i, log) in [
-                            &mut self.drop_drain,
-                            &mut self.past_drain,
-                            &mut self.future_drain,
-                            &mut self.past_future_drain,
-                            &mut self.future_past_drain,
-                            &mut self.all_drain,
-                            &mut self.past_all_drain,
-                            &mut self.future_all_drain,
-                        ]
-                        .into_iter()
-                        .enumerate() {
-                            let actual = log.backward_log(meta).map(|char| *char);
-                            assert_eq!(actual, Ok(expected), "{i}");
-                        }
+                        self.logs.assert_backward_log_transition(meta, expected);
                     });
                 }
                 Err(()) => {
                     self.meta.update_ref(Ok(false), |_, _| ());
-
-                    for log in [&mut self.drop_drain, &mut self.future_drain] {
-                        assert_eq!(log.backward_log(&self.meta), Err(OutOfLog::caller()));
-                        log.clear_poison();
-                    }
-
-                    for (i, log) in [
-                        &mut self.past_drain,
-                        &mut self.past_future_drain,
-                        &mut self.future_past_drain,
-                        &mut self.all_drain,
-                        &mut self.past_all_drain,
-                        &mut self.future_all_drain,
-                    ]
-                    .into_iter()
-                    .enumerate()
-                    {
-                        match log.backward_log(&self.meta) {
-                            Ok(expected) => {
-                                let expected = *expected;
-                                assert_eq!(
-                                    log.backward_log(&self.meta),
-                                    Err(OutOfLog::caller()),
-                                    "{i}"
-                                );
-                                log.clear_poison();
-
-                                // undo Ok
-                                let actual = log.forward_log(&self.meta).map(|char| *char);
-                                assert_eq!(actual, Ok(expected), "{i}");
-                            }
-                            Err(out_of_log) => {
-                                assert_eq!(out_of_log, OutOfLog::caller(), "{i}");
-                                log.clear_poison();
-                            }
-                        }
-                    }
+                    self.logs
+                        .assert_backward_log_transition(&self.meta, expected);
                 }
             }
         }
@@ -862,6 +599,11 @@ mod test {
 
         meta_and_logs.backward_log(Ok('h'));
         meta_and_logs.backward_log(Err(()));
+
+        meta_and_logs.forward_log(Ok('h'));
+        meta_and_logs.forward_log_err_in_global_log();
+
+        meta_and_logs.backward_log(Ok('h'));
 
         meta_and_logs.forward([], ['h', 'i'], 'j', false);
         meta_and_logs.forward([], [], 'k', false);

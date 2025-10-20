@@ -23,7 +23,7 @@ use bevy_platform::{
 use bevy_utils::prelude::DebugName;
 use core::{
     any::TypeId,
-    hash::{BuildHasher, Hasher, Hash},
+    hash::{BuildHasher, Hash, Hasher},
 };
 
 /// Wrap a `condition` into a reversivle `BoxedCondition` that logs the system output at
@@ -156,7 +156,11 @@ struct ConditionLogs {
 }
 
 impl ConditionLogs {
-    fn insert(&mut self, meta: &RevMeta, result: &Result<bool, RunSystemError>) -> Result<(), RunSystemError> {
+    fn insert(
+        &mut self,
+        meta: &RevMeta,
+        result: &Result<bool, RunSystemError>,
+    ) -> Result<(), RunSystemError> {
         match result {
             Ok(false) | Err(RunSystemError::Skipped(_)) => Ok(()),
             Ok(true) => {
@@ -164,9 +168,7 @@ impl ConditionLogs {
                 Ok(())
             }
             Err(RunSystemError::Failed(failed)) => {
-                self.failed_log
-                    .get_or_insert_default()
-                    .insert(meta, failed)
+                self.failed_log.get_or_insert_default().insert(meta, failed)
             }
         }
     }
@@ -195,9 +197,12 @@ impl FailedLogs {
 
         // log hash as transition, reduce usages for drained, remove if unused
         let past_len = self.err_failed_log.push_get_past_len(meta);
-        let mut drain = self.failed_log.push(meta, past_len, key).map_err(|err| RunSystemError::Failed(err.into()))?;
-        let keys = drain.drain_all();
-       
+        let mut drain = self
+            .failed_log
+            .push(meta, past_len, key)
+            .map_err(|err| RunSystemError::Failed(err.into()))?;
+        let keys = drain.all();
+
         for hash in keys {
             if let Entry::Occupied(mut occupied) = self.failed_cache.0.entry(hash) {
                 let usages = &mut occupied.get_mut().usages;
@@ -340,7 +345,9 @@ mod test {
             );
             self.meta.set_queue(RevQueue::CLEAR_THEN_RUN);
             self.meta.update_ref(Ok(true), |meta, _| {
-                self.logs.insert(meta, &Err(RunSystemError::Failed(err.into()))).unwrap();
+                self.logs
+                    .insert(meta, &Err(RunSystemError::Failed(err.into())))
+                    .unwrap();
             });
             let failed_logs = self.logs.failed_log.unwrap();
             let mut values = failed_logs.failed_cache.0.values();

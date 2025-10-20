@@ -405,7 +405,7 @@ impl UpdateLog {
             UpdateLogLimit::new_log(backward_limit, meta.now(), caller),
         );
 
-        true
+        true // todo: consider self.index != 0
     }
 
     /// Checks at [`RevDirection::FORWARD_LOG`](crate::meta::RevDirection::FORWARD_LOG) if this log
@@ -497,7 +497,8 @@ impl UpdateLog {
             &mut self.update_state,
             UpdateLogLimit::new_log(meta.now(), forward_limit, caller),
         );
-        true
+
+        true // todo: consider self.index != 0
     }
 
     /// This method **must** be called at least once per [reversible frame](RevMeta::now) before
