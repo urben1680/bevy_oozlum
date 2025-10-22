@@ -129,7 +129,10 @@ use core::{
 };
 use std::collections::{VecDeque, vec_deque::Drain};
 
-pub(crate) use update::limits::{UpdateLogLimits, UpdateLogState};
+pub(crate) use update::{
+    PreUpdateKind,
+    limits::{UpdateLogLimits, UpdateLogState},
+};
 pub use update::{UpdateLog, limits::UpdateLogId, limits::UpdateLogMissed};
 
 pub use transition::{TransitionDrain, TransitionLog};
@@ -145,20 +148,6 @@ mod update;
 mod test;
 
 // todo: remove Debug impls from Drainers
-
-/// Defines in which way a log has to be adjusted to reflect new changes to
-/// [`RevMeta`](crate::meta::RevMeta) since the last time the log was updated.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) enum PreUpdateKind {
-    /// Keep the log unchanged
-    Nothing,
-
-    /// Remove log entries that are in the future
-    RemoveFuture,
-
-    /// Remove all log entries.
-    RemoveLog,
-}
 
 /// An error that may be returned by the `backward_log`/`forward_log` methods of
 /// [`TransitionLog`]/[`TransitionsLog`] in case they already were at the end of their log before

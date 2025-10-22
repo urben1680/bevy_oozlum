@@ -19,8 +19,6 @@
 //!   the previous offset in [`UpdateLog::backward_log`]([`many`](UpdateLog::backward_log_many)).
 //! - The [`OffsetIter`] iterator is used to read the offsets. See [`IterItem`].
 
-use nonmax::NonMaxUsize;
-
 use super::UpdateLog;
 use core::{
     fmt::{Debug, Formatter, Result},
@@ -41,19 +39,6 @@ const WRAPPING_OFFSET_OR: u8 = 0b11_000000;
 const MAX_WRAPPING_OFFSET: u8 = 0b00_111111;
 
 impl UpdateLog {
-    /// Get an iterator that returns the [reversible frames](RevMeta::now) this log was updated at.
-    ///
-    /// If the log was updated multiple times at one frame, that frame will occur as many times in
-    /// sequence.
-    pub fn updated_at(&self) -> impl Iterator<Item = u64> + Debug + '_ {
-        UpdatedAtIter {
-            offsets: OffsetIter(self.offset_bytes.iter()),
-            frame: self.out_of_or_past_end_log,
-            zeroes: 0,
-            zeroes_max: self.zeroes_max,
-        }
-    }
-
     pub(super) fn push_offset(&mut self, mut offset: u64) {
         if offset == 0 {
             return self.push_zero_offset();
@@ -277,54 +262,6 @@ impl DoubleEndedIterator for OffsetIter<'_> {
     }
 }
 
-/// Iterator read frames at which [`UpdateLog`] updated.
-#[derive(Clone)]
-pub(super) struct UpdatedAtIter<'a> {
-    offsets: OffsetIter<'a>,
-    frame: u64,
-    zeroes: u8,
-    zeroes_max: u8,
-}
-
-impl Debug for UpdatedAtIter<'_> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
-        f.debug_list().entries(self.clone()).finish()
-    }
-}
-
-impl Iterator for UpdatedAtIter<'_> {
-    type Item = u64;
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.zeroes > 0 {
-            self.zeroes -= 1;
-            return Some(self.frame);
-        }
-        match self.offsets.next() {
-            Some(IterItem { offset: 0, len }) => {
-                self.zeroes = len.get() - 1;
-                Some(self.frame)
-            }
-            Some(IterItem { offset, .. }) => {
-                self.zeroes = 0;
-                self.frame += offset;
-                Some(self.frame)
-            }
-            None if self.zeroes_max > 0 => {
-                self.zeroes_max -= 1;
-                Some(self.frame)
-            }
-            None => None,
-        }
-    }
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        let (mut min, mut max) = self.offsets.size_hint();
-        let zeroes_max = self.zeroes_max as usize;
-        min = min.saturating_add(zeroes_max);
-        max = max.and_then(|max| max.checked_add(zeroes_max));
-        (min, max)
-    }
-}
-
 #[cfg(test)]
 mod test {
     use super::*;
@@ -351,21 +288,6 @@ mod test {
         for _ in 0..MAX_ZEROES_PER_BYTE {
             log.push_offset(0);
         }
-
-        // test frames
-
-        let mut frame = 0;
-        let expected_a = offsets.map(|offset| {
-            frame += offset;
-            frame
-        });
-        let expected_b = [expected_a[9]; MAX_ZEROES_PER_BYTE as usize];
-
-        assert!(
-            log.updated_at()
-                .eq(expected_a.iter().chain(expected_b.iter()).cloned()),
-            "{log:#?}\n{expected_a:?}{expected_b:?}"
-        );
 
         // make the 65 zeroes be part of the deque
         log.push_zero_offset();
