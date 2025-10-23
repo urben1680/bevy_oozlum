@@ -122,7 +122,7 @@ fn drain_all_iterator_works() {
 
         assert_eq!(gap_range.start, updated_gap.start, "#{i}");
         assert_eq!(gap_range.end, updated_gap.end, "#{i}");
-        prepend(&mut gap_buffer, &mut deque);
+        prepend(&mut deque, &mut gap_buffer);
         assert!(deque.iter().is_sorted(), "#{i}");
     }
 }

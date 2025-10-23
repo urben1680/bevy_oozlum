@@ -41,22 +41,31 @@ const MAX_WRAPPING_OFFSET: u8 = 0b00_111111;
 impl UpdateLog {
     pub(super) fn push_offset(&mut self, mut offset: u64) {
         if offset == 0 {
-            return self.push_zero_offset();
+            if self.zeroes == MAX_ZEROES_PER_BYTE {
+                self.offset_bytes.push_back(MAX_ZEROES_AS_BYTE);
+                self.index += 1;
+                self.zeroes = 0;
+            }
+
+            // increase the sequence of zero offsets
+            self.zeroes += 1;
+            self.zeroes_max = self.zeroes;
+            return;
         }
 
         if self.zeroes == 1 {
             // there was an offset of 0 previously, push it now that it is sure no more such offsets
             // are following it
             self.offset_bytes.push_back(0);
-            self.increase_index();
+            self.index += 1;
         } else if self.zeroes > 1 {
             // there was a sequence of offsets of 0 previously, push it now that it is sure no more
             // such offsets are following it
             self.offset_bytes.push_back((self.zeroes - 2) | ZEROES_OR);
-            self.increase_index();
+            self.index += 1;
         }
 
-        self.increase_index();
+        self.index += 1;
         self.zeroes = 0;
         self.zeroes_max = 0;
 
@@ -74,7 +83,7 @@ impl UpdateLog {
         offset >>= 6;
 
         loop {
-            self.increase_index();
+            self.index += 1;
 
             if offset <= MAX_WRAPPING_OFFSET as u64 {
                 // this is a wrapping byte
@@ -92,18 +101,6 @@ impl UpdateLog {
             // wrapped bytes contain 7 usable bits for the offset
             offset >>= 7;
         }
-    }
-
-    pub(super) fn push_zero_offset(&mut self) {
-        if self.zeroes == MAX_ZEROES_PER_BYTE {
-            self.offset_bytes.push_back(MAX_ZEROES_AS_BYTE);
-            self.increase_index();
-            self.zeroes = 0;
-        }
-
-        // increase the sequence of zero offsets
-        self.zeroes += 1;
-        self.zeroes_max = self.zeroes;
     }
 }
 
@@ -290,7 +287,7 @@ mod test {
         }
 
         // make the 65 zeroes be part of the deque
-        log.push_zero_offset();
+        log.push_offset(0);
 
         // test offsets
 

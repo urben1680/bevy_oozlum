@@ -434,7 +434,7 @@ impl<T> Drop for TransitionDrain<'_, T> {
             // todo: truncate_front https://github.com/rust-lang/rust/issues/140667
             self.log.transitions.drain(..self.gap_range.start);
         }
-        prepend(&mut self.gap_buffer, &mut self.log.transitions);
+        prepend(&mut self.log.transitions, &mut self.gap_buffer);
         let transition = unsafe {
             // SAFETY: ManuallyDrop remains unused after this until the end of drop
             ManuallyDrop::take(&mut self.transition)

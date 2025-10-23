@@ -314,7 +314,7 @@ impl GapRange {
 }
 
 // todo: use prepend https://github.com/rust-lang/rust/issues/146975
-fn prepend<T>(gap_buffer: &mut Box<[T]>, deque: &mut VecDeque<T>) {
+fn prepend<T>(deque: &mut VecDeque<T>, gap_buffer: &mut Box<[T]>) {
     let mut buffer = core::mem::take(gap_buffer).into_iter();
     if deque.is_empty() {
         return deque.extend(buffer);
