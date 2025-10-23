@@ -204,10 +204,6 @@ impl<'a, T> DrainAll<'a, T> {
     ) -> Self {
         let mut this_range = gap_range.clone();
 
-        debug_assert!(gap_range.start <= log.len());
-        debug_assert!(gap_range.end <= log.len());
-        debug_assert!(gap_range.start <= gap_range.end);
-
         let drain;
         if gap_range.end == log.len() {
             drain = log.drain(..gap_range.start);

@@ -366,8 +366,8 @@ impl<T> TransitionLog<T> {
 /// are 4 global states. Transitioning between them would need only three log entries, but as the
 /// above scheme shows, the final amount of log entries with `X` is four.
 ///
-/// The reason is it may lead to subtle bugs in the cleanup logic if `D` was included in the past
-/// drain. `D` was pushed at a frame that is still >= [`RevMeta::past_end`] and that may be
+/// The reason is it may lead to subtle bugs in the user's cleanup logic if `D` was included in the
+/// past drain. `D` was pushed at a frame that is still >= [`RevMeta::past_end`] and that may be
 /// unexpected. Because of this, `D` is kept if the past is actively drained via
 /// [`past`](Self::past) or [`all`](Self::all). If only [`future`](Self::future) is used or this
 /// container is dropped unused, `D` will be truncated.

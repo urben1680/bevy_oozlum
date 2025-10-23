@@ -661,7 +661,7 @@ pub struct TransitionsLogUpdate<U> {
 
 #[cfg(test)]
 mod test {
-    use core::{num::NonZeroU64, str::Chars};
+    use core::num::NonZeroU64;
 
     use crate::{
         log::test::Logs,
@@ -685,9 +685,9 @@ mod test {
         }
         fn forward<const N: usize, const M: usize>(
             &mut self,
-            past_drain: [(String, char); N],
-            future_drain: [(String, char); M],
-            push: (String, char),
+            past_drain: [(&'static str, char); N],
+            future_drain: [(&'static str, char); M],
+            push: (&'static str, char),
             clear: bool,
         ) {
             let queue = if clear {
@@ -714,7 +714,7 @@ mod test {
             self.meta.update_ref(Ok(true), |_, _| ());
         }
         #[track_caller]
-        fn forward_log(&mut self, expected: Result<(String, char), ()>) {
+        fn forward_log(&mut self, expected: Result<(&'static str, char), ()>) {
             self.meta.set_queue(RevQueue::RUN_FORWARD_LOG);
             match expected {
                 Ok(_) => {
@@ -731,7 +731,7 @@ mod test {
             }
         }
         #[track_caller]
-        fn backward_log(&mut self, expected: Result<(String, char), ()>) {
+        fn backward_log(&mut self, expected: Result<(&'static str, char), ()>) {
             self.meta.set_queue(RevQueue::RUN_BACKWARD_LOG);
             match expected {
                 Ok(_) => {
@@ -751,73 +751,73 @@ mod test {
 
     #[test]
     fn traverses_log() {
-        use crate::log::test::transitions_constructors::*;
+        use crate::log::test::transitions_presets::*;
 
         let mut meta_and_logs = MetaAndLogs::new(5);
 
-        meta_and_logs.forward([], [], a(), false);
-        meta_and_logs.forward([], [], b(), false);
-        meta_and_logs.forward([], [], c(), false);
-        meta_and_logs.forward([], [], d(), false);
-        meta_and_logs.forward([], [], e(), false); // non-past draining remove a() here
-        meta_and_logs.forward([a()], [], f(), false);
+        meta_and_logs.forward([], [], A, false);
+        meta_and_logs.forward([], [], B, false);
+        meta_and_logs.forward([], [], C, false);
+        meta_and_logs.forward([], [], D, false);
+        meta_and_logs.forward([], [], E, false); // non-past draining remove a() here
+        meta_and_logs.forward([A], [], F, false);
 
-        meta_and_logs.backward_log(Ok(f()));
-        meta_and_logs.backward_log(Ok(e()));
-        meta_and_logs.backward_log(Ok(d()));
-        meta_and_logs.backward_log(Ok(c()));
+        meta_and_logs.backward_log(Ok(F));
+        meta_and_logs.backward_log(Ok(E));
+        meta_and_logs.backward_log(Ok(D));
+        meta_and_logs.backward_log(Ok(C));
         meta_and_logs.backward_log(Err(())); // b() is unreachable but not yet drained
 
-        meta_and_logs.forward_log(Ok(c()));
-        meta_and_logs.forward_log(Ok(d()));
-        meta_and_logs.forward_log(Ok(e()));
-        meta_and_logs.forward_log(Ok(f()));
+        meta_and_logs.forward_log(Ok(C));
+        meta_and_logs.forward_log(Ok(D));
+        meta_and_logs.forward_log(Ok(E));
+        meta_and_logs.forward_log(Ok(F));
         meta_and_logs.forward_log(Err(()));
 
-        meta_and_logs.backward_log(Ok(f()));
-        meta_and_logs.backward_log(Ok(e()));
+        meta_and_logs.backward_log(Ok(F));
+        meta_and_logs.backward_log(Ok(E));
 
-        meta_and_logs.forward([], [e(), f()], g(), false);
+        meta_and_logs.forward([], [E, F], G, false);
 
-        meta_and_logs.backward_log(Ok(g()));
-        meta_and_logs.backward_log(Ok(d()));
-        meta_and_logs.backward_log(Ok(c()));
+        meta_and_logs.backward_log(Ok(G));
+        meta_and_logs.backward_log(Ok(D));
+        meta_and_logs.backward_log(Ok(C));
         meta_and_logs.backward_log(Err(()));
 
-        meta_and_logs.forward_log(Ok(c()));
-        meta_and_logs.forward_log(Ok(d()));
-        meta_and_logs.forward_log(Ok(g()));
+        meta_and_logs.forward_log(Ok(C));
+        meta_and_logs.forward_log(Ok(D));
+        meta_and_logs.forward_log(Ok(G));
         meta_and_logs.forward_log(Err(()));
 
-        meta_and_logs.backward_log(Ok(g()));
-        meta_and_logs.backward_log(Ok(d()));
+        meta_and_logs.backward_log(Ok(G));
+        meta_and_logs.backward_log(Ok(D));
 
-        meta_and_logs.forward([b(), c()], [d(), g()], h(), true);
+        meta_and_logs.forward([B, C], [D, G], H, true);
 
-        meta_and_logs.backward_log(Ok(h()));
+        meta_and_logs.backward_log(Ok(H));
         meta_and_logs.backward_log(Err(()));
 
-        meta_and_logs.forward_log(Ok(h()));
+        meta_and_logs.forward_log(Ok(H));
         meta_and_logs.forward_log(Err(()));
 
-        meta_and_logs.forward([], [], i(), false);
+        meta_and_logs.forward([], [], I, false);
 
-        meta_and_logs.backward_log(Ok(i()));
+        meta_and_logs.backward_log(Ok(I));
 
         meta_and_logs.noop_forward_backward_log();
 
-        meta_and_logs.backward_log(Ok(h()));
+        meta_and_logs.backward_log(Ok(H));
         meta_and_logs.backward_log(Err(()));
 
-        meta_and_logs.forward([], [h(), i()], j(), false);
-        meta_and_logs.forward([], [], k(), false);
-        meta_and_logs.forward([], [], l(), false);
+        meta_and_logs.forward([], [H, I], J, false);
+        meta_and_logs.forward([], [], K, false);
+        meta_and_logs.forward([], [], L, false);
 
-        meta_and_logs.backward_log(Ok(l()));
+        meta_and_logs.backward_log(Ok(L));
 
         meta_and_logs
             .meta
             .set_max_world_states(NonZeroU64::new(2).unwrap());
-        meta_and_logs.forward([j()], [l()], m(), false);
+        meta_and_logs.forward([J], [L], M, false);
     }
 }

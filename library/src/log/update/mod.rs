@@ -68,7 +68,7 @@ impl Debug for UpdateLog {
         f.debug_struct("UpdateLog")
             .field("offset_bytes", &self.offset_bytes)
             .field("offsets (decoded)", &OffsetIter(self.offset_bytes.iter()))
-            .field("out_of_or_past_end_log", &self.log_start)
+            .field("log_start", &self.log_start)
             .field("last_update", &self.last_update)
             .field("index", &self.index)
             .field("past_len", &self.past_len)
@@ -291,8 +291,12 @@ impl UpdateLog {
     fn push_with_caller(&mut self, meta: &RevMeta, caller: MaybeLocation) -> u64 {
         self.pre_update(meta);
 
-        let push = match self.index {
-            _ if self.log_start > meta.past_end() => true,
+        match self.index {
+            _ if self.log_start > meta.past_end() => {
+                self.push_offset(meta.now() - self.last_update);
+                self.last_update = meta.now();
+                self.past_len += 1;
+            }
             Some(index) if self.last_update > meta.past_end() => {
                 let iter = OffsetIter(self.offset_bytes.iter());
                 let mut to_drain = 0;
@@ -319,22 +323,20 @@ impl UpdateLog {
                 // todo: use truncate_front when https://github.com/rust-lang/rust/issues/140667 stabilizes
                 self.offset_bytes.drain(..to_drain);
 
-                true
+                self.push_offset(meta.now() - self.last_update);
+                self.last_update = meta.now();
+                self.past_len += 1;
             }
             _ => {
+                self.offset_bytes.clear();
                 self.log_start = meta.now();
                 self.last_update = meta.now();
                 self.index = Some(NonMaxUsize::ZERO);
-                false
+                self.past_len = 1;
+                self.zeroes = 0;
+                self.zeroes_max = 0;
             }
         };
-
-        if push {
-            self.push_offset(meta.now() - self.last_update);
-            self.last_update = meta.now();
-        }
-
-        self.past_len += 1;
 
         meta.update_log_limits().push_limit(
             &mut self.update_state,
@@ -745,7 +747,7 @@ mod test {
         meta_and_log.forward_log(0); // redo frame #4
         meta_and_log.forward_log(0); // redo frame #5
 
-        meta_and_log.forward([3, 4], false); // frame #6
+        meta_and_log.forward([1, 2], false); // frame #6
         meta_and_log.forward([1, 2], true); // frame #7
 
         meta_and_log.backward_log(2); // undo frame #7
@@ -754,16 +756,34 @@ mod test {
     }
 
     #[test]
-    fn behaves_like_meta_if_updated_once_per_frame() {
+    fn behaves_like_meta_minus_gaps() {
         let mut meta_and_log = MetaAndLog::new(4);
 
         meta_and_log.forward([1], false);
         assert_eq!(meta_and_log.meta.past_len(), 1);
 
-        meta_and_log.forward([2], false);
-        assert_eq!(meta_and_log.meta.past_len(), 2);
+        meta_and_log.forward([], false);
 
-        meta_and_log.forward([3], false);
+        meta_and_log.forward([2], false); // missed one
+        assert_eq!(meta_and_log.meta.past_len(), 3);
+
+        meta_and_log.forward([2], false); // popped one
+        assert_eq!(meta_and_log.meta.past_len(), 3);
+
+        meta_and_log.forward([3], false); // catched up
+        assert_eq!(meta_and_log.meta.past_len(), 3);
+
+        meta_and_log.forward([], false);
+
+        meta_and_log.forward([], false);
+
+        meta_and_log.forward([1], false); // popped one, missed two
+        assert_eq!(meta_and_log.meta.past_len(), 3);
+
+        meta_and_log.forward([2], false);
+        assert_eq!(meta_and_log.meta.past_len(), 3);
+
+        meta_and_log.forward([3], false); // catched up
         assert_eq!(meta_and_log.meta.past_len(), 3);
 
         meta_and_log.forward([3], false);
