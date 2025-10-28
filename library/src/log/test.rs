@@ -195,48 +195,50 @@ impl Logs<TransitionLog<char>> {
         future_drain: &[char],
         push: char,
     ) {
-        self.drop_drain.push(meta, max_past_len, push).unwrap();
+        self.drop_drain
+            .forward_push(meta, max_past_len, push)
+            .unwrap();
 
         self.past_drain
-            .push(meta, max_past_len, push)
+            .forward_push(meta, max_past_len, push)
             .unwrap()
             .assert_past(past_drain);
 
         self.future_drain
-            .push(meta, max_past_len, push)
+            .forward_push(meta, max_past_len, push)
             .unwrap()
             .assert_future(future_drain);
 
         self.past_future_drain
-            .push(meta, max_past_len, push)
+            .forward_push(meta, max_past_len, push)
             .unwrap()
             .assert_past(past_drain)
             .assert_future(future_drain)
             .assert_all(&[], &[]);
 
         self.future_past_drain
-            .push(meta, max_past_len, push)
+            .forward_push(meta, max_past_len, push)
             .unwrap()
             .assert_future(future_drain)
             .assert_past(past_drain)
             .assert_all(&[], &[]);
 
         self.all_drain
-            .push(meta, max_past_len, push)
+            .forward_push(meta, max_past_len, push)
             .unwrap()
             .assert_all(past_drain, future_drain)
             .assert_past(&[])
             .assert_future(&[]);
 
         self.past_all_drain
-            .push(meta, max_past_len, push)
+            .forward_push(meta, max_past_len, push)
             .unwrap()
             .assert_past(past_drain)
             .assert_all(&[], future_drain)
             .assert_future(&[]);
 
         self.future_all_drain
-            .push(meta, max_past_len, push)
+            .forward_push(meta, max_past_len, push)
             .unwrap()
             .assert_future(future_drain)
             .assert_all(past_drain, &[])
@@ -351,47 +353,47 @@ impl Logs<TransitionsLog<char, char>> {
         (transitions, update): (&'static str, char),
     ) {
         self.drop_drain
-            .extend_with(meta, max_past_len, transitions.chars(), update)
+            .forward_extend_with(meta, max_past_len, transitions.chars(), update)
             .unwrap();
 
         self.past_drain
-            .extend_with(meta, max_past_len, transitions.chars(), update)
+            .forward_extend_with(meta, max_past_len, transitions.chars(), update)
             .unwrap()
             .assert_past(past_drain);
 
         self.future_drain
-            .extend_with(meta, max_past_len, transitions.chars(), update)
+            .forward_extend_with(meta, max_past_len, transitions.chars(), update)
             .unwrap()
             .assert_future(future_drain);
 
         self.past_future_drain
-            .extend_with(meta, max_past_len, transitions.chars(), update)
+            .forward_extend_with(meta, max_past_len, transitions.chars(), update)
             .unwrap()
             .assert_past(past_drain)
             .assert_future(future_drain)
             .assert_all(&[], &[]);
 
         self.future_past_drain
-            .extend_with(meta, max_past_len, transitions.chars(), update)
+            .forward_extend_with(meta, max_past_len, transitions.chars(), update)
             .unwrap()
             .assert_future(future_drain)
             .assert_past(past_drain)
             .assert_all(&[], &[]);
 
         self.all_drain
-            .extend_with(meta, max_past_len, transitions.chars(), update)
+            .forward_extend_with(meta, max_past_len, transitions.chars(), update)
             .unwrap()
             .assert_all(past_drain, future_drain);
 
         self.past_all_drain
-            .extend_with(meta, max_past_len, transitions.chars(), update)
+            .forward_extend_with(meta, max_past_len, transitions.chars(), update)
             .unwrap()
             .assert_past(past_drain)
             .assert_all(&[], future_drain)
             .assert_future(&[]);
 
         self.future_all_drain
-            .extend_with(meta, max_past_len, transitions.chars(), update)
+            .forward_extend_with(meta, max_past_len, transitions.chars(), update)
             .unwrap()
             .assert_future(future_drain)
             .assert_all(past_drain, &[])
@@ -650,7 +652,7 @@ impl MetaAndLogs {
                 push,
             } in entries
             {
-                let past_len = self.updates.push_get_past_len(meta);
+                let past_len = self.updates.forward_past_len(meta);
                 let past_transition = past_drain
                     .iter()
                     .map(|(_, update)| *update)

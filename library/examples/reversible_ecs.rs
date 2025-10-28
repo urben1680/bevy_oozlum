@@ -308,7 +308,7 @@ fn row4(app: &mut App) {
 
                 // Pushing potential Waste entities may also pop an entity that got out-of-log now.
                 // These need to be despawned as they are now past the edge of the screen and cannot come back.
-                let mut drain = log.push(&meta, meta.past_len(), entity)?;
+                let mut drain = log.forward_push(&meta, meta.past_len(), entity)?;
                 for entity in drain.all().flatten() {
                     commands.entity(entity).despawn();
 
@@ -379,14 +379,14 @@ fn row5(app: &mut App) {
                 // We get the past len from the frame log instead from RevMeta.
                 // Note that here, in contrast to the previous row, we do not need to increase the past_len because
                 // we dont do anything with the entities that go out of log.
-                let past_len = past_len_log.push_get_past_len(&meta);
+                let past_len = past_len_log.forward_past_len(&meta);
 
                 // We spawn the waste entity and mark is as log scoped to be despawned when out-of-log.
                 let entity = commands.spawn(waste).make_rev_log_scoped(now).id();
 
                 // We do not use the push_and_pop_past method because, as this system does not run every frame,
                 // multiple log entries may be out of log now.
-                entity_log.push(&meta, past_len, entity)?;
+                entity_log.forward_push(&meta, past_len, entity)?;
             }
 
             // As before, the log behavior is just removing and readding the Waste component.

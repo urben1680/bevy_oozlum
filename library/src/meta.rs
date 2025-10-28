@@ -229,10 +229,10 @@ impl RevMeta {
         self.future_end.wrapping_sub(frame) <= (self.future_end - self.past_end)
     }
     pub fn past_contains(&self, frame: u64) -> bool {
-        self.now.wrapping_sub(frame).wrapping_sub(1) < (self.now - self.past_end)
+        self.now.wrapping_sub(frame).wrapping_sub(1) < self.past_len()
     }
     pub fn future_contains(&self, frame: u64) -> bool {
-        self.future_end.wrapping_sub(frame) < (self.future_end - self.now)
+        self.future_end.wrapping_sub(frame) < self.future_len()
     }
     pub fn end_of_log_backward(&self) -> bool {
         self.now == self.past_end
@@ -248,7 +248,7 @@ impl RevMeta {
         self.log_exits = 0;
         info!(
             "`RevQueue::Clear` was applied, `RevMeta::log_clears` is now {},  all `UpdateLog::id` \
-            until now are invalid and will be reinitialized at their next `UpdateLog::pre_update`",
+            until now are invalid and will be reinitialized at their next mutation",
             self.log_clears
         )
     }
@@ -351,7 +351,7 @@ impl RevMeta {
             None => None,
             Some(RevQueue::RUN_NOT_LOG) => {
                 if after_log {
-                    self.log_exits = self.log_exits.checked_add(1).unwrap();
+                    self.log_exits += 1;
                 }
                 Some(RevDirection::NOT_LOG)
             }

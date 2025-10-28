@@ -14,18 +14,68 @@ mod offset;
 /// [`RevMeta::past_len`] for when these updates do not happen exactly once per
 /// [`RevUpdate`](crate::schedule::RevUpdate).
 ///
-/// This usually is accompied by another log that would grow too large if `RevMeta::past_len` was
-/// used when it actually updates much more rarely. Another use case can be when it runs arbitrarily
-/// often per frame and there is no other way to determine how long a log should be when updating.
+/// This type is usually accompied by another log that would grow too large if `RevMeta::past_len`
+/// was used when it actually updates much more rarely. Another use case can be when it runs
+/// arbitrarily often per frame and there is no other way to determine to which length a log should
+/// be at most when updating.
 ///
 /// If an update is missed, for example when the scope of the log is behind complicated and
-/// error-prone scheduling and is just not reached when it should, [`RevMeta::run_rev_update`]
-/// will detect this and return an error.
+/// error-prone scheduling and is just not reached when it should, [`RevMeta::update`] and from that
+/// [`RevMeta::run_rev_update`] will detect this and return an error.
 ///
-/// For examples, see the [`push_get_past_len`](Self::push_get_past_len) method when a single update
-/// of an accompied log needs the `max_past_len` value or
-/// [`push_many_get_past_len`](Self::push_many_get_past_len) when an accompied log is updated
-/// multiple times in a row.
+/// # Example
+///
+/// The following system reacts on messages. These may not be written for many frames, but then
+/// again they could appear in a large amount in a single frame. One could use a
+/// [`TransitionsLog`](super::TransitionsLog) for that and just extend it with an empty iterator if
+/// there are no messages.
+///
+/// But if this system in turn is also used with a run condition, then it is impossible to pick a
+/// good `max_past_len` value that makes sure not too many messages are drained or the log grows way
+/// beyond what is needed.
+///
+/// For that case and other comparable ones, the solution is to pair the log(s) with a `UpdateLog`.
+///
+/// ```
+/// # use bevy_ecs::prelude::*;
+/// # use bevy_ecs::error::Result;
+/// # use bevy_oozlum::prelude::*;
+/// # #[derive(Message, Clone)]
+/// # struct MyMessage;
+/// fn my_system(
+///     meta: Res<RevMeta>,
+///     mut messages: MessageReader<MyMessage>,
+///     mut update_log: Local<UpdateLog>,
+///     mut message_log: Local<TransitionsLog<MyMessage>>,
+/// ) -> Result {
+///     match meta.running_direction() {
+///         RevDirection::NOT_LOG => {
+///             if !messages.is_empty() {
+///                 let iter = messages.read().cloned().inspect(|my_message| {
+///                     // use message
+///                 });
+///                 let past_len = update_log.forward_past_len(&meta);
+///                 message_log.forward_extend(&meta, past_len, iter);
+///             }
+///         }
+///         RevDirection::FORWARD_LOG => {
+///             if update_log.forward_log(&meta) {
+///                 for my_message in message_log.forward_log(&meta)? {
+///                     // use message
+///                 }
+///             }
+///         }
+///         RevDirection::BackwardLog => {
+///             if update_log.backward_log(&meta) {
+///                 for my_message in message_log.backward_log(&meta)? {
+///                     // use message
+///                 }
+///             }
+///         }
+///     }
+///     Ok(())
+/// }
+/// ```
 #[derive(Default)]
 pub struct UpdateLog {
     /// Offsets that need to be added or subtracted from [`Self::last_update`] to calculate at which
@@ -34,11 +84,8 @@ pub struct UpdateLog {
     /// For the encoding, see the [`offset`] module.
     offset_bytes: VecDeque<u8>,
 
-    /// A frame this log matched at (or 0) that is either at [`RevMeta::past_end`] or as closely
-    /// before it.
-    ///
-    /// This frame must not be a more recent frame than that because then [`Self::backward_log`]
-    /// will be unable to match that frame as [`Self::index`] cannot be reduced further.
+    /// The most past frame the log was updated. Each update truncates offsets until this value is
+    /// larger than [`RevMeta::past_end`].
     log_start: u64,
 
     /// The chronological last frame in the past this log got updated at.
@@ -57,7 +104,7 @@ pub struct UpdateLog {
     /// The amount of sequential offsets of `0` at the future end of the log.
     zeroes_max: u8,
 
-    /// The state that is needed to get the [`PreUpdateVariant`] at [`Self::pre_update`] and to push
+    /// The state that is needed to clean up the log at [`Self::pre_update`] and to push
     /// new limits to [`UpdateLogLimits`].
     update_state: Option<UpdateLogState>,
 }
@@ -198,10 +245,7 @@ impl UpdateLog {
     /// The internal id of this log, which is only `Some` after it first ran. The id will change
     /// when [`RevQueue::Clear`](crate::meta::RevQueue::Clear) is queued and applied.
     ///
-    /// When [`pre_update`](Self::pre_update) initiates the inner state, for example because it is
-    /// called for the very first time for this log or
-    /// [`RevQueue::Clear`](crate::meta::RevQueue::Clear) was applied, an info log with the id is
-    /// written alongside the location where it was called.
+    /// When this id changes, an info log with the id is written.
     ///
     /// This id is useful to identify missed updates from [`RevMeta::update`]. If
     /// [`RevMeta::run_rev_update`] is used, such errors are handled by the default error handler.
@@ -215,87 +259,29 @@ impl UpdateLog {
     /// This is used during [`RevDirection::NOT_LOG`](crate::meta::RevDirection::NOT_LOG) when the
     /// current scope has been determined for some operation to happen, most often in combination
     /// with another log that is updated next with the returned value.
-    ///
-    /// Before calling this, [`pre_update`](Self::pre_update) **must** be called at least once in
-    /// the [present reversible frame](RevMeta::now). This method may panic if this was not done.
-    ///
-    /// For updating this log multiple times during this frame, prefer to use
-    /// [`push_many_get_past_len`](Self::push_many_get_past_len) instead.
-    ///
-    /// # Example
-    ///
-    /// The following systems reacts on messages. These may not be written for many frames, but then
-    /// again they could appear in a large amount in a single frame. One could use a
-    /// [`TransitionsLog`](super::TransitionsLog) for that and just push no messages when there are
-    /// none. But if this system in turn could also be used with a run condition, then it is
-    /// impossible to pick a good `max_past_len` value that makes sure not too many messages are
-    /// drained or the log grows way beyond what is needed.
-    ///
-    /// For that case and other comparable ones, pairing the log with `UpdateLog` fixes this.
-    ///
-    /// ```
-    /// # use bevy_ecs::prelude::*;
-    /// # use bevy_ecs::error::Result;
-    /// # use bevy_oozlum::prelude::*;
-    /// # #[derive(Message, Clone)]
-    /// # struct MyMessage;
-    /// fn my_system(
-    ///     meta: Res<RevMeta>,
-    ///     mut messages: MessageReader<MyMessage>,
-    ///     mut update_log: Local<UpdateLog>,
-    ///     mut message_log: Local<TransitionsLog<MyMessage>>,
-    /// ) -> Result {
-    ///     // always call pre_update before further mutations
-    ///     update_log.pre_update(&meta);
-    ///     message_log.pre_update(&meta);
-    ///
-    ///     match meta.running_direction() {
-    ///         RevDirection::NOT_LOG => {
-    ///             if !messages.is_empty() {
-    ///                 let past_len = update_log.push_get_past_len(&meta);
-    ///                 message_log.push(past_len, |mut log| {
-    ///                     for my_message in messages.read() {
-    ///                         // use message
-    ///
-    ///                         log.push(my_message.clone())
-    ///                     }
-    ///                 })
-    ///             }
-    ///         }
-    ///         RevDirection::FORWARD_LOG => {
-    ///             if update_log.forward_log(&meta) {
-    ///                 let my_messages = message_log.forward_log()?;
-    ///                 for my_message in my_messages {
-    ///                     // use message
-    ///                 }
-    ///             }
-    ///         }
-    ///         RevDirection::BackwardLog => {
-    ///             if update_log.backward_log(&meta) {
-    ///                 let my_messages = message_log.backward_log()?;
-    ///                 for my_message in my_messages {
-    ///                     // use message
-    ///                 }
-    ///             }
-    ///         }
-    ///     }
-    ///     Ok(())
-    /// }
-    /// ```
     #[track_caller]
-    pub fn push_get_past_len(&mut self, meta: &RevMeta) -> u64 {
-        self.push_with_caller(meta, MaybeLocation::caller())
+    pub fn forward_past_len(&mut self, meta: &RevMeta) -> u64 {
+        self.forward_past_len_with_caller(meta, MaybeLocation::caller())
     }
 
-    fn push_with_caller(&mut self, meta: &RevMeta, caller: MaybeLocation) -> u64 {
-        self.pre_update(meta);
-
-        if self.log_start > meta.past_end() {
+    fn forward_past_len_with_caller(&mut self, meta: &RevMeta, caller: MaybeLocation) -> u64 {
+        if self.pre_update_to_clear(meta) || self.last_update <= meta.past_end() {
+            // all updates are out of log
+            self.offset_bytes.clear();
+            self.log_start = meta.now();
+            self.last_update = meta.now();
+            self.index = 0;
+            self.past_len = 1;
+            self.zeroes = 0;
+            self.zeroes_max = 0;
+        } else if self.log_start > meta.past_end() {
+            // no updates are out of log
             self.push_offset(meta.now() - self.last_update);
             self.last_update = meta.now();
             self.past_len += 1;
-        } else if self.last_update > meta.past_end() {
-            let iter = OffsetIter(self.offset_bytes.iter());
+        } else {
+            // some updates are out of log
+            let iter = OffsetIter(self.offset_bytes.range(..self.index));
             let mut to_drain = 0;
             for IterItem { offset, len } in iter {
                 if offset == 0 {
@@ -303,7 +289,7 @@ impl UpdateLog {
                     // which is actually always 1 here, but the amount of zero offsets in this
                     // one byte.
                     // We want to get rid of these offsets as well as they dont bring
-                    // self.out_of_or_past_end_log any closer the limit.
+                    // `self.log_start` any closer the limit.
                     to_drain += 1;
                     self.past_len -= len.get() as u64;
                     continue;
@@ -317,20 +303,12 @@ impl UpdateLog {
                 }
             }
             self.index -= to_drain;
-            // todo: use truncate_front when https://github.com/rust-lang/rust/issues/140667 stabilizes
+            // todo: use truncate_front https://github.com/rust-lang/rust/issues/140667
             self.offset_bytes.drain(..to_drain);
 
             self.push_offset(meta.now() - self.last_update);
             self.last_update = meta.now();
             self.past_len += 1;
-        } else {
-            self.offset_bytes.clear();
-            self.log_start = meta.now();
-            self.last_update = meta.now();
-            self.index = 0;
-            self.past_len = 1;
-            self.zeroes = 0;
-            self.zeroes_max = 0;
         }
 
         meta.update_log_limits().push_limit(
@@ -346,30 +324,32 @@ impl UpdateLog {
     ///
     /// Returns `true` if that is the case or `false` if not. This log is insensitive on
     /// checking outside its range of logged frames and just returns `false` then as well.
-    ///
-    /// Before calling this, [`pre_update`](Self::pre_update) **must** be called at least once in
-    /// the [present reversible frame](RevMeta::now). This method may panic if this was not done.
-    ///
-    /// If this log is potenitally updated more than once in the scope this method is used, prefer
-    /// [`backward_log_many`](Self::backward_log_many) over using this method in a while loop.
-    ///
-    /// See the [`update_get`](Self::update_get) for an example.
     #[track_caller]
     pub fn backward_log(&mut self, meta: &RevMeta) -> bool {
         self.backward_log_with_caller(meta, MaybeLocation::caller())
     }
 
     fn backward_log_with_caller(&mut self, meta: &RevMeta, caller: MaybeLocation) -> bool {
-        self.pre_update(meta);
-        if self.past_len == 0 {
-            return false;
-        };
-        let now_plus_1 = meta.now() + 1;
-        // set next backward_limit if this method returns true
-        if self.last_update != now_plus_1 {
+        if self.pre_update_to_clear(meta) {
+            self.clear();
             return false;
         }
+
+        if self.past_len == 0 {
+            // at the past end of the log
+            return false;
+        }
+
+        let now_plus_1 = meta.now() + 1;
+
+        if self.last_update != now_plus_1 {
+            // if last_update is larger than now, an update was missed but it is up to the RevMeta
+            // update to report on that
+            return false;
+        }
+
         let backward_limit = if self.zeroes > 0 {
+            // not all expected updates for this frame happened yet
             self.zeroes -= 1;
             now_plus_1
         } else {
@@ -403,79 +383,78 @@ impl UpdateLog {
     ///
     /// Returns `true` if that is the case or `false` if not. This log is insensitive on
     /// checking outside its range of logged frames and just returns `false` then as well.
-    ///
-    /// Before calling this, [`pre_update`](Self::pre_update) **must** be called at least once in
-    /// the [present reversible frame](RevMeta::now). This method may panic if this was not done.
-    ///
-    /// If this log is potenitally updated more than once in the scope this method is used, prefer
-    /// [`forward_log_many`](Self::forward_log_many) over using this method in a while loop.
-    ///
-    /// See [`update_get`](Self::update_get) for an example.
     #[track_caller]
     pub fn forward_log(&mut self, meta: &RevMeta) -> bool {
         self.forward_log_with_caller(meta, MaybeLocation::caller())
     }
 
     fn forward_log_with_caller(&mut self, meta: &RevMeta, caller: MaybeLocation) -> bool {
-        self.pre_update(meta);
+        if self.pre_update_to_clear(meta) {
+            self.clear();
+            return false;
+        }
+
         let now_minus_1 = meta.now() - 1;
 
         let forward_limit = if self.past_len == 0 {
+            // at the past end of the log
             if self.log_start != meta.now() {
+                // if log_start is less than now, an update was missed but it is up to the RevMeta
+                // update to report on that
                 return false;
             }
-            let mut iter = OffsetIter(self.offset_bytes.iter());
-            match iter.next() {
-                Some(IterItem { offset, .. }) => now_minus_1 + offset,
-                None if self.zeroes_max == 0 => u64::MAX,
-                None => now_minus_1,
-            }
+            self.next_forward_limit(OffsetIter(self.offset_bytes.iter()), now_minus_1)
         } else {
             let mut iter = OffsetIter(self.offset_bytes.range(self.index..));
             match iter.next() {
+                // there is another update for the last_update frame to be equal with now
                 Some(IterItem { offset: 0, len }) => {
                     if self.last_update != meta.now() {
+                        // there was an updated missed at last_update but it is up to the RevMeta
+                        // update to report on that
                         return false;
                     }
                     if self.zeroes < len.get() as u8 - 1 {
+                        // not all updates this frame happened yet
                         self.zeroes += 1;
                         now_minus_1
                     } else {
+                        // all updates this frame happened, unless there is another zero-offset next
                         self.index += 1;
                         self.zeroes = 0;
-                        match iter.next() {
-                            Some(IterItem { offset, .. }) => now_minus_1 + offset,
-                            None if self.zeroes_max == 0 => u64::MAX,
-                            None => now_minus_1,
-                        }
+                        self.next_forward_limit(iter, now_minus_1)
                     }
                 }
+                // there is a next offset that may add to now
                 Some(IterItem { offset, len }) => {
                     let frame = self.last_update + offset;
                     if frame != meta.now() {
+                        // if log_start is less than now, an update was missed but it is up to the
+                        // RevMeta update to report on that
                         return false;
                     }
                     self.last_update = frame;
                     self.index += len.get() as usize;
                     self.zeroes = 0;
-                    match iter.next() {
-                        Some(IterItem { offset, .. }) => now_minus_1 + offset,
-                        None if self.zeroes_max == 0 => u64::MAX,
-                        None => now_minus_1,
-                    }
+                    self.next_forward_limit(iter, now_minus_1)
                 }
+                // there is another update for the last_update frame to be equal with now
                 None if self.zeroes < self.zeroes_max => {
                     if self.last_update != meta.now() {
+                        // there was an updated missed at self.last_update but it is up to the
+                        // RevMeta update to report on that
                         return false;
                     }
                     self.zeroes += 1;
                     if self.zeroes == self.zeroes_max {
+                        // there is no other update in the future
                         u64::MAX
                     } else {
+                        // another update at this frame is expected
                         now_minus_1
                     }
                 }
-                // reached end of log
+                // reached future end of log
                 None => return false,
             }
         };
@@ -489,27 +468,46 @@ impl UpdateLog {
         true
     }
 
+    fn next_forward_limit(&self, mut iter: OffsetIter, now_minus_1: u64) -> u64 {
+        match iter.next() {
+            // there is an update in the future
+            Some(IterItem { offset, .. }) => now_minus_1 + offset,
+            // there is no update in the future
+            None if self.zeroes_max == 0 => u64::MAX,
+            // another update at this frame is expected
+            None => now_minus_1,
+        }
+    }
+
+    /// Shorten the log when log exits or clears were missed.
+    ///
+    /// If this method returns `true`, call [`Self::clear`] or do comparable operations.
     #[track_caller]
-    fn pre_update(&mut self, meta: &RevMeta) {
+    fn pre_update_to_clear(&mut self, meta: &RevMeta) -> bool {
         match meta.set_update_state(&mut self.update_state) {
-            PreUpdateKind::RemoveLog => {
-                self.offset_bytes.clear();
-                self.log_start = 0;
-                self.last_update = 0;
-                self.index = 0;
-                self.past_len = 0;
-                self.zeroes = 0;
-                self.zeroes_max = 0;
-            }
+            PreUpdateKind::RemoveLog => true,
             PreUpdateKind::RemoveFuture => {
                 if self.offset_bytes.len() > self.index {
                     self.offset_bytes.truncate(self.index);
                     self.zeroes = 0;
                 }
                 self.zeroes_max = self.zeroes;
+                false
             }
-            PreUpdateKind::Nothing => {}
+            PreUpdateKind::Nothing => false,
         }
+    }
+
+    /// Clear the log to be in the state of construction except of [`Self::update_state`] which is
+    /// not reset.
+    fn clear(&mut self) {
+        self.offset_bytes.clear();
+        self.log_start = 0;
+        self.last_update = 0;
+        self.index = 0;
+        self.past_len = 0;
+        self.zeroes = 0;
+        self.zeroes_max = 0;
     }
 }
 
@@ -559,13 +557,8 @@ mod test {
             self.meta.update_ref(Ok(true), |meta, direction| {
                 assert_eq!(direction, RevDirection::NOT_LOG);
                 for past_len in past_lens {
-                    let before = format!("{:#?}", self.update_log);
-                    let actual = self.update_log.push_with_caller(meta, caller);
-                    assert_eq!(
-                        actual, past_len,
-                        "\nbefore: {before}\nafter: {:#?}\n{meta:#?}",
-                        self.update_log
-                    );
+                    let actual = self.update_log.forward_past_len_with_caller(meta, caller);
+                    assert_eq!(actual, past_len);
                     self.last_update = caller;
                 }
             });
@@ -642,7 +635,6 @@ mod test {
                     assert!(self.update_log.backward_log_with_caller(meta, caller));
                 }
                 // assert no more updates would run
-                println!("{:#?}", self.update_log);
                 assert_eq!(self.update_log.backward_log(meta), false);
             });
 

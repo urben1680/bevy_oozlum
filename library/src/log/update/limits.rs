@@ -169,7 +169,7 @@ impl UpdateLogLimits {
             .checked_add(1)
             .expect("exhausted maximum number of `UpdateLog` updates");
 
-        // there should be no gaps in the 2D vector, otherwise that would be a crate bug
+        // there should be no gaps in the 2D vector, otherwise that would be a bug here
         assert_eq!(
             self.update_log_updates
                 .iter_mut()
@@ -282,27 +282,26 @@ impl UpdateLogState {
 /// [`RevQueue::Clear`](crate::meta::RevQueue::Clear) is applied, this id will change for the log.
 /// This Id is not reused when outdated.
 ///
-/// The [`Debug`] implementation will return the id as `UpdateLog {int}v{int}` where the first value
-/// is [`index`](Self::index) and the second [`meta_log_clears`](Self::meta_log_clears).
+/// The [`Debug`] implementation will return the id as `UpdateLogId {int}v{int}` where the first
+/// value is [`index`](Self::index) and the second [`meta_log_clears`](Self::meta_log_clears).
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct UpdateLogId {
     index: NonMaxU32,
+
+    // a byte array has a smaller alignment than the stored u64, reducing this type's size
     meta_log_clears: [u8; 8],
 }
 
 impl UpdateLogId {
     pub(super) const UNINIT: &str = "UpdateLog UNINIT";
 
-    /// The index of this log in [`RevMeta`](crate::meta::RevMeta).
+    /// The index of an [`UpdateLog`](super::UpdateLog) in [`RevMeta`](crate::meta::RevMeta).
     ///
     /// Other logs with this index may exist at the same time if:
     ///
     /// 1. [`RevQueue::Clear`](crate::meta::RevQueue::Clear) was applied
-    /// 2. This log did not update after that
-    /// 3. Another log was updated after that
-    ///
-    /// This log would then get a new id with a unique index at the next
-    /// [`UpdateLog::pre_update`](super::UpdateLog::pre_update).
+    /// 2. The log did not update after that
+    /// 3. Another log was updated after that which received this index
     ///
     /// Only with [`meta_log_clears`](Self::meta_log_clears) this ID is unique.
     pub fn index(self) -> u32 {
@@ -322,7 +321,7 @@ impl UpdateLogId {
 
 impl Display for UpdateLogId {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
-        write!(f, "UpdateLog {}v{}", self.index(), self.meta_log_clears())
+        write!(f, "UpdateLogId {}v{}", self.index(), self.meta_log_clears())
     }
 }
 

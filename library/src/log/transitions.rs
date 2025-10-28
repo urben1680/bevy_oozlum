@@ -314,14 +314,14 @@ impl<T, U> TransitionsLog<T, U> {
         self.updates.shrink_to_fit()
     }
 
-    pub fn extend_with<'a, I: IntoIterator<Item = T>>(
+    pub fn forward_extend_with<'a, I: IntoIterator<Item = T>>(
         &'a mut self,
         meta: &RevMeta,
         max_past_len: u64,
         transitions: I,
         update: U,
     ) -> Result<TransitionsDrain<'a, T, U, I>, OutOfLog> {
-        let updates = self.updates.push(
+        let updates = self.updates.forward_push(
             meta,
             max_past_len,
             TransitionsLogUpdate {
@@ -435,13 +435,13 @@ impl<T, U> TransitionsLog<T, U> {
 }
 
 impl<T> TransitionsLog<T, ()> {
-    pub fn extend<'a, I: IntoIterator<Item = T>>(
+    pub fn forward_extend<'a, I: IntoIterator<Item = T>>(
         &'a mut self,
         meta: &RevMeta,
         max_past_len: u64,
         transitions: I,
     ) -> Result<TransitionsDrain<'a, T, (), I>, OutOfLog> {
-        self.extend_with(meta, max_past_len, transitions, ())
+        self.forward_extend_with(meta, max_past_len, transitions, ())
     }
 }
 
@@ -515,7 +515,7 @@ where
             self.transitions.clear();
         } else {
             self.transitions.truncate(self.gap_range.end);
-            // todo: truncate_front https://github.com/rust-lang/rust/issues/140667
+            // todo: use truncate_front https://github.com/rust-lang/rust/issues/140667
             self.transitions.drain(..self.gap_range.start);
         }
         prepend(&mut self.transitions, &mut self.gap_buffer);

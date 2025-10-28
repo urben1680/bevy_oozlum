@@ -1,7 +1,7 @@
 //! This module contains a way to write ([`UpdateLog::push_offset`]) and read ([`OffsetIter`]) bytes
 //! that encode how many frames in the past or the future [`UpdateLog`] as updated at.
 //!
-//! This is more compact than storing `u64`.
+//! This is more compact than storing `u64` frames.
 //!
 //! - Offsets from `0` to `127` are encoded in a single byte as `x` bits in the pattern of
 //!   `0b0_xxxxxxx`.
@@ -16,7 +16,7 @@
 //!   - This uses up to ten bytes in total for `u64::MAX`.
 //! - This encoding does not consume more bytes than `u64` for offsets below `2^55`.
 //! - These bytes or sequences of bytes can be read in reverse as well, which is needed for reading
-//!   the previous offset in [`UpdateLog::backward_log`]([`many`](UpdateLog::backward_log_many)).
+//!   the previous offset in [`UpdateLog::backward_log`].
 //! - The [`OffsetIter`] iterator is used to read the offsets. See [`IterItem`].
 
 use super::UpdateLog;

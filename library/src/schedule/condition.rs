@@ -164,7 +164,7 @@ impl ConditionLogs {
         match result {
             Ok(false) | Err(RunSystemError::Skipped(_)) => Ok(()),
             Ok(true) => {
-                self.ok_true_log.push_get_past_len(meta);
+                self.ok_true_log.forward_past_len(meta);
                 Ok(())
             }
             Err(RunSystemError::Failed(failed)) => {
@@ -196,10 +196,10 @@ impl FailedLogs {
         let key = self.failed_cache.insert_get_key(failed);
 
         // log hash as transition, reduce usages for drained, remove if unused
-        let past_len = self.err_failed_log.push_get_past_len(meta);
+        let past_len = self.err_failed_log.forward_past_len(meta);
         let mut drain = self
             .failed_log
-            .push(meta, past_len, key)
+            .forward_push(meta, past_len, key)
             .map_err(|err| RunSystemError::Failed(err.into()))?;
         let keys = drain.all();
 

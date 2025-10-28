@@ -349,9 +349,9 @@ impl UndoRedoLog {
                 .try_resource_scope::<UndoRedoBuffer, _>(|world, mut buffer| {
                     if !buffer.0.is_empty() {
                         let meta = world.resource::<RevMeta>();
-                        let past_len = self.update_log.push_get_past_len(meta);
+                        let past_len = self.update_log.forward_past_len(meta);
                         let buffers = buffer.0.drain(..).map(|boxed| DebugHidden(boxed.undo_redo));
-                        self.undo_redo_log.extend(meta, past_len, buffers);
+                        self.undo_redo_log.forward_extend(meta, past_len, buffers);
                     }
                 })
                 .ok_or(UndoRedoLogError::UndoRedoBufferMissing { now }),

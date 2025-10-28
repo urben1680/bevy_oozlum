@@ -1,4 +1,4 @@
-//! This module contains the types around log variants the can be used in reversible systems.
+//! This module contains log variants and types around them that can be used in reversible systems.
 //!
 //! # Log variants
 //!
@@ -13,18 +13,16 @@
 //! All logs in an application can sum up to a large amount of data and it is undesired to store any
 //! more transition data than what is really needed to cover the [global log length].
 //!
-//! The transition logs need a `max_past_len` value as a parameter in their `push` and
-//! `push_drain_past` methods to determine how many past log entries they should keep to not go
+//! The transition logs need a `max_past_len` value as a parameter in their [`forward_push`] and
+//! [`forward_extend`] methods to determine how many past log entries they should keep to not go
 //! [`OutOfLog`] at some point. Depending on how often the log is pushing log entries, the correct
 //! source has to be used:
 //!
-//! | source                                | situation                                             |
-//! | ------------------------------------- | ----------------------------------------------------- |
-//! | [`RevMeta::past_len`]                 | the log updates at every frame exactly once           |
-//! | `RevMeta::past_len * const N`         | the log updates at every frame exactly `N` times      |
-//! | [`UpdateLog::push_get_past_len`]      | the log updates arbitrarily                           |
-//! | [`UpdateLog::push_many_get_past_len`] | the log updates in varying batches, maybe arbitrarily |
-//! | `u64::MAX`                            | the log is allowed to have unlimited growth           |
+//! | source                                | situation                                   |
+//! | ------------------------------------- | ------------------------------------------- |
+//! | [`RevMeta::past_len`]                 | the log updates at every frame exactly once |
+//! | [`UpdateLog::forward_past_len`]       | the log updates arbitrarily                 |
+//! | `u64::MAX`                            | the log is allowed to have unlimited growth |
 //!
 //! [`UpdateLog`] is able to manage its length from reading the [global log length] from
 //! [`RevMeta`].
@@ -36,19 +34,18 @@
 //! It is important that the transition logs are updated at the correct frames. This is trivial if
 //! they update at every frame exactly once. For other cases, refer to this table:
 //!
-//! | [`RevDirection`] | method                   | [`RevMeta::now`] |
-//! | ---------------- | ------------------------ | ---------------- |
-//! | [`NOT_LOG`]      | `push`/`push_drain_past` | `n`              |
-//! | [`BackwardLog`]  | `backward_log`           | `n-1`            |
-//! | [`FORWARD_LOG`]  | `forward_log`            | `n`              |
+//! | [`RevDirection`] | method                          | [`RevMeta::now`] |
+//! | ---------------- | ------------------------------- | ---------------- |
+//! | [`NOT_LOG`]      | `forward_push`/`forward_extend` | `n`              |
+//! | [`BackwardLog`]  | `backward_log`                  | `n-1`            |
+//! | [`FORWARD_LOG`]  | `forward_log`                   | `n`              |
 //!
 //! If a log is updated multiple times per frame, then these amounts must match for these frames as
 //! well.
 //!
-//! As this can become hard to manage, a `UpdateLog` can support these updates by tracking when
-//! and how often transition logs need to update. That log also provides the correct value for the
-//! `max_past_len` parameter of the pushing methods. See the type documentation of [`UpdateLog`]
-//! for examples.
+//! As this can become hard to manage, a [`UpdateLog`] can support these updates by tracking when
+//! and how often transition logs need to update. See the type documentation of [`UpdateLog`] for
+//! examples.
 //!
 //! ## Missing updates
 //!
@@ -71,10 +68,8 @@
 //! expects to be updated again is stored in [`RevMeta`]. If at these frames the log is not updated,
 //! [`RevMeta::update`] will report that via the [`RevMetaUpdateErr::UpdateLogsMissed`] error that
 //! contains a list of [`UpdateLogMissed`]. [`UpdateLogMissed::id`] contains the
-//! [id of the `UpdateLog` instance] that was missed.
-//!
-//! Whenever a [`UpdateLog`] [initializes the internal id], this id is logged at the INFO level with
-//! the location in the code. This should help to identify the issue.
+//! [id of the `UpdateLog` instance] that was missed. This id is also logged at the INFO level when
+//! it is set for an individual `UpdateLog`.
 //!
 //! When bevy's `track_location` cargo feature is active, [`UpdateLogMissed::last_update`] also
 //! contains the location where the [`UpdateLog`] was updated the last time.
@@ -83,9 +78,14 @@
 //! event is logged at the INFO level as well. Every `UpdateLog` that updates after that will get
 //! new ids which is then logged again.
 //!
+//! ## Draining transitions
+//!
+//! Updating the transition logs with [`forward_push`] and [`forward_extend`] also returns draining
+//! iterators.
+//!
 //! ### Example
 //!
-//! A [`UpdateLog::push_get_past_len`] runs at [frame `42`](crate::meta::RevMeta::now) during
+//! A [`UpdateLog::forward_past_len`] runs at [frame `42`](crate::meta::RevMeta::now) during
 //! [`RevDirection::NOT_LOG`]. This is the first time this log updated. `UpdateLog` will then inform
 //! [`RevMeta`] that there is no future frame it expects to run at during
 //! [`RevDirection::FORWARD_LOG`] but expects to run at frame `41` when going backward.
@@ -99,9 +99,9 @@
 //! missed. That way the `backward_log`/`forward_log` methods of transition logs that are updated
 //! alongside will never fail with [`OutOfLog`].
 //!
-//!
+//! [`forward_push`]: TransitionLog::forward_push
+//! [`forward_extend`]: TransitionsLog::forward_extend
 //! [id of the `UpdateLog` instance]: UpdateLog::id
-//! [initializes the internal id]: UpdateLog::pre_update
 //! [`RevMeta`]: crate::meta::RevMeta
 //! [`RevMeta::now`]: crate::meta::RevMeta::now
 //! [`RevMeta::past_len`]: crate::meta::RevMeta::past_len

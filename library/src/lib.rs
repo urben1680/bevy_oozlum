@@ -7,6 +7,8 @@ TODO:
 - PastLenLog -> UpdateLog, rename push methods
 - StrLog
 -- https://github.com/rust-lang/rust/issues/133253
+- retest drain_past logic without +1 special case
+-- With UpdateLog it cannot be guaranteed that the drained items were pushed at an out-of-log frame
 
 log Idee:
 - Nothing works everywhere

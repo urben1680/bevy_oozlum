@@ -234,7 +234,7 @@ impl<T> TransitionLog<T> {
     /// This is used during [`RevDirection::NOT_LOG`](crate::meta::RevDirection::NOT_LOG).
     ///
     /// For an example, see the [type level docs](TransitionLog).
-    pub fn push<'a>(
+    pub fn forward_push<'a>(
         &'a mut self,
         meta: &RevMeta,
         max_past_len: u64,
@@ -431,12 +431,12 @@ impl<T> Drop for TransitionDrain<'_, T> {
             self.log.transitions.clear();
         } else {
             self.log.transitions.truncate(self.gap_range.end);
-            // todo: truncate_front https://github.com/rust-lang/rust/issues/140667
+            // todo: use truncate_front https://github.com/rust-lang/rust/issues/140667
             self.log.transitions.drain(..self.gap_range.start);
         }
         prepend(&mut self.log.transitions, &mut self.gap_buffer);
         let transition = unsafe {
-            // SAFETY: ManuallyDrop remains unused after this until the end of drop
+            // SAFETY: only use of self.transition until the end of drop
             ManuallyDrop::take(&mut self.transition)
         };
         if self.push {
