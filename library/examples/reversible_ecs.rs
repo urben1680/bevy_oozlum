@@ -14,6 +14,16 @@ const CURRENT_BEVY_VERSION: usize = 0_17_0;
 const WINNING_BEVY_VERSION: usize = 1_00_0;
 
 // todo: mention how the last column cannot be undone
+
+/*
+
+1. toss trash at row 7 (reversible observer)
+2. undo toss
+3. redo toss
+
+triggers missed UpdateLog update
+*/
+
 /*
 
 Let's waste the time 'til Bevy 1.0 by tossing said waste into the ocean!

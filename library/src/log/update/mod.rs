@@ -9,6 +9,43 @@ use offset::*;
 
 pub(super) mod limits;
 mod offset;
+mod offset2;
+
+/*
+Zunehmend Probleme, Umsetzung nicht sehr stabil wegen vieler edge cases
+
+Lösungen:
+1. zurück zu u64 log
+ - sehr simpel, leicht zu warten
+ - verbraucht bei langen logs und häufigen runs viel speicher, alleine je rev system
+2. u64 log als abstraktion über offset log
+ - ählich wie jetzt aber expliziter getrennt
+ - iter gibt keine offsets sondern frames zurück
+ - ähnlich oder mehr komplex
+3. komplexibilität beibehalten, wieder Option<NonMaxUsize> index nutzen
+
+
+
+frame log logik:
+
+1. forward pusht den aktuellen frame, index = len
+2. backward_log prüft log[index-1]
+3. forward_log prüft log[index]
+
+
+andere Idee:
+
+- OffsetIter gibt nur den offset zurück, keine len
+- OffsetIter hat selbst das &mut single_byte_step byte
+- weitere single-byte optimierung für 1-offset
+-- 0b00_xxxxxx => small offset + 1
+-- 0b01_xxxxxx => zero offset + 2
+-- 0b10_xxxxxx => one offset + 1
+-- 0b11_xxxxxx => large offset (wrapping byte)
+--- 0b0_xxxxxxx => large offset (wrapped byte)
+
+
+*/
 
 /// A log that keeps track when it was updated and provides an alternative value to
 /// [`RevMeta::past_len`] for when these updates do not happen exactly once per
@@ -101,9 +138,6 @@ pub struct UpdateLog {
     /// The current amount of sequential offsets of `0`.
     zeroes: u8,
 
-    /// The amount of sequential offsets of `0` at the future end of the log.
-    zeroes_max: u8,
-
     /// The state that is needed to clean up the log at [`Self::pre_update`] and to push
     /// new limits to [`UpdateLogLimits`].
     update_state: Option<UpdateLogState>,
@@ -119,7 +153,6 @@ impl Debug for UpdateLog {
             .field("index", &self.index)
             .field("past_len", &self.past_len)
             .field("zeroes", &self.zeroes)
-            .field("zeroes_max", &self.zeroes_max)
             .field("update_state", &self.update_state)
             .finish()
     }
@@ -144,7 +177,6 @@ impl UpdateLog {
             index: 0,
             past_len: 0,
             zeroes: 0,
-            zeroes_max: 0,
             update_state: None,
         }
     }
@@ -268,12 +300,12 @@ impl UpdateLog {
         if self.pre_update_to_clear(meta) || self.last_update <= meta.past_end() {
             // all updates are out of log
             self.offset_bytes.clear();
+            self.offset_bytes.push_back(0);
             self.log_start = meta.now();
             self.last_update = meta.now();
-            self.index = 0;
+            self.index = 1;
             self.past_len = 1;
-            self.zeroes = 0;
-            self.zeroes_max = 0;
+            self.zeroes = 1;
         } else if self.log_start > meta.past_end() {
             // no updates are out of log
             self.push_offset(meta.now() - self.last_update);
@@ -302,11 +334,11 @@ impl UpdateLog {
                     break;
                 }
             }
-            self.index -= to_drain;
+            self.index -= to_drain - 1;
             // todo: use truncate_front https://github.com/rust-lang/rust/issues/140667
             self.offset_bytes.drain(..to_drain);
-
             self.push_offset(meta.now() - self.last_update);
+            self.offset_bytes.push_front(0);
             self.last_update = meta.now();
             self.past_len += 1;
         }
@@ -338,7 +370,7 @@ impl UpdateLog {
         if self.past_len == 0 {
             // at the past end of the log
             return false;
-        }
+        };
 
         let now_plus_1 = meta.now() + 1;
 
@@ -348,25 +380,31 @@ impl UpdateLog {
             return false;
         }
 
-        let backward_limit = if self.zeroes > 0 {
-            // not all expected updates for this frame happened yet
-            self.zeroes -= 1;
-            now_plus_1
-        } else {
-            OffsetIter(self.offset_bytes.range(..self.index))
-                .next_back()
-                .map_or(0, |item| {
-                    if item.offset == 0 {
-                        self.index -= 1;
-                        self.zeroes = item.len.get() - 1;
-                        now_plus_1
-                    } else {
-                        self.last_update -= item.offset;
-                        self.index -= item.len.get() as usize;
-                        self.zeroes = 0;
-                        self.last_update
-                    }
-                })
+        let backward_limit = match self.zeroes {
+            0 => match OffsetIter(self.offset_bytes.range(..self.index)).next_back() {
+                Some(IterItem { offset: 0, len }) => {
+                    self.index -= 1;
+                    self.zeroes = len.get() - 1;
+                    now_plus_1
+                }
+                Some(IterItem { offset, len }) => {
+                    self.last_update -= offset;
+                    self.index -= len.get() as usize;
+                    self.zeroes = 0;
+                    self.last_update
+                }
+                None => unreachable!(), // should have returned at self.past_len == 0 above
+            },
+            1 => {
+                self.zeroes -= 1;
+                OffsetIter(self.offset_bytes.range(..self.index))
+                    .next_back()
+                    .map_or(0, |item| now_plus_1 - item.offset)
+            }
+            _ => {
+                self.zeroes -= 1;
+                now_plus_1
+            }
         };
 
         self.past_len -= 1;
@@ -396,67 +434,43 @@ impl UpdateLog {
 
         let now_minus_1 = meta.now() - 1;
 
-        let forward_limit = if self.past_len == 0 {
-            // at the past end of the log
-            if self.log_start != meta.now() {
-                // if log_start is less than now, an update was missed but it is up to the RevMeta
-                // update to report on that
-                return false;
-            }
-            self.next_forward_limit(OffsetIter(self.offset_bytes.iter()), now_minus_1)
-        } else {
-            let mut iter = OffsetIter(self.offset_bytes.range(self.index..));
-            match iter.next() {
-                // there is another update for the last_update frame to be equal with now
-                Some(IterItem { offset: 0, len }) => {
-                    if self.last_update != meta.now() {
-                        // there was an updated missed at last_update but it is up to the RevMeta
-                        // update to report on that
-                        return false;
-                    }
-                    if self.zeroes < len.get() as u8 - 1 {
-                        // not all updates this frame happened yet
-                        self.zeroes += 1;
-                        now_minus_1
-                    } else {
-                        // all updates this frame happened, unless there is another zero-offset next
-                        self.index += 1;
-                        self.zeroes = 0;
-                        self.next_forward_limit(iter, now_minus_1)
-                    }
+        let mut iter = OffsetIter(self.offset_bytes.range(self.index..));
+        let forward_limit = match iter.next() {
+            // there is another update for the last_update frame to be equal with now
+            Some(IterItem { offset: 0, len }) => {
+                if self.last_update != meta.now() {
+                    // there was an updated missed at last_update but it is up to the RevMeta
+                    // update to report on that
+                    return false;
                 }
-                // there is a next offset that may add to now
-                Some(IterItem { offset, len }) => {
-                    let frame = self.last_update + offset;
-                    if frame != meta.now() {
-                        // if log_start is less than now, an update was missed but it is up to the
-                        // RevMeta update to report on that
-                        return false;
-                    }
-                    self.last_update = frame;
-                    self.index += len.get() as usize;
-                    self.zeroes = 0;
-                    self.next_forward_limit(iter, now_minus_1)
-                }
-                // there is another update for the last_update frame to be equal with now
-                None if self.zeroes < self.zeroes_max => {
-                    if self.last_update != meta.now() {
-                        // there was an updated missed at self.last_update but it is up to the
-                        // RevMeta update to report on that
-                        return false;
-                    }
+                if self.zeroes < len.get() as u8 - 1 {
+                    // not all updates this frame happened yet
                     self.zeroes += 1;
-                    if self.zeroes == self.zeroes_max {
-                        // there is no other update in the future
-                        u64::MAX
-                    } else {
-                        // another update at this frame is expected
-                        now_minus_1
-                    }
+                    now_minus_1
+                } else {
+                    // all updates this frame happened, unless there is another zero-offset next
+                    self.index += 1;
+                    self.zeroes = 0;
+                    iter.next()
+                        .map_or(u64::MAX, |item| now_minus_1 + item.offset)
                 }
-                // reached future end of log
-                None => return false,
             }
+            // there is a next offset that may add to now
+            Some(IterItem { offset, len }) => {
+                let frame = self.last_update + offset;
+                if frame != meta.now() {
+                    // if log_start is less than now, an update was missed but it is up to the
+                    // RevMeta update to report on that
+                    return false;
+                }
+                self.last_update = frame;
+                self.index += len.get() as usize;
+                self.zeroes = 0;
+                iter.next()
+                    .map_or(u64::MAX, |item| now_minus_1 + item.offset)
+            }
+            // reached future end of log
+            None => return false,
         };
 
         self.past_len += 1;
@@ -466,17 +480,6 @@ impl UpdateLog {
         );
 
         true
-    }
-
-    fn next_forward_limit(&self, mut iter: OffsetIter, now_minus_1: u64) -> u64 {
-        match iter.next() {
-            // there is an update in the future
-            Some(IterItem { offset, .. }) => now_minus_1 + offset,
-            // there is no update in the future
-            None if self.zeroes_max == 0 => u64::MAX,
-            // another update at this frame is expected
-            None => now_minus_1,
-        }
     }
 
     /// Shorten the log when log exits or clears were missed.
@@ -491,7 +494,6 @@ impl UpdateLog {
                     self.offset_bytes.truncate(self.index);
                     self.zeroes = 0;
                 }
-                self.zeroes_max = self.zeroes;
                 false
             }
             PreUpdateKind::Nothing => false,
@@ -507,7 +509,6 @@ impl UpdateLog {
         self.index = 0;
         self.past_len = 0;
         self.zeroes = 0;
-        self.zeroes_max = 0;
     }
 }
 
@@ -753,5 +754,35 @@ mod test {
 
         meta_and_log.forward([3], false);
         assert_eq!(meta_and_log.meta.past_len(), 3);
+    }
+
+    #[test]
+    fn forward_truncates_future() {
+        let mut meta_and_log = MetaAndLog::new(4);
+
+        meta_and_log.forward([1], false);
+
+        meta_and_log.backward_log(1);
+
+        meta_and_log.forward([], false);
+
+        meta_and_log.backward_log(0);
+
+        meta_and_log.forward_log(0);
+    }
+
+    #[test]
+    fn simple_undo_redo() {
+        let mut meta_and_log = MetaAndLog::new(4);
+
+        meta_and_log.forward([1], false);
+
+        println!("after forward {:#?}", meta_and_log.update_log);
+
+        meta_and_log.backward_log(1);
+
+        println!("after backward_log {:#?}", meta_and_log.update_log);
+
+        meta_and_log.forward_log(1);
     }
 }

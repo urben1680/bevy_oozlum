@@ -31,7 +31,7 @@ use std::collections::vec_deque::Iter;
 const MAX_ZEROES_PER_BYTE: u8 = 65;
 const MAX_ZEROES_AS_BYTE: u8 = 0b10_111111;
 const ZEROES_MASK: u8 = 0b00_111111;
-const ZEROES_OR: u8 = 0b10_000000;
+const TWO_ZEROES: u8 = 0b10_000000;
 const MAX_SINGLE_BYTE_OFFSET: u8 = 0b0_1111111;
 const WRAPPED_OFFSET_MASK: u8 = 0b0_1111111;
 const WRAPPING_OFFSET_MASK: u8 = 0b00_111111;
@@ -41,33 +41,26 @@ const MAX_WRAPPING_OFFSET: u8 = 0b00_111111;
 impl UpdateLog {
     pub(super) fn push_offset(&mut self, mut offset: u64) {
         if offset == 0 {
-            if self.zeroes == MAX_ZEROES_PER_BYTE {
-                self.offset_bytes.push_back(MAX_ZEROES_AS_BYTE);
-                self.index += 1;
-                self.zeroes = 0;
+            match self.offset_bytes.back_mut() {
+                // todo: nicht ausreichend, trifft hier nicht non-zero offset bytes
+                None | Some(&mut MAX_ZEROES_AS_BYTE) => {
+                    self.offset_bytes.push_back(0);
+                    self.index += 1;
+                    self.zeroes = 0;
+                }
+                // encoding changes from 0b0_xxxxxxx to 0b10_xxxxxx
+                Some(zero) if *zero == 0 => *zero = TWO_ZEROES,
+                // increase in 0b10_xxxxxx encoding without overflowing it
+                Some(zeroes) => *zeroes += 1,
             }
 
             // increase the sequence of zero offsets
             self.zeroes += 1;
-            self.zeroes_max = self.zeroes;
             return;
-        }
-
-        if self.zeroes == 1 {
-            // there was an offset of 0 previously, push it now that it is sure no more such offsets
-            // are following it
-            self.offset_bytes.push_back(0);
-            self.index += 1;
-        } else if self.zeroes > 1 {
-            // there was a sequence of offsets of 0 previously, push it now that it is sure no more
-            // such offsets are following it
-            self.offset_bytes.push_back((self.zeroes - 2) | ZEROES_OR);
-            self.index += 1;
         }
 
         self.index += 1;
         self.zeroes = 0;
-        self.zeroes_max = 0;
 
         if offset <= MAX_SINGLE_BYTE_OFFSET as u64 {
             self.offset_bytes.push_back(offset as u8);

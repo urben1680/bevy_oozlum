@@ -15,7 +15,7 @@ use core::{
 };
 
 use crate::{
-    log::{TransitionsLog, UpdateLog},
+    log::{OutOfLog, TransitionsLog, UpdateLog},
     meta::{NonLogNow, RevDirection, RevMeta},
 };
 
@@ -293,6 +293,7 @@ pub(crate) enum UndoRedoLogError {
     OutOfLog {
         now: u64,
         direction: RevDirection,
+        err: OutOfLog,
     },
 }
 
@@ -325,12 +326,20 @@ impl Display for UndoRedoLogError {
                     "RevDirection is {actual} when it was expected to be {expected} at frame {now} before the update of the UndoRedo log"
                 )
             }
-            Self::OutOfLog { now, direction } => {
-                write!(
+            Self::OutOfLog {
+                now,
+                direction,
+                err,
+            } => match err.0.into_option() {
+                None => write!(
                     f,
                     "UndoRedo log is in an invalid state at frame {now} during {direction}"
-                )
-            }
+                ),
+                Some(location) => write!(
+                    f,
+                    "UndoRedo log is in an invalid state at frame {now} during {direction} at {location}"
+                ),
+            },
         }
     }
 }
@@ -351,25 +360,43 @@ impl UndoRedoLog {
                         let meta = world.resource::<RevMeta>();
                         let past_len = self.update_log.forward_past_len(meta);
                         let buffers = buffer.0.drain(..).map(|boxed| DebugHidden(boxed.undo_redo));
-                        self.undo_redo_log.forward_extend(meta, past_len, buffers);
+                        self.undo_redo_log
+                            .forward_extend(meta, past_len, buffers)
+                            .map(|_| ())
+                    } else {
+                        self.undo_redo_log.poison()
                     }
+                    .map_err(|err| UndoRedoLogError::OutOfLog {
+                        now,
+                        direction: RevDirection::NOT_LOG,
+                        err,
+                    })
                 })
-                .ok_or(UndoRedoLogError::UndoRedoBufferMissing { now }),
+                .unwrap_or(Err(UndoRedoLogError::UndoRedoBufferMissing { now })),
             Some(RevDirection::FORWARD_LOG) => {
                 if self.update_log.forward_log(meta) {
                     let iter = self
                         .undo_redo_log
                         .forward_log(meta)
-                        .map_err(|_| UndoRedoLogError::OutOfLog {
+                        .map_err(|err| UndoRedoLogError::OutOfLog {
                             now,
                             direction: RevDirection::FORWARD_LOG,
+                            err,
                         })?
                         .map(|cell| cell.0.get());
                     for command in iter {
                         command.redo(world);
                     }
+                    Ok(())
+                } else {
+                    self.undo_redo_log
+                        .poison()
+                        .map_err(|err| UndoRedoLogError::OutOfLog {
+                            now,
+                            direction: RevDirection::FORWARD_LOG,
+                            err,
+                        })
                 }
-                Ok(())
             }
             direction => Err(UndoRedoLogError::RevDirectionMismatch {
                 now,
@@ -397,18 +424,26 @@ impl UndoRedoLog {
             let iter = self
                 .undo_redo_log
                 .backward_log(meta)
-                .map_err(|_| UndoRedoLogError::OutOfLog {
+                .map_err(|err| UndoRedoLogError::OutOfLog {
                     now,
                     direction: RevDirection::BackwardLog,
+                    err,
                 })?
                 .map(|cell| cell.0.get())
                 .rev();
             for command in iter {
                 command.undo(world);
             }
+            Ok(())
+        } else {
+            self.undo_redo_log
+                .poison()
+                .map_err(|err| UndoRedoLogError::OutOfLog {
+                    now,
+                    direction: RevDirection::BackwardLog,
+                    err,
+                })
         }
-
-        Ok(())
     }
 }
 
