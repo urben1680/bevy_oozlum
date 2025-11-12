@@ -17,11 +17,11 @@ const WINNING_BEVY_VERSION: usize = 1_00_0;
 
 /*
 
-1. toss trash at row 7 (reversible observer)
-2. undo toss
-3. redo toss
+BUGS:
 
-triggers missed UpdateLog update
+- UndoRedoBuffer missing
+-- ?
+
 */
 
 /*
@@ -178,7 +178,10 @@ impl<'w> TimeAndCounts<'w> {
     fn score(&self) -> usize {
         (self.counts.score.len() + CURRENT_BEVY_VERSION).min(WINNING_BEVY_VERSION)
     }
-    fn update(&mut self, entity: Entity, waste: Waste, meta: &RevMeta) {
+    fn update(&mut self, entity: Entity, waste: Waste, meta: &RevMeta, commands: &mut Commands) {
+        if !meta.contains(waste.tossed_at) {
+            commands.entity(entity).despawn();
+        }
         self.counts.score.insert(entity);
         let score = self.score();
         if score < WINNING_BEVY_VERSION {
@@ -209,10 +212,7 @@ fn despawn_waste(
 ) {
     if meta.get_ran_direction() == Some(RevDirection::NOT_LOG) {
         for (entity, &waste) in waste {
-            if !meta.contains(waste.tossed_at) {
-                commands.entity(entity).despawn();
-            }
-            time_and_counts.update(entity, waste, &meta);
+            time_and_counts.update(entity, waste, &meta, &mut commands);
         }
     }
 }
@@ -320,10 +320,12 @@ fn row4(app: &mut App) {
                 // These need to be despawned as they are now past the edge of the screen and cannot come back.
                 let mut drain = log.forward_push(&meta, meta.past_len(), entity)?;
                 for entity in drain.all().flatten() {
-                    commands.entity(entity).despawn();
+                    if !meta.contains(waste.tossed_at) {
+                        commands.entity(entity).despawn();
+                    }
 
                     // The player missed undoing this littering in time and the lost waste counter is increased.
-                    time_and_counts.update(entity, waste, &meta);
+                    time_and_counts.update(entity, waste, &meta, &mut commands);
                 }
             }
 
@@ -753,13 +755,20 @@ fn render(
         .chain(wave(meta.now()).take(10 - lost))
         .collect();
 
-    let marker = "                                                             <- future ^ past ->"
+    let marker1 =
+        "                                                             <- future ^ past ->"
+            .chars()
+            .skip(MAX_LOG_LEN as usize - (padding_cols + meta.future_len() as usize + 1))
+            .take(MAX_LOG_LEN as usize + 1)
+            .collect::<String>();
+    let marker3 = "                                                                      now"
         .chars()
         .skip(MAX_LOG_LEN as usize - (padding_cols + meta.future_len() as usize + 1))
         .take(MAX_LOG_LEN as usize + 1)
         .collect::<String>();
 
-    println!("{marker}");
+    println!("{marker1}");
+    println!("{marker3}");
     println!();
 
     if meta.get_ran_direction() != Some(RevDirection::NOT_LOG) || lost == 10 {

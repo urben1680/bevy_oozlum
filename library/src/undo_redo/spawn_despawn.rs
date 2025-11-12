@@ -324,7 +324,7 @@ impl RevIsDespawned for EntityWorldMut<'_> {
 
 #[cfg(test)]
 mod test {
-    use std::num::NonZeroU64;
+    use core::num::NonZeroU64;
 
     use crate::{meta::RevQueue, panic_on_error_events};
 
@@ -484,9 +484,9 @@ mod test {
         world_with_resources.assert_entities([
             (spawn_at_1, true),
             (spawn_at_2, true),
-            (despawn_at_2, true),
-            (spawn_buffer_at_2, true),
-            (reserve_buffer_at_2, true),
+            (despawn_at_2, false), /* this became false with no past-drain logic */
+            (spawn_buffer_at_2, false), /* this became false with no past-drain logic */
+            (reserve_buffer_at_2, false), /* this became false with no past-drain logic */
             (spawn_at_3, true),
             (despawn_at_3, true),
             (spawn_buffer_at_3, true),
@@ -503,8 +503,8 @@ mod test {
             (spawn_at_3, true),
             (spawn_at_4, true),
             (spawn_buffer_at_4, true),
-            (despawn_at_3, true),
-            (spawn_buffer_at_3, true),
+            (despawn_at_3, false), /* this became false with no past-drain logic */
+            (spawn_buffer_at_3, false), /* this became false with no past-drain logic */
         ]);
 
         // undo 4
@@ -515,8 +515,8 @@ mod test {
             (spawn_at_3, true),
             (spawn_at_4, true),
             (spawn_buffer_at_4, true),
-            (despawn_at_3, true),
-            (spawn_buffer_at_3, true),
+            (despawn_at_3, false), /* this became false with no past-drain logic */
+            (spawn_buffer_at_3, false), /* this became false with no past-drain logic */
         ]);
 
         // do fresh 4
@@ -536,8 +536,8 @@ mod test {
             (spawn_at_fresh_4, true),
             (despawn_at_fresh_4, true),
             (spawn_buffer_at_fresh_4, true),
-            (despawn_at_3, true),
-            (spawn_buffer_at_3, true),
+            (despawn_at_3, false), /* this became false with no past-drain logic */
+            (spawn_buffer_at_3, false), /* this became false with no past-drain logic */
         ]);
 
         // undo 4 again
@@ -549,8 +549,8 @@ mod test {
             (spawn_at_fresh_4, true),
             (despawn_at_fresh_4, true),
             (spawn_buffer_at_fresh_4, true),
-            (despawn_at_3, true),
-            (spawn_buffer_at_3, true),
+            (despawn_at_3, false), /* this became false with no past-drain logic */
+            (spawn_buffer_at_3, false), /* this became false with no past-drain logic */
         ]);
 
         // do yet another fresh 4 with clear

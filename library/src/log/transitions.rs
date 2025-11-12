@@ -340,11 +340,7 @@ impl<T, U> TransitionsLog<T, U> {
                     start_offset
                 })
                 .sum::<usize>();
-            GapRange {
-                start,
-                start_offset,
-                end: self.index,
-            }
+            GapRange::new(start, start_offset, self.index)
         };
         Ok(TransitionsDrain {
             transitions: &mut self.transitions,

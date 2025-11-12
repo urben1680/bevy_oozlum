@@ -277,17 +277,20 @@ impl<T> Drop for DrainAll<'_, T> {
 #[derive(Clone, Copy, Debug)]
 struct GapRange {
     start: usize,
-    start_offset: usize,
+    start_offset: usize, // todo: deprecate, no drain_past logic in transition logs
     end: usize,
 }
 
 impl GapRange {
-    fn new_offset_one(start: usize, end: usize) -> Self {
+    fn new(start: usize, start_offset: usize, end: usize) -> Self {
         Self {
             start,
-            start_offset: 1,
+            start_offset, /*: 0*/
             end,
         }
+    }
+    fn new_offset_one(start: usize, end: usize) -> Self {
+        Self::new(start, 1, end)
     }
     fn new_clear(index: usize) -> Self {
         Self {

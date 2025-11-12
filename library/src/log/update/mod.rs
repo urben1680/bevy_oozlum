@@ -1,15 +1,13 @@
-use crate::meta::RevMeta;
+use crate::{log::update::offset::OffsetLog, meta::RevMeta};
 use bevy_ecs::change_detection::MaybeLocation;
 use core::fmt::{Debug, Display};
-use std::collections::{TryReserveError, VecDeque};
+use std::collections::TryReserveError;
 
 pub use limits::UpdateLogId;
 use limits::*;
-use offset::*;
 
 pub(super) mod limits;
 mod offset;
-mod offset2;
 
 /*
 Zunehmend Probleme, Umsetzung nicht sehr stabil wegen vieler edge cases
@@ -113,13 +111,14 @@ andere Idee:
 ///     Ok(())
 /// }
 /// ```
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct UpdateLog {
+    offsets: OffsetLog,
     /// Offsets that need to be added or subtracted from [`Self::last_update`] to calculate at which
     /// frame the log is expected to be updated.
     ///
     /// For the encoding, see the [`offset`] module.
-    offset_bytes: VecDeque<u8>,
+    //offset_bytes: VecDeque<u8>,
 
     /// The most past frame the log was updated. Each update truncates offsets until this value is
     /// larger than [`RevMeta::past_end`].
@@ -130,32 +129,17 @@ pub struct UpdateLog {
 
     /// The current index into [`Self::offset_bytes`]. Always points to the first byte of an
     /// offset sequence or, when at the end of the log, is equal to the `len` of `offset_bytes`.
-    index: usize,
+    //index: usize,
 
     /// The length of the log which is what this log is keeping track of.
     past_len: u64,
 
     /// The current amount of sequential offsets of `0`.
-    zeroes: u8,
+    //zeroes: u8,
 
     /// The state that is needed to clean up the log at [`Self::pre_update`] and to push
     /// new limits to [`UpdateLogLimits`].
     update_state: Option<UpdateLogState>,
-}
-
-impl Debug for UpdateLog {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("UpdateLog")
-            .field("offset_bytes", &self.offset_bytes)
-            .field("offsets (decoded)", &OffsetIter(self.offset_bytes.iter()))
-            .field("log_start", &self.log_start)
-            .field("last_update", &self.last_update)
-            .field("index", &self.index)
-            .field("past_len", &self.past_len)
-            .field("zeroes", &self.zeroes)
-            .field("update_state", &self.update_state)
-            .finish()
-    }
 }
 
 impl Display for UpdateLog {
@@ -171,12 +155,10 @@ impl UpdateLog {
     /// Creates an empty log.
     pub const fn new() -> Self {
         Self {
-            offset_bytes: VecDeque::new(),
+            offsets: OffsetLog::new(),
             log_start: 0,
             last_update: 0,
-            index: 0,
             past_len: 0,
-            zeroes: 0,
             update_state: None,
         }
     }
@@ -188,7 +170,7 @@ impl UpdateLog {
     /// Note that the number of bytes has no relation to the length of the log.
     pub fn with_capacity(bytes_capacity: usize) -> Self {
         Self {
-            offset_bytes: VecDeque::with_capacity(bytes_capacity),
+            offsets: OffsetLog::with_capacity(bytes_capacity),
             ..Self::new()
         }
     }
@@ -198,8 +180,8 @@ impl UpdateLog {
     /// See [`VecDeque::len`].
     ///
     /// Note that the number of bytes has no relation to the length of the log.
-    pub fn len(&self) -> usize {
-        self.offset_bytes.len()
+    pub fn bytes_len(&self) -> usize {
+        self.offsets.get_bytes().len()
     }
 
     /// Returns the number of bytes the log can hold without reallocating.
@@ -207,8 +189,8 @@ impl UpdateLog {
     /// See [`VecDeque::capacity`].
     ///
     /// Note that the number of bytes has no relation to the length of the log.
-    pub fn capacity(&self) -> usize {
-        self.offset_bytes.capacity()
+    pub fn bytes_capacity(&self) -> usize {
+        self.offsets.get_bytes().capacity()
     }
 
     /// Returns `true` if the log contains no bytes.
@@ -216,8 +198,8 @@ impl UpdateLog {
     /// See [`VecDeque::is_empty`].
     ///
     /// Note that the number of bytes has no relation to the length of the log.
-    pub fn is_empty(&self) -> bool {
-        self.offset_bytes.is_empty()
+    pub fn bytes_is_empty(&self) -> bool {
+        self.offsets.get_bytes().is_empty()
     }
 
     /// Reserves capacity for at least `additional` more bytes.
@@ -225,8 +207,8 @@ impl UpdateLog {
     /// See [`VecDeque::reserve`].
     ///
     /// Note that the number of bytes has no relation to the length of the log.
-    pub fn reserve(&mut self, additional: usize) {
-        self.offset_bytes.reserve(additional)
+    pub fn bytes_reserve(&mut self, additional: usize) {
+        self.offsets.get_bytes_mut().reserve(additional)
     }
 
     /// Reserves capacity for at least `additional` more bytes.
@@ -234,8 +216,8 @@ impl UpdateLog {
     /// See [`VecDeque::reserve_exact`].
     ///
     /// Note that the number of bytes has no relation to the length of the log.
-    pub fn reserve_exact(&mut self, additional: usize) {
-        self.offset_bytes.reserve_exact(additional)
+    pub fn bytes_reserve_exact(&mut self, additional: usize) {
+        self.offsets.get_bytes_mut().reserve_exact(additional)
     }
 
     /// Tries to reserve capacity for at least `additional` more bytes.
@@ -243,8 +225,8 @@ impl UpdateLog {
     /// See [`VecDeque::try_reserve`].
     ///
     /// Note that the number of bytes has no relation to the length of the log.
-    pub fn try_reserve(&mut self, additional: usize) -> Result<(), TryReserveError> {
-        self.offset_bytes.try_reserve(additional)
+    pub fn bytes_try_reserve(&mut self, additional: usize) -> Result<(), TryReserveError> {
+        self.offsets.get_bytes_mut().try_reserve(additional)
     }
 
     /// Tries to reserve capacity for at least `additional` more bytes.
@@ -252,8 +234,8 @@ impl UpdateLog {
     /// See [`VecDeque::try_reserve_exact`].
     ///
     /// Note that the number of bytes has no relation to the length of the log.
-    pub fn try_reserve_exact(&mut self, additional: usize) -> Result<(), TryReserveError> {
-        self.offset_bytes.try_reserve_exact(additional)
+    pub fn bytes_try_reserve_exact(&mut self, additional: usize) -> Result<(), TryReserveError> {
+        self.offsets.get_bytes_mut().try_reserve_exact(additional)
     }
 
     /// Shrinks the capacity of the log with a lower bound.
@@ -261,8 +243,8 @@ impl UpdateLog {
     /// See [`VecDeque::shrink_to`].
     ///
     /// Note that the number of bytes has no relation to the length of the log.
-    pub fn shrink_to(&mut self, min_capacity: usize) {
-        self.offset_bytes.shrink_to(min_capacity)
+    pub fn bytes_shrink_to(&mut self, min_capacity: usize) {
+        self.offsets.get_bytes_mut().shrink_to(min_capacity)
     }
 
     /// Shrinks the capacity of the log as much as possible.
@@ -270,8 +252,8 @@ impl UpdateLog {
     /// See [`VecDeque::shrink_to_fit`].
     ///
     /// Note that the number of bytes has no relation to the length of the log.
-    pub fn shrink_to_fit(&mut self) {
-        self.offset_bytes.shrink_to_fit()
+    pub fn bytes_shrink_to_fit(&mut self) {
+        self.offsets.get_bytes_mut().shrink_to_fit()
     }
 
     /// The internal id of this log, which is only `Some` after it first ran. The id will change
@@ -297,48 +279,29 @@ impl UpdateLog {
     }
 
     fn forward_past_len_with_caller(&mut self, meta: &RevMeta, caller: MaybeLocation) -> u64 {
-        if self.pre_update_to_clear(meta) || self.last_update <= meta.past_end() {
+        if self.pre_update_to_clear(meta) || self.last_update < meta.past_end() {
             // all updates are out of log
-            self.offset_bytes.clear();
-            self.offset_bytes.push_back(0);
+            self.offsets.clear();
+            self.offsets.push_was_empty(0);
             self.log_start = meta.now();
             self.last_update = meta.now();
-            self.index = 1;
             self.past_len = 1;
-            self.zeroes = 1;
-        } else if self.log_start > meta.past_end() {
-            // no updates are out of log
-            self.push_offset(meta.now() - self.last_update);
-            self.last_update = meta.now();
-            self.past_len += 1;
         } else {
-            // some updates are out of log
-            let iter = OffsetIter(self.offset_bytes.range(..self.index));
-            let mut to_drain = 0;
-            for IterItem { offset, len } in iter {
-                if offset == 0 {
-                    // Offsets of 0 are encoded differently, len is not the amount of bytes,
-                    // which is actually always 1 here, but the amount of zero offsets in this
-                    // one byte.
-                    // We want to get rid of these offsets as well as they dont bring
-                    // `self.log_start` any closer the limit.
-                    to_drain += 1;
-                    self.past_len -= len.get() as u64;
-                    continue;
-                }
-                to_drain += len.get() as usize;
-                self.past_len -= 1;
-                self.log_start += offset;
+            /*
+            Problem: da der erste offset zu 0 wird, steigt self.log_start auch und ist nach dem
+            push ungleich meta.past_end()
 
-                if self.log_start > meta.past_end() {
-                    break;
-                }
+            womöglich sollte der erste offset doch nicht 0 sein sondern
+             */
+            if self.log_start <= meta.past_end() {
+                let mut minus = meta.past_end() - self.log_start;
+                self.past_len -= self.offsets.truncate_out_of_log(&mut minus);
+                self.log_start += minus;
             }
-            self.index -= to_drain - 1;
-            // todo: use truncate_front https://github.com/rust-lang/rust/issues/140667
-            self.offset_bytes.drain(..to_drain);
-            self.push_offset(meta.now() - self.last_update);
-            self.offset_bytes.push_front(0);
+            let offset = meta.now() - self.last_update;
+            if self.offsets.push_was_empty(offset) {
+                self.log_start = meta.now();
+            }
             self.last_update = meta.now();
             self.past_len += 1;
         }
@@ -380,34 +343,17 @@ impl UpdateLog {
             return false;
         }
 
-        let backward_limit = match self.zeroes {
-            0 => match OffsetIter(self.offset_bytes.range(..self.index)).next_back() {
-                Some(IterItem { offset: 0, len }) => {
-                    self.index -= 1;
-                    self.zeroes = len.get() - 1;
-                    now_plus_1
-                }
-                Some(IterItem { offset, len }) => {
-                    self.last_update -= offset;
-                    self.index -= len.get() as usize;
-                    self.zeroes = 0;
-                    self.last_update
-                }
-                None => unreachable!(), // should have returned at self.past_len == 0 above
-            },
-            1 => {
-                self.zeroes -= 1;
-                OffsetIter(self.offset_bytes.range(..self.index))
-                    .next_back()
-                    .map_or(0, |item| now_plus_1 - item.offset)
-            }
-            _ => {
-                self.zeroes -= 1;
-                now_plus_1
-            }
+        let mut iter = self.offsets.now_to_past();
+        let offset = iter.next().unwrap();
+        iter.sync();
+        let backward_limit = if offset == 0 {
+            iter.next().map_or(0, |_| now_plus_1)
+        } else {
+            self.last_update -= offset;
+            self.last_update
         };
-
         self.past_len -= 1;
+
         meta.update_log_limits().push_limit(
             &mut self.update_state,
             UpdateLogLimit::new_log(backward_limit, meta.now(), caller),
@@ -434,29 +380,9 @@ impl UpdateLog {
 
         let now_minus_1 = meta.now() - 1;
 
-        let mut iter = OffsetIter(self.offset_bytes.range(self.index..));
-        let forward_limit = match iter.next() {
-            // there is another update for the last_update frame to be equal with now
-            Some(IterItem { offset: 0, len }) => {
-                if self.last_update != meta.now() {
-                    // there was an updated missed at last_update but it is up to the RevMeta
-                    // update to report on that
-                    return false;
-                }
-                if self.zeroes < len.get() as u8 - 1 {
-                    // not all updates this frame happened yet
-                    self.zeroes += 1;
-                    now_minus_1
-                } else {
-                    // all updates this frame happened, unless there is another zero-offset next
-                    self.index += 1;
-                    self.zeroes = 0;
-                    iter.next()
-                        .map_or(u64::MAX, |item| now_minus_1 + item.offset)
-                }
-            }
-            // there is a next offset that may add to now
-            Some(IterItem { offset, len }) => {
+        let mut iter = self.offsets.now_to_future();
+        match iter.next() {
+            Some(offset) => {
                 let frame = self.last_update + offset;
                 if frame != meta.now() {
                     // if log_start is less than now, an update was missed but it is up to the
@@ -464,15 +390,12 @@ impl UpdateLog {
                     return false;
                 }
                 self.last_update = frame;
-                self.index += len.get() as usize;
-                self.zeroes = 0;
-                iter.next()
-                    .map_or(u64::MAX, |item| now_minus_1 + item.offset)
             }
-            // reached future end of log
             None => return false,
-        };
+        }
 
+        iter.sync();
+        let forward_limit = iter.next().map_or(u64::MAX, |offset| now_minus_1 + offset);
         self.past_len += 1;
         meta.update_log_limits().push_limit(
             &mut self.update_state,
@@ -490,9 +413,11 @@ impl UpdateLog {
         match meta.set_update_state(&mut self.update_state) {
             PreUpdateKind::RemoveLog => true,
             PreUpdateKind::RemoveFuture => {
-                if self.offset_bytes.len() > self.index {
-                    self.offset_bytes.truncate(self.index);
-                    self.zeroes = 0;
+                self.offsets.truncate_future();
+                if self.bytes_is_empty() {
+                    self.log_start = 0;
+                    self.last_update = 0;
+                    self.past_len = 0;
                 }
                 false
             }
@@ -503,12 +428,10 @@ impl UpdateLog {
     /// Clear the log to be in the state of construction except of [`Self::update_state`] which is
     /// not reset.
     fn clear(&mut self) {
-        self.offset_bytes.clear();
+        self.offsets.clear();
         self.log_start = 0;
         self.last_update = 0;
-        self.index = 0;
         self.past_len = 0;
-        self.zeroes = 0;
     }
 }
 
@@ -532,6 +455,7 @@ mod test {
 
     use super::*;
 
+    #[derive(Debug)]
     struct MetaAndLog {
         meta: RevMeta,
         update_log: UpdateLog,
@@ -722,6 +646,26 @@ mod test {
     }
 
     #[test]
+    fn behaves_like_meta() {
+        let mut meta_and_log = MetaAndLog::new(4);
+
+        meta_and_log.forward([1], false);
+        assert_eq!(meta_and_log.meta.past_len(), 1);
+
+        meta_and_log.forward([2], false);
+        assert_eq!(meta_and_log.meta.past_len(), 2);
+
+        meta_and_log.forward([3], false);
+        assert_eq!(meta_and_log.meta.past_len(), 3);
+
+        meta_and_log.forward([3], false);
+        assert_eq!(meta_and_log.meta.past_len(), 3);
+
+        meta_and_log.forward([3], false);
+        assert_eq!(meta_and_log.meta.past_len(), 3);
+    }
+
+    #[test]
     fn behaves_like_meta_minus_gaps() {
         let mut meta_and_log = MetaAndLog::new(4);
 
@@ -777,12 +721,21 @@ mod test {
 
         meta_and_log.forward([1], false);
 
-        println!("after forward {:#?}", meta_and_log.update_log);
-
         meta_and_log.backward_log(1);
 
-        println!("after backward_log {:#?}", meta_and_log.update_log);
-
         meta_and_log.forward_log(1);
+    }
+
+    #[test]
+    fn full_truncate_future_clears() {
+        let mut meta_and_log = MetaAndLog::new(4);
+
+        meta_and_log.forward([], false);
+        meta_and_log.forward([1], false);
+
+        meta_and_log.backward_log(1);
+        meta_and_log.backward_log(0);
+
+        meta_and_log.forward([1], false);
     }
 }
