@@ -295,7 +295,7 @@ impl UpdateLog {
              */
             if self.log_start <= meta.past_end() {
                 let mut minus = meta.past_end() - self.log_start;
-                self.past_len -= self.offsets.truncate_out_of_log(&mut minus);
+                self.past_len -= self.offsets.truncate_past(&mut minus);
                 self.log_start += minus;
             }
             let offset = meta.now() - self.last_update;

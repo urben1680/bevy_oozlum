@@ -1,20 +1,18 @@
-//! This module contains a specialized log to store frame offsets for
-//! [`UpdateLog`](super::UpdateLog).
+//! This module contains a specialized [`OffsetLog`] that is used by
+//! [`UpdateLog`](super::UpdateLog) to translate stored offsets into frames.
 //!
 //! # Motivation
 //!
 //! `UpdateLog` needs to keep track at which frame it has been updated. A very simple implementation
-//! of this could be if it contained a `VecDeque<u64>`. However, this would mean it would grow by
-//! eight bytes per update. Updates that happen almost every frame or even many times per frame
-//! would consume a large amount of data very quickly.
-//!
-//! Instead, `UpdateLog` has an internal, lower level log, namely [`OffsetLog`].
+//! of this could be if it contained a `VecDeque<u64>`. However, this would would grow by eight
+//! bytes per update. Updates that happen almost every frame or even many times per frame would
+//! consume a large amount of data very quickly.
 //!
 //! # Memory optimizations
 //!
 //! Instead of storing the frames `UpdateLog` ran, it stores the amount of frames since the last
-//! update. As these offsets are in pretty much every case far smaller than a frame can become, this
-//! enables multiple memory optimizations:
+//! update. As these "offsets" most often fit in far smaller integer types than frames, this enables
+//! multiple memory optimizations:
 //!
 //! ## 1. Variable length of stored integers
 //!
@@ -23,12 +21,12 @@
 //!
 //! Since the bytes also need to store some kind of flag that indicates how many bytes an offset
 //! is made of, this cannot be 100% efficient. For example, an offset of `255` requires more than
-//! one byte. Still, at least offsets of up to `65` do fit into a single byte, followed by `4161`
-//! in two bytes, `528449` in three bytes, etc.
+//! one byte. Still, offsets of up to `65` do fit into a single byte, followed by `4161` in two
+//! bytes, `528449` in three bytes, etc.
 //!
 //! ## 2. Storing multiple offsets of `1` in a single byte
 //!
-//! It is expected that many `UpdateLog`s still mostly are updated once every frame. So the encoding
+//! It is expected that many `UpdateLog`s still are mostly updated once every frame. So the encoding
 //! packs this offset more tightly than larger offsets. Streaks of up to `64` offsets of `1` fit
 //! into a single byte.
 //!
@@ -58,11 +56,16 @@
 //!   covered by streak encodings, a byte of `0b00_000000` is interpreted as "an offset of `2`".
 //! - Offsets stored in multiple bytes are encoded in `0b11_xxxxxx` for the first and last byte and
 //!   `0b0_xxxxxxx` for all bytes in between, if any are needed. As `UpdateLog` needs to be able to
-//!   read the offset in reverse too, the last byte needs to contain the two flag bits too.
+//!   read the offset backwards too, the last byte needs to contain the two flag bits as well.
 //! - Depending on how many in-between "wrapped" bytes there are, a constant value is added to the
 //!   offset. This way, `[0b11_000000, 0b11_000000]` and `[0b11_000000, 0b0_0000000, 0b11_000000]`
 //!   decode to different offsets despite the payload bits combine to the same integer. This further
 //!   compresses the offset values into potentially less bytes.
+
+/*
+todo: test if the first offset really needs to be 0 or if a get_front calc for log_start makes this
+simpler
+*/
 
 use core::borrow::Borrow;
 use std::collections::{
@@ -97,8 +100,13 @@ const MULTI_BYTE_OFFSET_6: u64 = 141845657555010;
 const MULTI_BYTE_OFFSET_7: u64 = 18156244167036994;
 const MULTI_BYTE_OFFSET_8: u64 = 2323999253380730946;
 
+/// Stores `u64` offsets and allows forward/backward traversals and past/future truncations.
 #[derive(Debug, Default)]
 pub(super) struct OffsetLog {
+    /// Encoded offsets in the log, see module docs for a summary on the encoding.
+    ///
+    /// If not empty, the first offset is always `0`. This is needed so
+    /// [`UpdateLog::log_start`](super::UpdateLog::log_start) can be checked to be in log or not.
     offsets: VecDeque<u8>,
     meta: OffsetMeta,
 }
@@ -129,15 +137,6 @@ impl OffsetLog {
     /// Only for capacity setters.
     pub(super) fn get_bytes_mut(&mut self) -> &mut VecDeque<u8> {
         &mut self.offsets
-    }
-
-    fn past_to_now(&mut self) -> PastToNow {
-        debug_assert_eq!(self.meta.index, self.offsets.len());
-        PastToNow {
-            iter: self.offsets.iter_mut(),
-            index: 0,
-            index_max: self.meta.index,
-        }
     }
 
     /// Returns an iterator that yields the decoded offsets as `u64`, going from the chronologically
@@ -192,131 +191,236 @@ impl OffsetLog {
     /// value will also be added to `minus`.
     ///
     /// If `minus` is larger than the total sum of offsets in the log, it will be reduced to the
-    /// actual sum. In this case the log is also fully cleared.
+    /// actual sum. In this case the log is also fully cleared. This also is the result of `minus`
+    /// being exactly equal.
     ///
     /// This method returns the amount of offsets that were truncated.
     ///
     /// This method assumes that it currently does not contain a future segment.
-    pub(super) fn truncate_out_of_log(&mut self, minus: &mut u64) -> u64 {
-        if self.meta.index == 0 {
-            *minus = 0;
-            return 0;
-        }
+    pub(super) fn truncate_past(&mut self, minus: &mut u64) -> u64 {
+        self.debug_assert_no_future();
 
+        let mut iter = PastToNow {
+            iter: self.offsets.iter_mut(),
+            index: 0,
+            index_max: self.meta.index,
+        };
         let minus_target = core::mem::take(minus);
-        let mut iter = self.past_to_now();
         let mut removed_offsets = 0;
 
         for item in iter.by_ref() {
             match item {
-                PastToNowItem::Streak(item) if !item.streak.one => {
-                    // zero-offset fully in the past
-                    removed_offsets += item.streak.max as u64 + 1;
-                    if item.last {
-                        self.clear();
-                        return removed_offsets;
-                    }
-                }
                 PastToNowItem::Streak(item) => {
+                    if !item.streak.one {
+                        // 0-offset streak is fully in the past, truncate it
+
+                        removed_offsets += item.streak.max as u64 + 1;
+
+                        if item.last {
+                            self.clear();
+                            return removed_offsets;
+                        }
+
+                        continue;
+                    }
+
+                    // 1-offset streak
+
                     let max64 = item.streak.max as u64;
                     let streak_len = max64 + 1;
                     let remaining = minus_target - *minus;
+                    let last = item.last;
+
                     match max64.checked_sub(remaining) {
                         None => {
-                            // fully remove the byte
+                            // streak is not enough to reach minus, truncate it
+
                             *minus += streak_len;
                             removed_offsets += streak_len;
-                            if item.last {
+
+                            if last {
                                 self.clear();
                                 return removed_offsets;
                             }
                         }
                         Some(0) => {
-                            // streak is reduced to 0 which translates to one 1-offset
-                            // replace it with one 0-offset
+                            // streak is reduced to one 1-offset
+                            // do not remove it but replace it with one 0-offset if there is no
+                            // following 0-offset streak to increase
+
                             *minus += streak_len;
                             removed_offsets += max64;
-                            let patch = iter.streak_patch(item);
-                            patch(self);
+                            let item_index = iter.index;
+
+                            while let Some(PastToNowItem::Streak(PastToNowItemStreak {
+                                streak: Streak { max, one: false },
+                                raw,
+                                last,
+                            })) = iter.next()
+                            {
+                                if max == NON_WRAPPED_BYTE_MASK {
+                                    continue;
+                                }
+
+                                *raw += 1;
+                                self.meta.index -= item_index;
+                                // todo: use truncate_front https://github.com/rust-lang/rust/issues/140667
+                                self.offsets.drain(..item_index);
+
+                                if last {
+                                    let (streak, step) =
+                                        self.meta.streak_and_step.as_mut().unwrap();
+                                    streak.max += 1;
+                                    *step += 1;
+                                }
+
+                                return removed_offsets;
+                            }
+
+                            // no following 0-offset streak found that is not yet full
+
+                            *item.raw = STREAK_ZERO_OR;
+                            let to_drain = item_index - 1;
+                            self.offsets.drain(..to_drain);
+                            self.meta.index -= to_drain;
+
+                            if last {
+                                self.set_meta_after_first_offset();
+                            }
+
                             return removed_offsets;
                         }
                         Some(_) => {
-                            let last = item.last;
+                            // streak is reduced to more than one 1-offset
+                            // reduce streak further by one to replace the first offset with an
+                            // additionally pushed 0-offset
+
                             let remaining_plus_one = remaining as u8 + 1;
                             *item.raw -= remaining_plus_one;
                             *minus += remaining_plus_one as u64;
                             removed_offsets += remaining;
                             let to_drain = iter.index - 1;
+                            // todo: use truncate_front https://github.com/rust-lang/rust/issues/140667
                             self.offsets.drain(..to_drain);
                             self.offsets.push_front(STREAK_ZERO_OR);
                             self.meta.index -= to_drain;
                             self.meta.index += 1;
+
                             if last {
                                 let (streak, step) = self.meta.streak_and_step.as_mut().unwrap();
                                 streak.max -= remaining_plus_one;
                                 *step -= remaining_plus_one;
                             }
+
                             return removed_offsets;
                         }
                     }
                 }
                 PastToNowItem::NonStreak(item) => {
+                    // offset of 2 or more
+
                     *minus += item.offset;
-                    if *minus > minus_target {
-                        let patch = iter.non_streak_patch(item);
-                        patch(self);
+
+                    if *minus <= minus_target {
+                        // offset is not enough to reach minus, truncate it
+
+                        removed_offsets += 1;
+
+                        if item.last {
+                            self.clear();
+                            return removed_offsets;
+                        }
+
+                        continue;
+                    }
+
+                    // offset exceeds minus
+                    // do not remove it but replace it with one 0-offset if there is no
+                    // following 0-offset streak to increase and this is a single-byte offset
+
+                    let item_index = iter.index;
+                    let last = item.last;
+
+                    while let Some(PastToNowItem::Streak(PastToNowItemStreak {
+                        streak: Streak { max, one: false },
+                        raw,
+                        last,
+                    })) = iter.next()
+                    {
+                        if max == NON_WRAPPED_BYTE_MASK {
+                            continue;
+                        }
+
+                        *raw += 1;
+                        self.meta.index -= item_index;
+                        // todo: use truncate_front https://github.com/rust-lang/rust/issues/140667
+                        self.offsets.drain(..item_index);
+
+                        if last {
+                            let (streak, step) = self.meta.streak_and_step.as_mut().unwrap();
+                            streak.max += 1;
+                            *step += 1;
+                        }
+
                         return removed_offsets;
                     }
-                    removed_offsets += 1;
-                    if item.last {
-                        self.clear();
-                        return removed_offsets;
+
+                    // no following 0-offset streak found that is not yet full
+
+                    match item.raw {
+                        Some(raw) => {
+                            *raw = STREAK_ZERO_OR;
+                            let to_drain = item_index - 1;
+                            // todo: use truncate_front https://github.com/rust-lang/rust/issues/140667
+                            self.offsets.drain(..to_drain);
+                            self.meta.index -= to_drain;
+                        }
+                        None => {
+                            let to_drain = item_index;
+                            // todo: use truncate_front https://github.com/rust-lang/rust/issues/140667
+                            self.offsets.drain(..to_drain);
+                            self.offsets.push_front(STREAK_ZERO_OR);
+                            self.meta.index -= to_drain;
+                            self.meta.index += 1;
+                        }
                     }
+
+                    if last {
+                        self.set_meta_after_first_offset();
+                    }
+
+                    return removed_offsets;
                 }
             };
         }
-        let to_drain = iter.index;
-        match iter.next().unwrap() {
-            PastToNowItem::Streak(PastToNowItemStreak {
-                streak: Streak { one: false, .. },
-                ..
-            }) => {
-                self.offsets.drain(..to_drain);
-                self.meta.index -= to_drain;
-            }
-            PastToNowItem::Streak(item) if item.streak.max == 0 => {
-                *minus += 1;
-                let patch = iter.streak_patch(item);
-                patch(self);
-            }
-            PastToNowItem::Streak(item) => {
-                let last = item.last;
-                *item.raw -= 1;
-                *minus += 1;
-                self.offsets.drain(..to_drain);
-                self.offsets.push_front(STREAK_ZERO_OR);
-                self.meta.index -= to_drain;
-                self.meta.index += 1;
-                if last {
-                    self.set_meta_after_first_offset();
-                }
-            }
-            PastToNowItem::NonStreak(item) => {
-                *minus += item.offset;
-                let patch = iter.non_streak_patch(item);
-                patch(self);
-            }
-        }
-        removed_offsets
+
+        // reaching this means the log is empty
+        debug_assert_eq!(*minus, 0);
+        debug_assert_eq!(removed_offsets, 0);
+        0
     }
+
+    fn set_meta_after_first_offset(&mut self) {
+        debug_assert_eq!(self.meta.index, 1);
+        debug_assert_eq!(self.offsets.len(), 1);
+        debug_assert_eq!(self.offsets[0] & WRAPPING_OFFSET_OR, STREAK_ZERO_OR);
+        self.meta.streak_and_step = Some((Streak { max: 0, one: false }, 0));
+    }
+
     pub(super) fn clear(&mut self) {
         self.offsets.clear();
         self.meta = OffsetMeta::default();
     }
-    /// Expects [`Self::truncate_future`] to be called in advance.
+
+    /// Push an offset to the log.
     ///
-    /// Returns `true` if the log was empty before the call.
+    /// Returns `true` if the log was empty before the call in which case the pushed offset is
+    /// always `0` regardless of `offset`.
+    ///
+    /// This method assumes that it currently does not contain a future segment.
     pub(super) fn push_was_empty(&mut self, offset: u64) -> bool {
+        self.debug_assert_no_future();
+
         match offset {
             _ if self.offsets.is_empty() => {
                 // first offset is always a zero
@@ -343,8 +447,10 @@ impl OffsetLog {
             ..MULTI_BYTE_OFFSET_8 => self.push_bytes::<7>(offset),
             _ => self.push_bytes::<8>(offset),
         }
+
         false
     }
+
     fn push_streak<const ONE: bool>(&mut self) {
         if let Some((streak, step)) = &mut self.meta.streak_and_step
             && streak.one == ONE
@@ -360,6 +466,7 @@ impl OffsetLog {
             self.offsets.push_back(streak.into());
         }
     }
+
     fn push_bytes<const WRAPPED: usize>(&mut self, mut offset: u64) {
         self.meta.index += WRAPPED + 2;
         self.meta.streak_and_step = None;
@@ -378,11 +485,13 @@ impl OffsetLog {
 
         self.offsets.push_back(offset as u8 | WRAPPING_OFFSET_OR);
     }
-    fn set_meta_after_first_offset(&mut self) {
-        debug_assert_eq!(self.meta.index, 1);
-        debug_assert_eq!(self.offsets.len(), 1);
-        debug_assert_eq!(self.offsets[0] & WRAPPING_OFFSET_OR, STREAK_ZERO_OR);
-        self.meta.streak_and_step = Some((Streak { max: 0, one: false }, 0));
+
+    fn debug_assert_no_future(&self) {
+        debug_assert_eq!(self.meta.index, self.offsets.len());
+        #[cfg(debug_assertions)]
+        if let Some((streak, step)) = self.meta.streak_and_step {
+            assert_eq!(streak.max, step)
+        }
     }
 }
 
@@ -398,123 +507,6 @@ struct PastToNow<'a> {
     index_max: usize,
 }
 
-impl PastToNow<'_> {
-    /// Returns a closure that either replaces `item` in [`OffsetLog::offsets`] with an `0` offset
-    /// or, which is preferred, removes it and increases an immediately following, existing
-    /// `0`-offset streak.
-    fn streak_patch(mut self, item: PastToNowItemStreak) -> impl FnOnce(&mut OffsetLog) + use<> {
-        let item_index = self.index;
-        let mut last = item.last;
-        let mut increase_existing = false;
-        if last {
-            *item.raw = STREAK_ZERO_OR;
-        } else {
-            while let Some(PastToNowItem::Streak(PastToNowItemStreak {
-                streak: Streak { max, one: false },
-                raw,
-                last: next_last,
-            })) = self.next()
-            {
-                if max == NON_WRAPPED_BYTE_MASK {
-                    continue;
-                }
-                *raw += 1;
-                last = next_last;
-                increase_existing = true;
-                break;
-            }
-            if !increase_existing {
-                *item.raw = STREAK_ZERO_OR;
-            }
-        }
-        move |offset_log| {
-            if increase_existing {
-                let to_drain = item_index;
-                offset_log.meta.index -= to_drain;
-                offset_log.offsets.drain(..to_drain);
-                if last {
-                    let (streak, step) = offset_log.meta.streak_and_step.as_mut().unwrap();
-                    streak.max += 1;
-                    *step += 1;
-                }
-            } else {
-                let to_drain = item_index - 1;
-                offset_log.offsets.drain(..to_drain);
-                offset_log.meta.index -= to_drain;
-                if last {
-                    offset_log.set_meta_after_first_offset();
-                }
-            }
-        }
-    }
-
-    /// Returns a closure that either replaces `item` in [`OffsetLog::offsets`] with an `0` offset
-    /// or, which is preferred, removes it and increases an immediately following, existing
-    /// `0`-offset streak.
-    fn non_streak_patch(
-        mut self,
-        item: PastToNowItemNonStreak,
-    ) -> impl FnOnce(&mut OffsetLog) + use<> {
-        let item_index = self.index;
-        let mut last = item.last;
-        let mut increase_existing = false;
-        let single_byte_offset = item.raw.is_some();
-        if last {
-            if let Some(raw) = item.raw {
-                *raw = STREAK_ZERO_OR;
-            }
-        } else {
-            while let Some(PastToNowItem::Streak(PastToNowItemStreak {
-                streak: Streak { max, one: false },
-                raw,
-                last: next_last,
-            })) = self.next()
-            {
-                if max == NON_WRAPPED_BYTE_MASK {
-                    continue;
-                }
-                *raw += 1;
-                last = next_last;
-                increase_existing = true;
-                break;
-            }
-            if !increase_existing {
-                if let Some(raw) = item.raw {
-                    *raw = STREAK_ZERO_OR;
-                }
-            }
-        }
-
-        move |offset_log| {
-            if increase_existing {
-                let to_drain = item_index;
-                offset_log.meta.index -= to_drain;
-                offset_log.offsets.drain(..to_drain);
-                if last {
-                    let (streak, step) = offset_log.meta.streak_and_step.as_mut().unwrap();
-                    streak.max += 1;
-                    *step += 1;
-                }
-                return;
-            }
-            if single_byte_offset {
-                let to_drain = item_index - 1;
-                offset_log.offsets.drain(..to_drain);
-                offset_log.meta.index -= to_drain;
-            } else {
-                let to_drain = item_index;
-                offset_log.offsets.drain(..to_drain);
-                offset_log.offsets.push_front(STREAK_ZERO_OR);
-                offset_log.meta.index -= to_drain;
-                offset_log.meta.index += 1;
-            }
-            if last {
-                offset_log.set_meta_after_first_offset();
-            }
-        }
-    }
-}
-
 impl<'a> Iterator for PastToNow<'a> {
     type Item = PastToNowItem<'a>;
     fn next(&mut self) -> Option<Self::Item> {
@@ -522,17 +514,17 @@ impl<'a> Iterator for PastToNow<'a> {
         self.index += 1;
 
         match FirstByte::from(&*first_byte) {
-            FirstByte::SingleByteOffset(offset) => {
-                Some(PastToNowItem::NonStreak(PastToNowItemNonStreak {
-                    offset,
-                    raw: Some(first_byte),
-                    last: self.index == self.index_max,
-                }))
-            }
             FirstByte::SingleByteStreak(streak) => {
                 Some(PastToNowItem::Streak(PastToNowItemStreak {
                     streak,
                     raw: first_byte,
+                    last: self.index == self.index_max,
+                }))
+            }
+            FirstByte::SingleByteOffset(offset) => {
+                Some(PastToNowItem::NonStreak(PastToNowItemNonStreak {
+                    offset,
+                    raw: Some(first_byte),
                     last: self.index == self.index_max,
                 }))
             }
@@ -759,24 +751,6 @@ impl From<Streak> for u8 {
     }
 }
 
-impl TryFrom<&u8> for Streak {
-    type Error = ();
-    fn try_from(value: &u8) -> Result<Self, Self::Error> {
-        let value = *value;
-        match value >> 6 {
-            0b01 => Ok(Streak {
-                max: value & NON_WRAPPED_BYTE_MASK,
-                one: false,
-            }),
-            0b10 => Ok(Streak {
-                max: value & NON_WRAPPED_BYTE_MASK,
-                one: true,
-            }),
-            _ => Err(()),
-        }
-    }
-}
-
 enum FirstByte {
     SingleByteOffset(u64),
     SingleByteStreak(Streak),
@@ -787,15 +761,15 @@ impl From<&u8> for FirstByte {
     fn from(value: &u8) -> Self {
         let value = *value;
         match value >> 6 {
-            0b00 => Self::SingleByteOffset(value as u64 + SINGLE_BYTE_OFFSET), // 0 and 1 are encoded in streaks, so + 2 here
-            0b01 => Self::SingleByteStreak(Streak {
-                max: value & NON_WRAPPED_BYTE_MASK,
-                one: false
-            }),
             0b10 => Self::SingleByteStreak(Streak {
                 max: value & NON_WRAPPED_BYTE_MASK,
                 one: true
             }),
+            0b01 => Self::SingleByteStreak(Streak {
+                max: value & NON_WRAPPED_BYTE_MASK,
+                one: false
+            }),
+            0b00 => Self::SingleByteOffset(value as u64 + SINGLE_BYTE_OFFSET),
             _ /*0b11*/ => Self::MultiByteOffsetIncomplete((value & NON_WRAPPED_BYTE_MASK) as u64)
         }
     }
@@ -1010,7 +984,7 @@ mod test {
             }
             let total_pushed = log.now_to_past().sum::<u64>();
             assert_eq!(total, total_pushed);
-            let actual_removed_offsets = log.truncate_out_of_log(&mut minus);
+            let actual_removed_offsets = log.truncate_past(&mut minus);
             let total_truncated = log.now_to_past().sum::<u64>();
             assert_eq!(expected_minus, total_pushed - total_truncated);
             assert_eq!(minus, expected_minus);

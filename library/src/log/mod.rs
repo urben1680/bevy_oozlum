@@ -231,15 +231,13 @@ impl<'a, T> DrainAll<'a, T> {
 impl<T> Iterator for DrainAll<'_, T> {
     type Item = T;
     fn next(&mut self) -> Option<T> {
-        if self.gap_range.buffer_pending() {
-            if self.gap_range.start == self.gap_range.start_offset {
-                *self.gap_buffer = self.drain.by_ref().take(self.gap_range.end).collect();
-                self.gap_range.end -= self.gap_range.start;
-                self.gap_range.start = 0;
-            } else {
-                self.gap_range.start -= 1;
-                self.gap_range.end -= 1;
-            }
+        if self.gap_range.start > 0 {
+            self.gap_range.start -= 1;
+            self.gap_range.end -= 1;
+        } else if self.gap_range.end > 0 {
+            *self.gap_buffer = self.drain.by_ref().take(self.gap_range.end).collect();
+            self.gap_range.end = 0;
+            self.gap_range.start = 0;
         }
         self.drain.next()
     }
@@ -252,9 +250,9 @@ impl<T> Iterator for DrainAll<'_, T> {
 impl<T> ExactSizeIterator for DrainAll<'_, T> {
     fn len(&self) -> usize {
         if self.gap_range.buffer_pending() {
-            self.drain.len().saturating_sub(
-                self.gap_range.end - self.gap_range.start + self.gap_range.start_offset,
-            )
+            self.drain
+                .len()
+                .saturating_sub(self.gap_range.end - self.gap_range.start)
         } else {
             self.drain.len()
         }
@@ -266,8 +264,7 @@ impl<T> FusedIterator for DrainAll<'_, T> {}
 impl<T> Drop for DrainAll<'_, T> {
     fn drop(&mut self) {
         if self.gap_range.buffer_pending() {
-            let offset = self.gap_range.start_offset;
-            let start = self.gap_range.start - offset;
+            let start = self.gap_range.start;
             let len = self.gap_range.end - start;
             *self.gap_buffer = self.drain.by_ref().skip(start).take(len).collect();
         }
@@ -277,36 +274,30 @@ impl<T> Drop for DrainAll<'_, T> {
 #[derive(Clone, Copy, Debug)]
 struct GapRange {
     start: usize,
-    start_offset: usize, // todo: deprecate, no drain_past logic in transition logs
     end: usize,
 }
 
 impl GapRange {
-    fn new(start: usize, start_offset: usize, end: usize) -> Self {
-        Self {
-            start,
-            start_offset, /*: 0*/
-            end,
-        }
+    fn new(start: usize, end: usize) -> Self {
+        Self { start, end }
     }
     fn new_offset_one(start: usize, end: usize) -> Self {
-        Self::new(start, 1, end)
+        Self::new(start, end)
     }
     fn new_clear(index: usize) -> Self {
         Self {
             start: index,
-            start_offset: 0,
             end: index,
         }
     }
     fn is_clear(self) -> bool {
-        self.start_offset == 0 && self.start == self.end
+        self.start == self.end
     }
     fn buffer_pending(self) -> bool {
         !self.is_clear() && self.start > 0
     }
     fn drain_past_end(&mut self) -> usize {
-        let end = self.start.saturating_sub(self.start_offset);
+        let end = self.start;
         self.end -= end;
         self.start = 0;
         end

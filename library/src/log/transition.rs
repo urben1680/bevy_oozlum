@@ -3,13 +3,9 @@ use crate::{
     meta::RevMeta,
 };
 use core::fmt::Debug;
-use std::{
-    collections::{
-        TryReserveError, VecDeque,
-        vec_deque::{Drain, Iter},
-    },
-    mem::ManuallyDrop,
-    usize,
+use std::collections::{
+    TryReserveError, VecDeque,
+    vec_deque::{Drain, Iter},
 };
 
 /// A log that is updated with exactly one transition type `T` that is used to transition a state
@@ -255,7 +251,7 @@ impl<T> TransitionLog<T> {
         self.meta_log_exits = meta.log_exits();
         Ok(TransitionDrain {
             log: self,
-            transition: ManuallyDrop::new(transition),
+            transition: Some(transition),
             push: max_past_len > 0,
             gap_range,
             gap_buffer: Default::default(),
@@ -338,8 +334,8 @@ impl<T> TransitionLog<T> {
     }
 }
 
-/// A container returned by [`TransitionLog::push`] that can be used to iterate the log entried that
-/// are to be truncated because they are out of log.
+/// A container returned by [`TransitionLog::forward_push`] that can be used to iterate the log
+/// entries that are to be truncated because they are out of log.
 ///
 /// The content of the available drains look like this:
 ///
@@ -347,8 +343,6 @@ impl<T> TransitionLog<T> {
 /// entry was pushed. Positive numbers are in the future, which is the case after
 /// [`TransitionLog::backward_log`] was used three times. When the drains are performed, the actual
 /// new entry `X` is pushed.
-///
-/// The `max_past_len` value would be `3` in this example.
 ///
 /// ```text
 /// [A] [B] [C] [D] [E] [F] [G] [H] [I]
@@ -359,33 +353,35 @@ impl<T> TransitionLog<T> {
 ///             -3  -2   1   0
 /// ```
 ///
-/// Note that `D` is actually not needed for this log anymore but may still be kept:
+/// The `max_past_len` value would be `4` in this example.
 ///
 /// A log entry is used to transition between two states. Because of this, `N` log entries are
-/// needed for `N+1` states. If `max_past_len` is now `3`, that means plus the present state there
-/// are 4 global states. Transitioning between them would need only three log entries, but as the
-/// above scheme shows, the final amount of log entries with `X` is four.
+/// needed for `N+1` states. If `max_past_len` is now `4`, that means plus the present state there
+/// are 4 global states. Transitioning between them need only the three log entries `D`, `E` and
+/// `F`, not `C`.
 ///
-/// The reason is it may lead to subtle bugs in the user's cleanup logic if `D` was included in the
-/// past drain. `D` was pushed at a frame that is still >= [`RevMeta::past_end`] and that may be
-/// unexpected. Because of this, `D` is kept if the past is actively drained via
-/// [`past`](Self::past) or [`all`](Self::all). If only [`future`](Self::future) is used or this
-/// container is dropped unused, `D` will be truncated.
+/// Note that with a `max_past_len` of `0`, the pushed log entry is also yielded by the past drain.
 #[derive(Debug)]
 pub struct TransitionDrain<'a, T> {
     log: &'a mut TransitionLog<T>,
-    transition: ManuallyDrop<T>,
+    transition: Option<T>,
     push: bool,
     gap_range: GapRange,
     gap_buffer: Box<[T]>,
 }
 
+pub(super) type DrainAndMaybePushedTransition<'a, T> =
+    core::iter::Chain<Drain<'a, T>, core::option::IntoIter<T>>;
+
 impl<'a, T> TransitionDrain<'a, T> {
     /// Returns log entries that were pushed before [`RevMeta::past_end`].
-    pub fn past(&mut self) -> Drain<'_, T> {
-        self.push = true;
+    pub fn past(&mut self) -> DrainAndMaybePushedTransition<'_, T> {
         let end = self.gap_range.drain_past_end();
-        self.log.transitions.drain(..end)
+        let mut maybe_pushed = None;
+        if !self.push {
+            maybe_pushed = self.transition.take();
+        }
+        self.log.transitions.drain(..end).chain(maybe_pushed)
     }
 
     /// Returns log entries that were pushed after [`RevMeta::now`] which, at this point of time,
@@ -398,7 +394,6 @@ impl<'a, T> TransitionDrain<'a, T> {
     /// Returns log entries that were pushed before [`RevMeta::past_end`] or after [`RevMeta::now`]
     /// which, at this point of time, is equal to [`RevMeta::future_end`].
     pub fn all(&mut self) -> DrainAll<'_, T> {
-        self.push = true;
         DrainAll::new(
             &mut self.log.transitions,
             &mut self.gap_range,
@@ -416,11 +411,11 @@ impl<'a, T> TransitionDrain<'a, T> {
         self.log.transitions.range(..self.gap_range.start)
     }
 
-    pub(super) fn transition_mut(&mut self) -> &mut T {
-        &mut self.transition
+    pub(super) fn transition_mut(&mut self) -> Option<&mut T> {
+        self.transition.as_mut()
     }
 
-    pub(super) fn does_push(&self) -> bool {
+    pub(super) fn push(&self) -> bool {
         self.push
     }
 }
@@ -435,11 +430,9 @@ impl<T> Drop for TransitionDrain<'_, T> {
             self.log.transitions.drain(..self.gap_range.start);
         }
         prepend(&mut self.log.transitions, &mut self.gap_buffer);
-        let transition = unsafe {
-            // SAFETY: only use of self.transition until the end of drop
-            ManuallyDrop::take(&mut self.transition)
-        };
-        if self.push {
+        if self.push
+            && let Some(transition) = self.transition.take()
+        {
             self.log.transitions.push_back(transition);
         }
         self.log.index = self.log.transitions.len();
@@ -550,8 +543,8 @@ mod test {
         meta_and_logs.forward([], [], 'b', false);
         meta_and_logs.forward([], [], 'c', false);
         meta_and_logs.forward([], [], 'd', false);
-        meta_and_logs.forward([], [], 'e', false); // non-past draining remove 'a' here
-        meta_and_logs.forward(['a'], [], 'f', false);
+        meta_and_logs.forward(['a'], [], 'e', false);
+        meta_and_logs.forward(['b'], [], 'f', false);
 
         meta_and_logs.backward_log(Ok('f'));
         meta_and_logs.backward_log(Ok('e'));
@@ -583,7 +576,7 @@ mod test {
         meta_and_logs.backward_log(Ok('g'));
         meta_and_logs.backward_log(Ok('d'));
 
-        meta_and_logs.forward(['b', 'c'], ['d', 'g'], 'h', true);
+        meta_and_logs.forward(['c'], ['d', 'g'], 'h', true);
 
         meta_and_logs.backward_log(Ok('h'));
         meta_and_logs.backward_log(Err(()));
@@ -614,6 +607,6 @@ mod test {
         meta_and_logs
             .meta
             .set_max_world_states(NonZeroU64::new(2).unwrap());
-        meta_and_logs.forward(['j'], ['l'], 'm', false);
+        meta_and_logs.forward(['j', 'k'], ['l'], 'm', false);
     }
 }

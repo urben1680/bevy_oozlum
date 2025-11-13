@@ -1,5 +1,8 @@
 use crate::{
-    log::{DrainAll, GapRange, OutOfLog, TransitionDrain, TransitionLog, prepend},
+    log::{
+        DrainAll, GapRange, OutOfLog, TransitionDrain, TransitionLog, prepend,
+        transition::DrainAndMaybePushedTransition,
+    },
     meta::RevMeta,
 };
 use core::{
@@ -332,21 +335,17 @@ impl<T, U> TransitionsLog<T, U> {
         let gap_range = if updates.is_clear() {
             GapRange::new_clear(self.index)
         } else {
-            let mut start_offset = 0;
             let start = updates
                 .iter_past()
-                .map(|update| {
-                    start_offset = update.transitions;
-                    start_offset
-                })
+                .map(|update| update.transitions)
                 .sum::<usize>();
-            GapRange::new(start, start_offset, self.index)
+            GapRange::new(start, self.index)
         };
         Ok(TransitionsDrain {
             transitions: &mut self.transitions,
             updates,
             index: &mut self.index,
-            transitions_iter: ManuallyDrop::new(transitions),
+            transitions_iter: Some(transitions),
             gap_range,
             gap_buffer: Default::default(),
         })
@@ -449,19 +448,35 @@ where
     transitions: &'a mut VecDeque<T>,
     updates: TransitionDrain<'a, TransitionsLogUpdate<U>>,
     index: &'a mut usize,
-    transitions_iter: ManuallyDrop<I>,
+    transitions_iter: Option<I>,
     gap_range: GapRange,
     gap_buffer: Box<[T]>,
 }
+
+pub(super) type DrainAndMaybePushedTransitions<'a, T, I> =
+    core::iter::Chain<Drain<'a, T>, core::iter::Flatten<core::option::IntoIter<I>>>;
 
 impl<'a, T, U, I> TransitionsDrain<'a, T, U, I>
 where
     I: IntoIterator<Item = T>,
 {
     /// Returns log entries that were pushed before [`RevMeta::past_end`].
-    pub fn past(&mut self) -> TransitionsDrainIters<Drain<T>, Drain<TransitionsLogUpdate<U>>, U> {
+    pub fn past(
+        &mut self,
+    ) -> TransitionsDrainIters<
+        DrainAndMaybePushedTransitions<T, I>,
+        DrainAndMaybePushedTransition<TransitionsLogUpdate<U>>,
+        U,
+    > {
         let end = self.gap_range.drain_past_end();
-        let transitions = self.transitions.drain(..end);
+        let mut maybe_pushed = None;
+        if !self.updates.push() {
+            maybe_pushed = self.transitions_iter.take();
+        }
+        let transitions = self
+            .transitions
+            .drain(..end)
+            .chain(maybe_pushed.into_iter().flatten());
         let updates = self.updates.past();
         TransitionsDrainIters {
             transitions,
@@ -515,15 +530,13 @@ where
             self.transitions.drain(..self.gap_range.start);
         }
         prepend(&mut self.transitions, &mut self.gap_buffer);
-        let transitions_iter = unsafe {
-            // SAFETY: only called this once in Drop
-            ManuallyDrop::take(&mut self.transitions_iter)
-        };
-        if self.updates.does_push() {
+        if self.updates.push()
+            && let Some(transitions_iter) = self.transitions_iter.take()
+        {
             let mut len = self.transitions.len();
             self.transitions.extend(transitions_iter);
             len = self.transitions.len() - len;
-            self.updates.transition_mut().transitions = len;
+            self.updates.transition_mut().unwrap().transitions = len;
         }
         *self.index = self.transitions.len();
     }
@@ -538,8 +551,8 @@ pub struct TransitionsDrainIters<TI, UI, U> {
 
 impl<TI, UI, U> TransitionsDrainIters<TI, UI, U>
 where
-    TI: ExactSizeIterator,
-    UI: ExactSizeIterator<Item = TransitionsLogUpdate<U>>,
+    TI: Iterator,
+    UI: Iterator<Item = TransitionsLogUpdate<U>>,
 {
     /// Returns the transitions and the update of the next log entry from the draining iterators.
     ///
@@ -755,8 +768,8 @@ mod test {
         meta_and_logs.forward([], [], B, false);
         meta_and_logs.forward([], [], C, false);
         meta_and_logs.forward([], [], D, false);
-        meta_and_logs.forward([], [], E, false); // non-past draining remove a() here
-        meta_and_logs.forward([A], [], F, false);
+        meta_and_logs.forward([A], [], E, false); // non-past draining remove a() here
+        meta_and_logs.forward([B], [], F, false);
 
         meta_and_logs.backward_log(Ok(F));
         meta_and_logs.backward_log(Ok(E));
@@ -788,7 +801,7 @@ mod test {
         meta_and_logs.backward_log(Ok(G));
         meta_and_logs.backward_log(Ok(D));
 
-        meta_and_logs.forward([B, C], [D, G], H, true);
+        meta_and_logs.forward([C], [D, G], H, true);
 
         meta_and_logs.backward_log(Ok(H));
         meta_and_logs.backward_log(Err(()));
@@ -814,6 +827,6 @@ mod test {
         meta_and_logs
             .meta
             .set_max_world_states(NonZeroU64::new(2).unwrap());
-        meta_and_logs.forward([J], [L], M, false);
+        meta_and_logs.forward([J, K], [L], M, false);
     }
 }
