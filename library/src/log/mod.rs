@@ -131,9 +131,9 @@ use std::collections::{VecDeque, vec_deque::Drain};
 
 pub(crate) use update::{
     PreUpdateKind,
-    limits::{UpdateLogLimits, UpdateLogState},
+    limit::{UpdateLogLimits, UpdateLogState},
 };
-pub use update::{UpdateLog, limits::UpdateLogId, limits::UpdateLogMissed};
+pub use update::{UpdateLog, limit::UpdateLogId, limit::UpdateLogMissed};
 
 pub use transition::{TransitionDrain, TransitionLog};
 pub use transitions::{
@@ -146,8 +146,6 @@ mod update;
 
 #[cfg(test)]
 mod test;
-
-// todo: remove Debug impls from Drainers
 
 /// An error that may be returned by the `backward_log`/`forward_log` methods of
 /// [`TransitionLog`]/[`TransitionsLog`] in case they already were at the end of their log before
@@ -186,35 +184,42 @@ impl Display for OutOfLog {
 
 impl Error for OutOfLog {}
 
+/// Iterator that drains both past and future log entries that got
+/// [out of log](crate::meta::RevMeta::contains).
 pub struct DrainAll<'a, T> {
-    /// A draining iterator of all log entries, if there is a gap ...
     drain: Drain<'a, T>,
     gap_range: GapRange,
     gap_buffer: &'a mut Box<[T]>,
 }
 
 impl<'a, T> DrainAll<'a, T> {
-    /// Pick a fitting draining range and mutate `gap` to be `0..deque.len()` when draining is done.
-    ///
-    /// This way a second call would return `Self` being empty and not draining anything more.
+    /// Calling this will cause `log` to become empty.
+    /// 
+    /// Calling this again will return an empty iterator.
     fn new(
         log: &'a mut VecDeque<T>,
         gap_range: &mut GapRange,
         gap_buffer: &'a mut Box<[T]>,
     ) -> Self {
+        // this_range is basically the state before the iteration, and gap_range will be mutated
+        // here to the state after iteration/drop
         let mut this_range = gap_range.clone();
 
         let drain;
         if gap_range.end == log.len() {
+            // only a past to drain
             drain = log.drain(..gap_range.start);
             this_range.end = gap_range.start;
             gap_range.end -= gap_range.start;
             gap_range.start = 0;
         } else if gap_range.start == 0 {
+            // only a future to drain
             drain = log.drain(gap_range.end..);
             this_range.start = 0;
             this_range.end = 0;
         } else {
+            // full drain including log items that are not out-of-log, but those will be buffered in
+            // gap_buffer for reinsertion at drop
             gap_range.start = 0;
             gap_range.end = 0;
             drain = log.drain(..);
@@ -232,9 +237,11 @@ impl<T> Iterator for DrainAll<'_, T> {
     type Item = T;
     fn next(&mut self) -> Option<T> {
         if self.gap_range.start > 0 {
+            // pre buffering
             self.gap_range.start -= 1;
             self.gap_range.end -= 1;
         } else if self.gap_range.end > 0 {
+            // buffer before advancing
             *self.gap_buffer = self.drain.by_ref().take(self.gap_range.end).collect();
             self.gap_range.end = 0;
             self.gap_range.start = 0;
@@ -271,6 +278,8 @@ impl<T> Drop for DrainAll<'_, T> {
     }
 }
 
+/// Defines a range of log entries that should be kept. Behaves like [`Range`](core::ops::Range) but
+/// comes with usecase-relevant methods.
 #[derive(Clone, Copy, Debug)]
 struct GapRange {
     start: usize,
@@ -280,9 +289,6 @@ struct GapRange {
 impl GapRange {
     fn new(start: usize, end: usize) -> Self {
         Self { start, end }
-    }
-    fn new_offset_one(start: usize, end: usize) -> Self {
-        Self::new(start, end)
     }
     fn new_clear(index: usize) -> Self {
         Self {
@@ -296,7 +302,7 @@ impl GapRange {
     fn buffer_pending(self) -> bool {
         !self.is_clear() && self.start > 0
     }
-    fn drain_past_end(&mut self) -> usize {
+    fn take_drain_past_end(&mut self) -> usize {
         let end = self.start;
         self.end -= end;
         self.start = 0;

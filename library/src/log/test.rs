@@ -83,28 +83,28 @@ impl GapTest {
 fn drain_all_iterator_works() {
     let tests = [
         (
-            GapRange::new_offset_one(0, 0),
+            GapRange::new(0, 0),
             GapTest::gap_empty(ABC, EMPTY),
         ),
-        (GapRange::new_offset_one(0, 1), GapTest::gap_a()),
-        (GapRange::new_offset_one(0, 2), GapTest::gap_ab()),
-        (GapRange::new_offset_one(0, 3), GapTest::gap_abc()),
+        (GapRange::new(0, 1), GapTest::gap_a()),
+        (GapRange::new(0, 2), GapTest::gap_ab()),
+        (GapRange::new(0, 3), GapTest::gap_abc()),
         (GapRange::new_clear(0), GapTest::gap_clear()),
         (
-            GapRange::new_offset_one(1, 1),
+            GapRange::new(1, 1),
             GapTest::gap_empty(ABC, EMPTY),
         ),
-        (GapRange::new_offset_one(1, 2), GapTest::gap_b()),
-        (GapRange::new_offset_one(1, 3), GapTest::gap_bc()),
+        (GapRange::new(1, 2), GapTest::gap_b()),
+        (GapRange::new(1, 3), GapTest::gap_bc()),
         (GapRange::new_clear(1), GapTest::gap_clear()),
         (
-            GapRange::new_offset_one(2, 2),
+            GapRange::new(2, 2),
             GapTest::gap_empty(ABC, EMPTY),
         ),
-        (GapRange::new_offset_one(2, 3), GapTest::gap_c()),
+        (GapRange::new(2, 3), GapTest::gap_c()),
         (GapRange::new_clear(2), GapTest::gap_clear()),
         (
-            GapRange::new_offset_one(3, 3),
+            GapRange::new(3, 3),
             GapTest::gap_empty(ABC, EMPTY),
         ),
         (GapRange::new_clear(3), GapTest::gap_clear()),

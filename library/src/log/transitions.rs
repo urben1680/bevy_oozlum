@@ -468,7 +468,7 @@ where
         DrainAndMaybePushedTransition<TransitionsLogUpdate<U>>,
         U,
     > {
-        let end = self.gap_range.drain_past_end();
+        let end = self.gap_range.take_drain_past_end();
         let mut maybe_pushed = None;
         if !self.updates.push() {
             maybe_pushed = self.transitions_iter.take();

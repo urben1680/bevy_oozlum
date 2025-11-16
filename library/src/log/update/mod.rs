@@ -3,47 +3,11 @@ use bevy_ecs::change_detection::MaybeLocation;
 use core::fmt::{Debug, Display};
 use std::collections::TryReserveError;
 
-pub use limits::UpdateLogId;
-use limits::*;
+pub use limit::UpdateLogId;
+use limit::*;
 
-pub(super) mod limits;
+pub(super) mod limit;
 mod offset;
-
-/*
-Zunehmend Probleme, Umsetzung nicht sehr stabil wegen vieler edge cases
-
-Lösungen:
-1. zurück zu u64 log
- - sehr simpel, leicht zu warten
- - verbraucht bei langen logs und häufigen runs viel speicher, alleine je rev system
-2. u64 log als abstraktion über offset log
- - ählich wie jetzt aber expliziter getrennt
- - iter gibt keine offsets sondern frames zurück
- - ähnlich oder mehr komplex
-3. komplexibilität beibehalten, wieder Option<NonMaxUsize> index nutzen
-
-
-
-frame log logik:
-
-1. forward pusht den aktuellen frame, index = len
-2. backward_log prüft log[index-1]
-3. forward_log prüft log[index]
-
-
-andere Idee:
-
-- OffsetIter gibt nur den offset zurück, keine len
-- OffsetIter hat selbst das &mut single_byte_step byte
-- weitere single-byte optimierung für 1-offset
--- 0b00_xxxxxx => small offset + 1
--- 0b01_xxxxxx => zero offset + 2
--- 0b10_xxxxxx => one offset + 1
--- 0b11_xxxxxx => large offset (wrapping byte)
---- 0b0_xxxxxxx => large offset (wrapped byte)
-
-
-*/
 
 /// A log that keeps track when it was updated and provides an alternative value to
 /// [`RevMeta::past_len`] for when these updates do not happen exactly once per
@@ -113,31 +77,27 @@ andere Idee:
 /// ```
 #[derive(Default, Debug)]
 pub struct UpdateLog {
-    offsets: OffsetLog,
     /// Offsets that need to be added or subtracted from [`Self::last_update`] to calculate at which
     /// frame the log is expected to be updated.
     ///
     /// For the encoding, see the [`offset`] module.
-    //offset_bytes: VecDeque<u8>,
+    offsets: OffsetLog,
 
-    /// The most past frame the log was updated. Each update truncates offsets until this value is
-    /// larger than [`RevMeta::past_end`].
+    /// The most past frame that can be reached by iterating the offsets to the past from
+    /// [`Self::last_update`]. This frame is equal or less than [`RevMeta::past_end`] and may never
+    /// have been a frame this log was updated at, or was updated at but this frame is no longer
+    /// reachable when traversing the global log.
+    /// 
+    /// This frame is used to determine if and how many past offsets can be truncated.
     log_start: u64,
 
     /// The chronological last frame in the past this log got updated at.
     last_update: u64,
 
-    /// The current index into [`Self::offset_bytes`]. Always points to the first byte of an
-    /// offset sequence or, when at the end of the log, is equal to the `len` of `offset_bytes`.
-    //index: usize,
-
     /// The length of the log which is what this log is keeping track of.
     past_len: u64,
 
-    /// The current amount of sequential offsets of `0`.
-    //zeroes: u8,
-
-    /// The state that is needed to clean up the log at [`Self::pre_update`] and to push
+    /// The state that is needed to clean up the log at [`Self::pre_update_to_clear`] and to push
     /// new limits to [`UpdateLogLimits`].
     update_state: Option<UpdateLogState>,
 }
@@ -279,25 +239,17 @@ impl UpdateLog {
     }
 
     fn forward_past_len_with_caller(&mut self, meta: &RevMeta, caller: MaybeLocation) -> u64 {
-        if self.pre_update_to_clear(meta) || self.last_update < meta.past_end() {
-            // all updates are out of log
+        if self.not_log_should_clear(meta) {
+            // log is empty or all updates are out of log
+            // it is not important what offset is pushed as long log_start + offset = now
+            // asusming 1-offset streak are the most common offsets and that during
+            // RevDirection::NOT_LOG the value of now is non-zero, start such a 1-offset streak here
             self.offsets.clear();
-            self.offsets.push_was_empty(0);
-            self.log_start = meta.now();
+            self.offsets.push_was_empty(1);
+            self.log_start = meta.now() - 1;
             self.last_update = meta.now();
             self.past_len = 1;
         } else {
-            /*
-            Problem: da der erste offset zu 0 wird, steigt self.log_start auch und ist nach dem
-            push ungleich meta.past_end()
-
-            womöglich sollte der erste offset doch nicht 0 sein sondern
-             */
-            if self.log_start <= meta.past_end() {
-                let mut minus = meta.past_end() - self.log_start;
-                self.past_len -= self.offsets.truncate_past(&mut minus);
-                self.log_start += minus;
-            }
             let offset = meta.now() - self.last_update;
             if self.offsets.push_was_empty(offset) {
                 self.log_start = meta.now();
@@ -312,6 +264,17 @@ impl UpdateLog {
         );
 
         self.past_len
+    }
+
+    fn not_log_should_clear(&mut self, meta: &RevMeta) -> bool {
+        self.pre_update_to_clear(meta) || self.last_update < meta.past_end() || {
+            if self.log_start <= meta.past_end() {
+                let mut minus = meta.past_end() - self.log_start;
+                self.past_len -= self.offsets.truncate_past(&mut minus);
+                self.log_start += minus;
+            }
+            self.past_len == 0
+        }
     }
 
     /// Checks at [`RevDirection::BackwardLog`](crate::meta::RevDirection::BackwardLog) if this log
@@ -344,15 +307,11 @@ impl UpdateLog {
         }
 
         let mut iter = self.offsets.now_to_past();
-        let offset = iter.next().unwrap();
+        self.last_update -= iter.next().unwrap();
         iter.sync();
-        let backward_limit = if offset == 0 {
-            iter.next().map_or(0, |_| now_plus_1)
-        } else {
-            self.last_update -= offset;
-            self.last_update
-        };
         self.past_len -= 1;
+
+        let backward_limit = iter.next().map_or(0, |_| self.last_update);
 
         meta.update_log_limits().push_limit(
             &mut self.update_state,
@@ -437,7 +396,6 @@ impl UpdateLog {
 
 /// Defines in which way a log has to be adjusted to reflect new changes to
 /// [`RevMeta`](crate::meta::RevMeta) since the last time the log was updated.
-#[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum PreUpdateKind {
     /// Keep the log unchanged
     Nothing,

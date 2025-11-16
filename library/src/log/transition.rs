@@ -246,7 +246,7 @@ impl<T> TransitionLog<T> {
             let max_past_len = usize::try_from(max_past_len)
                 .unwrap_or(usize::MAX)
                 .saturating_sub(1);
-            GapRange::new_offset_one(self.index.saturating_sub(max_past_len), self.index)
+            GapRange::new(self.index.saturating_sub(max_past_len), self.index)
         };
         self.meta_log_exits = meta.log_exits();
         Ok(TransitionDrain {
@@ -376,7 +376,7 @@ pub(super) type DrainAndMaybePushedTransition<'a, T> =
 impl<'a, T> TransitionDrain<'a, T> {
     /// Returns log entries that were pushed before [`RevMeta::past_end`].
     pub fn past(&mut self) -> DrainAndMaybePushedTransition<'_, T> {
-        let end = self.gap_range.drain_past_end();
+        let end = self.gap_range.take_drain_past_end();
         let mut maybe_pushed = None;
         if !self.push {
             maybe_pushed = self.transition.take();

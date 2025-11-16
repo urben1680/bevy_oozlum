@@ -473,7 +473,7 @@ mod test {
 
         // initial set gives Nothing variant
         let variant = limits.set_update_state(&mut state, 0, 0);
-        assert_eq!(variant, PreUpdateKind::Nothing);
+        assert!(matches!(variant, PreUpdateKind::Nothing));
         assert_eq!(
             state,
             Some(UpdateLogState {
@@ -501,7 +501,7 @@ mod test {
 
         // update at another frame
         let variant = limits.set_update_state(&mut state, 0, 0);
-        assert_eq!(variant, PreUpdateKind::Nothing);
+        assert!(matches!(variant, PreUpdateKind::Nothing));
         assert_eq!(
             state,
             Some(UpdateLogState {
@@ -530,7 +530,7 @@ mod test {
 
         // increased log_exits gives DropFuture variant
         let variant = limits.set_update_state(&mut state, 1, 0);
-        assert_eq!(variant, PreUpdateKind::RemoveFuture);
+        assert!(matches!(variant, PreUpdateKind::RemoveFuture));
         assert_eq!(
             state,
             Some(UpdateLogState {
@@ -560,7 +560,7 @@ mod test {
         // increased log_clears gived DropLog variant and resets everything
         limits.clear();
         let variant = limits.set_update_state(&mut state, 1, 1);
-        assert_eq!(variant, PreUpdateKind::RemoveLog);
+        assert!(matches!(variant, PreUpdateKind::RemoveLog));
         assert_eq!(
             state,
             Some(UpdateLogState {
@@ -577,7 +577,7 @@ mod test {
         // do not clear counter to demonstrate this issues a new, potentially different id
         // limits.clear();
         let variant = limits.set_update_state(&mut state, 2, 2);
-        assert_eq!(variant, PreUpdateKind::RemoveLog);
+        assert!(matches!(variant, PreUpdateKind::RemoveLog));
         assert_eq!(
             state,
             Some(UpdateLogState {
