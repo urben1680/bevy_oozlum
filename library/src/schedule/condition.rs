@@ -106,7 +106,7 @@ impl<T: ReadOnlySystem<In = (), Out = bool>> System for RevCondition<T> {
         })?;
 
         match direction {
-            RevDirection::NOT_LOG => {
+            RevDirection::Forward(_) => {
                 let result = unsafe {
                     // SAFETY:
                     // - in `initialize` T returned the required access to make this safe
@@ -118,7 +118,7 @@ impl<T: ReadOnlySystem<In = (), Out = bool>> System for RevCondition<T> {
 
                 result
             }
-            RevDirection::FORWARD_LOG => self.logs.get(meta, true),
+            RevDirection::ForwardLog => self.logs.get(meta, true),
             RevDirection::BackwardLog => self.logs.get(meta, false),
         }
     }
@@ -199,8 +199,7 @@ impl FailedLogs {
         let past_len = self.err_failed_log.forward_past_len(meta);
         let mut drain = self
             .failed_log
-            .forward_push(meta, past_len, key)
-            .map_err(|err| RunSystemError::Failed(err.into()))?;
+            .forward_push(meta, past_len, key);
         let keys = drain.all();
 
         for hash in keys {
@@ -289,6 +288,8 @@ struct Failed {
 
 #[cfg(test)]
 mod test {
+    use core::num::NonZeroU64;
+
     use crate::meta::RevQueue;
 
     use super::*;
@@ -301,26 +302,26 @@ mod test {
     impl MetaAndLogs {
         fn new() -> Self {
             Self {
-                meta: RevMeta::new(None, false),
+                meta: RevMeta::new(NonZeroU64::MAX, false),
                 logs: Default::default(),
             }
         }
         fn forward(&mut self, result: Result<bool, RunSystemError>) {
-            self.meta.set_queue(RevQueue::RUN_NOT_LOG);
+            self.meta.set_queue(RevQueue::RunForward);
             self.meta.update_ref(Ok(true), |meta, _| {
                 self.logs.insert(meta, &result).unwrap();
             });
         }
         fn noop_forward(&mut self) {
-            self.meta.set_queue(RevQueue::RUN_NOT_LOG);
+            self.meta.set_queue(RevQueue::RunForward);
             self.meta.update_ref(Ok(true), |_, _| ());
         }
         fn forward_log(&mut self, expected: Result<bool, &str>) {
-            self.meta.set_queue(RevQueue::RUN_FORWARD_LOG);
+            self.meta.set_queue(RevQueue::RunForwardLog);
             self.log(true, expected);
         }
         fn backward_log(&mut self, expected: Result<bool, &str>) {
-            self.meta.set_queue(RevQueue::RUN_BACKWARD_LOG);
+            self.meta.set_queue(RevQueue::RunBackwardLog);
             self.log(false, expected);
         }
         fn log(&mut self, forward: bool, expected: Result<bool, &str>) {
@@ -343,7 +344,7 @@ mod test {
                     .as_ref()
                     .is_some_and(|failed_logs| failed_logs.failed_cache.0.len() > 1)
             );
-            self.meta.set_queue(RevQueue::CLEAR_THEN_RUN);
+            self.meta.set_queue(RevQueue::ClearThenRunForward);
             self.meta.update_ref(Ok(true), |meta, _| {
                 self.logs
                     .insert(meta, &Err(RunSystemError::Failed(err.into())))

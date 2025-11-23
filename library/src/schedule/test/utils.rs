@@ -1,3 +1,4 @@
+use core::num::NonZeroU64;
 use super::*;
 use crate::{
     meta::RevDirection,
@@ -35,7 +36,7 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
     // set up world
     let mut world = World::new();
     world.init_resource::<TestLog>();
-    world.insert_resource(RevMeta::new(None, false));
+    world.insert_resource(RevMeta::new(NonZeroU64::MAX, false));
 
     // set up schedules
     let mut schedule = Schedule::new(FixedUpdate);
@@ -71,27 +72,27 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
         world
             .resource_mut::<TestLog>()
             .0
-            .push(LogEntry::SysObsv((n, RevDirection::NOT_LOG)));
+            .push(LogEntry::SysObsv((n, RevDirection::FORWARD_MIN)));
 
         // trigger observer in observer
         world.trigger(SysObsvObsv(n));
 
-        let now = world.resource::<RevMeta>().non_log_now().unwrap();
+        let past_len = world.resource::<RevMeta>().non_log_past_len();
 
         // trigger command in observer
         world.commands().queue(move |world: &mut World| {
             world
                 .resource_mut::<TestLog>()
                 .0
-                .push(LogEntry::SysObsvCmd((n, RevDirection::NOT_LOG)));
+                .push(LogEntry::SysObsvCmd((n, RevDirection::FORWARD_MIN)));
 
             let test = LogEntry::SysObsvCmd(n);
-            world.buffer_undo_redo(now, test);
+            world.buffer_undo_redo(past_len, test);
         });
 
         // buffer reversible observer
         let test = LogEntry::SysObsv(n);
-        world.buffer_undo_redo(now, test);
+        world.buffer_undo_redo(past_len, test);
     });
     world.add_observer(
         |event: On<SysHookObsv>,
@@ -100,10 +101,10 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
          mut buffer: ResMut<UndoRedoBuffer>| {
             let n = event.0;
             log.0
-                .push(LogEntry::SysHookObsv((n, RevDirection::NOT_LOG)));
+                .push(LogEntry::SysHookObsv((n, RevDirection::FORWARD_MIN)));
             let test = LogEntry::SysHookObsv(n);
-            let now = meta.non_log_now().unwrap();
-            buffer.buffer_undo_redo(now, test);
+            let past_len = meta.non_log_past_len();
+            buffer.buffer_undo_redo(past_len, test);
         },
     );
     world.add_observer(
@@ -113,10 +114,10 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
          mut buffer: ResMut<UndoRedoBuffer>| {
             let n = event.0;
             log.0
-                .push(LogEntry::SysObsvObsv((n, RevDirection::NOT_LOG)));
+                .push(LogEntry::SysObsvObsv((n, RevDirection::FORWARD_MIN)));
             let test = LogEntry::SysObsvObsv(n);
-            let now = meta.non_log_now().unwrap();
-            buffer.buffer_undo_redo(now, test);
+            let past_len = meta.non_log_past_len();
+            buffer.buffer_undo_redo(past_len, test);
         },
     );
     world.add_observer(
@@ -125,10 +126,10 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
          meta: Res<RevMeta>,
          mut buffer: ResMut<UndoRedoBuffer>| {
             let n = event.0;
-            log.0.push(LogEntry::SysCmdObsv((n, RevDirection::NOT_LOG)));
+            log.0.push(LogEntry::SysCmdObsv((n, RevDirection::FORWARD_MIN)));
             let test = LogEntry::SysCmdObsv(n);
-            let now = meta.non_log_now().unwrap();
-            buffer.buffer_undo_redo(now, test);
+            let past_len = meta.non_log_past_len();
+            buffer.buffer_undo_redo(past_len, test);
         },
     );
 
@@ -140,27 +141,27 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
             world
                 .resource_mut::<TestLog>()
                 .0
-                .push(LogEntry::SysHook((n, RevDirection::NOT_LOG)));
+                .push(LogEntry::SysHook((n, RevDirection::FORWARD_MIN)));
 
             // trigger observer in hook
             world.trigger(SysHookObsv(n));
 
-            let now = world.resource::<RevMeta>().non_log_now().unwrap();
+            let past_len = world.resource::<RevMeta>().non_log_past_len();
 
             // trigger command in hook
             world.commands().queue(move |world: &mut World| {
                 world
                     .resource_mut::<TestLog>()
                     .0
-                    .push(LogEntry::SysHookCmd((n, RevDirection::NOT_LOG)));
+                    .push(LogEntry::SysHookCmd((n, RevDirection::FORWARD_MIN)));
 
                 let test = LogEntry::SysHookCmd(n);
-                world.buffer_undo_redo(now, test);
+                world.buffer_undo_redo(past_len, test);
             });
 
             // buffer reversible hook
             let test = LogEntry::SysHook(n);
-            world.buffer_undo_redo(now, test);
+            world.buffer_undo_redo(past_len, test);
         });
     world
         .register_component_hooks::<SysCmdHook>()
@@ -173,12 +174,12 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
             world
                 .resource_mut::<TestLog>()
                 .0
-                .push(LogEntry::SysCmdHook((n, RevDirection::NOT_LOG)));
+                .push(LogEntry::SysCmdHook((n, RevDirection::FORWARD_MIN)));
 
             // buffer reversible hook
-            let now = world.resource::<RevMeta>().non_log_now().unwrap();
+            let past_len = world.resource::<RevMeta>().non_log_past_len();
             let test = LogEntry::SysCmdHook(n);
-            world.buffer_undo_redo(now, test);
+            world.buffer_undo_redo(past_len, test);
         });
 
     // run tests forward
@@ -189,13 +190,13 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
             apply_final_deferred,
             step,
             expected,
-            RevDirection::NOT_LOG,
+            RevDirection::FORWARD_MIN,
         );
     }
 
     // run tests backward log
     let mut meta = world.resource_mut::<RevMeta>();
-    meta.set_queue(RevQueue::Run(RevDirection::BackwardLog));
+    meta.set_queue(RevQueue::RunBackwardLog);
     for (step, expected) in expected.iter().enumerate().rev() {
         test_step(
             &mut world,
@@ -209,7 +210,7 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
 
     // run tests forward log
     let mut meta = world.resource_mut::<RevMeta>();
-    meta.set_queue(RevQueue::Run(RevDirection::FORWARD_LOG));
+    meta.set_queue(RevQueue::RunForwardLog);
     for (step, expected) in expected.iter().enumerate() {
         test_step(
             &mut world,
@@ -217,7 +218,7 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
             apply_final_deferred,
             step,
             expected,
-            RevDirection::FORWARD_LOG,
+            RevDirection::ForwardLog,
         );
     }
 }
@@ -245,7 +246,7 @@ fn test_step(
         // test step successful
         return;
     }
-    let actual = Test::from_log_entries(actual_tests, direction);
+    let actual = Test::from_log_entries(&actual_tests, direction);
     let iter = expected.into_iter().map(|ok| Result::<_, ()>::Ok(ok));
     let expected: Vec<_> = if direction.is_forward() {
         iter.collect()
@@ -253,7 +254,7 @@ fn test_step(
         iter.rev().collect()
     };
     panic!(
-        "expected: {expected:?}\nactual:   {actual:?}\nconfig: {variant}\napply_final_deferred: {apply_final_deferred}\ndirection: {direction:?}\nstep: {step}"
+        "actual_tests: {actual_tests:?}\nexpected_tests: {expected_tests:?}\nexpected: {expected:?}\nactual:   {actual:?}\nconfig: {variant}\napply_final_deferred: {apply_final_deferred}\ndirection: {direction:?}\nstep: {step}"
     )
 }
 

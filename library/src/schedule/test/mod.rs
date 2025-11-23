@@ -19,6 +19,7 @@ use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
+use core::num::NonZeroU64;
 
 mod utils;
 
@@ -33,7 +34,7 @@ enum Test {
 
 impl Test {
     fn from_log_entries(
-        tests: Vec<LogEntry<(u8, RevDirection)>>,
+        tests: &[LogEntry<(u8, RevDirection)>],
         direction: RevDirection,
     ) -> Vec<Result<Self, LogEntry<(u8, RevDirection)>>> {
         let mut variants: [(_, Vec<_>); 3] = [
@@ -139,7 +140,7 @@ impl UndoRedo for LogEntry<u8> {
         world
             .resource_mut::<TestLog>()
             .0
-            .push(self.map(|n| (n, RevDirection::FORWARD_LOG)));
+            .push(self.map(|n| (n, RevDirection::ForwardLog)));
     }
 }
 
@@ -174,6 +175,14 @@ impl IntoIterator for Test {
     }
 }
 
+fn normalize_direction(direction: RevDirection) -> RevDirection {
+    match direction {
+        RevDirection::Forward(_) => RevDirection::FORWARD_MIN,
+        RevDirection::ForwardLog => RevDirection::ForwardLog,
+        RevDirection::BackwardLog => RevDirection::BackwardLog
+    }
+}
+
 #[derive(SystemSet, Copy, Clone, Debug, Hash, PartialEq, Eq)]
 struct TestSet(u8);
 
@@ -200,7 +209,7 @@ fn non_exclusive_system<const N: u8>(
     mut log: ResMut<TestLog>,
     commands: Commands,
 ) {
-    let direction = meta.running_direction();
+    let direction = normalize_direction(meta.running_direction());
 
     log.0.push(LogEntry::NonExclusiveSys((N, direction)));
 
@@ -224,12 +233,13 @@ fn non_exclusive_system_commands_only<const N: u8>(meta: Res<RevMeta>, mut comma
 
 /// Will not add sync point
 fn exclusive_system<const N: u8>(world: &mut World) {
-    let direction = world.resource::<RevMeta>().running_direction();
+    let direction = normalize_direction(world.resource::<RevMeta>().running_direction());
     world
         .resource_mut::<TestLog>()
         .0
         .push(LogEntry::ExclusiveSys((N, direction)));
-    if direction != RevDirection::NOT_LOG {
+
+    if direction.is_log() {
         return;
     }
 
@@ -251,9 +261,9 @@ fn system_command<const N: u8>(world: &mut World) {
     world
         .resource_mut::<TestLog>()
         .0
-        .push(LogEntry::SysCmd((N, RevDirection::NOT_LOG)));
+        .push(LogEntry::SysCmd((N, RevDirection::FORWARD_MIN)));
 
-    let now = world.resource::<RevMeta>().non_log_now().unwrap();
+    let now = world.resource::<RevMeta>().non_log_past_len();
     world.buffer_undo_redo(now, LogEntry::SysCmd(N));
 }
 
@@ -463,9 +473,9 @@ fn duplicate_system_chain_builds() {
 #[test]
 fn truncates_future_command_log() {
     fn system(meta: Res<RevMeta>, mut commands: Commands, mut command_queued: Local<bool>) {
-        if !*command_queued && let Some(now) = meta.non_log_now() {
-            if now.get() == 2 {
-                commands.rev_spawn_empty(now);
+        if !*command_queued && let Some(RevDirection::Forward(past_len)) = meta.get_running_direction() {
+            if meta.now() == 2 {
+                commands.rev_spawn_empty(past_len);
                 *command_queued = true;
             }
         }
@@ -474,29 +484,29 @@ fn truncates_future_command_log() {
     panic_on_error_events();
 
     let mut app = App::new();
-    app.add_plugins(RevPlugin::add_meta_and_runner(None, false, Update))
+    app.add_plugins(RevPlugin::add_meta_and_runner(NonZeroU64::MAX, false, Update))
         .rev_add_systems(RevUpdate, system);
 
     app.update(); // do 1
     app.update(); // do 2, command queued
     app.world_mut()
         .resource_mut::<RevMeta>()
-        .set_queue(RevQueue::Run(RevDirection::BackwardLog));
+        .set_queue(RevQueue::RunBackwardLog);
     app.update(); // undo 2
     app.update(); // undo 1
     app.world_mut()
         .resource_mut::<RevMeta>()
-        .set_queue(RevQueue::Run(RevDirection::FORWARD_LOG));
+        .set_queue(RevQueue::RunForwardLog);
     app.update(); // do 1, should truncate logs
     app.update(); // do 2, no command queued
     app.world_mut()
         .resource_mut::<RevMeta>()
-        .set_queue(RevQueue::Run(RevDirection::BackwardLog));
+        .set_queue(RevQueue::RunBackwardLog);
     app.update(); // undo 2
     app.update(); // undo 1
     app.world_mut()
         .resource_mut::<RevMeta>()
-        .set_queue(RevQueue::Run(RevDirection::FORWARD_LOG));
+        .set_queue(RevQueue::RunForwardLog);
     app.update(); // redo 1
     app.update(); // redo 2, should not panic
 }

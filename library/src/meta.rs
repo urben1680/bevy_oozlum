@@ -8,7 +8,7 @@ use bevy_log::info;
 use core::{
     error::Error,
     fmt::{Debug, Display},
-    num::NonZeroU64,
+    num::NonZeroU64
 };
 
 #[derive(Resource, Debug)]
@@ -17,7 +17,7 @@ pub struct RevMeta {
     past_end: u64,
     now: u64,
     future_end: u64,
-    max_world_states: Option<NonZeroU64>,
+    max_past_len: NonZeroU64, // todo: no option, unrestricted should use MAX
     direction: RunningOrRan,
     queue: Option<RevQueue>,
     log_exits: u64,
@@ -27,43 +27,40 @@ pub struct RevMeta {
 
 impl Default for RevMeta {
     fn default() -> Self {
-        Self::new(Self::DEFAULT_MAX_WORLD_STATES, Self::DEFAULT_PAUSED)
+        Self::new(Self::DEFAULT_MAX_PAST_LEN, Self::DEFAULT_PAUSED)
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "bevy_reflect", derive(bevy_reflect::Reflect))]
 pub enum RevDirection {
-    Forward { log: bool },
+    Forward(PastLen),
+    ForwardLog,
     BackwardLog,
 }
 
 impl RevDirection {
-    pub const NOT_LOG: Self = Self::Forward { log: false };
-    pub const FORWARD_LOG: Self = Self::Forward { log: true };
-    pub fn is_backward_log(self) -> bool {
-        self == Self::BackwardLog
-    }
+    pub(crate) const FORWARD_MIN: Self = Self::Forward(PastLen(NonZeroU64::MIN));
     pub fn is_forward(self) -> bool {
-        self != Self::BackwardLog
+        !self.is_backward()
     }
-    pub fn is_forward_log(self) -> bool {
-        self == Self::FORWARD_LOG
-    }
-    pub fn is_not_log(self) -> bool {
-        self == Self::NOT_LOG
+    pub fn is_backward(self) -> bool {
+        matches!(self, Self::BackwardLog)
     }
     pub fn is_log(self) -> bool {
-        self != Self::NOT_LOG
+        !self.is_not_log()
+    }
+    pub fn is_not_log(self) -> bool {
+        matches!(self, Self::Forward(_))
     }
 }
 
 impl Display for RevDirection {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match *self {
-            RevDirection::NOT_LOG => write!(f, "Forward (not log)"),
-            RevDirection::FORWARD_LOG => write!(f, "Forward (log)"),
-            RevDirection::BackwardLog => write!(f, "Backward (log)"),
+            RevDirection::Forward(_) => write!(f, "Forward"),
+            RevDirection::ForwardLog => write!(f, "Forward Log"),
+            RevDirection::BackwardLog => write!(f, "Backward Log"),
         }
     }
 }
@@ -79,50 +76,35 @@ enum RunningOrRan {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "bevy_reflect", derive(bevy_reflect::Reflect))]
 pub enum RevQueue {
-    Run(RevDirection),
+    RunForward,
+    RunForwardLog,
+    RunBackwardLog,
     Pause,
-    Clear {
-        /// If `true`, this clear is followed by an [`RevDirection::NOT_LOG`] update.
-        /// Otherwise, no update will follow this clear and [`RevMeta`] will be in a paused state.
-        then_run: bool,
-    },
-}
-
-impl RevQueue {
-    pub const RUN_NOT_LOG: Self = Self::Run(RevDirection::NOT_LOG);
-    pub const RUN_FORWARD_LOG: Self = Self::Run(RevDirection::FORWARD_LOG);
-    pub const RUN_BACKWARD_LOG: Self = Self::Run(RevDirection::BackwardLog);
-    /// This clear is followed by an [`RevDirection::NOT_LOG`] update
-    pub const CLEAR_THEN_RUN: Self = Self::Clear { then_run: true };
-    /// No update will follow this clear and [`RevMeta`] will be in a paused state.
-    pub const CLEAR_THEN_PAUSE: Self = Self::Clear { then_run: false };
+    ClearThenRunForward,
+    ClearThenPause
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct NonLogNow(pub(crate) u64);
+#[cfg_attr(feature = "bevy_reflect", derive(bevy_reflect::Reflect))]
+pub struct PastLen(pub(crate) NonZeroU64);
 
-impl NonLogNow {
-    pub fn get(self) -> u64 {
+impl PastLen {
+    pub fn get(self) -> NonZeroU64 {
         self.0
     }
 }
 
 impl RevMeta {
-    pub(crate) const DEFAULT_MAX_WORLD_STATES: Option<NonZeroU64> = Some(NonZeroU64::MIN);
+    pub(crate) const DEFAULT_MAX_PAST_LEN: NonZeroU64 = NonZeroU64::MIN;
     pub(crate) const DEFAULT_PAUSED: bool = false;
-    pub fn new(max_world_states: Option<NonZeroU64>, paused: bool) -> Self {
-        let direction = if paused {
-            RunningOrRan::Pause { after_log: false }
-        } else {
-            RunningOrRan::Ran(RevDirection::NOT_LOG)
-        };
+    pub fn new(max_past_len: NonZeroU64, paused: bool) -> Self {
         Self {
             past_end: 0,
             now: 0,
             future_end: 0,
-            max_world_states,
-            direction,
-            queue: None,
+            max_past_len,
+            direction: RunningOrRan::Pause { after_log: false },
+            queue: (!paused).then_some(RevQueue::RunForward),
             log_exits: 0,
             log_clears: 0,
             update_log_limits: UpdateLogLimits::default(),
@@ -132,10 +114,10 @@ impl RevMeta {
     pub(crate) fn running_new() -> Self {
         Self {
             past_end: 0,
-            now: 0,
-            future_end: 0,
-            max_world_states: None,
-            direction: RunningOrRan::Running(RevDirection::NOT_LOG),
+            now: 1,
+            future_end: 1,
+            max_past_len: NonZeroU64::MAX,
+            direction: RunningOrRan::Running(RevDirection::FORWARD_MIN),
             queue: None,
             log_exits: 0,
             log_clears: 0,
@@ -151,14 +133,11 @@ impl RevMeta {
     pub fn get_queue(&self) -> Option<RevQueue> {
         self.queue
     }
-    pub fn set_max_world_states(&mut self, max_world_states: NonZeroU64) {
-        self.max_world_states = Some(max_world_states);
+    pub fn set_max_past_len(&mut self, max_past_len: NonZeroU64) {
+        self.max_past_len = max_past_len;
     }
-    pub fn unset_max_world_states(&mut self) {
-        self.max_world_states = None;
-    }
-    pub fn get_max_world_states(&self) -> Option<NonZeroU64> {
-        self.max_world_states
+    pub fn get_max_past_len(&self) -> NonZeroU64 {
+        self.max_past_len
     }
     pub fn running_direction(&self) -> RevDirection {
         self.get_running_direction().unwrap()
@@ -203,15 +182,18 @@ impl RevMeta {
     pub const fn now(&self) -> u64 {
         self.now
     }
-    pub fn non_log_now(&self) -> Option<NonLogNow> {
-        matches!(self.direction, RunningOrRan::Running(RevDirection::NOT_LOG))
-            .then_some(NonLogNow(self.now))
-    }
     pub fn past_end(&self) -> u64 {
         self.past_end
     }
     pub fn past_len(&self) -> u64 {
         self.now - self.past_end
+    }
+    #[cfg(test)]
+    pub(crate) fn non_log_past_len(&self) -> PastLen {
+        let RunningOrRan::Running(RevDirection::Forward(past_len)) = self.direction else {
+            panic!()
+        };
+        past_len
     }
     pub fn future_len(&self) -> u64 {
         self.future_end - self.now
@@ -328,9 +310,12 @@ impl RevMeta {
     ) -> Result<Self, RevMetaUpdateErr> {
         // get direction that ran previously
         let (ran, after_log) = match self.direction {
-            RunningOrRan::Ran(RevDirection::NOT_LOG) => (Some(RevDirection::NOT_LOG), false),
-            RunningOrRan::Ran(RevDirection::FORWARD_LOG) => (
-                (!self.end_of_log_forward()).then_some(RevDirection::FORWARD_LOG),
+            RunningOrRan::Ran(RevDirection::Forward(_)) => (
+                Some(RevDirection::FORWARD_MIN), // gets updated below
+                false
+            ),
+            RunningOrRan::Ran(RevDirection::ForwardLog) => (
+                (!self.end_of_log_forward()).then_some(RevDirection::ForwardLog),
                 true,
             ),
             RunningOrRan::Ran(RevDirection::BackwardLog) => (
@@ -349,23 +334,23 @@ impl RevMeta {
         // get queued direction
         let queue = match self.queue.take() {
             None => None,
-            Some(RevQueue::RUN_NOT_LOG) => {
+            Some(RevQueue::RunForward) => {
                 if after_log {
                     self.log_exits += 1;
                 }
-                Some(RevDirection::NOT_LOG)
+                Some(RevDirection::FORWARD_MIN) // gets updated below
             }
-            Some(RevQueue::RUN_FORWARD_LOG) if !self.end_of_log_forward() => {
-                Some(RevDirection::FORWARD_LOG)
+            Some(RevQueue::RunForwardLog) if !self.end_of_log_forward() => {
+                Some(RevDirection::ForwardLog)
             }
-            Some(RevQueue::RUN_BACKWARD_LOG) if !self.end_of_log_backward() => {
+            Some(RevQueue::RunBackwardLog) if !self.end_of_log_backward() => {
                 Some(RevDirection::BackwardLog)
             }
-            Some(RevQueue::CLEAR_THEN_RUN) => {
+            Some(RevQueue::ClearThenRunForward) => {
                 self.clear();
-                Some(RevDirection::NOT_LOG)
+                Some(RevDirection::FORWARD_MIN) // gets updated below
             }
-            Some(RevQueue::CLEAR_THEN_PAUSE) => {
+            Some(RevQueue::ClearThenPause) => {
                 self.clear();
                 self.direction = RunningOrRan::Pause { after_log: false };
                 return Ok(self);
@@ -384,20 +369,20 @@ impl RevMeta {
         };
 
         let direction = match queue_or_ran {
-            RevDirection::NOT_LOG => {
+            RevDirection::Forward(_) => {
                 self.now += 1;
                 self.future_end = self.now;
-                if let Some(max_world_states) = self.max_world_states.map(NonZeroU64::get) {
-                    // include equality here as the present state has to be added to the comparision
-                    if self.past_len() >= max_world_states {
-                        self.past_end = self.now + 1 - max_world_states;
-                    }
+                let max_past_len = self.max_past_len.get();
+                if self.past_len() > max_past_len {
+                    self.past_end = self.now - max_past_len;
                 }
-                RevDirection::NOT_LOG
+                let past_len = NonZeroU64::new(self.now - self.past_end)
+                    .expect("now is increased here and larger than past_end");
+                RevDirection::Forward(PastLen(past_len))
             }
-            RevDirection::FORWARD_LOG => {
+            RevDirection::ForwardLog => {
                 self.now = self.now + 1;
-                RevDirection::FORWARD_LOG
+                RevDirection::ForwardLog
             }
             RevDirection::BackwardLog => {
                 self.now = self.now - 1;
@@ -431,7 +416,7 @@ impl RevMeta {
         should_run: Result<bool, UpdateLogMissed>,
         c: impl FnOnce(&mut Self, RevDirection),
     ) {
-        let meta = core::mem::replace(self, RevMeta::new(None, true));
+        let meta = core::mem::replace(self, RevMeta::new(NonZeroU64::MAX, true));
         match should_run {
             Ok(should_run) => {
                 let mut ran = false;
@@ -596,7 +581,19 @@ impl Error for TryRunRevUpdateError {}
 
 #[cfg(test)]
 mod test {
+    use core::mem::Discriminant;
+
     use super::*;
+
+
+    impl RevDirection {
+        #[cfg(test)]
+        pub const FWD_DISCRIMINANT: Discriminant<Self> = Self::FORWARD_MIN.discriminant();
+        #[cfg(test)]
+        pub const fn discriminant(self) -> Discriminant<Self> {
+            core::mem::discriminant(&self)
+        }
+    }
 
     struct RunValues {
         past_end: u64,
@@ -604,12 +601,13 @@ mod test {
         future_end: u64,
         log_exits: u64,
         log_clears: u64,
-        direction: RevDirection,
+        direction: Discriminant<RevDirection>,
     }
 
     impl RevMeta {
         fn update_assert(&mut self, queue: Option<RevQueue>, values: Option<RunValues>) {
             match queue {
+                None if self.now == 0 => assert_eq!(self.get_queue(), Some(RevQueue::RunForward)),
                 None => assert_eq!(self.get_queue(), None),
                 Some(queue) => self.set_queue(queue),
             }
@@ -620,14 +618,14 @@ mod test {
                 assert_eq!(meta.future_end(), values.future_end);
                 assert_eq!(meta.log_exits(), values.log_exits);
                 assert_eq!(meta.log_clears(), values.log_clears);
-                assert_eq!(direction, values.direction);
+                assert_eq!(direction.discriminant(), values.direction);
             });
         }
     }
 
     #[test]
     fn traverses_log() {
-        let mut meta = RevMeta::new(NonZeroU64::new(5), false);
+        let mut meta = RevMeta::new(NonZeroU64::new(4).unwrap(), false);
         meta.update_assert(
             None,
             Some(RunValues {
@@ -636,18 +634,18 @@ mod test {
                 future_end: 1,
                 log_exits: 0,
                 log_clears: 0,
-                direction: RevDirection::NOT_LOG,
+                direction: RevDirection::FWD_DISCRIMINANT,
             }),
         );
         meta.update_assert(
-            Some(RevQueue::RUN_NOT_LOG),
+            Some(RevQueue::RunForward),
             Some(RunValues {
                 past_end: 0,
                 now: 2,
                 future_end: 2,
                 log_exits: 0,
                 log_clears: 0,
-                direction: RevDirection::NOT_LOG,
+                direction: RevDirection::FWD_DISCRIMINANT,
             }),
         );
         meta.update_assert(
@@ -658,7 +656,7 @@ mod test {
                 future_end: 3,
                 log_exits: 0,
                 log_clears: 0,
-                direction: RevDirection::NOT_LOG,
+                direction: RevDirection::FWD_DISCRIMINANT,
             }),
         );
         meta.update_assert(
@@ -669,7 +667,7 @@ mod test {
                 future_end: 4,
                 log_exits: 0,
                 log_clears: 0,
-                direction: RevDirection::NOT_LOG,
+                direction: RevDirection::FWD_DISCRIMINANT,
             }),
         );
         meta.update_assert(
@@ -680,18 +678,18 @@ mod test {
                 future_end: 5,
                 log_exits: 0,
                 log_clears: 0,
-                direction: RevDirection::NOT_LOG,
+                direction: RevDirection::FWD_DISCRIMINANT,
             }),
         );
         meta.update_assert(
-            Some(RevQueue::RUN_BACKWARD_LOG),
+            Some(RevQueue::RunBackwardLog),
             Some(RunValues {
                 past_end: 1,
                 now: 4,
                 future_end: 5,
                 log_exits: 0,
                 log_clears: 0,
-                direction: RevDirection::BackwardLog,
+                direction: RevDirection::BackwardLog.discriminant(),
             }),
         );
         meta.update_assert(
@@ -702,18 +700,18 @@ mod test {
                 future_end: 5,
                 log_exits: 0,
                 log_clears: 0,
-                direction: RevDirection::BackwardLog,
+                direction: RevDirection::BackwardLog.discriminant(),
             }),
         );
         meta.update_assert(
-            Some(RevQueue::RUN_BACKWARD_LOG),
+            Some(RevQueue::RunBackwardLog),
             Some(RunValues {
                 past_end: 1,
                 now: 2,
                 future_end: 5,
                 log_exits: 0,
                 log_clears: 0,
-                direction: RevDirection::BackwardLog,
+                direction: RevDirection::BackwardLog.discriminant(),
             }),
         );
         meta.update_assert(
@@ -724,20 +722,20 @@ mod test {
                 future_end: 5,
                 log_exits: 0,
                 log_clears: 0,
-                direction: RevDirection::BackwardLog,
+                direction: RevDirection::BackwardLog.discriminant(),
             }),
         );
         meta.update_assert(None, None);
-        meta.update_assert(Some(RevQueue::RUN_BACKWARD_LOG), None);
+        meta.update_assert(Some(RevQueue::RunBackwardLog), None);
         meta.update_assert(
-            Some(RevQueue::RUN_FORWARD_LOG),
+            Some(RevQueue::RunForwardLog),
             Some(RunValues {
                 past_end: 1,
                 now: 2,
                 future_end: 5,
                 log_exits: 0,
                 log_clears: 0,
-                direction: RevDirection::FORWARD_LOG,
+                direction: RevDirection::ForwardLog.discriminant(),
             }),
         );
         meta.update_assert(
@@ -748,18 +746,18 @@ mod test {
                 future_end: 5,
                 log_exits: 0,
                 log_clears: 0,
-                direction: RevDirection::FORWARD_LOG,
+                direction: RevDirection::ForwardLog.discriminant(),
             }),
         );
         meta.update_assert(
-            Some(RevQueue::RUN_FORWARD_LOG),
+            Some(RevQueue::RunForwardLog),
             Some(RunValues {
                 past_end: 1,
                 now: 4,
                 future_end: 5,
                 log_exits: 0,
                 log_clears: 0,
-                direction: RevDirection::FORWARD_LOG,
+                direction: RevDirection::ForwardLog.discriminant(),
             }),
         );
         meta.update_assert(
@@ -770,20 +768,20 @@ mod test {
                 future_end: 5,
                 log_exits: 0,
                 log_clears: 0,
-                direction: RevDirection::FORWARD_LOG,
+                direction: RevDirection::ForwardLog.discriminant(),
             }),
         );
         meta.update_assert(None, None);
-        meta.update_assert(Some(RevQueue::RUN_FORWARD_LOG), None);
+        meta.update_assert(Some(RevQueue::RunForwardLog), None);
         meta.update_assert(
-            Some(RevQueue::RUN_BACKWARD_LOG),
+            Some(RevQueue::RunBackwardLog),
             Some(RunValues {
                 past_end: 1,
                 now: 4,
                 future_end: 5,
                 log_exits: 0,
                 log_clears: 0,
-                direction: RevDirection::BackwardLog,
+                direction: RevDirection::BackwardLog.discriminant(),
             }),
         );
         meta.update_assert(
@@ -794,30 +792,30 @@ mod test {
                 future_end: 5,
                 log_exits: 0,
                 log_clears: 0,
-                direction: RevDirection::BackwardLog,
+                direction: RevDirection::BackwardLog.discriminant(),
             }),
         );
         meta.update_assert(Some(RevQueue::Pause), None);
         meta.update_assert(
-            Some(RevQueue::RUN_NOT_LOG),
+            Some(RevQueue::RunForward),
             Some(RunValues {
                 past_end: 1,
                 now: 4,
                 future_end: 4,
                 log_exits: 1,
                 log_clears: 0,
-                direction: RevDirection::NOT_LOG,
+                direction: RevDirection::FWD_DISCRIMINANT,
             }),
         );
         meta.update_assert(
-            Some(RevQueue::RUN_BACKWARD_LOG),
+            Some(RevQueue::RunBackwardLog),
             Some(RunValues {
                 past_end: 1,
                 now: 3,
                 future_end: 4,
                 log_exits: 1,
                 log_clears: 0,
-                direction: RevDirection::BackwardLog,
+                direction: RevDirection::BackwardLog.discriminant(),
             }),
         );
         meta.update_assert(
@@ -828,19 +826,19 @@ mod test {
                 future_end: 4,
                 log_exits: 1,
                 log_clears: 0,
-                direction: RevDirection::BackwardLog,
+                direction: RevDirection::BackwardLog.discriminant(),
             }),
         );
-        meta.update_assert(Some(RevQueue::CLEAR_THEN_PAUSE), None);
+        meta.update_assert(Some(RevQueue::ClearThenPause), None);
         meta.update_assert(
-            Some(RevQueue::RUN_NOT_LOG),
+            Some(RevQueue::RunForward),
             Some(RunValues {
                 past_end: 2,
                 now: 3,
                 future_end: 3,
                 log_exits: 0,
                 log_clears: 1,
-                direction: RevDirection::NOT_LOG,
+                direction: RevDirection::FWD_DISCRIMINANT,
             }),
         );
         meta.update_assert(
@@ -851,7 +849,7 @@ mod test {
                 future_end: 4,
                 log_exits: 0,
                 log_clears: 1,
-                direction: RevDirection::NOT_LOG,
+                direction: RevDirection::FWD_DISCRIMINANT,
             }),
         );
         meta.update_assert(
@@ -862,18 +860,18 @@ mod test {
                 future_end: 5,
                 log_exits: 0,
                 log_clears: 1,
-                direction: RevDirection::NOT_LOG,
+                direction: RevDirection::FWD_DISCRIMINANT,
             }),
         );
         meta.update_assert(
-            Some(RevQueue::RUN_BACKWARD_LOG),
+            Some(RevQueue::RunBackwardLog),
             Some(RunValues {
                 past_end: 2,
                 now: 4,
                 future_end: 5,
                 log_exits: 0,
                 log_clears: 1,
-                direction: RevDirection::BackwardLog,
+                direction: RevDirection::BackwardLog.discriminant(),
             }),
         );
         meta.update_assert(
@@ -884,25 +882,25 @@ mod test {
                 future_end: 5,
                 log_exits: 0,
                 log_clears: 1,
-                direction: RevDirection::BackwardLog,
+                direction: RevDirection::BackwardLog.discriminant(),
             }),
         );
         meta.update_assert(
-            Some(RevQueue::CLEAR_THEN_RUN),
+            Some(RevQueue::ClearThenRunForward),
             Some(RunValues {
                 past_end: 3,
                 now: 4,
                 future_end: 4,
                 log_exits: 0,
                 log_clears: 2,
-                direction: RevDirection::NOT_LOG,
+                direction: RevDirection::FWD_DISCRIMINANT,
             }),
         );
     }
 
     #[test]
     fn contains_returns_expected() {
-        let mut meta = RevMeta::new(None, true);
+        let mut meta = RevMeta::new(NonZeroU64::MAX, true);
         meta.past_end = 1;
         meta.now = 3;
         meta.future_end = 5;

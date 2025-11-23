@@ -13,10 +13,8 @@ use bevy_log::{error, error_once};
 
 use crate::{
     log::{OutOfLog, TransitionsLog},
-    meta::{NonLogNow, RevDirection, RevMeta},
+    meta::{PastLen, RevDirection, RevMeta},
 };
-
-use super::RevOp;
 
 #[derive(Resource, Default, Debug)]
 pub(crate) struct RevDespawnCleaner {
@@ -44,7 +42,7 @@ impl From<OutOfLog> for DespawnCleanerErr {
 }
 
 impl RevDespawnCleaner {
-    pub(crate) fn log_spawn(&mut self, entity: Entity, location: MaybeLocation, _: NonLogNow) {
+    pub(crate) fn log_spawn(&mut self, entity: Entity, location: MaybeLocation, _: PastLen) {
         self.spawn_queue.push((entity, location));
     }
 
@@ -52,13 +50,13 @@ impl RevDespawnCleaner {
         &mut self,
         entities: &[Entity],
         location: MaybeLocation,
-        _: NonLogNow,
+        _: PastLen,
     ) {
         self.spawn_queue
             .extend(entities.iter().copied().map(|entity| (entity, location)));
     }
 
-    pub(crate) fn log_despawn(&mut self, entity: Entity, location: MaybeLocation, _: NonLogNow) {
+    pub(crate) fn log_despawn(&mut self, entity: Entity, location: MaybeLocation, _: PastLen) {
         self.despawn_queue.push((entity, location));
     }
 
@@ -74,7 +72,7 @@ impl RevDespawnCleaner {
         &mut self,
         buffers: usize,
         location: MaybeLocation,
-        _: NonLogNow,
+        _: PastLen,
     ) {
         self.spawn_buffer_queue
             .extend(core::iter::repeat_n((None, location), buffers));
@@ -98,18 +96,16 @@ impl RevDespawnCleaner {
                     .ok_or(DespawnCleanerErr::MetaNotRunning)?;
 
                 match direction {
-                    RevDirection::NOT_LOG => {
-                        let past_len = meta.past_len();
-
+                    RevDirection::Forward(PastLen(past_len)) => {
+                        // todo: RevOp::FinalDespawn
                         let new_spawn = this.spawn_queue.drain(..).map(|(entity, _)| entity);
-                        let mut drain = this.spawn.forward_extend(meta, past_len, new_spawn)?;
+                        let mut drain = this.spawn.forward_extend(meta, past_len, new_spawn);
                         let old_spawn = drain.future();
 
                         let new_despawn = this.despawn_queue.drain(..).map(|(entity, _)| entity);
                         let mut drain = this
                             .despawn
-                            .forward_extend(meta, past_len, new_despawn)
-                            .unwrap();
+                            .forward_extend(meta, past_len, new_despawn);
                         let old_despawn = drain.past();
 
                         let new_buffer = this
@@ -119,8 +115,7 @@ impl RevDespawnCleaner {
                             .chain(this.spawn_buffer_queue.drain(..));
                         let mut drain = this
                             .spawn_buffer
-                            .forward_extend(meta, past_len, new_buffer)
-                            .unwrap();
+                            .forward_extend(meta, past_len, new_buffer);
                         let old_buffer = drain.all().flat_map(|(entity, _)| entity);
 
                         for entity in old_spawn.chain(old_despawn).chain(old_buffer) {
@@ -129,7 +124,7 @@ impl RevDespawnCleaner {
 
                         Ok(())
                     }
-                    RevDirection::FORWARD_LOG => this.forward_log(meta),
+                    RevDirection::ForwardLog => this.forward_log(meta),
                     RevDirection::BackwardLog => this.backward_log(meta),
                 }
             })
@@ -333,11 +328,11 @@ mod test {
     struct WorldWithResources(World);
 
     impl WorldWithResources {
-        fn new(max_world_states: u64) -> Self {
+        fn new(max_past_len: u64) -> Self {
             panic_on_error_events();
             let mut world = World::new();
             world.init_resource::<RevDespawnCleaner>();
-            world.insert_resource(RevMeta::new(NonZeroU64::new(max_world_states), false));
+            world.insert_resource(RevMeta::new(NonZeroU64::new(max_past_len).unwrap(), false));
             Self(world)
         }
         fn spawn_batch<const N: usize>(&mut self) -> [Entity; N] {
@@ -364,22 +359,22 @@ mod test {
             let mut cleaner_result = None;
             let mut meta = self.0.remove_resource::<RevMeta>().unwrap();
             let queue = if clear {
-                RevQueue::CLEAR_THEN_RUN
+                RevQueue::ClearThenRunForward
             } else {
-                RevQueue::RUN_NOT_LOG
+                RevQueue::RunForward
             };
             meta.set_queue(queue);
             meta = meta
                 .update(|meta, _| {
-                    let now = meta.non_log_now().unwrap();
+                    let past_len = meta.non_log_past_len();
                     self.0.insert_resource(meta);
                     let mut cleaner = self.0.resource_mut::<RevDespawnCleaner>();
-                    cleaner.log_spawn_batch(&spawn, caller, now);
+                    cleaner.log_spawn_batch(&spawn, caller, past_len);
                     for entity in despawn {
-                        cleaner.log_despawn(entity, caller, now);
+                        cleaner.log_despawn(entity, caller, past_len);
                     }
                     cleaner.log_spawn_buffer_batch(&buffer, caller);
-                    cleaner.log_spawn_buffer_batch_reserve(buffer_reserve, caller, now);
+                    cleaner.log_spawn_buffer_batch_reserve(buffer_reserve, caller, past_len);
                     cleaner_result = Some(RevDespawnCleaner::update(&mut self.0));
                     self.0.remove_resource::<RevMeta>()
                 })
@@ -392,10 +387,9 @@ mod test {
         fn forward_log(&mut self) {
             let mut meta = self.0.remove_resource::<RevMeta>().unwrap();
             let mut ran = false;
-            meta.set_queue(RevQueue::RUN_FORWARD_LOG);
+            meta.set_queue(RevQueue::RunForwardLog);
             meta = meta
-                .update(|meta, direction| {
-                    assert_eq!(direction, RevDirection::FORWARD_LOG);
+                .update(|meta, _| {
                     ran = true;
                     self.0.insert_resource(meta);
                     RevDespawnCleaner::update(&mut self.0).unwrap();
@@ -409,10 +403,9 @@ mod test {
             let caller = MaybeLocation::caller();
             let mut meta = self.0.remove_resource::<RevMeta>().unwrap();
             let mut ran = false;
-            meta.set_queue(RevQueue::RUN_BACKWARD_LOG);
+            meta.set_queue(RevQueue::RunBackwardLog);
             meta = meta
-                .update(|meta, direction| {
-                    assert_eq!(direction, RevDirection::BackwardLog);
+                .update(|meta, _| {
                     ran = true;
                     self.0.insert_resource(meta);
                     self.0
@@ -429,7 +422,7 @@ mod test {
 
     #[test]
     fn log_traversal_works() {
-        let mut world_with_resources = WorldWithResources::new(2);
+        let mut world_with_resources = WorldWithResources::new(1);
         let [
             spawn_at_1,
             spawn_at_2,

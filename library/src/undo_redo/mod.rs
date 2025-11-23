@@ -16,7 +16,7 @@ use core::{
 
 use crate::{
     log::{OutOfLog, TransitionsLog, UpdateLog},
-    meta::{NonLogNow, RevDirection, RevMeta},
+    meta::{PastLen, RevDirection, RevMeta},
 };
 
 mod commands;
@@ -103,52 +103,56 @@ pub trait BuffersUndoRedo {
     /// | [`UndoRedoBuffer`] | ✅ | ❌ |
     /// | [`Commands`] | ❌ | ✅ |
     /// | [`EntityCommands`] | ❌ | ✅ |
-    fn buffer_undo_redo(&mut self, now: NonLogNow, undo_redo: impl UndoRedo);
+    fn buffer_undo_redo(&mut self, past_len: PastLen, undo_redo: impl UndoRedo);
 }
 
 impl BuffersUndoRedo for Commands<'_, '_> {
     #[track_caller]
-    fn buffer_undo_redo(&mut self, now: NonLogNow, undo_redo: impl UndoRedo) {
+    fn buffer_undo_redo(&mut self, past_len: PastLen, undo_redo: impl UndoRedo) {
         self.queue(move |world: &mut World| {
-            world.buffer_undo_redo(now, undo_redo);
+            world.buffer_undo_redo(past_len, undo_redo);
         });
     }
 }
 
 impl BuffersUndoRedo for EntityCommands<'_> {
     #[track_caller]
-    fn buffer_undo_redo(&mut self, now: NonLogNow, undo_redo: impl UndoRedo) {
+    fn buffer_undo_redo(&mut self, past_len: PastLen, undo_redo: impl UndoRedo) {
         self.queue(move |mut world: EntityWorldMut| {
-            world.buffer_undo_redo(now, undo_redo);
+            world.buffer_undo_redo(past_len, undo_redo);
         });
     }
 }
 
 impl BuffersUndoRedo for World {
     #[track_caller]
-    fn buffer_undo_redo(&mut self, now: NonLogNow, undo_redo: impl UndoRedo) {
-        DeferredWorld::buffer_undo_redo(&mut self.into(), now, undo_redo);
+    fn buffer_undo_redo(&mut self, past_len: PastLen, undo_redo: impl UndoRedo) {
+        DeferredWorld::buffer_undo_redo(&mut self.into(), past_len, undo_redo);
     }
 }
 
 impl BuffersUndoRedo for EntityWorldMut<'_> {
     #[track_caller]
-    fn buffer_undo_redo(&mut self, now: NonLogNow, undo_redo: impl UndoRedo) {
+    fn buffer_undo_redo(&mut self, past_len: PastLen, undo_redo: impl UndoRedo) {
         // SAFETY: Only resources are accessed, entity location remains unchanged
         let world = unsafe { self.world_mut() };
-        world.buffer_undo_redo(now, undo_redo);
+        world.buffer_undo_redo(past_len, undo_redo);
     }
 }
 
 impl BuffersUndoRedo for DeferredWorld<'_> {
     #[track_caller]
-    fn buffer_undo_redo(&mut self, now: NonLogNow, undo_redo: impl UndoRedo) {
-        debug_assert_eq!(
-            self.get_resource::<RevMeta>().map(RevMeta::non_log_now),
-            Some(Some(now))
-        );
+    fn buffer_undo_redo(&mut self, past_len: PastLen, undo_redo: impl UndoRedo) {
+        debug_assert!(self.get_resource::<RevMeta>().is_some_and(|meta| {
+            meta.get_running_direction().is_some_and(|direction| {
+                match direction {
+                    RevDirection::Forward(actual) => actual == past_len,
+                    _ => false
+                }
+            })
+        }));
         self.resource_mut::<UndoRedoBuffer>()
-            .buffer_undo_redo(now, undo_redo);
+            .buffer_undo_redo(past_len, undo_redo);
     }
 }
 
@@ -166,7 +170,7 @@ impl UndoRedoBuffer {
         self.0.is_empty()
     }
     #[track_caller]
-    pub(crate) fn buffer_undo_redo(&mut self, _: NonLogNow, undo_redo: impl UndoRedo) {
+    pub(crate) fn buffer_undo_redo(&mut self, _: PastLen, undo_redo: impl UndoRedo) {
         let name = type_name_of_val(&undo_redo);
         let boxed = BoxedUndoRedo {
             undo_redo: SyncCell::new(Box::new(undo_redo)),
@@ -311,10 +315,8 @@ impl Display for UndoRedoLogError {
                 direction,
             } => {
                 let actual = match direction {
-                    Some(RevDirection::NOT_LOG) => "forward (not log)",
-                    Some(RevDirection::FORWARD_LOG) => "forward (log)",
-                    Some(RevDirection::BackwardLog) => "backward",
-                    None => "none",
+                    Some(direction) => format!("{direction}"),
+                    None => "none".to_string(),
                 };
                 let expected = if *expected_forward {
                     "forward"
@@ -354,49 +356,32 @@ impl UndoRedoLog {
 
         let now = meta.now();
         match meta.get_running_direction() {
-            Some(RevDirection::NOT_LOG) => world
+            Some(RevDirection::Forward(_)) => world
                 .try_resource_scope::<UndoRedoBuffer, _>(|world, mut buffer| {
                     if !buffer.0.is_empty() {
                         let meta = world.resource::<RevMeta>();
                         let past_len = self.update_log.forward_past_len(meta);
                         let buffers = buffer.0.drain(..).map(|boxed| DebugHidden(boxed.undo_redo));
-                        self.undo_redo_log
-                            .forward_extend(meta, past_len, buffers)
-                            .map(|_| ())
-                    } else {
-                        self.undo_redo_log.poison()
+                        self.undo_redo_log.forward_extend(meta, past_len, buffers);
                     }
-                    .map_err(|err| UndoRedoLogError::OutOfLog {
-                        now,
-                        direction: RevDirection::NOT_LOG,
-                        err,
-                    })
                 })
-                .unwrap_or(Err(UndoRedoLogError::UndoRedoBufferMissing { now })),
-            Some(RevDirection::FORWARD_LOG) => {
+                .ok_or(UndoRedoLogError::UndoRedoBufferMissing { now }),
+            Some(RevDirection::ForwardLog) => {
                 if self.update_log.forward_log(meta) {
                     let iter = self
                         .undo_redo_log
                         .forward_log(meta)
                         .map_err(|err| UndoRedoLogError::OutOfLog {
                             now,
-                            direction: RevDirection::FORWARD_LOG,
+                            direction: RevDirection::ForwardLog,
                             err,
                         })?
                         .map(|cell| cell.0.get());
                     for command in iter {
                         command.redo(world);
                     }
-                    Ok(())
-                } else {
-                    self.undo_redo_log
-                        .poison()
-                        .map_err(|err| UndoRedoLogError::OutOfLog {
-                            now,
-                            direction: RevDirection::FORWARD_LOG,
-                            err,
-                        })
                 }
+                Ok(())
             }
             direction => Err(UndoRedoLogError::RevDirectionMismatch {
                 now,
@@ -434,16 +419,8 @@ impl UndoRedoLog {
             for command in iter {
                 command.undo(world);
             }
-            Ok(())
-        } else {
-            self.undo_redo_log
-                .poison()
-                .map_err(|err| UndoRedoLogError::OutOfLog {
-                    now,
-                    direction: RevDirection::BackwardLog,
-                    err,
-                })
         }
+        Ok(())
     }
 }
 
@@ -459,12 +436,6 @@ pub enum RevOp {
 }
 
 impl RevOp {
-    pub fn direction(self) -> RevDirection {
-        match self {
-            Self::Buffer { direction, .. } => direction,
-            Self::FinalDespawn { .. } => RevDirection::NOT_LOG,
-        }
-    }
     pub(crate) fn scope<Out>(self, world: &mut World, c: impl FnOnce(&mut World) -> Out) -> Out {
         let mut swap = ResourceSwap(Some(self));
         swap.redo(world);
@@ -543,12 +514,12 @@ impl UndoRedo for SpawnEmpty {
     }
 }
 
-fn rev_spawn_empty_inner(entity_mut: &mut EntityWorldMut, now: NonLogNow, caller: MaybeLocation) {
+fn rev_spawn_empty_inner(entity_mut: &mut EntityWorldMut, past_len: PastLen, caller: MaybeLocation) {
     let entity = entity_mut.id();
-    entity_mut.buffer_undo_redo(now, SpawnEmpty { entity, caller });
+    entity_mut.buffer_undo_redo(past_len, SpawnEmpty { entity, caller });
     entity_mut
         .resource_mut::<RevDespawnCleaner>()
-        .log_spawn(entity, caller, now);
+        .log_spawn(entity, caller, past_len);
 }
 
 #[cfg(test)]

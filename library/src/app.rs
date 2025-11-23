@@ -54,16 +54,16 @@ impl RevApp for App {
 pub enum RevPlugin {
     Minimum,
     AddMeta {
-        max_world_states: Option<NonZeroU64>,
+        max_past_len: NonZeroU64,
         paused: bool,
     },
     AddMetaAndRunner {
-        max_world_states: Option<NonZeroU64>,
+        max_past_len: NonZeroU64,
         paused: bool,
         in_schedule: InternedScheduleLabel,
     },
     AddMetaAndRunnerInSet {
-        max_world_states: Option<NonZeroU64>,
+        max_past_len: NonZeroU64,
         paused: bool,
         in_schedule: InternedScheduleLabel,
         in_set: InternedSystemSet,
@@ -80,7 +80,7 @@ pub enum RevPlugin {
 impl Default for RevPlugin {
     fn default() -> Self {
         Self::add_meta_and_runner(
-            RevMeta::DEFAULT_MAX_WORLD_STATES,
+            RevMeta::DEFAULT_MAX_PAST_LEN,
             RevMeta::DEFAULT_PAUSED,
             FixedUpdate,
         )
@@ -91,31 +91,31 @@ impl RevPlugin {
     pub const fn minimum() -> Self {
         Self::Minimum
     }
-    pub const fn add_meta(max_world_states: Option<NonZeroU64>, paused: bool) -> Self {
+    pub const fn add_meta(max_past_len: NonZeroU64, paused: bool) -> Self {
         Self::AddMeta {
-            max_world_states,
+            max_past_len,
             paused,
         }
     }
     pub fn add_meta_and_runner(
-        max_world_states: Option<NonZeroU64>,
+        max_past_len: NonZeroU64,
         paused: bool,
         in_schedule: impl ScheduleLabel,
     ) -> Self {
         Self::AddMetaAndRunner {
-            max_world_states,
+            max_past_len,
             paused,
             in_schedule: in_schedule.intern(),
         }
     }
     pub fn add_meta_and_runner_in_set(
-        max_world_states: Option<NonZeroU64>,
+        max_past_len: NonZeroU64,
         paused: bool,
         in_schedule: impl ScheduleLabel,
         in_set: impl SystemSet,
     ) -> Self {
         Self::AddMetaAndRunnerInSet {
-            max_world_states,
+            max_past_len,
             paused,
             in_schedule: in_schedule.intern(),
             in_set: in_set.intern(),
@@ -139,17 +139,17 @@ impl Plugin for RevPlugin {
         // add meta
         match self {
             Self::AddMeta {
-                max_world_states,
+                max_past_len: max_world_states,
                 paused,
                 ..
             }
             | Self::AddMetaAndRunner {
-                max_world_states,
+                max_past_len: max_world_states,
                 paused,
                 ..
             }
             | Self::AddMetaAndRunnerInSet {
-                max_world_states,
+                max_past_len: max_world_states,
                 paused,
                 ..
             } => {

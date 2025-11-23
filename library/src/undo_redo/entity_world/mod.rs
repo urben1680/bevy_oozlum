@@ -1,6 +1,6 @@
 use super::{BuffersUndoRedo, RevDespawnCleaner, RevWorld, Take, UndoRedo};
 use crate::{
-    meta::{NonLogNow, RevDirection},
+    meta::{PastLen, RevDirection},
     undo_redo::{EntityRevDespawnedError, RevDespawned, RevOp},
 };
 use bevy_ecs::{
@@ -28,7 +28,7 @@ mod test;
 
 pub trait RevEntityWorldMut<'w> {
     // todo: mention relationship methods + out of scope
-    fn redo_and_buffer(&mut self, now: NonLogNow, undo_redo: impl UndoRedo);
+    fn redo_and_buffer(&mut self, past_len: PastLen, undo_redo: impl UndoRedo);
 
     // the methods here are purposely sorted alphabetically to make it easily comparable to bevy's docs
     // unmentioned methods are either
@@ -37,7 +37,7 @@ pub trait RevEntityWorldMut<'w> {
     // c) missed by accident!
 
     /// Reversible version of [`EntityWorldMut::clear`].
-    fn rev_clear(&mut self, now: NonLogNow) -> &mut Self;
+    fn rev_clear(&mut self, past_len: PastLen) -> &mut Self;
 
     /// Reversible version of [`EntityWorldMut::clone_and_spawn`].
     ///
@@ -45,7 +45,7 @@ pub trait RevEntityWorldMut<'w> {
     /// registered with [`RevApp::register_non_entity_buffer`](crate::app::RevApp::register_non_entity_buffer).
     /// Otherwise, at undo, the spawned entity will still be in relationship with the common
     /// `RelationshipTarget` despite being [temporarily despawned](DisabledToDespawn).
-    fn rev_clone_and_spawn(&mut self, now: NonLogNow) -> Entity;
+    fn rev_clone_and_spawn(&mut self, past_len: PastLen) -> Entity;
 
     /// Reversible version of [`EntityWorldMut::clone_and_spawn_with_opt_in`].
     ///
@@ -55,7 +55,7 @@ pub trait RevEntityWorldMut<'w> {
     /// `RelationshipTarget` despite being [temporarily despawned](DisabledToDespawn).
     fn rev_clone_and_spawn_with_opt_in(
         &mut self,
-        now: NonLogNow,
+        past_len: PastLen,
         config: impl FnOnce(&mut EntityClonerBuilder<OptIn>) + Send + Sync + 'static,
     ) -> Entity;
 
@@ -67,7 +67,7 @@ pub trait RevEntityWorldMut<'w> {
     /// `RelationshipTarget` despite being [temporarily despawned](DisabledToDespawn).
     fn rev_clone_and_spawn_with_opt_out(
         &mut self,
-        now: NonLogNow,
+        past_len: PastLen,
         config: impl FnOnce(&mut EntityClonerBuilder<OptOut>) + Send + Sync + 'static,
     ) -> Entity;
 
@@ -80,21 +80,21 @@ pub trait RevEntityWorldMut<'w> {
     /// Reversible version of [`EntityWorldMut::despawn`].
     ///
     /// Note that this despawns the entity not now but later when this action goes out of log.
-    fn rev_despawn_single(self, now: NonLogNow);
+    fn rev_despawn_single(self, past_len: PastLen);
 
     // todo
-    fn rev_log_scope(&mut self, now: NonLogNow) -> &mut Self;
+    fn rev_log_scope(&mut self, past_len: PastLen) -> &mut Self;
 
     /// Reversible version of [`EntityWorldMut::entry`].
     fn rev_entry<'a, T: Component>(&'a mut self) -> RevComponentEntry<'w, 'a, T>;
 
     /// Reversible version of [`EntityWorldMut::insert`].
-    fn rev_insert<T: Bundle>(&mut self, now: NonLogNow, bundle: T) -> &mut Self;
+    fn rev_insert<T: Bundle>(&mut self, past_len: PastLen, bundle: T) -> &mut Self;
 
     /// Reversible version of [`EntityWorldMut::insert_by_id`].
     unsafe fn rev_insert_by_id(
         &mut self,
-        now: NonLogNow,
+        past_len: PastLen,
         component_id: ComponentId,
         component: OwningPtr<'_>,
     ) -> &mut Self;
@@ -102,13 +102,13 @@ pub trait RevEntityWorldMut<'w> {
     /// Reversible version of [`EntityWorldMut::insert_by_ids`].
     unsafe fn rev_insert_by_ids<'a, I: Iterator<Item = OwningPtr<'a>>>(
         &mut self,
-        now: NonLogNow,
+        past_len: PastLen,
         component_ids: &[ComponentId],
         iter_components: I,
     ) -> &mut Self;
 
     /// Reversible version of [`EntityWorldMut::insert_if_new`].
-    fn rev_insert_if_new<T: Bundle>(&mut self, now: NonLogNow, bundle: T) -> &mut Self;
+    fn rev_insert_if_new<T: Bundle>(&mut self, past_len: PastLen, bundle: T) -> &mut Self;
 
     // rev_insert_reflect
     // out of scope due complexity
@@ -123,13 +123,13 @@ pub trait RevEntityWorldMut<'w> {
     // out of scope
 
     /// Reversible version of [`EntityWorldMut::remove`].
-    fn rev_remove<T: Bundle>(&mut self, now: NonLogNow) -> &mut Self;
+    fn rev_remove<T: Bundle>(&mut self, past_len: PastLen) -> &mut Self;
 
     /// Reversible version of [`EntityWorldMut::remove_by_id`].
-    fn rev_remove_by_id(&mut self, now: NonLogNow, component_id: ComponentId) -> &mut Self;
+    fn rev_remove_by_id(&mut self, past_len: PastLen, component_id: ComponentId) -> &mut Self;
 
     /// Reversible version of [`EntityWorldMut::remove_by_ids`].
-    fn rev_remove_by_ids(&mut self, now: NonLogNow, component_ids: &[ComponentId]) -> &mut Self;
+    fn rev_remove_by_ids(&mut self, past_len: PastLen, component_ids: &[ComponentId]) -> &mut Self;
 
     // rev_remove_reflect
     // out of scope due complexity
@@ -138,67 +138,67 @@ pub trait RevEntityWorldMut<'w> {
     // out of scope due complexity
 
     /// Reversible version of [`EntityWorldMut::remove_with_requires`].
-    fn rev_remove_with_requires<T: Bundle>(&mut self, now: NonLogNow) -> &mut Self;
+    fn rev_remove_with_requires<T: Bundle>(&mut self, past_len: PastLen) -> &mut Self;
 
     /// Reversible version of [`EntityWorldMut::retain`].
-    fn rev_retain<T: Bundle>(&mut self, now: NonLogNow) -> &mut Self;
+    fn rev_retain<T: Bundle>(&mut self, past_len: PastLen) -> &mut Self;
 
     /// Reversible version of [`EntityWorldMut::take`].
     fn rev_take<'a, T: Bundle + BundleFromComponents, Out>(
         &'a mut self,
-        now: NonLogNow,
+        past_len: PastLen,
         c: impl FnOnce(&T) -> Out,
     ) -> Option<Out>;
 }
 
 impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
-    fn redo_and_buffer(&mut self, now: NonLogNow, undo_redo: impl UndoRedo) {
+    fn redo_and_buffer(&mut self, past_len: PastLen, undo_redo: impl UndoRedo) {
         // todo: pass location
-        self.world_scope(|world| world.redo_and_buffer(now, undo_redo))
+        self.world_scope(|world| world.redo_and_buffer(past_len, undo_redo))
     }
 
     #[track_caller]
-    fn rev_log_scope(&mut self, now: NonLogNow) -> &mut Self {
+    fn rev_log_scope(&mut self, past_len: PastLen) -> &mut Self {
         let entity = self.id();
         self.resource_mut::<RevDespawnCleaner>()
-            .log_spawn(entity, MaybeLocation::caller(), now);
+            .log_spawn(entity, MaybeLocation::caller(), past_len);
         self
     }
 
     #[track_caller]
-    fn rev_clear(&mut self, now: NonLogNow) -> &mut Self {
-        rev_try_clear_with_caller(self, now, MaybeLocation::caller()).unwrap();
+    fn rev_clear(&mut self, past_len: PastLen) -> &mut Self {
+        rev_try_clear_with_caller(self, past_len, MaybeLocation::caller()).unwrap();
         self
     }
 
     #[track_caller]
-    fn rev_clone_and_spawn(&mut self, now: NonLogNow) -> Entity {
-        self.rev_clone_and_spawn_with_opt_out(now, |_| {})
+    fn rev_clone_and_spawn(&mut self, past_len: PastLen) -> Entity {
+        self.rev_clone_and_spawn_with_opt_out(past_len, |_| {})
     }
 
     #[track_caller]
     fn rev_clone_and_spawn_with_opt_in(
         &mut self,
-        now: NonLogNow,
+        past_len: PastLen,
         config: impl FnOnce(&mut EntityClonerBuilder<OptIn>) + Send + Sync + 'static,
     ) -> Entity {
-        rev_try_clone_and_spawn_with_opt_in_with_caller(self, now, config, MaybeLocation::caller())
+        rev_try_clone_and_spawn_with_opt_in_with_caller(self, past_len, config, MaybeLocation::caller())
             .unwrap()
     }
 
     #[track_caller]
     fn rev_clone_and_spawn_with_opt_out(
         &mut self,
-        now: NonLogNow,
+        past_len: PastLen,
         config: impl FnOnce(&mut EntityClonerBuilder<OptOut>) + Send + Sync + 'static,
     ) -> Entity {
-        rev_try_clone_and_spawn_with_opt_out_with_caller(self, now, config, MaybeLocation::caller())
+        rev_try_clone_and_spawn_with_opt_out_with_caller(self, past_len, config, MaybeLocation::caller())
             .unwrap()
     }
 
     #[track_caller]
-    fn rev_despawn_single(self, now: NonLogNow) {
-        rev_try_despawn_single_with_caller(self, now, MaybeLocation::caller()).unwrap()
+    fn rev_despawn_single(self, past_len: PastLen) {
+        rev_try_despawn_single_with_caller(self, past_len, MaybeLocation::caller()).unwrap()
     }
 
     fn rev_entry<'a, T: Component>(&'a mut self) -> RevComponentEntry<'w, 'a, T> {
@@ -216,13 +216,13 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
     }
 
     #[track_caller]
-    fn rev_insert<T: Bundle>(&mut self, now: NonLogNow, bundle: T) -> &mut Self {
+    fn rev_insert<T: Bundle>(&mut self, past_len: PastLen, bundle: T) -> &mut Self {
         rev_try_insert_with_caller(
             self,
             PhantomData::<T>,
             InsertMode::Replace,
             |entity_mut| entity_mut.insert(bundle),
-            now,
+            past_len,
             MaybeLocation::caller(),
         )
         .unwrap()
@@ -231,7 +231,7 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
     #[track_caller]
     unsafe fn rev_insert_by_id(
         &mut self,
-        now: NonLogNow,
+        past_len: PastLen,
         component_id: ComponentId,
         component: OwningPtr<'_>,
     ) -> &mut Self {
@@ -240,7 +240,7 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
             component_id,
             InsertMode::Replace,
             |entity_mut| unsafe { entity_mut.insert_by_id(component_id, component) },
-            now,
+            past_len,
             MaybeLocation::caller(),
         )
         .unwrap()
@@ -249,7 +249,7 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
     #[track_caller]
     unsafe fn rev_insert_by_ids<'a, I: Iterator<Item = OwningPtr<'a>>>(
         &mut self,
-        now: NonLogNow,
+        past_len: PastLen,
         component_ids: &[ComponentId],
         iter_components: I,
     ) -> &mut Self {
@@ -258,65 +258,65 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
             component_ids,
             InsertMode::Replace,
             |entity_mut| unsafe { entity_mut.insert_by_ids(component_ids, iter_components) },
-            now,
+            past_len,
             MaybeLocation::caller(),
         )
         .unwrap()
     }
 
     #[track_caller]
-    fn rev_insert_if_new<T: Bundle>(&mut self, now: NonLogNow, bundle: T) -> &mut Self {
+    fn rev_insert_if_new<T: Bundle>(&mut self, past_len: PastLen, bundle: T) -> &mut Self {
         rev_try_insert_with_caller(
             self,
             PhantomData::<T>,
             InsertMode::Keep,
             |entity_mut| entity_mut.insert_if_new(bundle),
-            now,
+            past_len,
             MaybeLocation::caller(),
         )
         .unwrap()
     }
 
     #[track_caller]
-    fn rev_remove<T: Bundle>(&mut self, now: NonLogNow) -> &mut Self {
-        rev_try_remove_with_caller::<_, false>(self, PhantomData::<T>, now, MaybeLocation::caller())
+    fn rev_remove<T: Bundle>(&mut self, past_len: PastLen) -> &mut Self {
+        rev_try_remove_with_caller::<_, false>(self, PhantomData::<T>, past_len, MaybeLocation::caller())
             .unwrap()
     }
 
     #[track_caller]
-    fn rev_remove_by_id(&mut self, now: NonLogNow, component_id: ComponentId) -> &mut Self {
-        rev_try_remove_with_caller::<_, false>(self, component_id, now, MaybeLocation::caller())
+    fn rev_remove_by_id(&mut self, past_len: PastLen, component_id: ComponentId) -> &mut Self {
+        rev_try_remove_with_caller::<_, false>(self, component_id, past_len, MaybeLocation::caller())
             .unwrap()
     }
 
     #[track_caller]
-    fn rev_remove_by_ids(&mut self, now: NonLogNow, component_ids: &[ComponentId]) -> &mut Self {
-        rev_try_remove_with_caller::<_, false>(self, component_ids, now, MaybeLocation::caller())
+    fn rev_remove_by_ids(&mut self, past_len: PastLen, component_ids: &[ComponentId]) -> &mut Self {
+        rev_try_remove_with_caller::<_, false>(self, component_ids, past_len, MaybeLocation::caller())
             .unwrap()
     }
 
     #[track_caller]
-    fn rev_remove_with_requires<T: Bundle>(&mut self, now: NonLogNow) -> &mut Self {
-        rev_try_remove_with_caller::<_, true>(self, PhantomData::<T>, now, MaybeLocation::caller())
+    fn rev_remove_with_requires<T: Bundle>(&mut self, past_len: PastLen) -> &mut Self {
+        rev_try_remove_with_caller::<_, true>(self, PhantomData::<T>, past_len, MaybeLocation::caller())
             .unwrap()
     }
 
     #[track_caller]
-    fn rev_retain<T: Bundle>(&mut self, now: NonLogNow) -> &mut Self {
-        rev_try_retain_with_caller(self, PhantomData::<T>, now, MaybeLocation::caller()).unwrap()
+    fn rev_retain<T: Bundle>(&mut self, past_len: PastLen) -> &mut Self {
+        rev_try_retain_with_caller(self, PhantomData::<T>, past_len, MaybeLocation::caller()).unwrap()
     }
 
     #[track_caller]
     fn rev_take<'a, T: Bundle + BundleFromComponents, Out>(
         &'a mut self,
-        now: NonLogNow,
+        past_len: PastLen,
         c: impl FnOnce(&T) -> Out,
     ) -> Option<Out> {
         self.take::<T>().map(|value| {
             let out = c(&value);
             let entity = self.id();
             self.buffer_undo_redo(
-                now,
+                past_len,
                 Take {
                     bundle: Some(value),
                     entity,
@@ -329,16 +329,16 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
 
 pub(crate) fn rev_try_clear_with_caller<'a, 'b>(
     entity_mut: &'a mut EntityWorldMut<'b>,
-    now: NonLogNow,
+    past_len: PastLen,
     caller: MaybeLocation,
 ) -> Result<&'a mut EntityWorldMut<'b>, EntityRevDespawnedError> {
     assert_not_rev_despawned(&*entity_mut)?;
-    Ok(rev_clear_with_caller(entity_mut, now, caller))
+    Ok(rev_clear_with_caller(entity_mut, past_len, caller))
 }
 
 fn rev_clear_with_caller<'a, 'b>(
     entity_mut: &'a mut EntityWorldMut<'b>,
-    now: NonLogNow,
+    past_len: PastLen,
     caller: MaybeLocation,
 ) -> &'a mut EntityWorldMut<'b> {
     let id = entity_mut.id();
@@ -346,15 +346,15 @@ fn rev_clear_with_caller<'a, 'b>(
         let mut buffer = BundleBuffer::new((), id, caller);
         let mut cloner = ().cloner(world);
         let entities = buffer.toggle_state(world);
-        entities.move_components(world, &mut cloner, RevDirection::NOT_LOG);
-        world.buffer_undo_redo(now, buffer);
+        entities.move_components(world, &mut cloner, RevDirection::Forward(past_len));
+        world.buffer_undo_redo(past_len, buffer);
     });
     entity_mut
 }
 
 pub(crate) fn rev_try_clone_and_spawn_with_opt_in_with_caller<'a, 'b>(
     entity_mut: &'a mut EntityWorldMut<'b>,
-    now: NonLogNow,
+    past_len: PastLen,
     config: impl FnOnce(&mut EntityClonerBuilder<OptIn>) + Send + Sync + 'static,
     caller: MaybeLocation,
 ) -> Result<Entity, EntityRevDespawnedError> {
@@ -362,13 +362,13 @@ pub(crate) fn rev_try_clone_and_spawn_with_opt_in_with_caller<'a, 'b>(
     let clone = entity_mut.clone_and_spawn_with_opt_in(config);
     // SAFETY: cannot change entity location as DeferredWorld
     let world = unsafe { entity_mut.world_mut().into() };
-    rev_spawn_with_caller(world, clone, now, caller);
+    rev_spawn_with_caller(world, clone, past_len, caller);
     Ok(clone)
 }
 
 pub(crate) fn rev_try_clone_and_spawn_with_opt_out_with_caller<'a, 'b>(
     entity_mut: &'a mut EntityWorldMut<'b>,
-    now: NonLogNow,
+    past_len: PastLen,
     config: impl FnOnce(&mut EntityClonerBuilder<OptOut>) + Send + Sync + 'static,
     caller: MaybeLocation,
 ) -> Result<Entity, EntityRevDespawnedError> {
@@ -376,17 +376,17 @@ pub(crate) fn rev_try_clone_and_spawn_with_opt_out_with_caller<'a, 'b>(
     let clone = entity_mut.clone_and_spawn_with_opt_out(config);
     // SAFETY: cannot change entity location as DeferredWorld
     let world = unsafe { entity_mut.world_mut().into() };
-    rev_spawn_with_caller(world, clone, now, caller);
+    rev_spawn_with_caller(world, clone, past_len, caller);
     Ok(clone)
 }
 
 pub(crate) fn rev_try_despawn_single_with_caller(
     mut entity_mut: EntityWorldMut,
-    now: NonLogNow,
+    past_len: PastLen,
     caller: MaybeLocation,
 ) -> Result<(), EntityRevDespawnedError> {
     assert_not_rev_despawned(&entity_mut)?;
-    rev_spawn_despawn_with_caller::<false>(&mut entity_mut, now, caller);
+    rev_spawn_despawn_with_caller::<false>(&mut entity_mut, past_len, caller);
     Ok(())
 }
 
@@ -395,7 +395,7 @@ pub(crate) fn rev_try_insert_with_caller<'a, 'b>(
     bundle_type_or_component_ids: impl MaybeDynamicBundle,
     mut insert_mode: InsertMode,
     insert: impl for<'c> FnOnce(&'c mut EntityWorldMut<'b>) -> &'c mut EntityWorldMut<'b>,
-    now: NonLogNow,
+    past_len: PastLen,
     caller: MaybeLocation,
 ) -> Result<&'a mut EntityWorldMut<'b>, EntityRevDespawnedError> {
     let archetype = assert_not_rev_despawned(&*entity_mut)?;
@@ -428,11 +428,11 @@ pub(crate) fn rev_try_insert_with_caller<'a, 'b>(
                 // here the `buffer` is the buffer for the overwritten components...
                 let entities = buffer.toggle_state(world);
                 let backup_buffer = entities.buffer;
-                entities.move_components(world, &mut cloner, RevDirection::NOT_LOG);
+                entities.move_components(world, &mut cloner, RevDirection::Forward(past_len));
                 // ...here `buffer` becomes the buffer for the inserted components
                 buffer.state = BufferState::Unspawned;
                 world.buffer_undo_redo(
-                    now,
+                    past_len,
                     BundleBufferReplace {
                         backup_buffer,
                         insert_buffer: buffer,
@@ -440,7 +440,7 @@ pub(crate) fn rev_try_insert_with_caller<'a, 'b>(
                 );
             }
             InsertMode::Keep => {
-                world.buffer_undo_redo(now, buffer);
+                world.buffer_undo_redo(past_len, buffer);
             }
         }
         true
@@ -460,7 +460,7 @@ pub(crate) fn rev_try_remove_with_caller<
 >(
     entity_mut: &'a mut EntityWorldMut<'b>,
     bundle_type_or_component_ids: B,
-    now: NonLogNow,
+    past_len: PastLen,
     caller: MaybeLocation,
 ) -> Result<&'a mut EntityWorldMut<'b>, EntityRevDespawnedError> {
     assert_not_rev_despawned(&*entity_mut)?;
@@ -472,8 +472,8 @@ pub(crate) fn rev_try_remove_with_caller<
         let mut buffer = BundleBuffer::new(cloner_builder, id, caller);
         let mut cloner = cloner_builder.cloner(world);
         let entities = buffer.toggle_state(world);
-        entities.move_components(world, &mut cloner, RevDirection::NOT_LOG);
-        world.buffer_undo_redo(now, buffer);
+        entities.move_components(world, &mut cloner, RevDirection::Forward(past_len));
+        world.buffer_undo_redo(past_len, buffer);
     });
     Ok(entity_mut)
 }
@@ -481,7 +481,7 @@ pub(crate) fn rev_try_remove_with_caller<
 pub(crate) fn rev_try_retain_with_caller<'a, 'b>(
     entity_mut: &'a mut EntityWorldMut<'b>,
     bundle_type_or_component_ids: impl MaybeDynamicBundle,
-    now: NonLogNow,
+    past_len: PastLen,
     caller: MaybeLocation,
 ) -> Result<&'a mut EntityWorldMut<'b>, EntityRevDespawnedError> {
     let archetype = assert_not_rev_despawned(&*entity_mut)?;
@@ -498,12 +498,12 @@ pub(crate) fn rev_try_retain_with_caller<'a, 'b>(
         let mut buffer = BundleBuffer::new(cloner_builder, id, caller);
         let mut cloner = cloner_builder.cloner(world);
         let entities = buffer.toggle_state(world);
-        entities.move_components(world, &mut cloner, RevDirection::NOT_LOG);
-        world.buffer_undo_redo(now, buffer);
+        entities.move_components(world, &mut cloner, RevDirection::Forward(past_len));
+        world.buffer_undo_redo(past_len, buffer);
         true
     });
     if !retained_any {
-        Ok(rev_clear_with_caller(entity_mut, now, caller))
+        Ok(rev_clear_with_caller(entity_mut, past_len, caller))
     } else {
         Ok(entity_mut)
     }
@@ -694,39 +694,39 @@ impl<const SPAWN: bool> UndoRedo for SpawnDespawn<SPAWN> {
         self.undo_redo(world, RevDirection::BackwardLog);
     }
     fn redo(&mut self, world: &mut World) {
-        self.undo_redo(world, RevDirection::FORWARD_LOG);
+        self.undo_redo(world, RevDirection::ForwardLog);
     }
 }
 
 pub(crate) fn rev_spawn_despawn_with_caller<const SPAWN: bool>(
     entity_mut: &mut EntityWorldMut,
-    now: NonLogNow,
+    past_len: PastLen,
     caller: MaybeLocation,
 ) {
     let entity = entity_mut.id();
     let mut this = SpawnDespawn::<SPAWN>(BundleBuffer::new((), entity, caller));
     let mut cleaner = entity_mut.resource_mut::<RevDespawnCleaner>();
     if SPAWN {
-        cleaner.log_spawn(entity, caller, now);
+        cleaner.log_spawn(entity, caller, past_len);
         cleaner.log_spawn_buffer(None, caller);
     } else {
-        cleaner.log_despawn(entity, caller, now);
-        entity_mut.world_scope(|world| this.undo_redo(world, RevDirection::NOT_LOG));
+        cleaner.log_despawn(entity, caller, past_len);
+        entity_mut.world_scope(|world| this.undo_redo(world, RevDirection::Forward(past_len)));
     }
-    entity_mut.buffer_undo_redo(now, this);
+    entity_mut.buffer_undo_redo(past_len, this);
 }
 
 pub(crate) fn rev_spawn_with_caller(
     mut world: DeferredWorld,
     entity: Entity,
-    now: NonLogNow,
+    past_len: PastLen,
     caller: MaybeLocation,
 ) {
     let this = SpawnDespawn::<true>(BundleBuffer::new((), entity, caller));
     let mut cleaner = world.resource_mut::<RevDespawnCleaner>();
-    cleaner.log_spawn(entity, caller, now);
+    cleaner.log_spawn(entity, caller, past_len);
     cleaner.log_spawn_buffer(None, caller);
-    world.buffer_undo_redo(now, this);
+    world.buffer_undo_redo(past_len, this);
 }
 
 pub(crate) fn assert_not_rev_despawned<'a, E: 'a + Into<EntityRef<'a>>>(
@@ -861,7 +861,7 @@ impl<Cloner: ClonerBuilder> UndoRedo for BundleBuffer<Cloner> {
         self.undo_redo(world, RevDirection::BackwardLog);
     }
     fn redo(&mut self, world: &mut World) {
-        self.undo_redo(world, RevDirection::FORWARD_LOG);
+        self.undo_redo(world, RevDirection::ForwardLog);
     }
 }
 
@@ -895,11 +895,11 @@ impl UndoRedo for BundleBufferReplace {
             target: self.backup_buffer,
             buffer: self.backup_buffer,
         };
-        entities.move_components(world, &mut cloner, RevDirection::FORWARD_LOG);
+        entities.move_components(world, &mut cloner, RevDirection::ForwardLog);
 
         // move inserted components from the insert_buffer into the entity
         let entities = self.insert_buffer.toggle_state(world);
-        entities.move_components(world, &mut cloner, RevDirection::FORWARD_LOG);
+        entities.move_components(world, &mut cloner, RevDirection::ForwardLog);
     }
 }
 
@@ -938,15 +938,15 @@ impl<'w, 'a, T: Component> RevComponentEntry<'w, 'a, T> {
     #[track_caller]
     pub fn rev_insert_entry(
         self,
-        now: NonLogNow,
+        past_len: PastLen,
         component: T,
     ) -> RevOccupiedComponentEntry<'w, 'a, T> {
         match self {
             RevComponentEntry::Occupied(mut entry) => {
-                entry.rev_insert(now, component);
+                entry.rev_insert(past_len, component);
                 entry
             }
-            RevComponentEntry::Vacant(entry) => entry.rev_insert(now, component),
+            RevComponentEntry::Vacant(entry) => entry.rev_insert(past_len, component),
         }
     }
 
@@ -961,10 +961,10 @@ impl<'w, 'a, T: Component> RevComponentEntry<'w, 'a, T> {
 
     /// Reversible version of [`Entry::or_insert`](bevy_ecs::world::Entry::or_insert).
     #[track_caller]
-    pub fn rev_or_insert(self, now: NonLogNow, default: T) -> RevOccupiedComponentEntry<'w, 'a, T> {
+    pub fn rev_or_insert(self, past_len: PastLen, default: T) -> RevOccupiedComponentEntry<'w, 'a, T> {
         match self {
             RevComponentEntry::Occupied(entry) => entry,
-            RevComponentEntry::Vacant(entry) => entry.rev_insert(now, default),
+            RevComponentEntry::Vacant(entry) => entry.rev_insert(past_len, default),
         }
     }
 
@@ -984,12 +984,12 @@ impl<'w, 'a, T: Component> RevComponentEntry<'w, 'a, T> {
     #[track_caller]
     pub fn rev_or_insert_with<F: FnOnce() -> T>(
         self,
-        now: NonLogNow,
+        past_len: PastLen,
         default: F,
     ) -> RevOccupiedComponentEntry<'w, 'a, T> {
         match self {
             RevComponentEntry::Occupied(entry) => entry,
-            RevComponentEntry::Vacant(entry) => entry.rev_insert(now, default()),
+            RevComponentEntry::Vacant(entry) => entry.rev_insert(past_len, default()),
         }
     }
 }
@@ -1006,10 +1006,10 @@ impl<'w, 'a, T: Component + Default> RevComponentEntry<'w, 'a, T> {
 
     /// Reversible version of [`Entry::or_insert_with`](bevy_ecs::world::Entry::or_default).
     #[track_caller]
-    pub fn rev_or_default(self, now: NonLogNow) -> RevOccupiedComponentEntry<'w, 'a, T> {
+    pub fn rev_or_default(self, past_len: PastLen) -> RevOccupiedComponentEntry<'w, 'a, T> {
         match self {
             RevComponentEntry::Occupied(entry) => entry,
-            RevComponentEntry::Vacant(entry) => entry.rev_insert(now, Default::default()),
+            RevComponentEntry::Vacant(entry) => entry.rev_insert(past_len, Default::default()),
         }
     }
 }
@@ -1023,8 +1023,8 @@ impl<'w, 'a, T: Component> RevOccupiedComponentEntry<'w, 'a, T> {
 
     /// Reversible version of [`OccupiedEntry::or_insert_with`](bevy_ecs::world::OccupiedEntry::insert).
     #[track_caller]
-    pub fn rev_insert(&mut self, now: NonLogNow, component: T) {
-        self.entity_world_mut.rev_insert(now, component);
+    pub fn rev_insert(&mut self, past_len: PastLen, component: T) {
+        self.entity_world_mut.rev_insert(past_len, component);
     }
 
     /// See [`OccupiedEntry::take`](bevy_ecs::world::OccupiedEntry::take).
@@ -1036,9 +1036,9 @@ impl<'w, 'a, T: Component> RevOccupiedComponentEntry<'w, 'a, T> {
 
     /// Reversible version of [`OccupiedEntry::take`](bevy_ecs::world::OccupiedEntry::take).
     #[track_caller]
-    pub fn rev_take<Out>(self, now: NonLogNow, c: impl FnOnce(&T) -> Out) -> Out {
+    pub fn rev_take<Out>(self, past_len: PastLen, c: impl FnOnce(&T) -> Out) -> Out {
         // This shouldn't panic because if we have an OccupiedEntry the component must exist.
-        self.entity_world_mut.rev_take::<T, Out>(now, c).unwrap()
+        self.entity_world_mut.rev_take::<T, Out>(past_len, c).unwrap()
     }
 }
 
@@ -1055,8 +1055,8 @@ impl<'w, 'a, T: Component> RevVacantComponentEntry<'w, 'a, T> {
 
     /// Reversible version of [`VacantEntry::take`](bevy_ecs::world::VacantEntry::insert).
     #[track_caller]
-    pub fn rev_insert(self, now: NonLogNow, component: T) -> RevOccupiedComponentEntry<'w, 'a, T> {
-        self.entity_world_mut.rev_insert(now, component);
+    pub fn rev_insert(self, past_len: PastLen, component: T) -> RevOccupiedComponentEntry<'w, 'a, T> {
+        self.entity_world_mut.rev_insert(past_len, component);
         RevOccupiedComponentEntry {
             entity_world_mut: self.entity_world_mut,
             _marker: PhantomData,

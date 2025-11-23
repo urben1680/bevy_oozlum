@@ -301,7 +301,7 @@ impl OffsetLog {
     /// Push an offset to the log.
     ///
     /// This method assumes that it currently does not contain a future segment.
-    pub(super) fn push_was_empty(&mut self, offset: u64) -> bool {
+    pub(super) fn push(&mut self, offset: u64) {
         self.debug_assert_no_future();
 
         match offset {
@@ -322,8 +322,6 @@ impl OffsetLog {
             ..MULTI_BYTE_OFFSET_8 => self.push_bytes::<7>(offset),
             _ => self.push_bytes::<8>(offset),
         }
-
-        false
     }
 
     fn push_streak<const ONE: bool>(&mut self) {
@@ -831,11 +829,9 @@ mod test {
     #[test]
     fn push_works() {
         let mut log = OffsetLog::default();
-        let mut first = true;
 
         for offset in OFFSETS_DECODED {
-            assert_eq!(log.push_was_empty(offset), first);
-            first = false;
+            log.push(offset);
         }
 
         assert_eq!(log.offsets, OFFSETS_ENCODED);
@@ -853,7 +849,7 @@ mod test {
             let mut log = OffsetLog::default();
             let total = offsets.iter().sum::<u64>();
             for offset in offsets.iter().cloned() {
-                log.push_was_empty(offset);
+                log.push(offset);
             }
             let total_pushed = log.now_to_past().sum::<u64>();
             assert_eq!(total, total_pushed);

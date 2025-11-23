@@ -1,7 +1,7 @@
 use crate::{log::update::offset::OffsetLog, meta::RevMeta};
 use bevy_ecs::change_detection::MaybeLocation;
-use core::fmt::{Debug, Display};
-use std::collections::TryReserveError;
+use core::{fmt::{Debug, Display}, num::NonZeroU64};
+use std::{collections::TryReserveError};
 
 pub use limit::UpdateLogId;
 use limit::*;
@@ -234,28 +234,30 @@ impl UpdateLog {
     /// current scope has been determined for some operation to happen, most often in combination
     /// with another log that is updated next with the returned value.
     #[track_caller]
-    pub fn forward_past_len(&mut self, meta: &RevMeta) -> u64 {
+    pub fn forward_past_len(&mut self, meta: &RevMeta) -> NonZeroU64 {
         self.forward_past_len_with_caller(meta, MaybeLocation::caller())
     }
 
-    fn forward_past_len_with_caller(&mut self, meta: &RevMeta, caller: MaybeLocation) -> u64 {
+    fn forward_past_len_with_caller(&mut self, meta: &RevMeta, caller: MaybeLocation) -> NonZeroU64 {
+        let past_len;
+        
         if self.not_log_should_clear(meta) {
             // log is empty or all updates are out of log
             // it is not important what offset is pushed as long log_start + offset = now
             // asusming 1-offset streak are the most common offsets and that during
             // RevDirection::NOT_LOG the value of now is non-zero, start such a 1-offset streak here
             self.offsets.clear();
-            self.offsets.push_was_empty(1);
+            self.offsets.push(1);
             self.log_start = meta.now() - 1;
             self.last_update = meta.now();
             self.past_len = 1;
+            past_len = NonZeroU64::MIN;
         } else {
             let offset = meta.now() - self.last_update;
-            if self.offsets.push_was_empty(offset) {
-                self.log_start = meta.now();
-            }
+            self.offsets.push(offset);
             self.last_update = meta.now();
-            self.past_len += 1;
+            past_len = NonZeroU64::new(self.past_len + 1).expect("should not overflow");
+            self.past_len = past_len.get();
         }
 
         meta.update_log_limits().push_limit(
@@ -263,7 +265,7 @@ impl UpdateLog {
             UpdateLogLimit::new_not_log(meta.now(), caller),
         );
 
-        self.past_len
+        past_len
     }
 
     fn not_log_should_clear(&mut self, meta: &RevMeta) -> bool {
@@ -409,7 +411,7 @@ pub(crate) enum PreUpdateKind {
 
 #[cfg(test)]
 mod test {
-    use crate::meta::{RevDirection, RevQueue};
+    use crate::meta::RevQueue;
 
     use super::*;
 
@@ -423,7 +425,7 @@ mod test {
     impl MetaAndLog {
         fn new(max_world_states: u64) -> Self {
             Self {
-                meta: RevMeta::new(core::num::NonZeroU64::new(max_world_states), false),
+                meta: RevMeta::new(core::num::NonZeroU64::new(max_world_states).unwrap(), false),
                 update_log: UpdateLog::new(),
                 last_update: MaybeLocation::caller(),
             }
@@ -432,14 +434,14 @@ mod test {
         fn forward<const N: usize>(&mut self, past_lens: [u64; N], clear: bool) {
             let caller = MaybeLocation::caller();
             let queue = if clear {
-                RevQueue::CLEAR_THEN_RUN
+                RevQueue::ClearThenRunForward
             } else {
-                RevQueue::RUN_NOT_LOG
+                RevQueue::RunForward
             };
             self.meta.set_queue(queue);
-            self.meta.update_ref(Ok(true), |meta, direction| {
-                assert_eq!(direction, RevDirection::NOT_LOG);
+            self.meta.update_ref(Ok(true), |meta, _| {
                 for past_len in past_lens {
+                    let past_len = NonZeroU64::new(past_len).unwrap();
                     let actual = self.update_log.forward_past_len_with_caller(meta, caller);
                     assert_eq!(actual, past_len);
                     self.last_update = caller;
@@ -458,9 +460,8 @@ mod test {
                     if insufficient_updates == 1 {
                         missed.last_update = caller;
                     }
-                    self.meta.set_queue(RevQueue::RUN_FORWARD_LOG);
-                    self.meta.update_ref(Err(missed), |meta, direction| {
-                        assert_eq!(direction, RevDirection::FORWARD_LOG);
+                    self.meta.set_queue(RevQueue::RunForwardLog);
+                    self.meta.update_ref(Err(missed), |meta, _| {
                         for _ in 0..insufficient_updates {
                             assert_eq!(self.update_log.forward_log_with_caller(meta, caller), true);
                         }
@@ -470,9 +471,8 @@ mod test {
             }
 
             // test where all updates ran
-            self.meta.set_queue(RevQueue::RUN_FORWARD_LOG);
-            self.meta.update_ref(Ok(true), |meta, direction| {
-                assert_eq!(direction, RevDirection::FORWARD_LOG);
+            self.meta.set_queue(RevQueue::RunForwardLog);
+            self.meta.update_ref(Ok(true), |meta, _| {
                 for _ in 0..updates {
                     assert!(self.update_log.forward_log_with_caller(meta, caller));
                 }
@@ -496,9 +496,8 @@ mod test {
                     if insufficient_updates == 1 {
                         missed.last_update = caller;
                     }
-                    self.meta.set_queue(RevQueue::RUN_BACKWARD_LOG);
-                    self.meta.update_ref(Err(missed), |meta, direction| {
-                        assert_eq!(direction, RevDirection::BackwardLog);
+                    self.meta.set_queue(RevQueue::RunBackwardLog);
+                    self.meta.update_ref(Err(missed), |meta, _| {
                         for _ in 0..insufficient_updates {
                             assert_eq!(
                                 self.update_log.backward_log_with_caller(meta, caller),
@@ -511,9 +510,8 @@ mod test {
             }
 
             // test where all updates ran
-            self.meta.set_queue(RevQueue::RUN_BACKWARD_LOG);
-            self.meta.update_ref(Ok(true), |meta, direction| {
-                assert_eq!(direction, RevDirection::BackwardLog);
+            self.meta.set_queue(RevQueue::RunBackwardLog);
+            self.meta.update_ref(Ok(true), |meta, _| {
                 for _ in 0..updates {
                     assert!(self.update_log.backward_log_with_caller(meta, caller));
                 }
@@ -533,9 +531,9 @@ mod test {
         }
         fn revert(&mut self, updates: u64, forward: bool) {
             let queue = if forward {
-                RevQueue::RUN_FORWARD_LOG
+                RevQueue::RunForwardLog
             } else {
-                RevQueue::RUN_BACKWARD_LOG
+                RevQueue::RunBackwardLog
             };
             self.meta.set_queue(queue);
             self.meta.update_ref(Ok(true), |meta, _| {
@@ -562,7 +560,7 @@ mod test {
 
     #[test]
     fn log_traversal_works() {
-        let mut meta_and_log = MetaAndLog::new(4);
+        let mut meta_and_log = MetaAndLog::new(3);
 
         meta_and_log.forward([1], false); // frame #1
         meta_and_log.forward([2, 3], false); // frame #2
@@ -605,7 +603,7 @@ mod test {
 
     #[test]
     fn behaves_like_meta() {
-        let mut meta_and_log = MetaAndLog::new(4);
+        let mut meta_and_log = MetaAndLog::new(3);
 
         meta_and_log.forward([1], false);
         assert_eq!(meta_and_log.meta.past_len(), 1);
@@ -625,7 +623,7 @@ mod test {
 
     #[test]
     fn behaves_like_meta_minus_gaps() {
-        let mut meta_and_log = MetaAndLog::new(4);
+        let mut meta_and_log = MetaAndLog::new(3);
 
         meta_and_log.forward([1], false);
         assert_eq!(meta_and_log.meta.past_len(), 1);
@@ -660,7 +658,7 @@ mod test {
 
     #[test]
     fn forward_truncates_future() {
-        let mut meta_and_log = MetaAndLog::new(4);
+        let mut meta_and_log = MetaAndLog::new(3);
 
         meta_and_log.forward([1], false);
 
@@ -675,7 +673,7 @@ mod test {
 
     #[test]
     fn simple_undo_redo() {
-        let mut meta_and_log = MetaAndLog::new(4);
+        let mut meta_and_log = MetaAndLog::new(3);
 
         meta_and_log.forward([1], false);
 
@@ -686,7 +684,7 @@ mod test {
 
     #[test]
     fn full_truncate_future_clears() {
-        let mut meta_and_log = MetaAndLog::new(4);
+        let mut meta_and_log = MetaAndLog::new(3);
 
         meta_and_log.forward([], false);
         meta_and_log.forward([1], false);

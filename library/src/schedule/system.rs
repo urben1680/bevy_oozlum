@@ -536,8 +536,8 @@ mod test {
     struct Observer;
 
     fn observer(_: On<Observer>, mut world: DeferredWorld) {
-        let now = world.resource::<RevMeta>().non_log_now().unwrap();
-        world.buffer_undo_redo(now, blank_undo_redo);
+        let past_len = world.resource::<RevMeta>().non_log_past_len();
+        world.buffer_undo_redo(past_len, blank_undo_redo);
         world.commands().queue(|world: &mut World| {
             world.spawn(EmptyOnAdd);
         });
@@ -546,16 +546,16 @@ mod test {
     #[derive(Event)]
     struct EmptyObserver;
     fn empty_observer(_: On<Observer>, mut world: DeferredWorld) {
-        let now = world.resource::<RevMeta>().non_log_now().unwrap();
-        world.buffer_undo_redo(now, blank_undo_redo);
+        let past_len = world.resource::<RevMeta>().non_log_past_len();
+        world.buffer_undo_redo(past_len, blank_undo_redo);
     }
 
     #[derive(Component)]
     #[component(on_add = on_add)]
     struct OnAdd;
     fn on_add(mut world: DeferredWorld, _: HookContext) {
-        let now = world.resource::<RevMeta>().non_log_now().unwrap();
-        world.buffer_undo_redo(now, blank_undo_redo);
+        let past_len = world.resource::<RevMeta>().non_log_past_len();
+        world.buffer_undo_redo(past_len, blank_undo_redo);
         world.commands().queue(|world: &mut World| {
             world.trigger(EmptyObserver);
         });
@@ -565,15 +565,15 @@ mod test {
     #[component(on_add = empty_on_add)]
     struct EmptyOnAdd;
     fn empty_on_add(mut world: DeferredWorld, _: HookContext) {
-        let now = world.resource::<RevMeta>().non_log_now().unwrap();
-        world.buffer_undo_redo(now, blank_undo_redo);
+        let past_len = world.resource::<RevMeta>().non_log_past_len();
+        world.buffer_undo_redo(past_len, blank_undo_redo);
     }
 
     fn assert_system_drains_all_undo_redo<M>(system: impl IntoSystem<(), (), M> + Copy + 'static) {
         panic_on_error_events();
         let mut app = App::new();
         app.add_plugins(RevPlugin::add_meta_and_runner(
-            RevMeta::DEFAULT_MAX_WORLD_STATES,
+            RevMeta::DEFAULT_MAX_PAST_LEN,
             RevMeta::DEFAULT_PAUSED,
             Update,
         ))
@@ -591,9 +591,9 @@ mod test {
     fn non_exclusive_system_drains_all_undo_redo() {
         assert_system_drains_all_undo_redo(
             |mut buffer: ResMut<UndoRedoBuffer>, meta: Res<RevMeta>, mut commands: Commands| {
-                let now = meta.non_log_now().unwrap();
-                buffer.buffer_undo_redo(now, blank_undo_redo);
-                commands.buffer_undo_redo(now, blank_undo_redo);
+                let past_len = meta.non_log_past_len();
+                buffer.buffer_undo_redo(past_len, blank_undo_redo);
+                commands.buffer_undo_redo(past_len, blank_undo_redo);
                 commands.queue(|world: &mut World| {
                     world.trigger(Observer);
                     world.spawn(OnAdd);
@@ -605,8 +605,8 @@ mod test {
     #[test]
     fn exclusive_system_drains_all_undo_redo() {
         assert_system_drains_all_undo_redo(|world: &mut World| {
-            let now = world.resource::<RevMeta>().non_log_now().unwrap();
-            world.buffer_undo_redo(now, blank_undo_redo);
+            let past_len = world.resource::<RevMeta>().non_log_past_len();
+            world.buffer_undo_redo(past_len, blank_undo_redo);
             world.trigger(Observer);
             world.spawn(OnAdd);
         })

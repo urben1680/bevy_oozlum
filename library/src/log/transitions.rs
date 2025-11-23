@@ -1,7 +1,6 @@
 use crate::{
     log::{
         DrainAll, GapRange, OutOfLog, TransitionDrain, TransitionLog, prepend,
-        transition::DrainAndMaybePushedTransition,
     },
     meta::RevMeta,
 };
@@ -11,10 +10,10 @@ use core::{
     marker::PhantomData,
     mem::ManuallyDrop,
 };
-use std::collections::{
+use std::{collections::{
     TryReserveError, VecDeque,
     vec_deque::{Drain, IterMut},
-};
+}, num::NonZeroU64};
 
 /// A log that is updated with with a variable amount of transition type `T` which are used to
 /// transition a state forward or backward in time. For each of these updates, a type `U` is stored
@@ -158,36 +157,6 @@ impl<T, U> TransitionsLog<T, U> {
         }
     }
 
-    /// Returns the current poison state.
-    ///
-    /// If present, this has an effect on the following methods:
-    ///
-    /// - [`pre_update`](Self::pre_update)/[`pre_update_drain`](Self::pre_update_drain) will not
-    ///   truncate/drain any log entries except if [`RevQueue::Clear`](crate::meta::RevQueue::Clear)
-    ///   is applied, which also clears the poison.
-    /// - [`push`](Self::push) ignores the pushed log entry and [logs an error](bevy_log::error).
-    /// - [`push_drain_past`](Self::push_drain_past) ignores the pushed log entry,
-    ///   [logs an error](bevy_log::error) and always returns an drains no log entries.
-    /// - [`forward_log`](Self::forward_log)/[`backward_log`](Self::backward_log) continue to return
-    ///   the same [`OutOfLog`] error as this method here does.
-    ///
-    /// If bevy's `track_location` cargo feature is activated, the error here contains the location
-    /// where it originally occured.
-    ///
-    /// To unset the poison, [`clear_poison`](Self::clear_poison) can be called.
-    pub fn poison(&self) -> Result<(), OutOfLog> {
-        self.updates.poison()
-    }
-
-    /// Unsets the poison, see [`poison`](Self::poison).
-    ///
-    /// This happens automatically when
-    /// [`pre_update`](Self::pre_update)([`_drain`](Self::pre_update_drain)) applies a previous
-    /// [`RevQueue::Clear`](crate::meta::RevQueue::Clear).
-    pub fn clear_poison(&mut self) {
-        self.updates.clear_poison();
-    }
-
     /// Returns the number of transitions (`T`) in the log.
     ///
     /// See [`VecDeque::len`].
@@ -320,18 +289,18 @@ impl<T, U> TransitionsLog<T, U> {
     pub fn forward_extend_with<'a, I: IntoIterator<Item = T>>(
         &'a mut self,
         meta: &RevMeta,
-        max_past_len: u64,
+        past_len: NonZeroU64,
         transitions: I,
         update: U,
-    ) -> Result<TransitionsDrain<'a, T, U, I>, OutOfLog> {
+    ) -> TransitionsDrain<'a, T, U, I> {
         let updates = self.updates.forward_push(
             meta,
-            max_past_len,
+            past_len,
             TransitionsLogUpdate {
                 update,
                 transitions: usize::MAX, // will be overwritten when transititons are counted
             },
-        )?;
+        );
         let gap_range = if updates.is_clear() {
             GapRange::new_clear(self.index)
         } else {
@@ -341,14 +310,14 @@ impl<T, U> TransitionsLog<T, U> {
                 .sum::<usize>();
             GapRange::new(start, self.index)
         };
-        Ok(TransitionsDrain {
+        TransitionsDrain {
             transitions: &mut self.transitions,
             updates,
             index: &mut self.index,
-            transitions_iter: Some(transitions),
+            transitions_iter: ManuallyDrop::new(transitions),
             gap_range,
             gap_buffer: Default::default(),
-        })
+        }
     }
 
     /// Returns references to the log entry that was logged at the chronologically previous push. If
@@ -433,10 +402,10 @@ impl<T> TransitionsLog<T, ()> {
     pub fn forward_extend<'a, I: IntoIterator<Item = T>>(
         &'a mut self,
         meta: &RevMeta,
-        max_past_len: u64,
+        past_len: NonZeroU64,
         transitions: I,
-    ) -> Result<TransitionsDrain<'a, T, (), I>, OutOfLog> {
-        self.forward_extend_with(meta, max_past_len, transitions, ())
+    ) -> TransitionsDrain<'a, T, (), I> {
+        self.forward_extend_with(meta, past_len, transitions, ())
     }
 }
 
@@ -448,7 +417,7 @@ where
     transitions: &'a mut VecDeque<T>,
     updates: TransitionDrain<'a, TransitionsLogUpdate<U>>,
     index: &'a mut usize,
-    transitions_iter: Option<I>,
+    transitions_iter: ManuallyDrop<I>,
     gap_range: GapRange,
     gap_buffer: Box<[T]>,
 }
@@ -464,19 +433,14 @@ where
     pub fn past(
         &mut self,
     ) -> TransitionsDrainIters<
-        DrainAndMaybePushedTransitions<T, I>,
-        DrainAndMaybePushedTransition<TransitionsLogUpdate<U>>,
+        Drain<T>,
+        Drain<TransitionsLogUpdate<U>>,
         U,
     > {
         let end = self.gap_range.take_drain_past_end();
-        let mut maybe_pushed = None;
-        if !self.updates.push() {
-            maybe_pushed = self.transitions_iter.take();
-        }
         let transitions = self
             .transitions
-            .drain(..end)
-            .chain(maybe_pushed.into_iter().flatten());
+            .drain(..end);
         let updates = self.updates.past();
         TransitionsDrainIters {
             transitions,
@@ -530,14 +494,14 @@ where
             self.transitions.drain(..self.gap_range.start);
         }
         prepend(&mut self.transitions, &mut self.gap_buffer);
-        if self.updates.push()
-            && let Some(transitions_iter) = self.transitions_iter.take()
-        {
-            let mut len = self.transitions.len();
-            self.transitions.extend(transitions_iter);
-            len = self.transitions.len() - len;
-            self.updates.transition_mut().unwrap().transitions = len;
-        }
+        let transitions_iter = unsafe {
+            // SAFETY: Only called this once and only in this Drop
+            ManuallyDrop::take(&mut self.transitions_iter)
+        };
+        let mut len = self.transitions.len();
+        self.transitions.extend(transitions_iter);
+        len = self.transitions.len() - len;
+        self.updates.transition_mut().transitions = len;
         *self.index = self.transitions.len();
     }
 }
@@ -686,9 +650,9 @@ mod test {
     }
 
     impl MetaAndLogs {
-        fn new(max_world_states: u64) -> Self {
+        fn new(max_past_len: u64) -> Self {
             Self {
-                meta: RevMeta::new(NonZeroU64::new(max_world_states), false),
+                meta: RevMeta::new(NonZeroU64::new(max_past_len).unwrap(), false),
                 logs: Logs::default(),
             }
         }
@@ -700,16 +664,18 @@ mod test {
             clear: bool,
         ) {
             let queue = if clear {
-                RevQueue::CLEAR_THEN_RUN
+                RevQueue::ClearThenRunForward
             } else {
-                RevQueue::RUN_NOT_LOG
+                RevQueue::RunForward
             };
             self.meta.set_queue(queue);
             self.meta.update_ref(Ok(true), |meta, direction| {
-                assert_eq!(direction, RevDirection::NOT_LOG);
+                let RevDirection::Forward(past_len) = direction else {
+                    unreachable!()
+                };
                 self.logs.assert_forward_transitions(
                     meta,
-                    meta.past_len(),
+                    past_len.get(),
                     &past_drain,
                     &future_drain,
                     push,
@@ -717,18 +683,17 @@ mod test {
             });
         }
         fn noop_forward_backward_log(&mut self) {
-            self.meta.set_queue(RevQueue::RUN_NOT_LOG);
+            self.meta.set_queue(RevQueue::RunForward);
             self.meta.update_ref(Ok(true), |_, _| ());
-            self.meta.set_queue(RevQueue::RUN_BACKWARD_LOG);
+            self.meta.set_queue(RevQueue::RunBackwardLog);
             self.meta.update_ref(Ok(true), |_, _| ());
         }
         #[track_caller]
         fn forward_log(&mut self, expected: Result<(&'static str, char), ()>) {
-            self.meta.set_queue(RevQueue::RUN_FORWARD_LOG);
+            self.meta.set_queue(RevQueue::RunForwardLog);
             match expected {
                 Ok(_) => {
-                    self.meta.update_ref(Ok(true), |meta, direction| {
-                        assert_eq!(direction, RevDirection::FORWARD_LOG);
+                    self.meta.update_ref(Ok(true), |meta, _| {
                         self.logs.assert_forward_log_transitions(meta, expected);
                     });
                 }
@@ -741,11 +706,10 @@ mod test {
         }
         #[track_caller]
         fn backward_log(&mut self, expected: Result<(&'static str, char), ()>) {
-            self.meta.set_queue(RevQueue::RUN_BACKWARD_LOG);
+            self.meta.set_queue(RevQueue::RunBackwardLog);
             match expected {
                 Ok(_) => {
-                    self.meta.update_ref(Ok(true), |meta, direction| {
-                        assert_eq!(direction, RevDirection::BackwardLog);
+                    self.meta.update_ref(Ok(true), |meta, _| {
                         self.logs.assert_backward_log_transitions(meta, expected);
                     });
                 }
@@ -762,7 +726,7 @@ mod test {
     fn traverses_log() {
         use crate::log::test::transitions_presets::*;
 
-        let mut meta_and_logs = MetaAndLogs::new(5);
+        let mut meta_and_logs = MetaAndLogs::new(4);
 
         meta_and_logs.forward([], [], A, false);
         meta_and_logs.forward([], [], B, false);
@@ -826,7 +790,7 @@ mod test {
 
         meta_and_logs
             .meta
-            .set_max_world_states(NonZeroU64::new(2).unwrap());
+            .set_max_past_len(NonZeroU64::new(1).unwrap());
         meta_and_logs.forward([J, K], [L], M, false);
     }
 }

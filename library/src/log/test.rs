@@ -2,7 +2,7 @@ use super::*;
 
 use core::{num::NonZeroU64, str::Chars};
 
-use crate::meta::{RevDirection, RevMeta, RevQueue};
+use crate::meta::{RevMeta, RevQueue};
 
 static EMPTY: &[char] = &[];
 static A: &[char] = &['a'];
@@ -199,56 +199,48 @@ impl Logs<TransitionLog<char>> {
     pub(super) fn assert_forward_transition(
         &mut self,
         meta: &RevMeta,
-        max_past_len: u64,
+        max_past_len: NonZeroU64,
         past_drain: &[char],
         future_drain: &[char],
         push: char,
     ) {
         self.drop_drain
-            .forward_push(meta, max_past_len, push)
-            .unwrap();
+            .forward_push(meta, max_past_len, push);
 
         self.past_drain
             .forward_push(meta, max_past_len, push)
-            .unwrap()
             .assert_past(past_drain);
 
         self.future_drain
             .forward_push(meta, max_past_len, push)
-            .unwrap()
             .assert_future(future_drain);
 
         self.past_future_drain
             .forward_push(meta, max_past_len, push)
-            .unwrap()
             .assert_past(past_drain)
             .assert_future(future_drain)
             .assert_all(&[], &[]);
 
         self.future_past_drain
             .forward_push(meta, max_past_len, push)
-            .unwrap()
             .assert_future(future_drain)
             .assert_past(past_drain)
             .assert_all(&[], &[]);
 
         self.all_drain
             .forward_push(meta, max_past_len, push)
-            .unwrap()
             .assert_all(past_drain, future_drain)
             .assert_past(&[])
             .assert_future(&[]);
 
         self.past_all_drain
             .forward_push(meta, max_past_len, push)
-            .unwrap()
             .assert_past(past_drain)
             .assert_all(&[], future_drain)
             .assert_future(&[]);
 
         self.future_all_drain
             .forward_push(meta, max_past_len, push)
-            .unwrap()
             .assert_future(future_drain)
             .assert_all(past_drain, &[])
             .assert_future(&[]);
@@ -283,7 +275,6 @@ impl Logs<TransitionLog<char>> {
             Err(()) => {
                 for (i, log) in logs {
                     assert_eq!(log.forward_log(meta), Err(OutOfLog::caller()), "{i}");
-                    log.clear_poison();
                 }
             }
         }
@@ -315,7 +306,6 @@ impl Logs<TransitionLog<char>> {
             Err(()) => {
                 for log in logs {
                     assert_eq!(log.backward_log(meta), Err(OutOfLog::caller()));
-                    log.clear_poison();
                 }
             }
         }
@@ -326,54 +316,46 @@ impl Logs<TransitionsLog<char, char>> {
     pub(super) fn assert_forward_transitions(
         &mut self,
         meta: &RevMeta,
-        max_past_len: u64,
+        max_past_len: NonZeroU64,
         past_drain: &[(&'static str, char)],
         future_drain: &[(&'static str, char)],
         (transitions, update): (&'static str, char),
     ) {
         self.drop_drain
-            .forward_extend_with(meta, max_past_len, transitions.chars(), update)
-            .unwrap();
+            .forward_extend_with(meta, max_past_len, transitions.chars(), update);
 
         self.past_drain
             .forward_extend_with(meta, max_past_len, transitions.chars(), update)
-            .unwrap()
             .assert_past(past_drain);
 
         self.future_drain
             .forward_extend_with(meta, max_past_len, transitions.chars(), update)
-            .unwrap()
             .assert_future(future_drain);
 
         self.past_future_drain
             .forward_extend_with(meta, max_past_len, transitions.chars(), update)
-            .unwrap()
             .assert_past(past_drain)
             .assert_future(future_drain)
             .assert_all(&[], &[]);
 
         self.future_past_drain
             .forward_extend_with(meta, max_past_len, transitions.chars(), update)
-            .unwrap()
             .assert_future(future_drain)
             .assert_past(past_drain)
             .assert_all(&[], &[]);
 
         self.all_drain
             .forward_extend_with(meta, max_past_len, transitions.chars(), update)
-            .unwrap()
             .assert_all(past_drain, future_drain);
 
         self.past_all_drain
             .forward_extend_with(meta, max_past_len, transitions.chars(), update)
-            .unwrap()
             .assert_past(past_drain)
             .assert_all(&[], future_drain)
             .assert_future(&[]);
 
         self.future_all_drain
             .forward_extend_with(meta, max_past_len, transitions.chars(), update)
-            .unwrap()
             .assert_future(future_drain)
             .assert_all(past_drain, &[])
             .assert_future(&[]);
@@ -408,7 +390,6 @@ impl Logs<TransitionsLog<char, char>> {
                         log.forward_log(meta).map(TransitionsLogIterMut::to_tuple),
                         Err(OutOfLog::caller())
                     );
-                    log.clear_poison();
                 }
             }
         }
@@ -443,7 +424,6 @@ impl Logs<TransitionsLog<char, char>> {
                         log.backward_log(meta).map(TransitionsLogIterMut::to_tuple),
                         Err(OutOfLog::caller())
                     );
-                    log.clear_poison();
                 }
             }
         }
@@ -579,7 +559,7 @@ fn entries<const N: usize, const M: usize>(
 impl MetaAndLogs {
     fn new(max_world_states: u64) -> Self {
         Self {
-            meta: RevMeta::new(NonZeroU64::new(max_world_states), false),
+            meta: RevMeta::new(NonZeroU64::new(max_world_states).unwrap(), false),
             updates: UpdateLog::new(),
             transition_logs: Logs::default(),
             transitions_logs: Logs::default(),
@@ -587,13 +567,12 @@ impl MetaAndLogs {
     }
     fn forward<const N: usize>(&mut self, entries: [Entries; N], clear: bool) {
         let queue = if clear {
-            RevQueue::CLEAR_THEN_RUN
+            RevQueue::ClearThenRunForward
         } else {
-            RevQueue::RUN_NOT_LOG
+            RevQueue::RunForward
         };
         self.meta.set_queue(queue);
-        self.meta.update_ref(Ok(true), |meta, direction| {
-            assert_eq!(direction, RevDirection::NOT_LOG);
+        self.meta.update_ref(Ok(true), |meta, _| {
             for Entries {
                 past_drain,
                 future_drain,
@@ -627,9 +606,8 @@ impl MetaAndLogs {
         });
     }
     fn forward_log<const N: usize>(&mut self, entries: [(&'static str, char); N]) {
-        self.meta.set_queue(RevQueue::RUN_FORWARD_LOG);
-        self.meta.update_ref(Ok(true), |meta, direction| {
-            assert_eq!(direction, RevDirection::FORWARD_LOG);
+        self.meta.set_queue(RevQueue::RunForwardLog);
+        self.meta.update_ref(Ok(true), |meta, _| {
             let mut entries = entries.into_iter();
             while self.updates.forward_log(meta) {
                 let entry = entries.by_ref().next().unwrap();
@@ -642,9 +620,8 @@ impl MetaAndLogs {
         });
     }
     fn backward_log<const N: usize>(&mut self, entries: [(&'static str, char); N]) {
-        self.meta.set_queue(RevQueue::RUN_BACKWARD_LOG);
-        self.meta.update_ref(Ok(true), |meta, direction| {
-            assert_eq!(direction, RevDirection::BackwardLog);
+        self.meta.set_queue(RevQueue::RunBackwardLog);
+        self.meta.update_ref(Ok(true), |meta, _| {
             let mut entries = entries.into_iter();
             while self.updates.backward_log(meta) {
                 let entry = entries.by_ref().next().unwrap();
@@ -683,7 +660,7 @@ pub(super) mod transitions_presets {
 fn traverses_logs() {
     use transitions_presets::*;
 
-    let mut meta_and_logs = MetaAndLogs::new(5);
+    let mut meta_and_logs = MetaAndLogs::new(4);
 
     meta_and_logs.forward([entries([], [], A)], false);
     meta_and_logs.forward([entries([], [], B), entries([], [], C)], false);
@@ -733,7 +710,7 @@ fn traverses_logs() {
 fn behaves_like_meta_minus_gaps() {
     use transitions_presets::*;
 
-    let mut meta_and_logs = MetaAndLogs::new(4);
+    let mut meta_and_logs = MetaAndLogs::new(3);
 
     meta_and_logs.forward([entries([], [], A)], false);
     meta_and_logs.forward([], false);
