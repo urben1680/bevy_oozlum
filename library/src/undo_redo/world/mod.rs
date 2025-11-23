@@ -35,7 +35,10 @@ pub trait RevWorld {
     fn rev_despawn_single(&mut self, past_len: PastLen, entity: Entity) -> bool;
 
     /// Reversible version of [`World::get_resource_or_init`].
-    fn rev_get_resource_or_init<R: Resource + FromWorld>(&mut self, past_len: PastLen) -> Mut<'_, R>;
+    fn rev_get_resource_or_init<R: Resource + FromWorld>(
+        &mut self,
+        past_len: PastLen,
+    ) -> Mut<'_, R>;
 
     /// Reversible version of [`World::get_resource_or_insert_with`].
     fn rev_get_resource_or_insert_with<R: Resource>(
@@ -124,8 +127,11 @@ impl RevWorld for World {
 
     #[track_caller]
     fn rev_log_scope(&mut self, past_len: PastLen, entity: Entity) {
-        self.resource_mut::<RevDespawnCleaner>()
-            .log_spawn(entity, MaybeLocation::caller(), past_len);
+        self.resource_mut::<RevDespawnCleaner>().log_spawn(
+            entity,
+            MaybeLocation::caller(),
+            past_len,
+        );
     }
 
     #[track_caller]
@@ -136,7 +142,10 @@ impl RevWorld for World {
     }
 
     #[track_caller]
-    fn rev_get_resource_or_init<R: Resource + FromWorld>(&mut self, past_len: PastLen) -> Mut<'_, R> {
+    fn rev_get_resource_or_init<R: Resource + FromWorld>(
+        &mut self,
+        past_len: PastLen,
+    ) -> Mut<'_, R> {
         self.rev_init_resource::<R>(past_len);
         self.resource_mut::<R>()
     }
@@ -212,8 +221,11 @@ pub trait RevDeferredWorld {
 impl RevDeferredWorld for DeferredWorld<'_> {
     #[track_caller]
     fn rev_log_scope(&mut self, past_len: PastLen, entity: Entity) {
-        self.resource_mut::<RevDespawnCleaner>()
-            .log_spawn(entity, MaybeLocation::caller(), past_len);
+        self.resource_mut::<RevDespawnCleaner>().log_spawn(
+            entity,
+            MaybeLocation::caller(),
+            past_len,
+        );
     }
 }
 

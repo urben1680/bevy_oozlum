@@ -62,7 +62,11 @@ fn main() {
             // This one here adds the given RevMeta and adds its runner system, which calls
             // RevUpdate, in FixedUpdate. You most likely want to pick this schedule, or another
             // one which is called in FixedUpdate.
-            RevPlugin::add_meta_and_runner(NonZeroU64::new(MAX_LOG_LEN).unwrap(), false, FixedUpdate),
+            RevPlugin::add_meta_and_runner(
+                NonZeroU64::new(MAX_LOG_LEN).unwrap(),
+                false,
+                FixedUpdate,
+            ),
             // This example game consists of seven rows you can toss Waste in by pressing 1 to 7.
             // Each row is implemented as a plugin here that adds its system and other things if
             // needed. It makes no sense to give each row a different logic, but they shall show
@@ -432,7 +436,9 @@ fn row6(app: &mut App) {
 
     fn system(meta: Res<RevMeta>, pressed: Res<KeysPressed>, mut commands: Commands) {
         if pressed.num6
-            && meta.get_running_direction().is_some_and(RevDirection::is_not_log)
+            && meta
+                .get_running_direction()
+                .is_some_and(RevDirection::is_not_log)
         {
             commands.spawn(Waste {
                 tossed_at: meta.now(),
@@ -513,7 +519,7 @@ fn row7(app: &mut App) {
     #[derive(Event)]
     struct WasteObserverEvent {
         tossed_at: u64,
-        past_len: PastLen
+        past_len: PastLen,
     }
 
     fn system(meta: Res<RevMeta>, pressed: Res<KeysPressed>, mut commands: Commands) {
@@ -522,7 +528,7 @@ fn row7(app: &mut App) {
         {
             commands.trigger(WasteObserverEvent {
                 tossed_at: meta.now(),
-                past_len
+                past_len,
             });
         }
     }
@@ -533,13 +539,10 @@ fn row7(app: &mut App) {
     fn observer(trigger: On<WasteObserverEvent>, mut world: DeferredWorld) {
         let WasteObserverEvent {
             tossed_at,
-            past_len
+            past_len,
         } = *trigger;
 
-        let waste = Waste {
-            tossed_at,
-            row: 7,
-        };
+        let waste = Waste { tossed_at, row: 7 };
 
         let mut commands = world.commands();
         let entity = commands.spawn(waste);
@@ -564,17 +567,20 @@ fn rev_log_scope_and_buffer_waste_op(
     // This is how all reversible structural operations like commands work, though you can use it for
     // anything else as well.
     // This closure in particular will remove the Waste component on undo and add it back on redo.
-    entity_commands.buffer_undo_redo(past_len, move |world: &mut World, variant: UndoRedoDirection| {
-        let mut entity = world.entity_mut(entity);
-        match variant {
-            UndoRedoDirection::Undo => {
-                entity.remove::<Waste>();
-            }
-            UndoRedoDirection::Redo => {
-                entity.insert(waste);
-            }
-        };
-    });
+    entity_commands.buffer_undo_redo(
+        past_len,
+        move |world: &mut World, variant: UndoRedoDirection| {
+            let mut entity = world.entity_mut(entity);
+            match variant {
+                UndoRedoDirection::Undo => {
+                    entity.remove::<Waste>();
+                }
+                UndoRedoDirection::Redo => {
+                    entity.insert(waste);
+                }
+            };
+        },
+    );
 }
 
 /*

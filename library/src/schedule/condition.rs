@@ -197,9 +197,7 @@ impl FailedLogs {
 
         // log hash as transition, reduce usages for drained, remove if unused
         let past_len = self.err_failed_log.forward_past_len(meta);
-        let mut drain = self
-            .failed_log
-            .forward_push(meta, past_len, key);
+        let mut drain = self.failed_log.forward_push(meta, past_len, key);
         let keys = drain.all();
 
         for hash in keys {

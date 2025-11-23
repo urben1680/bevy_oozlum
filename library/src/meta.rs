@@ -8,7 +8,7 @@ use bevy_log::info;
 use core::{
     error::Error,
     fmt::{Debug, Display},
-    num::NonZeroU64
+    num::NonZeroU64,
 };
 
 #[derive(Resource, Debug)]
@@ -81,7 +81,7 @@ pub enum RevQueue {
     RunBackwardLog,
     Pause,
     ClearThenRunForward,
-    ClearThenPause
+    ClearThenPause,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -312,7 +312,7 @@ impl RevMeta {
         let (ran, after_log) = match self.direction {
             RunningOrRan::Ran(RevDirection::Forward(_)) => (
                 Some(RevDirection::FORWARD_MIN), // gets updated below
-                false
+                false,
             ),
             RunningOrRan::Ran(RevDirection::ForwardLog) => (
                 (!self.end_of_log_forward()).then_some(RevDirection::ForwardLog),
@@ -584,7 +584,6 @@ mod test {
     use core::mem::Discriminant;
 
     use super::*;
-
 
     impl RevDirection {
         #[cfg(test)]

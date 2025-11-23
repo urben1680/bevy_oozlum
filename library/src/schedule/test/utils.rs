@@ -1,4 +1,3 @@
-use core::num::NonZeroU64;
 use super::*;
 use crate::{
     meta::RevDirection,
@@ -14,6 +13,7 @@ use bevy_ecs::{
     system::IntoSystem,
     world::{DeferredWorld, World},
 };
+use core::num::NonZeroU64;
 
 pub(super) fn test_run<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
     configs: Vec<C>,
@@ -126,7 +126,8 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
          meta: Res<RevMeta>,
          mut buffer: ResMut<UndoRedoBuffer>| {
             let n = event.0;
-            log.0.push(LogEntry::SysCmdObsv((n, RevDirection::FORWARD_MIN)));
+            log.0
+                .push(LogEntry::SysCmdObsv((n, RevDirection::FORWARD_MIN)));
             let test = LogEntry::SysCmdObsv(n);
             let past_len = meta.non_log_past_len();
             buffer.buffer_undo_redo(past_len, test);

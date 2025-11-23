@@ -144,12 +144,11 @@ impl BuffersUndoRedo for DeferredWorld<'_> {
     #[track_caller]
     fn buffer_undo_redo(&mut self, past_len: PastLen, undo_redo: impl UndoRedo) {
         debug_assert!(self.get_resource::<RevMeta>().is_some_and(|meta| {
-            meta.get_running_direction().is_some_and(|direction| {
-                match direction {
+            meta.get_running_direction()
+                .is_some_and(|direction| match direction {
                     RevDirection::Forward(actual) => actual == past_len,
-                    _ => false
-                }
-            })
+                    _ => false,
+                })
         }));
         self.resource_mut::<UndoRedoBuffer>()
             .buffer_undo_redo(past_len, undo_redo);
@@ -514,7 +513,11 @@ impl UndoRedo for SpawnEmpty {
     }
 }
 
-fn rev_spawn_empty_inner(entity_mut: &mut EntityWorldMut, past_len: PastLen, caller: MaybeLocation) {
+fn rev_spawn_empty_inner(
+    entity_mut: &mut EntityWorldMut,
+    past_len: PastLen,
+    caller: MaybeLocation,
+) {
     let entity = entity_mut.id();
     entity_mut.buffer_undo_redo(past_len, SpawnEmpty { entity, caller });
     entity_mut

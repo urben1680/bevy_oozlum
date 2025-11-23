@@ -15,11 +15,11 @@ use bevy_ecs::{
     system::{Commands, IntoSystem, Local},
     world::World,
 };
+use core::num::NonZeroU64;
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
-use core::num::NonZeroU64;
 
 mod utils;
 
@@ -179,7 +179,7 @@ fn normalize_direction(direction: RevDirection) -> RevDirection {
     match direction {
         RevDirection::Forward(_) => RevDirection::FORWARD_MIN,
         RevDirection::ForwardLog => RevDirection::ForwardLog,
-        RevDirection::BackwardLog => RevDirection::BackwardLog
+        RevDirection::BackwardLog => RevDirection::BackwardLog,
     }
 }
 
@@ -473,7 +473,9 @@ fn duplicate_system_chain_builds() {
 #[test]
 fn truncates_future_command_log() {
     fn system(meta: Res<RevMeta>, mut commands: Commands, mut command_queued: Local<bool>) {
-        if !*command_queued && let Some(RevDirection::Forward(past_len)) = meta.get_running_direction() {
+        if !*command_queued
+            && let Some(RevDirection::Forward(past_len)) = meta.get_running_direction()
+        {
             if meta.now() == 2 {
                 commands.rev_spawn_empty(past_len);
                 *command_queued = true;
@@ -484,8 +486,12 @@ fn truncates_future_command_log() {
     panic_on_error_events();
 
     let mut app = App::new();
-    app.add_plugins(RevPlugin::add_meta_and_runner(NonZeroU64::MAX, false, Update))
-        .rev_add_systems(RevUpdate, system);
+    app.add_plugins(RevPlugin::add_meta_and_runner(
+        NonZeroU64::MAX,
+        false,
+        Update,
+    ))
+    .rev_add_systems(RevUpdate, system);
 
     app.update(); // do 1
     app.update(); // do 2, command queued

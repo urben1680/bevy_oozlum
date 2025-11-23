@@ -82,31 +82,19 @@ impl GapTest {
 #[test]
 fn drain_all_iterator_works() {
     let tests = [
-        (
-            GapRange::new(0, 0),
-            GapTest::gap_empty(ABC, EMPTY),
-        ),
+        (GapRange::new(0, 0), GapTest::gap_empty(ABC, EMPTY)),
         (GapRange::new(0, 1), GapTest::gap_a()),
         (GapRange::new(0, 2), GapTest::gap_ab()),
         (GapRange::new(0, 3), GapTest::gap_abc()),
         (GapRange::new_clear(0), GapTest::gap_clear()),
-        (
-            GapRange::new(1, 1),
-            GapTest::gap_empty(ABC, EMPTY),
-        ),
+        (GapRange::new(1, 1), GapTest::gap_empty(ABC, EMPTY)),
         (GapRange::new(1, 2), GapTest::gap_b()),
         (GapRange::new(1, 3), GapTest::gap_bc()),
         (GapRange::new_clear(1), GapTest::gap_clear()),
-        (
-            GapRange::new(2, 2),
-            GapTest::gap_empty(ABC, EMPTY),
-        ),
+        (GapRange::new(2, 2), GapTest::gap_empty(ABC, EMPTY)),
         (GapRange::new(2, 3), GapTest::gap_c()),
         (GapRange::new_clear(2), GapTest::gap_clear()),
-        (
-            GapRange::new(3, 3),
-            GapTest::gap_empty(ABC, EMPTY),
-        ),
+        (GapRange::new(3, 3), GapTest::gap_empty(ABC, EMPTY)),
         (GapRange::new_clear(3), GapTest::gap_clear()),
     ];
 
@@ -204,8 +192,7 @@ impl Logs<TransitionLog<char>> {
         future_drain: &[char],
         push: char,
     ) {
-        self.drop_drain
-            .forward_push(meta, max_past_len, push);
+        self.drop_drain.forward_push(meta, max_past_len, push);
 
         self.past_drain
             .forward_push(meta, max_past_len, push)

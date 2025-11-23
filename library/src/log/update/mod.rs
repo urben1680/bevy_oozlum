@@ -1,7 +1,10 @@
 use crate::{log::update::offset::OffsetLog, meta::RevMeta};
 use bevy_ecs::change_detection::MaybeLocation;
-use core::{fmt::{Debug, Display}, num::NonZeroU64};
-use std::{collections::TryReserveError};
+use core::{
+    fmt::{Debug, Display},
+    num::NonZeroU64,
+};
+use std::collections::TryReserveError;
 
 pub use limit::UpdateLogId;
 use limit::*;
@@ -87,7 +90,7 @@ pub struct UpdateLog {
     /// [`Self::last_update`]. This frame is equal or less than [`RevMeta::past_end`] and may never
     /// have been a frame this log was updated at, or was updated at but this frame is no longer
     /// reachable when traversing the global log.
-    /// 
+    ///
     /// This frame is used to determine if and how many past offsets can be truncated.
     log_start: u64,
 
@@ -238,9 +241,13 @@ impl UpdateLog {
         self.forward_past_len_with_caller(meta, MaybeLocation::caller())
     }
 
-    fn forward_past_len_with_caller(&mut self, meta: &RevMeta, caller: MaybeLocation) -> NonZeroU64 {
+    fn forward_past_len_with_caller(
+        &mut self,
+        meta: &RevMeta,
+        caller: MaybeLocation,
+    ) -> NonZeroU64 {
         let past_len;
-        
+
         if self.not_log_should_clear(meta) {
             // log is empty or all updates are out of log
             // it is not important what offset is pushed as long log_start + offset = now

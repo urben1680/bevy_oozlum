@@ -106,7 +106,10 @@ fn rev_insert_if_new() {
     let mut entity_mut = world.spawn((Explicit::<1>(1), Required::<1>(1), Required::<2>(1)));
 
     let entity = entity_mut
-        .rev_insert_if_new(past_len, (Explicit::<1>(0), Explicit::<2>(0), Explicit::<3>(0)))
+        .rev_insert_if_new(
+            past_len,
+            (Explicit::<1>(0), Explicit::<2>(0), Explicit::<3>(0)),
+        )
         .id();
     let mut buffer = world.remove_resource::<UndoRedoBuffer>().unwrap();
     let entity_ref = world.entity(entity);

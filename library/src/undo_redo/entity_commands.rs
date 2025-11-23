@@ -82,8 +82,11 @@ pub trait RevEntityCommands<'a> {
         F: FnOnce() -> bool;
 
     /// Reversible version of [`EntityCommands::insert_if_new`].
-    fn rev_insert_if_new(&mut self, past_len: PastLen, bundle: impl Bundle)
-    -> &mut EntityCommands<'a>;
+    fn rev_insert_if_new(
+        &mut self,
+        past_len: PastLen,
+        bundle: impl Bundle,
+    ) -> &mut EntityCommands<'a>;
 
     /// Reversible version of [`EntityCommands::insert_if_new_and`].
     fn rev_insert_if_new_and<F>(
@@ -109,7 +112,8 @@ pub trait RevEntityCommands<'a> {
     ) -> &mut EntityCommands<'a>;
 
     /// Reversible version of [`EntityCommands::remove_with_requires`].
-    fn rev_remove_with_requires<B: Bundle>(&mut self, past_len: PastLen) -> &mut EntityCommands<'a>;
+    fn rev_remove_with_requires<B: Bundle>(&mut self, past_len: PastLen)
+    -> &mut EntityCommands<'a>;
 
     /// Reversible version of [`EntityCommands::retain`].
     fn rev_retain<B>(&mut self, past_len: PastLen) -> &mut EntityCommands<'a>
@@ -120,7 +124,8 @@ pub trait RevEntityCommands<'a> {
     fn rev_try_despawn_single(&mut self, past_len: PastLen);
 
     /// Reversible version of [`EntityCommands::try_insert`].
-    fn rev_try_insert(&mut self, past_len: PastLen, bundle: impl Bundle) -> &mut EntityCommands<'a>;
+    fn rev_try_insert(&mut self, past_len: PastLen, bundle: impl Bundle)
+    -> &mut EntityCommands<'a>;
 
     /// Reversible version of [`EntityCommands::try_insert_by_id`].
     unsafe fn rev_try_insert_by_id<T: Send + 'static>(
@@ -280,7 +285,11 @@ impl<'a> RevEntityCommands<'a> for EntityCommands<'a> {
     }
 
     #[track_caller]
-    fn rev_try_insert(&mut self, past_len: PastLen, bundle: impl Bundle) -> &mut EntityCommands<'a> {
+    fn rev_try_insert(
+        &mut self,
+        past_len: PastLen,
+        bundle: impl Bundle,
+    ) -> &mut EntityCommands<'a> {
         self.queue_handled(rev_insert(past_len, bundle, InsertMode::Replace), ignore)
     }
 
@@ -586,7 +595,10 @@ pub fn rev_remove_with_requires<T: Bundle>(past_len: PastLen) -> impl EntityComm
 
 /// Reversible version of [`remove_by_id`](bevy_ecs::system::entity_command::remove_by_id).
 #[track_caller]
-pub fn rev_remove_by_id(past_len: PastLen, component_id: ComponentId) -> impl EntityCommand<CmdOut> {
+pub fn rev_remove_by_id(
+    past_len: PastLen,
+    component_id: ComponentId,
+) -> impl EntityCommand<CmdOut> {
     let caller = MaybeLocation::caller();
     move |mut entity_mut: EntityWorldMut| {
         rev_try_remove_with_caller::<_, false>(&mut entity_mut, component_id, past_len, caller)

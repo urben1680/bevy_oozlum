@@ -160,8 +160,11 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
     #[track_caller]
     fn rev_log_scope(&mut self, past_len: PastLen) -> &mut Self {
         let entity = self.id();
-        self.resource_mut::<RevDespawnCleaner>()
-            .log_spawn(entity, MaybeLocation::caller(), past_len);
+        self.resource_mut::<RevDespawnCleaner>().log_spawn(
+            entity,
+            MaybeLocation::caller(),
+            past_len,
+        );
         self
     }
 
@@ -182,8 +185,13 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
         past_len: PastLen,
         config: impl FnOnce(&mut EntityClonerBuilder<OptIn>) + Send + Sync + 'static,
     ) -> Entity {
-        rev_try_clone_and_spawn_with_opt_in_with_caller(self, past_len, config, MaybeLocation::caller())
-            .unwrap()
+        rev_try_clone_and_spawn_with_opt_in_with_caller(
+            self,
+            past_len,
+            config,
+            MaybeLocation::caller(),
+        )
+        .unwrap()
     }
 
     #[track_caller]
@@ -192,8 +200,13 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
         past_len: PastLen,
         config: impl FnOnce(&mut EntityClonerBuilder<OptOut>) + Send + Sync + 'static,
     ) -> Entity {
-        rev_try_clone_and_spawn_with_opt_out_with_caller(self, past_len, config, MaybeLocation::caller())
-            .unwrap()
+        rev_try_clone_and_spawn_with_opt_out_with_caller(
+            self,
+            past_len,
+            config,
+            MaybeLocation::caller(),
+        )
+        .unwrap()
     }
 
     #[track_caller]
@@ -279,31 +292,52 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
 
     #[track_caller]
     fn rev_remove<T: Bundle>(&mut self, past_len: PastLen) -> &mut Self {
-        rev_try_remove_with_caller::<_, false>(self, PhantomData::<T>, past_len, MaybeLocation::caller())
-            .unwrap()
+        rev_try_remove_with_caller::<_, false>(
+            self,
+            PhantomData::<T>,
+            past_len,
+            MaybeLocation::caller(),
+        )
+        .unwrap()
     }
 
     #[track_caller]
     fn rev_remove_by_id(&mut self, past_len: PastLen, component_id: ComponentId) -> &mut Self {
-        rev_try_remove_with_caller::<_, false>(self, component_id, past_len, MaybeLocation::caller())
-            .unwrap()
+        rev_try_remove_with_caller::<_, false>(
+            self,
+            component_id,
+            past_len,
+            MaybeLocation::caller(),
+        )
+        .unwrap()
     }
 
     #[track_caller]
     fn rev_remove_by_ids(&mut self, past_len: PastLen, component_ids: &[ComponentId]) -> &mut Self {
-        rev_try_remove_with_caller::<_, false>(self, component_ids, past_len, MaybeLocation::caller())
-            .unwrap()
+        rev_try_remove_with_caller::<_, false>(
+            self,
+            component_ids,
+            past_len,
+            MaybeLocation::caller(),
+        )
+        .unwrap()
     }
 
     #[track_caller]
     fn rev_remove_with_requires<T: Bundle>(&mut self, past_len: PastLen) -> &mut Self {
-        rev_try_remove_with_caller::<_, true>(self, PhantomData::<T>, past_len, MaybeLocation::caller())
-            .unwrap()
+        rev_try_remove_with_caller::<_, true>(
+            self,
+            PhantomData::<T>,
+            past_len,
+            MaybeLocation::caller(),
+        )
+        .unwrap()
     }
 
     #[track_caller]
     fn rev_retain<T: Bundle>(&mut self, past_len: PastLen) -> &mut Self {
-        rev_try_retain_with_caller(self, PhantomData::<T>, past_len, MaybeLocation::caller()).unwrap()
+        rev_try_retain_with_caller(self, PhantomData::<T>, past_len, MaybeLocation::caller())
+            .unwrap()
     }
 
     #[track_caller]
@@ -961,7 +995,11 @@ impl<'w, 'a, T: Component> RevComponentEntry<'w, 'a, T> {
 
     /// Reversible version of [`Entry::or_insert`](bevy_ecs::world::Entry::or_insert).
     #[track_caller]
-    pub fn rev_or_insert(self, past_len: PastLen, default: T) -> RevOccupiedComponentEntry<'w, 'a, T> {
+    pub fn rev_or_insert(
+        self,
+        past_len: PastLen,
+        default: T,
+    ) -> RevOccupiedComponentEntry<'w, 'a, T> {
         match self {
             RevComponentEntry::Occupied(entry) => entry,
             RevComponentEntry::Vacant(entry) => entry.rev_insert(past_len, default),
@@ -1038,7 +1076,9 @@ impl<'w, 'a, T: Component> RevOccupiedComponentEntry<'w, 'a, T> {
     #[track_caller]
     pub fn rev_take<Out>(self, past_len: PastLen, c: impl FnOnce(&T) -> Out) -> Out {
         // This shouldn't panic because if we have an OccupiedEntry the component must exist.
-        self.entity_world_mut.rev_take::<T, Out>(past_len, c).unwrap()
+        self.entity_world_mut
+            .rev_take::<T, Out>(past_len, c)
+            .unwrap()
     }
 }
 
@@ -1055,7 +1095,11 @@ impl<'w, 'a, T: Component> RevVacantComponentEntry<'w, 'a, T> {
 
     /// Reversible version of [`VacantEntry::take`](bevy_ecs::world::VacantEntry::insert).
     #[track_caller]
-    pub fn rev_insert(self, past_len: PastLen, component: T) -> RevOccupiedComponentEntry<'w, 'a, T> {
+    pub fn rev_insert(
+        self,
+        past_len: PastLen,
+        component: T,
+    ) -> RevOccupiedComponentEntry<'w, 'a, T> {
         self.entity_world_mut.rev_insert(past_len, component);
         RevOccupiedComponentEntry {
             entity_world_mut: self.entity_world_mut,

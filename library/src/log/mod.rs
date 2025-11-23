@@ -194,7 +194,7 @@ pub struct DrainAll<'a, T> {
 
 impl<'a, T> DrainAll<'a, T> {
     /// Calling this will cause `log` to become empty.
-    /// 
+    ///
     /// Calling this again will return an empty iterator.
     fn new(
         log: &'a mut VecDeque<T>,

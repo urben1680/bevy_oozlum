@@ -103,9 +103,7 @@ impl RevDespawnCleaner {
                         let old_spawn = drain.future();
 
                         let new_despawn = this.despawn_queue.drain(..).map(|(entity, _)| entity);
-                        let mut drain = this
-                            .despawn
-                            .forward_extend(meta, past_len, new_despawn);
+                        let mut drain = this.despawn.forward_extend(meta, past_len, new_despawn);
                         let old_despawn = drain.past();
 
                         let new_buffer = this
@@ -113,9 +111,8 @@ impl RevDespawnCleaner {
                             .drain(..)
                             .map(|(entity, location)| (Some(entity), location))
                             .chain(this.spawn_buffer_queue.drain(..));
-                        let mut drain = this
-                            .spawn_buffer
-                            .forward_extend(meta, past_len, new_buffer);
+                        let mut drain =
+                            this.spawn_buffer.forward_extend(meta, past_len, new_buffer);
                         let old_buffer = drain.all().flat_map(|(entity, _)| entity);
 
                         for entity in old_spawn.chain(old_despawn).chain(old_buffer) {

@@ -1,7 +1,5 @@
 use crate::{
-    log::{
-        DrainAll, GapRange, OutOfLog, TransitionDrain, TransitionLog, prepend,
-    },
+    log::{DrainAll, GapRange, OutOfLog, TransitionDrain, TransitionLog, prepend},
     meta::RevMeta,
 };
 use core::{
@@ -10,10 +8,13 @@ use core::{
     marker::PhantomData,
     mem::ManuallyDrop,
 };
-use std::{collections::{
-    TryReserveError, VecDeque,
-    vec_deque::{Drain, IterMut},
-}, num::NonZeroU64};
+use std::{
+    collections::{
+        TryReserveError, VecDeque,
+        vec_deque::{Drain, IterMut},
+    },
+    num::NonZeroU64,
+};
 
 /// A log that is updated with with a variable amount of transition type `T` which are used to
 /// transition a state forward or backward in time. For each of these updates, a type `U` is stored
@@ -430,17 +431,9 @@ where
     I: IntoIterator<Item = T>,
 {
     /// Returns log entries that were pushed before [`RevMeta::past_end`].
-    pub fn past(
-        &mut self,
-    ) -> TransitionsDrainIters<
-        Drain<T>,
-        Drain<TransitionsLogUpdate<U>>,
-        U,
-    > {
+    pub fn past(&mut self) -> TransitionsDrainIters<Drain<T>, Drain<TransitionsLogUpdate<U>>, U> {
         let end = self.gap_range.take_drain_past_end();
-        let transitions = self
-            .transitions
-            .drain(..end);
+        let transitions = self.transitions.drain(..end);
         let updates = self.updates.past();
         TransitionsDrainIters {
             transitions,

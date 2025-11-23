@@ -184,16 +184,16 @@ impl OffsetLog {
     }
 
     /// Truncates all past offsets that sum up to `minus`.
-    /// 
+    ///
     /// This method returns the amount of offsets that were truncated.
     ///
     /// The first offset that, when added to the previously truncated offsets, exceeds `minus`, will
     /// be kept. If that is the first offset, nothing will be truncated and `minus` and the returned
     /// value will be `0`.
-    /// 
+    ///
     /// If `minus` is larger than all contained offsets, the log gets cleared and `minus` is capped
     /// to the actual sum of truncated offsets.
-    /// 
+    ///
     /// `minus` will never be increased.
     ///
     /// This method assumes that it currently does not contain a future segment.
@@ -244,7 +244,7 @@ impl OffsetLog {
                         }
                     } else {
                         // streak exceeds minus_target, reduce it
-                        
+
                         let remaining_u8 = remaining as u8;
                         *item.raw -= remaining_u8;
                         *minus += remaining;
@@ -874,12 +874,12 @@ mod test {
         fn empty_log() {
             test([], 1, 0, 0);
         }
-        
+
         #[test]
         fn full_zero_streak() {
             test([0, 0, 0, 3], 1, 0, 3);
         }
-        
+
         #[test]
         fn full_zero_streak_as_last() {
             test([0, 0, 0], 1, 0, 3);
