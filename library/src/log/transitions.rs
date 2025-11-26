@@ -287,10 +287,24 @@ impl<T, U> TransitionsLog<T, U> {
         self.updates.shrink_to_fit()
     }
 
+    /// Returns the most recent global count of log exits that was witnessed.
+    ///
+    /// See [`RevMeta::log_exits`].
+    pub fn witnessed_log_exits(&self) -> u64 {
+        self.updates.witnessed_log_exits()
+    }
+
+    /// Returns the most recent global count of log clears that was witnessed.
+    ///
+    /// See [`RevMeta::log_clears`].
+    pub fn witnessed_log_clears(&self) -> u64 {
+        self.updates.witnessed_log_clears()
+    }
+
     pub fn forward_extend_with<'a, I: IntoIterator<Item = T>>(
         &'a mut self,
         meta: &RevMeta,
-        past_len: NonZeroU64,
+        past_len: impl Into<NonZeroU64>,
         transitions: I,
         update: U,
     ) -> TransitionsDrain<'a, T, U, I> {
@@ -354,9 +368,9 @@ impl<T, U> TransitionsLog<T, U> {
         let old_index = self.index;
         let update_mut = self.updates.backward_log(meta)?;
         self.index -= update_mut.transitions;
-        let iter = self.transitions.range_mut(self.index..old_index);
+        let transitions = self.transitions.range_mut(self.index..old_index);
         Ok(TransitionsLogIterMut {
-            transitions: iter,
+            transitions,
             update: &mut update_mut.update,
         })
     }
@@ -391,9 +405,9 @@ impl<T, U> TransitionsLog<T, U> {
         let old_index = self.index;
         let update_mut = self.updates.forward_log(meta)?;
         self.index += update_mut.transitions;
-        let iter = self.transitions.range_mut(old_index..self.index);
+        let transitions = self.transitions.range_mut(old_index..self.index);
         Ok(TransitionsLogIterMut {
-            transitions: iter,
+            transitions,
             update: &mut update_mut.update,
         })
     }
@@ -403,7 +417,7 @@ impl<T> TransitionsLog<T, ()> {
     pub fn forward_extend<'a, I: IntoIterator<Item = T>>(
         &'a mut self,
         meta: &RevMeta,
-        past_len: NonZeroU64,
+        past_len: impl Into<NonZeroU64>,
         transitions: I,
     ) -> TransitionsDrain<'a, T, (), I> {
         self.forward_extend_with(meta, past_len, transitions, ())
@@ -668,7 +682,7 @@ mod test {
                 };
                 self.logs.assert_forward_transitions(
                     meta,
-                    past_len.get(),
+                    past_len,
                     &past_drain,
                     &future_drain,
                     push,

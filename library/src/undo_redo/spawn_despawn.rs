@@ -14,6 +14,7 @@ use bevy_log::{error, error_once};
 use crate::{
     log::{OutOfLog, TransitionsLog},
     meta::{PastLen, RevDirection, RevMeta},
+    prelude::RevOp,
 };
 
 #[derive(Resource, Default, Debug)]
@@ -96,8 +97,7 @@ impl RevDespawnCleaner {
                     .ok_or(DespawnCleanerErr::MetaNotRunning)?;
 
                 match direction {
-                    RevDirection::Forward(PastLen(past_len)) => {
-                        // todo: RevOp::FinalDespawn
+                    RevDirection::Forward(past_len) => {
                         let new_spawn = this.spawn_queue.drain(..).map(|(entity, _)| entity);
                         let mut drain = this.spawn.forward_extend(meta, past_len, new_spawn);
                         let old_spawn = drain.future();
@@ -115,9 +115,17 @@ impl RevDespawnCleaner {
                             this.spawn_buffer.forward_extend(meta, past_len, new_buffer);
                         let old_buffer = drain.all().flat_map(|(entity, _)| entity);
 
-                        for entity in old_spawn.chain(old_despawn).chain(old_buffer) {
-                            let _ = world.try_despawn(entity); // todo: upstream a way to set the location
-                        }
+                        RevOp::FinalDespawn { buffer: false }.scope(world, |world| {
+                            for entity in old_spawn.chain(old_despawn) {
+                                let _ = world.try_despawn(entity);
+                            }
+                        });
+
+                        RevOp::FinalDespawn { buffer: true }.scope(world, |world| {
+                            for entity in old_buffer {
+                                let _ = world.try_despawn(entity);
+                            }
+                        });
 
                         Ok(())
                     }

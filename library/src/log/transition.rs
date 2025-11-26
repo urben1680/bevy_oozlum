@@ -78,12 +78,12 @@ pub struct TransitionLog<T> {
     /// Contains the most recent global count of log exits that was witnessed.
     ///
     /// See [`RevMeta::log_exits`].
-    meta_log_exits: u64,
+    witnessed_log_exits: u64,
 
     /// Contains the most recent global count of log clears that was witnessed.
     ///
     /// See [`RevMeta::log_clears`].
-    meta_log_clears: u64,
+    witnessed_log_clears: u64,
 }
 
 impl<T> Default for TransitionLog<T> {
@@ -99,8 +99,8 @@ impl<T> TransitionLog<T> {
             transitions: VecDeque::new(),
             index: 0,
             index_max: 0,
-            meta_log_exits: 0,
-            meta_log_clears: 0,
+            witnessed_log_exits: 0,
+            witnessed_log_clears: 0,
         }
     }
 
@@ -177,6 +177,20 @@ impl<T> TransitionLog<T> {
         self.transitions.shrink_to_fit()
     }
 
+    /// Returns the most recent global count of log exits that was witnessed.
+    ///
+    /// See [`RevMeta::log_exits`].
+    pub fn witnessed_log_exits(&self) -> u64 {
+        self.witnessed_log_exits
+    }
+
+    /// Returns the most recent global count of log clears that was witnessed.
+    ///
+    /// See [`RevMeta::log_clears`].
+    pub fn witnessed_log_clears(&self) -> u64 {
+        self.witnessed_log_clears
+    }
+
     /// Updates the log with a new `transition` and returns [`TransitionDrain`] that can be used to
     /// iterate log entries that got out-of-log with this push.
     ///
@@ -194,20 +208,17 @@ impl<T> TransitionLog<T> {
     pub fn forward_push<'a>(
         &'a mut self,
         meta: &RevMeta,
-        past_len: NonZeroU64,
+        past_len: impl Into<NonZeroU64>,
         transition: T,
     ) -> TransitionDrain<'a, T> {
-        let past_len = past_len.get();
-        let gap_range = if self.meta_log_clears < meta.log_clears() {
-            self.meta_log_clears = meta.log_clears();
+        let gap_range = if self.witnessed_log_clears < meta.log_clears() {
+            self.witnessed_log_clears = meta.log_clears();
             GapRange::new_clear(self.index)
         } else {
-            let past_len = usize::try_from(past_len)
-                .unwrap_or(usize::MAX)
-                .saturating_sub(1);
-            GapRange::new(self.index.saturating_sub(past_len), self.index)
+            let past_len = past_len.into().get().try_into().unwrap_or(usize::MAX);
+            GapRange::new(self.index.saturating_sub(past_len - 1), self.index)
         };
-        self.meta_log_exits = meta.log_exits();
+        self.witnessed_log_exits = meta.log_exits();
         TransitionDrain {
             log: self,
             transition: ManuallyDrop::new(transition),
@@ -232,11 +243,11 @@ impl<T> TransitionLog<T> {
     /// For an example, see the [type level docs](TransitionLog).
     #[track_caller]
     pub fn backward_log(&mut self, meta: &RevMeta) -> Result<&mut T, OutOfLog> {
-        if self.meta_log_clears >= meta.log_clears()
+        if self.witnessed_log_clears >= meta.log_clears()
             && let Some(index) = self.index.checked_sub(1)
         {
-            if self.meta_log_exits < meta.log_exits() {
-                self.meta_log_exits = meta.log_exits();
+            if self.witnessed_log_exits < meta.log_exits() {
+                self.witnessed_log_exits = meta.log_exits();
                 self.index_max = self.index;
             }
             // self.index should always be <= the deque len, so successfully reducing the index
@@ -266,8 +277,8 @@ impl<T> TransitionLog<T> {
     /// For an example, see the [type level docs](TransitionLog).
     #[track_caller]
     pub fn forward_log<'a, 'm>(&'a mut self, meta: &'m RevMeta) -> Result<&'a mut T, OutOfLog> {
-        if self.meta_log_clears < meta.log_clears()
-            || self.meta_log_exits < meta.log_exits()
+        if self.witnessed_log_clears < meta.log_clears()
+            || self.witnessed_log_exits < meta.log_exits()
             || self.index >= self.index_max
         {
             return Err(OutOfLog::caller());
@@ -417,7 +428,7 @@ mod test {
                 };
                 self.logs.assert_forward_transition(
                     meta,
-                    past_len.get(),
+                    past_len,
                     &past_drain,
                     &future_drain,
                     push,

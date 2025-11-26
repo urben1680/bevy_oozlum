@@ -139,21 +139,21 @@ impl Plugin for RevPlugin {
         // add meta
         match self {
             Self::AddMeta {
-                max_past_len: max_world_states,
+                max_past_len,
                 paused,
                 ..
             }
             | Self::AddMetaAndRunner {
-                max_past_len: max_world_states,
+                max_past_len,
                 paused,
                 ..
             }
             | Self::AddMetaAndRunnerInSet {
-                max_past_len: max_world_states,
+                max_past_len,
                 paused,
                 ..
             } => {
-                let meta = RevMeta::new(*max_world_states, *paused);
+                let meta = RevMeta::new(*max_past_len, *paused);
                 if let Some(existing) = app.world().get_resource::<RevMeta>() {
                     bevy_log::warn!("`RevPlugin::build` overwrote {existing:?} with {meta:?}");
                 }

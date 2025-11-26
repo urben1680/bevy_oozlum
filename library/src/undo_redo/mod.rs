@@ -1,12 +1,14 @@
 use bevy_ecs::{
     bundle::{Bundle, BundleFromComponents},
-    change_detection::MaybeLocation,
+    change_detection::{DetectChangesMut, MaybeLocation},
     entity::{Entity, EntityDoesNotExistError},
     resource::Resource,
     system::{Commands, EntityCommands},
-    world::{DeferredWorld, EntityWorldMut, FromWorld, World},
+    world::{DeferredWorld, EntityWorldMut, World},
 };
+use bevy_log::warn_once;
 use bevy_platform::cell::SyncCell;
+use bevy_utils::prelude::DebugName;
 use core::{
     any::type_name_of_val,
     error::Error,
@@ -173,7 +175,7 @@ impl UndoRedoBuffer {
         let name = type_name_of_val(&undo_redo);
         let boxed = BoxedUndoRedo {
             undo_redo: SyncCell::new(Box::new(undo_redo)),
-            name,
+            name: DebugName::borrowed(name),
             caller: MaybeLocation::caller(),
         };
         self.0.push(boxed);
@@ -196,7 +198,7 @@ impl UndoRedo for UndoRedoBuffer {
 
 struct BoxedUndoRedo {
     undo_redo: SyncCell<Box<dyn UndoRedo>>,
-    name: &'static str,
+    name: DebugName,
     caller: MaybeLocation,
 }
 
@@ -425,6 +427,7 @@ impl UndoRedoLog {
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Resource)]
 pub enum RevOp {
+    // todo: assert in tests
     Buffer {
         direction: RevDirection,
         buffer: Entity,
@@ -435,30 +438,24 @@ pub enum RevOp {
 }
 
 impl RevOp {
-    pub(crate) fn scope<Out>(self, world: &mut World, c: impl FnOnce(&mut World) -> Out) -> Out {
-        let mut swap = ResourceSwap(Some(self));
-        swap.redo(world);
-        let out = c(world);
-        swap.undo(world);
-        out
-    }
-}
-
-#[derive(Copy, Clone, Debug)]
-pub struct UndoRedoSwap<T: UndoRedo>(pub T);
-
-impl<T: UndoRedo> UndoRedo for UndoRedoSwap<T> {
-    fn undo(&mut self, world: &mut World) {
-        self.0.redo(world);
-    }
-    fn redo(&mut self, world: &mut World) {
-        self.0.undo(world);
-    }
-}
-
-impl<T: UndoRedo + FromWorld> FromWorld for UndoRedoSwap<T> {
-    fn from_world(world: &mut World) -> Self {
-        Self(T::from_world(world))
+    pub(crate) fn scope(mut self, world: &mut World, c: impl FnOnce(&mut World)) {
+        match world.get_resource_mut::<Self>() {
+            None => {
+                world.insert_resource(self);
+                c(world);
+                world.remove_resource::<Self>();
+            }
+            Some(mut other) => {
+                core::mem::swap(&mut self, other.bypass_change_detection());
+                if matches!(*other, Self::FinalDespawn { .. }) {
+                    warn_once!(
+                        "a reversible buffering happens at the time of finalizing despawns, this may be unintentional"
+                    );
+                }
+                c(world);
+                world.insert_resource(self);
+            }
+        }
     }
 }
 

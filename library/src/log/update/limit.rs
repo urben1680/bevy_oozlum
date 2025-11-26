@@ -219,9 +219,9 @@ impl UpdateLogLimits {
     /// [`UpdateLog::pre_update`](super::UpdateLog::pre_update).
     pub(super) fn push_limit(&self, state: &mut Option<UpdateLogState>, limits: UpdateLogLimit) {
         // get and verify state
-        const ERR: &str = "UpdateLog did not run `pre_update` at this reversible frame";
+        const ERR: &str = "UpdateLog did not run `pre_update` at this reversible frame"; // todo: make method take &mut UpdateLogState
         let state = state.as_mut().expect(ERR);
-        assert_eq!(state.limits_updates, self.limits_updates, "{ERR}");
+        assert_eq!(state.limits_updates, self.limits_updates, "{ERR}"); // todo: see if this can be debug assert
 
         // push update, extend outer vector if needed
         let v = &mut *self.update_log_updates.borrow_local_mut();

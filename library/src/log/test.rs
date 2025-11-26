@@ -187,7 +187,7 @@ impl Logs<TransitionLog<char>> {
     pub(super) fn assert_forward_transition(
         &mut self,
         meta: &RevMeta,
-        max_past_len: NonZeroU64,
+        max_past_len: impl Into<NonZeroU64> + Copy,
         past_drain: &[char],
         future_drain: &[char],
         push: char,
@@ -303,7 +303,7 @@ impl Logs<TransitionsLog<char, char>> {
     pub(super) fn assert_forward_transitions(
         &mut self,
         meta: &RevMeta,
-        max_past_len: NonZeroU64,
+        max_past_len: impl Into<NonZeroU64> + Copy,
         past_drain: &[(&'static str, char)],
         future_drain: &[(&'static str, char)],
         (transitions, update): (&'static str, char),
@@ -544,9 +544,9 @@ fn entries<const N: usize, const M: usize>(
 }
 
 impl MetaAndLogs {
-    fn new(max_world_states: u64) -> Self {
+    fn new(max_past_len: u64) -> Self {
         Self {
-            meta: RevMeta::new(NonZeroU64::new(max_world_states).unwrap(), false),
+            meta: RevMeta::new(NonZeroU64::new(max_past_len).unwrap(), false),
             updates: UpdateLog::new(),
             transition_logs: Logs::default(),
             transitions_logs: Logs::default(),

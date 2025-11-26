@@ -430,9 +430,9 @@ mod test {
     }
 
     impl MetaAndLog {
-        fn new(max_world_states: u64) -> Self {
+        fn new(max_past_len: u64) -> Self {
             Self {
-                meta: RevMeta::new(core::num::NonZeroU64::new(max_world_states).unwrap(), false),
+                meta: RevMeta::new(core::num::NonZeroU64::new(max_past_len).unwrap(), false),
                 update_log: UpdateLog::new(),
                 last_update: MaybeLocation::caller(),
             }

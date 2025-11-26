@@ -17,7 +17,7 @@ pub struct RevMeta {
     past_end: u64,
     now: u64,
     future_end: u64,
-    max_past_len: NonZeroU64, // todo: no option, unrestricted should use MAX
+    max_past_len: NonZeroU64,
     direction: RunningOrRan,
     queue: Option<RevQueue>,
     log_exits: u64,
@@ -86,10 +86,10 @@ pub enum RevQueue {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "bevy_reflect", derive(bevy_reflect::Reflect))]
-pub struct PastLen(pub(crate) NonZeroU64);
+pub struct PastLen(NonZeroU64);
 
-impl PastLen {
-    pub fn get(self) -> NonZeroU64 {
+impl Into<NonZeroU64> for PastLen {
+    fn into(self) -> NonZeroU64 {
         self.0
     }
 }

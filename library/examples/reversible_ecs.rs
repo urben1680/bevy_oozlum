@@ -325,7 +325,7 @@ fn row4(app: &mut App) {
 
                 // Pushing potential Waste entities may also pop an entity that got out-of-log now.
                 // These need to be despawned as they are now past the edge of the screen and cannot come back.
-                let mut drain = log.forward_push(&meta, past_len.get(), entity);
+                let mut drain = log.forward_push(&meta, past_len, entity);
                 for entity in drain.all().flatten() {
                     if !meta.contains(waste.tossed_at) {
                         commands.entity(entity).despawn();
