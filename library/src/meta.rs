@@ -34,13 +34,15 @@ impl Default for RevMeta {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "bevy_reflect", derive(bevy_reflect::Reflect))]
 pub enum RevDirection {
-    Forward(PastLen),
+    Forward { meta_past_len: MetaPastLen },
     ForwardLog,
     BackwardLog,
 }
 
 impl RevDirection {
-    pub(crate) const FORWARD_MIN: Self = Self::Forward(PastLen(NonZeroU64::MIN));
+    pub(crate) const FORWARD_MIN: Self = Self::Forward {
+        meta_past_len: MetaPastLen(NonZeroU64::MIN),
+    };
     pub fn is_forward(self) -> bool {
         !self.is_backward()
     }
@@ -51,14 +53,14 @@ impl RevDirection {
         !self.is_not_log()
     }
     pub fn is_not_log(self) -> bool {
-        matches!(self, Self::Forward(_))
+        matches!(self, Self::Forward { .. })
     }
 }
 
 impl Display for RevDirection {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match *self {
-            RevDirection::Forward(_) => write!(f, "Forward"),
+            RevDirection::Forward { .. } => write!(f, "Forward"),
             RevDirection::ForwardLog => write!(f, "Forward Log"),
             RevDirection::BackwardLog => write!(f, "Backward Log"),
         }
@@ -86,9 +88,9 @@ pub enum RevQueue {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "bevy_reflect", derive(bevy_reflect::Reflect))]
-pub struct PastLen(NonZeroU64);
+pub struct MetaPastLen(NonZeroU64);
 
-impl Into<NonZeroU64> for PastLen {
+impl Into<NonZeroU64> for MetaPastLen {
     fn into(self) -> NonZeroU64 {
         self.0
     }
@@ -189,11 +191,11 @@ impl RevMeta {
         self.now - self.past_end
     }
     #[cfg(test)]
-    pub(crate) fn non_log_past_len(&self) -> PastLen {
-        let RunningOrRan::Running(RevDirection::Forward(past_len)) = self.direction else {
+    pub(crate) fn meta_past_len(&self) -> MetaPastLen {
+        let RunningOrRan::Running(RevDirection::Forward { meta_past_len }) = self.direction else {
             panic!()
         };
-        past_len
+        meta_past_len
     }
     pub fn future_len(&self) -> u64 {
         self.future_end - self.now
@@ -310,7 +312,7 @@ impl RevMeta {
     ) -> Result<Self, RevMetaUpdateErr> {
         // get direction that ran previously
         let (ran, after_log) = match self.direction {
-            RunningOrRan::Ran(RevDirection::Forward(_)) => (
+            RunningOrRan::Ran(RevDirection::Forward { .. }) => (
                 Some(RevDirection::FORWARD_MIN), // gets updated below
                 false,
             ),
@@ -369,7 +371,7 @@ impl RevMeta {
         };
 
         let direction = match queue_or_ran {
-            RevDirection::Forward(_) => {
+            RevDirection::Forward { .. } => {
                 self.now += 1;
                 self.future_end = self.now;
                 let max_past_len = self.max_past_len.get();
@@ -378,7 +380,9 @@ impl RevMeta {
                 }
                 let past_len = NonZeroU64::new(self.now - self.past_end)
                     .expect("now is increased here and larger than past_end");
-                RevDirection::Forward(PastLen(past_len))
+                RevDirection::Forward {
+                    meta_past_len: MetaPastLen(past_len),
+                }
             }
             RevDirection::ForwardLog => {
                 self.now = self.now + 1;

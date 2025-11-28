@@ -27,7 +27,7 @@ use std::{
 /// [`RevQueue::Clear`](crate::meta::RevQueue::Clear) was queued and applied or the
 /// [`RevDirection`](crate::meta::RevDirection) changed from a
 /// [log variant](crate::meta::RevDirection::is_log) to the
-/// [`RevDirection::NOT_LOG`](crate::meta::RevDirection::NOT_LOG) one.
+/// [`RevDirection::Forward`](crate::meta::RevDirection::Forward) one.
 ///
 /// These methods make sure the log catches such changes even if the current system does not run in
 /// the very same frame they took effect, like when that frame was missed because of run conditions.
@@ -58,7 +58,7 @@ use std::{
 ///     mut log: Local<TransitionsLog<MyTransition, MyUpdate>>
 /// ) -> Result<(), BevyError> {
 ///     match meta.running_direction() {
-///         RevDirection::NOT_LOG => {
+///         RevDirection::Forward { meta_past_len } => {
 ///             let new_transitions: Vec<MyTransition> = todo!();
 ///             let new_update: MyUpdate = todo!();
 ///
@@ -67,7 +67,7 @@ use std::{
 ///             // push transitions and update to the log
 ///             let mut drain = log.extend_with(
 ///                 &meta,
-///                 meta.past_len(),
+///                 meta_past_len,
 ///                 new_transitions,
 ///                 new_update
 ///             )?;
@@ -94,7 +94,7 @@ use std::{
 ///
 ///             // `drain.all()` is also available
 ///         },
-///         RevDirection::FORWARD_LOG => {
+///         RevDirection::ForwardLog => {
 ///             let iter = log.forward_log(&meta)?;
 ///             let next_update = iter.update.clone();
 ///             for next_transition in iter {
@@ -313,7 +313,7 @@ impl<T, U> TransitionsLog<T, U> {
             past_len,
             TransitionsLogUpdate {
                 update,
-                transitions: usize::MAX, // will be overwritten when transititons are counted
+                transitions_len: usize::MAX.to_ne_bytes(), // will be overwritten when transititons are counted
             },
         );
         let gap_range = if updates.is_clear() {
@@ -321,7 +321,7 @@ impl<T, U> TransitionsLog<T, U> {
         } else {
             let start = updates
                 .iter_past()
-                .map(|update| update.transitions)
+                .map(|update| update.transitions_len())
                 .sum::<usize>();
             GapRange::new(start, self.index)
         };
@@ -367,7 +367,7 @@ impl<T, U> TransitionsLog<T, U> {
     ) -> Result<TransitionsLogIterMut<T, U>, OutOfLog> {
         let old_index = self.index;
         let update_mut = self.updates.backward_log(meta)?;
-        self.index -= update_mut.transitions;
+        self.index -= update_mut.transitions_len();
         let transitions = self.transitions.range_mut(self.index..old_index);
         Ok(TransitionsLogIterMut {
             transitions,
@@ -387,7 +387,7 @@ impl<T, U> TransitionsLog<T, U> {
     /// and stored in this log entry at [`backward_log`](Self::backward_log). `forward_log` would
     /// then take the value from the log entry to return it.
     ///
-    /// This is used during [`RevDirection::FORWARD_LOG`](crate::meta::RevDirection::FORWARD_LOG).
+    /// This is used during [`RevDirection::ForwardLog`](crate::meta::RevDirection::ForwardLog).
     ///
     /// Before calling this, [`pre_update`](Self::pre_update) or
     /// [`pre_update_drain`](Self::pre_update_drain) **must** be called at least once in the
@@ -404,7 +404,7 @@ impl<T, U> TransitionsLog<T, U> {
     pub fn forward_log(&mut self, meta: &RevMeta) -> Result<TransitionsLogIterMut<T, U>, OutOfLog> {
         let old_index = self.index;
         let update_mut = self.updates.forward_log(meta)?;
-        self.index += update_mut.transitions;
+        self.index += update_mut.transitions_len();
         let transitions = self.transitions.range_mut(old_index..self.index);
         Ok(TransitionsLogIterMut {
             transitions,
@@ -508,7 +508,7 @@ where
         let mut len = self.transitions.len();
         self.transitions.extend(transitions_iter);
         len = self.transitions.len() - len;
-        self.updates.transition_mut().transitions = len;
+        self.updates.transition_mut().transitions_len = len.to_ne_bytes();
         *self.index = self.transitions.len();
     }
 }
@@ -531,7 +531,7 @@ where
     pub fn next_log_entry(&mut self) -> Option<(Take<&'_ mut TI>, U)> {
         self.updates.next().map(|update| {
             (
-                self.transitions.by_ref().take(update.transitions),
+                self.transitions.by_ref().take(update.transitions_len()),
                 update.update,
             )
         })
@@ -636,7 +636,16 @@ pub struct TransitionsLogUpdate<U> {
     /// The amount of transitions that belong to this log entry
     ///
     /// Must be private because draining iterators rely on the value to remain unchanged.
-    transitions: usize,
+    ///
+    /// A byte array has a smaller alignment than the stored usize, reducing this type's size if
+    /// `U` has an alignment less than `usize`.
+    transitions_len: [u8; usize::BITS as usize / 8],
+}
+
+impl<U> TransitionsLogUpdate<U> {
+    pub fn transitions_len(&self) -> usize {
+        usize::from_ne_bytes(self.transitions_len)
+    }
 }
 
 #[cfg(test)]
@@ -677,12 +686,12 @@ mod test {
             };
             self.meta.set_queue(queue);
             self.meta.update_ref(Ok(true), |meta, direction| {
-                let RevDirection::Forward(past_len) = direction else {
+                let RevDirection::Forward { meta_past_len } = direction else {
                     unreachable!()
                 };
                 self.logs.assert_forward_transitions(
                     meta,
-                    past_len,
+                    meta_past_len,
                     &past_drain,
                     &future_drain,
                     push,

@@ -1,16 +1,8 @@
 //! This module contains [`UpdateLogLimits`] which is part of [`RevMeta`](crate::meta::RevMeta).
 //!
-//! [`UpdateLog`](super::UpdateLog) interacts with that struct in two ways:
-//!
-//! 1. Updating [`UpdateLogState`] in the log to determine which [`PreUpdateVariant`] is returned in
-//!    [`pre_update`](super::UpdateLog::pre_update).
-//! 2. Sending [`UpdateLogLimit`] at
-//!    [`push_get_past_len`](super::UpdateLog::push_get_past_len),
-//!    [`forward_log`](super::UpdateLog::forward_log) and
-//!    [`backward_log`](super::UpdateLog::backward_log). When `RevMeta` is updating
-//!   `UpdateLogLimits`, an error can be generated if a `UpdateLog` did not update (often enough)
-//!   at the current frame as it did during
-//!   [`RevDirection::NOT_LOG`](crate::meta::RevDirection::NOT_LOG).
+//! [`UpdateLog`](super::UpdateLog) sends [`UpdateLogLimit`] to that struct so `RevMeta` can report
+//! errors if it did not update at the current frame as it did during
+//! [`RevDirection::Forward`](crate::meta::RevDirection::Forward).
 
 use super::PreUpdateKind;
 use bevy_ecs::change_detection::MaybeLocation;
@@ -56,7 +48,7 @@ impl Debug for UpdateLogLimits {
                 "update_log_updates (this thread)",
                 &*self.update_log_updates.borrow_local_mut(),
             )
-            .finish_non_exhaustive() // update_log_updates may contain updates for another thread
+            .finish_non_exhaustive() // update_log_updates may contain updates from another thread
     }
 }
 
@@ -81,9 +73,9 @@ impl UpdateLogLimits {
             let state = UpdateLogState {
                 index,
                 updates_this_frame: 0,
-                limits_updates: self.limits_updates,
-                meta_log_exits,
-                meta_log_clears,
+                witnessed_limits_updates: self.limits_updates,
+                witnessed_log_exits: meta_log_exits,
+                witnessed_log_clears: meta_log_clears,
             };
             bevy_log::info!(
                 "A `UpdateLog` with the id `{}` was initiated at {caller}, \
@@ -97,20 +89,20 @@ impl UpdateLogLimits {
             *state = Some(new_state());
             return PreUpdateKind::Nothing;
         };
-        if state.meta_log_clears < meta_log_clears {
+        if state.witnessed_log_clears < meta_log_clears {
             // meta was cleared in the meantime
             *state = new_state();
             PreUpdateKind::RemoveLog
-        } else if state.meta_log_exits < meta_log_exits {
+        } else if state.witnessed_log_exits < meta_log_exits {
             // meta ran at not-log in the meantime
-            state.limits_updates = self.limits_updates;
-            state.meta_log_exits = meta_log_exits;
+            state.witnessed_limits_updates = self.limits_updates;
+            state.witnessed_log_exits = meta_log_exits;
             state.updates_this_frame = 0;
             PreUpdateKind::RemoveFuture
         } else {
-            if state.limits_updates != self.limits_updates {
+            if state.witnessed_limits_updates != self.limits_updates {
                 // this log did not update at this frame yet
-                state.limits_updates = self.limits_updates;
+                state.witnessed_limits_updates = self.limits_updates;
                 state.updates_this_frame = 0;
             }
             PreUpdateKind::Nothing
@@ -191,7 +183,7 @@ impl UpdateLogLimits {
                                 // SAFETY: `index` originates from an NonMaxU32 value
                                 NonMaxU32::new_unchecked(index as u32)
                             },
-                            meta_log_clears,
+                            witnessed_log_clears: meta_log_clears,
                         },
                         last_update: limits.last_update,
                     });
@@ -211,24 +203,16 @@ impl UpdateLogLimits {
         }
     }
 
-    /// Update the logged [`UpdateLogLimit`] associated to this `state` with the given `limits`.
-    ///
-    /// # Panic
-    ///
-    /// This method panics if `state` is was not updated this frame via
-    /// [`UpdateLog::pre_update`](super::UpdateLog::pre_update).
-    pub(super) fn push_limit(&self, state: &mut Option<UpdateLogState>, limits: UpdateLogLimit) {
-        // get and verify state
-        const ERR: &str = "UpdateLog did not run `pre_update` at this reversible frame"; // todo: make method take &mut UpdateLogState
-        let state = state.as_mut().expect(ERR);
-        assert_eq!(state.limits_updates, self.limits_updates, "{ERR}"); // todo: see if this can be debug assert
+    /// Update the logged [`UpdateLogLimit`] associated to this `state` with the given `limit`.
+    pub(super) fn push_limit(&self, state: &mut UpdateLogState, limit: UpdateLogLimit) {
+        debug_assert_eq!(state.witnessed_limits_updates, self.limits_updates);
 
         // push update, extend outer vector if needed
         let v = &mut *self.update_log_updates.borrow_local_mut();
         let index = state.updates_this_frame as usize;
         let new_len = v.len().max(index + 1);
         v.resize(new_len, Vec::new());
-        v[index].push((state.index, limits));
+        v[index].push((state.index, limit));
 
         // the next update at this frame should come with a higher value
         state.updates_this_frame += 1;
@@ -241,7 +225,7 @@ impl UpdateLogLimits {
 pub(crate) struct UpdateLogState {
     /// Unique index of a [`UpdateLog`](super::UpdateLog) to keep track how many logs are out there
     /// to reserve them space in [`UpdateLogLimits::update_log_limits`]. May change when
-    /// [`RevMeta`](crate::meta::RevMeta) is [cleared](crate::meta::RevQueue::Clear).
+    /// [`RevMeta`](crate::meta::RevMeta) is [cleared](crate::meta::RevQueue::ClearThenRunForward).
     ///
     /// Is `NonMax` to offer a niche since `Self` is stored in an `Option` at `UpdateLog`.
     index: NonMaxU32,
@@ -252,76 +236,82 @@ pub(crate) struct UpdateLogState {
 
     /// Contains the most recent [`UpdateLogLimits::limits_updates`] value that was witnessed by this
     /// [`UpdateLog`](super::UpdateLog).
-    limits_updates: u64,
+    witnessed_limits_updates: u64,
 
     /// Contains the most recent global count of log exits that was witnessed by this
     /// [`UpdateLog`](super::UpdateLog).
     ///
     /// See [`RevMeta::log_exits`](crate::meta::RevMeta::log_exits).
-    meta_log_exits: u64,
+    witnessed_log_exits: u64,
 
     /// Contains the most recent global count of log clears that was witnessed by this
     /// [`UpdateLog`](super::UpdateLog).
     ///
     /// See [`RevMeta::log_clears`](crate::meta::RevMeta::log_clears).
-    meta_log_clears: u64,
+    witnessed_log_clears: u64,
 }
 
 impl UpdateLogState {
     pub(super) fn id(&self) -> UpdateLogId {
         UpdateLogId {
             index: self.index,
-            meta_log_clears: self.meta_log_clears.to_ne_bytes(),
+            witnessed_log_clears: self.witnessed_log_clears.to_ne_bytes(),
         }
     }
 }
 
 /// Unique ID of an [`UpdateLog`](super::UpdateLog) from [`RevUpdate::id`](super::UpdateLog::id).
 ///
-/// When [`UpdateLog::pre_update`](super::UpdateLog::pre_update) is called after
-/// [`RevQueue::Clear`](crate::meta::RevQueue::Clear) is applied, this id will change for the log.
-/// This Id is not reused when outdated.
+/// When an `UpdateLog` is mutated after
+/// [`RevQueue::ClearThenRunForward`](crate::meta::RevQueue::ClearThenRunForward) /
+/// [`RevQueue::ClearThenPause`](crate::meta::RevQueue::ClearThenPause) is applied, this id will
+/// change for the log, including the [`index`](Self::index) value.
+///
+/// No Id is reused when outdated.
 ///
 /// The [`Debug`] implementation will return the id as `UpdateLogId {int}v{int}` where the first
-/// value is [`index`](Self::index) and the second [`meta_log_clears`](Self::meta_log_clears).
+/// value is [`index`](Self::index) and the second
+/// [`witnessed_log_clears`](Self::witnessed_log_clears).
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct UpdateLogId {
     index: NonMaxU32,
 
-    // a byte array has a smaller alignment than the stored u64, reducing this type's size
-    meta_log_clears: [u8; 8],
+    /// A byte array has a smaller alignment than the stored u64, reducing this type's size.
+    witnessed_log_clears: [u8; 8],
 }
 
 impl UpdateLogId {
-    pub(super) const UNINIT: &str = "UpdateLog UNINIT";
+    pub(super) const UNINIT: &str = "UpdateLogId UNINIT";
 
     /// The index of an [`UpdateLog`](super::UpdateLog) in [`RevMeta`](crate::meta::RevMeta).
     ///
     /// Other logs with this index may exist at the same time if:
     ///
-    /// 1. [`RevQueue::Clear`](crate::meta::RevQueue::Clear) was applied
+    /// 1. [`RevQueue::ClearThenRunForward`](crate::meta::RevQueue::ClearThenRunForward) /
+    ///    [`RevQueue::ClearThenPause`](crate::meta::RevQueue::ClearThenPause) was applied
     /// 2. The log did not update after that
     /// 3. Another log was updated after that which received this index
     ///
-    /// Only with [`meta_log_clears`](Self::meta_log_clears) this ID is unique.
+    /// Only with [`witnessed_log_clears`](Self::witnessed_log_clears) this ID is unique.
     pub fn index(self) -> u32 {
         self.index.get()
     }
 
     /// The latest value of [`RevMeta::log_clears`](crate::meta::RevMeta::log_clears) this log has
-    /// witnessed.
-    ///
-    /// This log will be cleared if this value is outdated and
-    /// [`UpdateLog::pre_update`](super::UpdateLog::pre_update) is called, which changes
-    /// [`index`](Self::index) as well.
-    pub fn meta_log_clears(self) -> u64 {
-        u64::from_ne_bytes(self.meta_log_clears)
+    /// witnessed. Here it can be understood as a generational value of this ID.
+    pub fn witnessed_log_clears(self) -> u64 {
+        u64::from_ne_bytes(self.witnessed_log_clears)
     }
 }
 
 impl Display for UpdateLogId {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
-        write!(f, "UpdateLogId {}v{}", self.index(), self.meta_log_clears())
+        write!(
+            f,
+            "UpdateLogId {}v{}",
+            self.index(),
+            self.witnessed_log_clears()
+        )
     }
 }
 
@@ -356,7 +346,7 @@ pub(crate) struct UpdateLogLimit {
     ///
     /// Is [`u64::MAX`] if `UpdateLog` has no further updates in its future.
     ///
-    /// Will be set to `u64::MAX` at [`RevDirection::NOT_LOG`](crate::meta::RevDirection::NOT_LOG).
+    /// Will be set to `u64::MAX` at [`RevDirection::Forward`](crate::meta::RevDirection::Forward).
     future: u64,
 
     /// The last location where [`UpdateLog`](super::UpdateLog) was updated. Is empty if bevy's
@@ -365,10 +355,10 @@ pub(crate) struct UpdateLogLimit {
 }
 
 impl UpdateLogLimit {
-    /// A new limit during an [`RevDirection::NOT_LOG`](crate::meta::RevDirection::NOT_LOG) update.
+    /// A new limit during an [`RevDirection::Forward`](crate::meta::RevDirection::Forward) update.
     ///
     /// Restricts [`RevMeta::now`](crate::meta::RevMeta::now) to not go below `now`.
-    pub(crate) fn new_not_log(now: u64, caller: MaybeLocation) -> Self {
+    pub(crate) fn new_forward(now: u64, caller: MaybeLocation) -> Self {
         Self {
             past: now,
             future: u64::MAX,
@@ -376,11 +366,11 @@ impl UpdateLogLimit {
         }
     }
 
-    /// A new limit during an [`RevDirection::FORWARD_LOG`](crate::meta::RevDirection::FORWARD_LOG)/
+    /// A new limit during an [`RevDirection::ForwardLog`](crate::meta::RevDirection::ForwardLog)/
     /// [`RevDirection::BackwardLog`](crate::meta::RevDirection::BackwardLog) update.
     ///
     /// Restricts [`RevMeta::now`](crate::meta::RevMeta::now) to not go below `past` or above
-    /// `future`, except during [`RevDirection::NOT_LOG`](crate::meta::RevDirection::NOT_LOG).
+    /// `future`, except during [`RevDirection::Forward`](crate::meta::RevDirection::Forward).
     pub(crate) fn new_log(past: u64, future: u64, caller: MaybeLocation) -> Self {
         Self {
             past,
@@ -429,18 +419,14 @@ impl<'a> UpdatesIter<'a> {
 impl<'a> Iterator for UpdatesIter<'a> {
     type Item = (usize, UpdateLogLimit);
     fn next(&mut self) -> Option<Self::Item> {
-        match self.pop() {
-            Some(index_and_limit) => Some(index_and_limit),
-            None => {
-                // Try to get an update of the next higher updates_this_frame. If this still yields
-                // None then all updates are drained as there would be no gap of updates. A log that
-                // updated for the nth time surely updated for the (n-1)th time before if n is > 0.
-                // See also the comment in `RevMeta::set_update_state`.
-                self.skip_locals = 0;
-                self.updates_this_frame += 1;
-                self.pop()
-            }
-        }
+        self.pop().or_else(|| {
+            // Try to get an update of the next higher updates_this_frame. If this still yields None
+            // then all updates are drained as there would be no gap of updates. A log that updated
+            // for the nth time surely updated for the (n-1)th time before if n is > 0.
+            self.skip_locals = 0;
+            self.updates_this_frame += 1;
+            self.pop()
+        })
     }
 }
 
@@ -479,22 +465,25 @@ mod test {
             Some(UpdateLogState {
                 index: NonMaxU32::ZERO,
                 updates_this_frame: 0,
-                limits_updates: 0,
-                meta_log_exits: 0,
-                meta_log_clears: 0,
+                witnessed_limits_updates: 0,
+                witnessed_log_exits: 0,
+                witnessed_log_clears: 0,
             })
         );
 
         // pushing update increases updates_this_frame
-        limits.push_limit(&mut state, UpdateLogLimit::new_not_log(1, caller));
+        limits.push_limit(
+            state.as_mut().unwrap(),
+            UpdateLogLimit::new_forward(1, caller),
+        );
         assert_eq!(
             state,
             Some(UpdateLogState {
                 index: NonMaxU32::ZERO,
                 updates_this_frame: 1,
-                limits_updates: 0,
-                meta_log_exits: 0,
-                meta_log_clears: 0,
+                witnessed_limits_updates: 0,
+                witnessed_log_exits: 0,
+                witnessed_log_clears: 0,
             })
         );
         limits.update(2, 0, false).unwrap();
@@ -507,23 +496,26 @@ mod test {
             Some(UpdateLogState {
                 index: NonMaxU32::ZERO,
                 updates_this_frame: 0,
-                limits_updates: 1,
-                meta_log_exits: 0,
-                meta_log_clears: 0,
+                witnessed_limits_updates: 1,
+                witnessed_log_exits: 0,
+                witnessed_log_clears: 0,
             })
         );
 
         // update at the same frame increases updates_this_frame again to check next following
         // update to this also resets it again
-        limits.push_limit(&mut state, UpdateLogLimit::new_not_log(2, caller));
+        limits.push_limit(
+            state.as_mut().unwrap(),
+            UpdateLogLimit::new_forward(2, caller),
+        );
         assert_eq!(
             state,
             Some(UpdateLogState {
                 index: NonMaxU32::ZERO,
                 updates_this_frame: 1,
-                limits_updates: 1,
-                meta_log_exits: 0,
-                meta_log_clears: 0,
+                witnessed_limits_updates: 1,
+                witnessed_log_exits: 0,
+                witnessed_log_clears: 0,
             })
         );
         limits.update(3, 0, false).unwrap();
@@ -536,23 +528,26 @@ mod test {
             Some(UpdateLogState {
                 index: NonMaxU32::ZERO,
                 updates_this_frame: 0,
-                limits_updates: 2,
-                meta_log_exits: 1,
-                meta_log_clears: 0,
+                witnessed_limits_updates: 2,
+                witnessed_log_exits: 1,
+                witnessed_log_clears: 0,
             })
         );
 
         // update at the same frame increases updates_this_frame again to check next following
         // update to this also resets it again
-        limits.push_limit(&mut state, UpdateLogLimit::new_not_log(3, caller));
+        limits.push_limit(
+            state.as_mut().unwrap(),
+            UpdateLogLimit::new_forward(3, caller),
+        );
         assert_eq!(
             state,
             Some(UpdateLogState {
                 index: NonMaxU32::ZERO,
                 updates_this_frame: 1,
-                limits_updates: 2,
-                meta_log_exits: 1,
-                meta_log_clears: 0,
+                witnessed_limits_updates: 2,
+                witnessed_log_exits: 1,
+                witnessed_log_clears: 0,
             })
         );
         limits.update(4, 0, false).unwrap();
@@ -566,9 +561,9 @@ mod test {
             Some(UpdateLogState {
                 index: NonMaxU32::ZERO,
                 updates_this_frame: 0,
-                limits_updates: 0,
-                meta_log_exits: 1,
-                meta_log_clears: 1,
+                witnessed_limits_updates: 0,
+                witnessed_log_exits: 1,
+                witnessed_log_clears: 1,
             })
         );
         limits.update(5, 0, false).unwrap();
@@ -583,9 +578,9 @@ mod test {
             Some(UpdateLogState {
                 index: NonMaxU32::ONE,
                 updates_this_frame: 0,
-                limits_updates: 1,
-                meta_log_exits: 2,
-                meta_log_clears: 2,
+                witnessed_limits_updates: 1,
+                witnessed_log_exits: 2,
+                witnessed_log_clears: 2,
             })
         );
     }
@@ -595,16 +590,16 @@ mod test {
         let mut limits = UpdateLogLimits::default();
 
         // add a past limit of 1
-        let mut past_state = None;
+        let mut state = None;
         let past_limit = UpdateLogLimit::new_log(1, u64::MAX, MaybeLocation::caller());
-        limits.set_update_state(&mut past_state, 0, 0);
-        limits.push_limit(&mut past_state, past_limit);
+        limits.set_update_state(&mut state, 0, 0);
+        limits.push_limit(state.as_mut().unwrap(), past_limit);
 
         // add a future limit of 1
         let mut future_state = None;
         let future_limit = UpdateLogLimit::new_log(u64::MIN, 1, MaybeLocation::caller());
         limits.set_update_state(&mut future_state, 0, 0);
-        limits.push_limit(&mut future_state, future_limit);
+        limits.push_limit(state.as_mut().unwrap(), future_limit);
 
         // 1 is in both limits
         let result = limits.update(1, 0, true);
@@ -613,7 +608,7 @@ mod test {
         // 0 is breaching the past limit
         let result = limits.update(0, 0, true);
         let past_missed = Err(vec![UpdateLogMissed {
-            id: past_state.unwrap().id(),
+            id: state.unwrap().id(),
             last_update: past_limit.last_update,
         }]);
         assert_eq!(result, past_missed);

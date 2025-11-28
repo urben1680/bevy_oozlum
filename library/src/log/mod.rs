@@ -4,7 +4,7 @@
 //!
 //! - [`TransitionLog`], for storing singular values to transition a state forward or backward.
 //! - [`TransitionsLog`], for storing multiple values to transition a state forward or backward.
-//! - [`UpdateLog`], for keeping track when, how often and with which `max_past_len` value the other
+//! - [`UpdateLog`], for keeping track when, how often and with which `past_len` value the other
 //!   logs need to update in cases these updates happen irregularily. Can also be used as an compact
 //!   alternative to `TransitionLog<bool>`.
 //!
@@ -13,16 +13,16 @@
 //! All logs in an application can sum up to a large amount of data and it is undesired to store any
 //! more transition data than what is really needed to cover the [global log length].
 //!
-//! The transition logs need a `max_past_len` value as a parameter in their [`forward_push`] and
+//! The transition logs need a `past_len` value as a parameter in their [`forward_push`] and
 //! [`forward_extend`] methods to determine how many past log entries they should keep to not go
 //! [`OutOfLog`] at some point. Depending on how often the log is pushing log entries, the correct
 //! source has to be used:
 //!
-//! | source                                | situation                                   |
-//! | ------------------------------------- | ------------------------------------------- |
-//! | [`RevMeta::past_len`]                 | the log updates at every frame exactly once |
-//! | [`UpdateLog::forward_past_len`]       | the log updates arbitrarily                 |
-//! | `u64::MAX`                            | the log is allowed to have unlimited growth |
+//! | source                          | situation                                   |
+//! | ------------------------------- | ------------------------------------------- |
+//! | [`MetaPastLen`]                 | the log updates at every frame exactly once |
+//! | [`UpdateLog::forward_past_len`] | the log updates arbitrarily                 |
+//! | `u64::MAX`                      | the log is allowed to have unlimited growth |
 //!
 //! [`UpdateLog`] is able to manage its length from reading the [global log length] from
 //! [`RevMeta`].
@@ -36,9 +36,9 @@
 //!
 //! | [`RevDirection`] | method                          | [`RevMeta::now`] |
 //! | ---------------- | ------------------------------- | ---------------- |
-//! | [`NOT_LOG`]      | `forward_push`/`forward_extend` | `n`              |
+//! | [`Forward`]      | `forward_push`/`forward_extend` | `n`              |
 //! | [`BackwardLog`]  | `backward_log`                  | `n-1`            |
-//! | [`FORWARD_LOG`]  | `forward_log`                   | `n`              |
+//! | [`ForwardLog`]   | `forward_log`                   | `n`              |
 //!
 //! If a log is updated multiple times per frame, then these amounts must match for these frames as
 //! well.
@@ -74,9 +74,12 @@
 //! When bevy's `track_location` cargo feature is active, [`UpdateLogMissed::last_update`] also
 //! contains the location where the [`UpdateLog`] was updated the last time.
 //!
-//! Note however that when a [`RevQueue::Clear`] is applied, all ids until then become invalid. This
-//! event is logged at the INFO level as well. Every `UpdateLog` that updates after that will get
-//! new ids which is then logged again.
+//! Note however that when a [`RevQueue::ClearThenRunForward`]/[`RevQueue::ClearThenPause`] is
+//! applied, all ids until then become invalid. This event is logged at the INFO level as well.
+//! Every `UpdateLog` that updates after that will get new ids which is then logged again.
+//!
+//! Log clears happen not when the queue above is applied but at the first next update of each log
+//! after that.
 //!
 //! ## Draining transitions
 //!
@@ -86,13 +89,13 @@
 //! ### Example
 //!
 //! A [`UpdateLog::forward_past_len`] runs at [frame `42`](crate::meta::RevMeta::now) during
-//! [`RevDirection::NOT_LOG`]. This is the first time this log updated. `UpdateLog` will then inform
+//! [`RevDirection::Forward`]. This is the first time this log updated. `UpdateLog` will then inform
 //! [`RevMeta`] that there is no future frame it expects to run at during
-//! [`RevDirection::FORWARD_LOG`] but expects to run at frame `41` when going backward.
+//! [`RevDirection::ForwardLog`] but expects to run at frame `41` when going backward.
 //!
 //! When then [`UpdateLog::backward_log`] of this specific log runs at `41` during
 //! [`RevDirection::BackwardLog`], this gets updated: Now there is no other frame in the past it
-//! expects to run at, however it expects to run at frame `42` during [`RevDirection::FORWARD_LOG`].
+//! expects to run at, however it expects to run at frame `42` during [`RevDirection::ForwardLog`].
 //!
 //! If these updates during the [log directions] do not happen however, [`RevMeta`] will notice
 //! that, which triggers the [`UpdateLogsMissed`] error right at the frame where the update was
@@ -104,18 +107,19 @@
 //! [id of the `UpdateLog` instance]: UpdateLog::id
 //! [`RevMeta`]: crate::meta::RevMeta
 //! [`RevMeta::now`]: crate::meta::RevMeta::now
-//! [`RevMeta::past_len`]: crate::meta::RevMeta::past_len
+//! [`MetaPastLen`]: crate::meta::MetaPastLen
 //! [`RevMeta::update`]: crate::meta::RevMeta::update
 //! [global log length]: crate::meta::RevMeta::contains
 //! [`RevDirection`]: crate::meta::RevDirection
-//! [`RevDirection::NOT_LOG`]: crate::meta::RevDirection::NOT_LOG
-//! [`NOT_LOG`]: crate::meta::RevDirection::NOT_LOG
+//! [`RevDirection::Forward`]: crate::meta::RevDirection::Forward
+//! [`Forward`]: crate::meta::RevDirection::Forward
 //! [`RevDirection::BackwardLog`]: crate::meta::RevDirection::BackwardLog
 //! [`BackwardLog`]: crate::meta::RevDirection::BackwardLog
-//! [`RevDirection::FORWARD_LOG`]: crate::meta::RevDirection::FORWARD_LOG
-//! [`FORWARD_LOG`]: crate::meta::RevDirection::FORWARD_LOG
+//! [`RevDirection::ForwardLog`]: crate::meta::RevDirection::ForwardLog
+//! [`ForwardLog`]: crate::meta::RevDirection::ForwardLog
 //! [log directions]: crate::meta::RevDirection::is_log
-//! [`RevQueue::Clear`]: crate::meta::RevQueue::Clear
+//! [`RevQueue::ClearThenRunForward`]: crate::meta::RevQueue::ClearThenRunForward
+//! [`RevQueue::ClearThenPause`]: crate::meta::RevQueue::ClearThenPause
 //! [`RevMetaUpdateErr::UpdateLogsMissed`]: crate::meta::RevMetaUpdateErr::UpdateLogsMissed
 //! [`UpdateLogsMissed`]: crate::meta::RevMetaUpdateErr::UpdateLogsMissed
 //! [reversible scheduling]: crate::schedule::RevSchedule
@@ -151,7 +155,10 @@ mod test;
 /// [`TransitionLog`]/[`TransitionsLog`] in case they already were at the end of their log before
 /// the method call.
 ///
-/// This error indicates the continuity of the global state was broken.
+/// This error indicates the continuity of the global state was broken and should not be ignored.
+/// Instead, consider to pair the log with an [`UpdateLog`] that prevents this error. If then there
+/// still is an error, it will be because an update was missed and `UpdateLog` will cause that to be
+/// reported at the end of the schedule.
 ///
 /// See the [module level documentation](crate::log) for more information.
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]

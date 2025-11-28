@@ -18,7 +18,7 @@ use core::{
 
 use crate::{
     log::{OutOfLog, TransitionsLog, UpdateLog},
-    meta::{PastLen, RevDirection, RevMeta},
+    meta::{MetaPastLen, RevDirection, RevMeta},
 };
 
 mod commands;
@@ -105,12 +105,12 @@ pub trait BuffersUndoRedo {
     /// | [`UndoRedoBuffer`] | ✅ | ❌ |
     /// | [`Commands`] | ❌ | ✅ |
     /// | [`EntityCommands`] | ❌ | ✅ |
-    fn buffer_undo_redo(&mut self, past_len: PastLen, undo_redo: impl UndoRedo);
+    fn buffer_undo_redo(&mut self, past_len: MetaPastLen, undo_redo: impl UndoRedo);
 }
 
 impl BuffersUndoRedo for Commands<'_, '_> {
     #[track_caller]
-    fn buffer_undo_redo(&mut self, past_len: PastLen, undo_redo: impl UndoRedo) {
+    fn buffer_undo_redo(&mut self, past_len: MetaPastLen, undo_redo: impl UndoRedo) {
         self.queue(move |world: &mut World| {
             world.buffer_undo_redo(past_len, undo_redo);
         });
@@ -119,7 +119,7 @@ impl BuffersUndoRedo for Commands<'_, '_> {
 
 impl BuffersUndoRedo for EntityCommands<'_> {
     #[track_caller]
-    fn buffer_undo_redo(&mut self, past_len: PastLen, undo_redo: impl UndoRedo) {
+    fn buffer_undo_redo(&mut self, past_len: MetaPastLen, undo_redo: impl UndoRedo) {
         self.queue(move |mut world: EntityWorldMut| {
             world.buffer_undo_redo(past_len, undo_redo);
         });
@@ -128,14 +128,14 @@ impl BuffersUndoRedo for EntityCommands<'_> {
 
 impl BuffersUndoRedo for World {
     #[track_caller]
-    fn buffer_undo_redo(&mut self, past_len: PastLen, undo_redo: impl UndoRedo) {
+    fn buffer_undo_redo(&mut self, past_len: MetaPastLen, undo_redo: impl UndoRedo) {
         DeferredWorld::buffer_undo_redo(&mut self.into(), past_len, undo_redo);
     }
 }
 
 impl BuffersUndoRedo for EntityWorldMut<'_> {
     #[track_caller]
-    fn buffer_undo_redo(&mut self, past_len: PastLen, undo_redo: impl UndoRedo) {
+    fn buffer_undo_redo(&mut self, past_len: MetaPastLen, undo_redo: impl UndoRedo) {
         // SAFETY: Only resources are accessed, entity location remains unchanged
         let world = unsafe { self.world_mut() };
         world.buffer_undo_redo(past_len, undo_redo);
@@ -144,11 +144,13 @@ impl BuffersUndoRedo for EntityWorldMut<'_> {
 
 impl BuffersUndoRedo for DeferredWorld<'_> {
     #[track_caller]
-    fn buffer_undo_redo(&mut self, past_len: PastLen, undo_redo: impl UndoRedo) {
+    fn buffer_undo_redo(&mut self, past_len: MetaPastLen, undo_redo: impl UndoRedo) {
         debug_assert!(self.get_resource::<RevMeta>().is_some_and(|meta| {
             meta.get_running_direction()
                 .is_some_and(|direction| match direction {
-                    RevDirection::Forward(actual) => actual == past_len,
+                    RevDirection::Forward {
+                        meta_past_len: actual,
+                    } => actual == past_len,
                     _ => false,
                 })
         }));
@@ -171,7 +173,7 @@ impl UndoRedoBuffer {
         self.0.is_empty()
     }
     #[track_caller]
-    pub(crate) fn buffer_undo_redo(&mut self, _: PastLen, undo_redo: impl UndoRedo) {
+    pub(crate) fn buffer_undo_redo(&mut self, _: MetaPastLen, undo_redo: impl UndoRedo) {
         let name = type_name_of_val(&undo_redo);
         let boxed = BoxedUndoRedo {
             undo_redo: SyncCell::new(Box::new(undo_redo)),
@@ -357,7 +359,7 @@ impl UndoRedoLog {
 
         let now = meta.now();
         match meta.get_running_direction() {
-            Some(RevDirection::Forward(_)) => world
+            Some(RevDirection::Forward { .. }) => world
                 .try_resource_scope::<UndoRedoBuffer, _>(|world, mut buffer| {
                     if !buffer.0.is_empty() {
                         let meta = world.resource::<RevMeta>();
@@ -512,7 +514,7 @@ impl UndoRedo for SpawnEmpty {
 
 fn rev_spawn_empty_inner(
     entity_mut: &mut EntityWorldMut,
-    past_len: PastLen,
+    past_len: MetaPastLen,
     caller: MaybeLocation,
 ) {
     let entity = entity_mut.id();

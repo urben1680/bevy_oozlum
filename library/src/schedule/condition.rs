@@ -27,7 +27,7 @@ use core::{
 };
 
 /// Wrap a `condition` into a reversivle `BoxedCondition` that logs the system output at
-/// [`RevDirection::NOT_LOG`] and traverses the log during [log directions](RevDirection::is_log),
+/// [`RevDirection::Forward`] and traverses the log during [log directions](RevDirection::is_log),
 /// bypassing the inner system.
 pub(super) fn into_rev_condition<Marker>(
     condition: impl SystemCondition<Marker>,
@@ -106,7 +106,7 @@ impl<T: ReadOnlySystem<In = (), Out = bool>> System for RevCondition<T> {
         })?;
 
         match direction {
-            RevDirection::Forward(_) => {
+            RevDirection::Forward { .. } => {
                 let result = unsafe {
                     // SAFETY:
                     // - in `initialize` T returned the required access to make this safe

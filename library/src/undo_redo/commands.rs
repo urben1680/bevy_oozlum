@@ -1,5 +1,5 @@
 use crate::{
-    meta::PastLen,
+    meta::MetaPastLen,
     prelude::UndoRedo,
     undo_redo::{
         RevDespawnCleaner, RevWorld, rev_init_resource_with_caller,
@@ -17,9 +17,9 @@ use bevy_ecs::{
 };
 
 pub trait RevCommands {
-    fn redo_and_buffer(&mut self, past_len: PastLen, undo_redo: impl UndoRedo);
+    fn redo_and_buffer(&mut self, past_len: MetaPastLen, undo_redo: impl UndoRedo);
 
-    fn rev_log_scope(&mut self, past_len: PastLen, entity: Entity);
+    fn rev_log_scope(&mut self, past_len: MetaPastLen, entity: Entity);
 
     // the methods here are purposely sorted alphabetically to make it easily comparable to bevy's docs
     // unmentioned methods are either
@@ -28,7 +28,7 @@ pub trait RevCommands {
     // c) missed by accident!
 
     /// Reversible version of [`Commands::init_resource`].
-    fn rev_init_resource<R: Resource + FromWorld>(&mut self, past_len: PastLen);
+    fn rev_init_resource<R: Resource + FromWorld>(&mut self, past_len: MetaPastLen);
 
     // rev_insert_batch
     // no efficient algorithm found yet
@@ -37,23 +37,23 @@ pub trait RevCommands {
     // no efficient algorithm found yet
 
     /// Reversible version of [`Commands::insert_resource`].
-    fn rev_insert_resource<R: Resource>(&mut self, past_len: PastLen, resource: R);
+    fn rev_insert_resource<R: Resource>(&mut self, past_len: MetaPastLen, resource: R);
 
     /// Reversible version of [`Commands::remove_resource`].
-    fn rev_remove_resource<R: Resource>(&mut self, past_len: PastLen);
+    fn rev_remove_resource<R: Resource>(&mut self, past_len: MetaPastLen);
 
     /// Reversible version of [`Commands::spawn`].
-    fn rev_spawn<T: Bundle>(&mut self, past_len: PastLen, bundle: T) -> EntityCommands;
+    fn rev_spawn<T: Bundle>(&mut self, past_len: MetaPastLen, bundle: T) -> EntityCommands;
 
     /// Reversible version of [`Commands::spawn_batch`].
-    fn rev_spawn_batch<I>(&mut self, past_len: PastLen, batch: I)
+    fn rev_spawn_batch<I>(&mut self, past_len: MetaPastLen, batch: I)
     where
         I: IntoIterator + Send + Sync + 'static,
         <I as IntoIterator>::Item: Bundle,
         <<I as IntoIterator>::Item as DynamicBundle>::Effect: NoBundleEffect;
 
     /// Reversible version of [`Commands::spawn_empty`].
-    fn rev_spawn_empty(&mut self, past_len: PastLen) -> EntityCommands;
+    fn rev_spawn_empty(&mut self, past_len: MetaPastLen) -> EntityCommands;
 
     // rev_try_insert_batch
     // no efficient algorithm found yet
@@ -63,12 +63,12 @@ pub trait RevCommands {
 }
 
 impl RevCommands for Commands<'_, '_> {
-    fn redo_and_buffer(&mut self, past_len: PastLen, undo_redo: impl UndoRedo) {
+    fn redo_and_buffer(&mut self, past_len: MetaPastLen, undo_redo: impl UndoRedo) {
         self.queue(move |world: &mut World| world.redo_and_buffer(past_len, undo_redo));
     }
 
     #[track_caller]
-    fn rev_log_scope(&mut self, past_len: PastLen, entity: Entity) {
+    fn rev_log_scope(&mut self, past_len: MetaPastLen, entity: Entity) {
         let caller = MaybeLocation::caller();
         self.queue(move |world: &mut World| {
             world
@@ -78,22 +78,22 @@ impl RevCommands for Commands<'_, '_> {
     }
 
     #[track_caller]
-    fn rev_init_resource<R: Resource + FromWorld>(&mut self, past_len: PastLen) {
+    fn rev_init_resource<R: Resource + FromWorld>(&mut self, past_len: MetaPastLen) {
         self.queue(rev_init_resource::<R>(past_len))
     }
 
     #[track_caller]
-    fn rev_insert_resource<R: Resource>(&mut self, past_len: PastLen, resource: R) {
+    fn rev_insert_resource<R: Resource>(&mut self, past_len: MetaPastLen, resource: R) {
         self.queue(rev_insert_resource(past_len, resource))
     }
 
     #[track_caller]
-    fn rev_remove_resource<R: Resource>(&mut self, past_len: PastLen) {
+    fn rev_remove_resource<R: Resource>(&mut self, past_len: MetaPastLen) {
         self.queue(rev_remove_resource::<R>(past_len))
     }
 
     #[track_caller]
-    fn rev_spawn<T: Bundle>(&mut self, past_len: PastLen, bundle: T) -> EntityCommands {
+    fn rev_spawn<T: Bundle>(&mut self, past_len: MetaPastLen, bundle: T) -> EntityCommands {
         let caller = MaybeLocation::caller();
         let mut entity_cmds = self.spawn(bundle);
         entity_cmds.queue(move |mut entity_mut: EntityWorldMut| {
@@ -103,7 +103,7 @@ impl RevCommands for Commands<'_, '_> {
     }
 
     #[track_caller]
-    fn rev_spawn_empty(&mut self, past_len: PastLen) -> EntityCommands {
+    fn rev_spawn_empty(&mut self, past_len: MetaPastLen) -> EntityCommands {
         let caller = MaybeLocation::caller();
         let mut entity_cmds = self.spawn_empty();
         entity_cmds.queue(move |mut entity_mut: EntityWorldMut| {
@@ -113,7 +113,7 @@ impl RevCommands for Commands<'_, '_> {
     }
 
     #[track_caller]
-    fn rev_spawn_batch<I>(&mut self, past_len: PastLen, batch: I)
+    fn rev_spawn_batch<I>(&mut self, past_len: MetaPastLen, batch: I)
     where
         I: IntoIterator + Send + Sync + 'static,
         <I as IntoIterator>::Item: Bundle,
@@ -125,7 +125,7 @@ impl RevCommands for Commands<'_, '_> {
 
 /// Reversible version of [`spawn_batch`](bevy_ecs::system::command::spawn_batch).
 #[track_caller]
-pub fn rev_spawn_batch<I>(past_len: PastLen, bundles_iter: I) -> impl Command
+pub fn rev_spawn_batch<I>(past_len: MetaPastLen, bundles_iter: I) -> impl Command
 where
     I: IntoIterator + Send + Sync + 'static,
     I::Item: Bundle<Effect: NoBundleEffect>,
@@ -138,7 +138,7 @@ where
 
 /// Reversible version of [`init_resource`](bevy_ecs::system::command::init_resource).
 #[track_caller]
-pub fn rev_init_resource<R: Resource + FromWorld>(past_len: PastLen) -> impl Command {
+pub fn rev_init_resource<R: Resource + FromWorld>(past_len: MetaPastLen) -> impl Command {
     let caller = MaybeLocation::caller();
     move |world: &mut World| {
         rev_init_resource_with_caller::<R>(world, past_len, caller);
@@ -147,7 +147,7 @@ pub fn rev_init_resource<R: Resource + FromWorld>(past_len: PastLen) -> impl Com
 
 /// Reversible version of [`insert_resource`](bevy_ecs::system::command::insert_resource).
 #[track_caller]
-pub fn rev_insert_resource<R: Resource>(past_len: PastLen, resource: R) -> impl Command {
+pub fn rev_insert_resource<R: Resource>(past_len: MetaPastLen, resource: R) -> impl Command {
     let caller = MaybeLocation::caller();
     move |world: &mut World| {
         rev_insert_resource_with_caller(world, past_len, resource, caller);
@@ -155,7 +155,7 @@ pub fn rev_insert_resource<R: Resource>(past_len: PastLen, resource: R) -> impl 
 }
 
 /// Reversible version of [`remove_resource`](bevy_ecs::system::command::remove_resource).
-pub fn rev_remove_resource<R: Resource>(past_len: PastLen) -> impl Command {
+pub fn rev_remove_resource<R: Resource>(past_len: MetaPastLen) -> impl Command {
     let caller = MaybeLocation::caller();
     move |world: &mut World| {
         rev_remove_resource_with_caller::<R, _>(world, past_len, |_| (), caller);

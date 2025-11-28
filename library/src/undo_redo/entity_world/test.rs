@@ -25,7 +25,7 @@ fn setup() -> World {
 #[test]
 fn rev_clear() {
     let mut world = setup();
-    let past_len = world.resource::<RevMeta>().non_log_past_len();
+    let past_len = world.resource::<RevMeta>().meta_past_len();
     let mut entity_mut = world.spawn(Explicit::<1>(0));
 
     let entity = rev_try_clear_with_caller(&mut entity_mut, past_len, MaybeLocation::caller())
@@ -50,7 +50,7 @@ fn rev_clear() {
 #[test]
 fn rev_despawn_single() {
     let mut world = setup();
-    let past_len = world.resource::<RevMeta>().non_log_past_len();
+    let past_len = world.resource::<RevMeta>().meta_past_len();
     let entity_mut = world.spawn_empty();
     let entity = entity_mut.id();
 
@@ -71,7 +71,7 @@ fn rev_despawn_single() {
 #[test]
 fn rev_insert() {
     let mut world = setup();
-    let past_len = world.resource::<RevMeta>().non_log_past_len();
+    let past_len = world.resource::<RevMeta>().meta_past_len();
     let mut entity_mut = world.spawn((Explicit::<1>(1), Required::<1>(1)));
 
     let entity = entity_mut
@@ -102,7 +102,7 @@ fn rev_insert() {
 #[test]
 fn rev_insert_if_new() {
     let mut world = setup();
-    let past_len = world.resource::<RevMeta>().non_log_past_len();
+    let past_len = world.resource::<RevMeta>().meta_past_len();
     let mut entity_mut = world.spawn((Explicit::<1>(1), Required::<1>(1), Required::<2>(1)));
 
     let entity = entity_mut
@@ -142,7 +142,7 @@ fn rev_insert_if_new() {
 #[test]
 fn rev_remove() {
     let mut world = setup();
-    let past_len = world.resource::<RevMeta>().non_log_past_len();
+    let past_len = world.resource::<RevMeta>().meta_past_len();
     let mut entity_mut = world.spawn((Explicit::<1>(0), Explicit::<2>(0)));
 
     let entity = entity_mut
@@ -179,7 +179,7 @@ fn rev_remove() {
 #[test]
 fn rev_remove_with_requires() {
     let mut world = setup();
-    let past_len = world.resource::<RevMeta>().non_log_past_len();
+    let past_len = world.resource::<RevMeta>().meta_past_len();
     let mut entity_mut = world.spawn((Explicit::<1>(0), Explicit::<2>(0)));
 
     let entity = entity_mut
@@ -216,7 +216,7 @@ fn rev_remove_with_requires() {
 #[test]
 fn rev_retain() {
     let mut world = setup();
-    let past_len = world.resource::<RevMeta>().non_log_past_len();
+    let past_len = world.resource::<RevMeta>().meta_past_len();
     let mut entity_mut = world.spawn((Explicit::<1>(0), Explicit::<2>(0), Explicit::<3>(0)));
 
     let entity = entity_mut

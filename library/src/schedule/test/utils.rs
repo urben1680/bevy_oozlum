@@ -77,7 +77,7 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
         // trigger observer in observer
         world.trigger(SysObsvObsv(n));
 
-        let past_len = world.resource::<RevMeta>().non_log_past_len();
+        let past_len = world.resource::<RevMeta>().meta_past_len();
 
         // trigger command in observer
         world.commands().queue(move |world: &mut World| {
@@ -103,7 +103,7 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
             log.0
                 .push(LogEntry::SysHookObsv((n, RevDirection::FORWARD_MIN)));
             let test = LogEntry::SysHookObsv(n);
-            let past_len = meta.non_log_past_len();
+            let past_len = meta.meta_past_len();
             buffer.buffer_undo_redo(past_len, test);
         },
     );
@@ -116,7 +116,7 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
             log.0
                 .push(LogEntry::SysObsvObsv((n, RevDirection::FORWARD_MIN)));
             let test = LogEntry::SysObsvObsv(n);
-            let past_len = meta.non_log_past_len();
+            let past_len = meta.meta_past_len();
             buffer.buffer_undo_redo(past_len, test);
         },
     );
@@ -129,7 +129,7 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
             log.0
                 .push(LogEntry::SysCmdObsv((n, RevDirection::FORWARD_MIN)));
             let test = LogEntry::SysCmdObsv(n);
-            let past_len = meta.non_log_past_len();
+            let past_len = meta.meta_past_len();
             buffer.buffer_undo_redo(past_len, test);
         },
     );
@@ -147,7 +147,7 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
             // trigger observer in hook
             world.trigger(SysHookObsv(n));
 
-            let past_len = world.resource::<RevMeta>().non_log_past_len();
+            let past_len = world.resource::<RevMeta>().meta_past_len();
 
             // trigger command in hook
             world.commands().queue(move |world: &mut World| {
@@ -178,7 +178,7 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
                 .push(LogEntry::SysCmdHook((n, RevDirection::FORWARD_MIN)));
 
             // buffer reversible hook
-            let past_len = world.resource::<RevMeta>().non_log_past_len();
+            let past_len = world.resource::<RevMeta>().meta_past_len();
             let test = LogEntry::SysCmdHook(n);
             world.buffer_undo_redo(past_len, test);
         });

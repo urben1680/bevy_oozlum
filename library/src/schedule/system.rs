@@ -536,7 +536,7 @@ mod test {
     struct Observer;
 
     fn observer(_: On<Observer>, mut world: DeferredWorld) {
-        let past_len = world.resource::<RevMeta>().non_log_past_len();
+        let past_len = world.resource::<RevMeta>().meta_past_len();
         world.buffer_undo_redo(past_len, blank_undo_redo);
         world.commands().queue(|world: &mut World| {
             world.spawn(EmptyOnAdd);
@@ -546,7 +546,7 @@ mod test {
     #[derive(Event)]
     struct EmptyObserver;
     fn empty_observer(_: On<Observer>, mut world: DeferredWorld) {
-        let past_len = world.resource::<RevMeta>().non_log_past_len();
+        let past_len = world.resource::<RevMeta>().meta_past_len();
         world.buffer_undo_redo(past_len, blank_undo_redo);
     }
 
@@ -554,7 +554,7 @@ mod test {
     #[component(on_add = on_add)]
     struct OnAdd;
     fn on_add(mut world: DeferredWorld, _: HookContext) {
-        let past_len = world.resource::<RevMeta>().non_log_past_len();
+        let past_len = world.resource::<RevMeta>().meta_past_len();
         world.buffer_undo_redo(past_len, blank_undo_redo);
         world.commands().queue(|world: &mut World| {
             world.trigger(EmptyObserver);
@@ -565,7 +565,7 @@ mod test {
     #[component(on_add = empty_on_add)]
     struct EmptyOnAdd;
     fn empty_on_add(mut world: DeferredWorld, _: HookContext) {
-        let past_len = world.resource::<RevMeta>().non_log_past_len();
+        let past_len = world.resource::<RevMeta>().meta_past_len();
         world.buffer_undo_redo(past_len, blank_undo_redo);
     }
 
@@ -591,7 +591,7 @@ mod test {
     fn non_exclusive_system_drains_all_undo_redo() {
         assert_system_drains_all_undo_redo(
             |mut buffer: ResMut<UndoRedoBuffer>, meta: Res<RevMeta>, mut commands: Commands| {
-                let past_len = meta.non_log_past_len();
+                let past_len = meta.meta_past_len();
                 buffer.buffer_undo_redo(past_len, blank_undo_redo);
                 commands.buffer_undo_redo(past_len, blank_undo_redo);
                 commands.queue(|world: &mut World| {
@@ -605,7 +605,7 @@ mod test {
     #[test]
     fn exclusive_system_drains_all_undo_redo() {
         assert_system_drains_all_undo_redo(|world: &mut World| {
-            let past_len = world.resource::<RevMeta>().non_log_past_len();
+            let past_len = world.resource::<RevMeta>().meta_past_len();
             world.buffer_undo_redo(past_len, blank_undo_redo);
             world.trigger(Observer);
             world.spawn(OnAdd);

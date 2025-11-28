@@ -5,7 +5,7 @@ use bevy::{
     },
     prelude::*,
 };
-use bevy_oozlum::{meta::PastLen, prelude::*};
+use bevy_oozlum::{meta::MetaPastLen, prelude::*};
 use crossterm::{ExecutableCommand, cursor::*, terminal::*};
 use std::{io::stdout, num::NonZeroU64, time::Duration};
 
@@ -214,7 +214,7 @@ fn despawn_waste(
     mut time_and_counts: TimeAndCounts,
     mut commands: Commands,
 ) {
-    if matches!(meta.get_ran_direction(), Some(RevDirection::Forward(_))) {
+    if matches!(meta.get_ran_direction(), Some(RevDirection::Forward { .. })) {
         for (entity, &waste) in waste {
             time_and_counts.update(entity, waste, &meta, &mut commands);
         }
@@ -229,14 +229,14 @@ fn row1(app: &mut App) {
 
     fn system(meta: Res<RevMeta>, pressed: Res<KeysPressed>, mut commands: Commands) {
         // RevMeta::non_log_now returns a tiny type that is used in the API to express that
-        // currently the RevDirection::NOT_LOG phase is active. This makes it much easier
+        // currently the RevDirection::Forward phase is active. This makes it much easier
         // to prevent incorrectly issued reversible commands, in contrast to some additional
         // runtime checks deep inside the crate's implementation and confusing call stacks.
         if pressed.num1
-            && let Some(RevDirection::Forward(past_len)) = meta.get_running_direction()
+            && let Some(RevDirection::Forward { meta_past_len }) = meta.get_running_direction()
         {
             commands.rev_spawn(
-                past_len,
+                meta_past_len,
                 Waste {
                     tossed_at: meta.now(), // the current frame can be received from RevMeta
                     row: 1,
@@ -255,10 +255,10 @@ fn row2(app: &mut App) {
             return;
         };
         if world.resource::<KeysPressed>().num2
-            && let Some(RevDirection::Forward(past_len)) = meta.get_running_direction()
+            && let Some(RevDirection::Forward { meta_past_len }) = meta.get_running_direction()
         {
             world.rev_spawn(
-                past_len,
+                meta_past_len,
                 Waste {
                     tossed_at: meta.now(), // the current frame can be received from NonLogNow
                     row: 2,
@@ -275,7 +275,7 @@ fn row3(app: &mut App) {
 
     fn system(meta: Res<RevMeta>, pressed: Res<KeysPressed>, mut commands: Commands) {
         // The system is noop during log phases.
-        let Some(RevDirection::Forward(past_len)) = meta.get_running_direction() else {
+        let Some(RevDirection::Forward { meta_past_len }) = meta.get_running_direction() else {
             return;
         };
 
@@ -290,7 +290,7 @@ fn row3(app: &mut App) {
             let entity = commands.spawn(waste);
 
             // See this helper function for the manual approach.
-            rev_log_scope_and_buffer_waste_op(entity, waste, past_len);
+            rev_log_scope_and_buffer_waste_op(entity, waste, meta_past_len);
         }
     }
 }
@@ -317,15 +317,15 @@ fn row4(app: &mut App) {
 
         // Depending on the current RevDirection, the system has different behavior
         match meta.running_direction() {
-            // During NOT_LOG we want to react on the pressed keys to spawn Waste entities and to log that.
-            RevDirection::Forward(past_len) => {
+            // During Forward we want to react on the pressed keys to spawn Waste entities and to log that.
+            RevDirection::Forward { meta_past_len } => {
                 // If the key is pressed, we spawn another Waste entity.
                 // If not, we still need to push a None to advance the log.
                 let entity = pressed.num4.then(|| commands.spawn(waste).id());
 
                 // Pushing potential Waste entities may also pop an entity that got out-of-log now.
                 // These need to be despawned as they are now past the edge of the screen and cannot come back.
-                let mut drain = log.forward_push(&meta, past_len, entity);
+                let mut drain = log.forward_push(&meta, meta_past_len, entity);
                 for entity in drain.all().flatten() {
                     if !meta.contains(waste.tossed_at) {
                         commands.entity(entity).despawn();
@@ -361,7 +361,7 @@ fn row5(app: &mut App) {
         RevUpdate,
         // The system will now only run when the key is pressed. The state of the condition system will make
         // sure to pass at the correct log phases as well. The actual key press only matters for
-        // RevDirection::NOT_LOG.
+        // RevDirection::Forward.
         spawn_and_log_system
             .rev_run_if(spawn_condition)
             .rev_in_set(Row(5)),
@@ -391,9 +391,12 @@ fn row5(app: &mut App) {
             // Note that no despawns happen in this system as the system does not necessarily run when an entity
             // spawned from here gets out-of-log.
             // Not need to check if the key is pressed before the spawn, it is implied by the system running.
-            RevDirection::Forward(past_len) => {
+            RevDirection::Forward { meta_past_len } => {
                 // We spawn the waste entity and mark is as log scoped to be despawned when out-of-log.
-                let entity = commands.spawn(waste).make_rev_log_scoped(past_len).id();
+                let entity = commands
+                    .spawn(waste)
+                    .make_rev_log_scoped(meta_past_len)
+                    .id();
 
                 // We get the past len from the frame log instead from RevMeta.
                 // Note that here, in contrast to the previous row, we do not need to increase the past_len because
@@ -488,10 +491,11 @@ fn row6(app: &mut App) {
 
             // No buffer or delayed despawn involved, this is the case we care for!
             None => {
-                // Skip when this is not RevDirection::NOT_LOG, which may be the case even when
+                // Skip when this is not RevDirection::Forward, which may be the case even when
                 // the RevOp resource is absent, like when this hook runs outside the RevUpdate
                 // schedule.
-                let Some(RevDirection::Forward(past_len)) = world.get_running_direction() else {
+                let Some(RevDirection::Forward { meta_past_len }) = world.get_running_direction()
+                else {
                     return;
                 };
 
@@ -505,7 +509,7 @@ fn row6(app: &mut App) {
 
                 let mut commands = world.commands();
                 let entity = commands.entity(entity);
-                rev_log_scope_and_buffer_waste_op(entity, waste, past_len);
+                rev_log_scope_and_buffer_waste_op(entity, waste, meta_past_len);
             }
         }
     }
@@ -519,16 +523,16 @@ fn row7(app: &mut App) {
     #[derive(Event)]
     struct WasteObserverEvent {
         tossed_at: u64,
-        past_len: PastLen,
+        meta_past_len: MetaPastLen,
     }
 
     fn system(meta: Res<RevMeta>, pressed: Res<KeysPressed>, mut commands: Commands) {
         if pressed.num7
-            && let Some(RevDirection::Forward(past_len)) = meta.get_running_direction()
+            && let Some(RevDirection::Forward { meta_past_len }) = meta.get_running_direction()
         {
             commands.trigger(WasteObserverEvent {
                 tossed_at: meta.now(),
-                past_len,
+                meta_past_len,
             });
         }
     }
@@ -539,14 +543,14 @@ fn row7(app: &mut App) {
     fn observer(trigger: On<WasteObserverEvent>, mut world: DeferredWorld) {
         let WasteObserverEvent {
             tossed_at,
-            past_len,
+            meta_past_len,
         } = *trigger;
 
         let waste = Waste { tossed_at, row: 7 };
 
         let mut commands = world.commands();
         let entity = commands.spawn(waste);
-        rev_log_scope_and_buffer_waste_op(entity, waste, past_len);
+        rev_log_scope_and_buffer_waste_op(entity, waste, meta_past_len);
     }
 }
 
@@ -554,10 +558,10 @@ fn row7(app: &mut App) {
 fn rev_log_scope_and_buffer_waste_op(
     mut entity_commands: EntityCommands,
     waste: Waste,
-    past_len: PastLen,
+    meta_past_len: MetaPastLen,
 ) {
     // We mark the entity as log scoped which means it will be despawned when this frame gets out of log.
-    entity_commands.make_rev_log_scoped(past_len);
+    entity_commands.make_rev_log_scoped(meta_past_len);
 
     let entity = entity_commands.id();
 
@@ -568,7 +572,7 @@ fn rev_log_scope_and_buffer_waste_op(
     // anything else as well.
     // This closure in particular will remove the Waste component on undo and add it back on redo.
     entity_commands.buffer_undo_redo(
-        past_len,
+        meta_past_len,
         move |world: &mut World, variant: UndoRedoDirection| {
             let mut entity = world.entity_mut(entity);
             match variant {

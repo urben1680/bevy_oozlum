@@ -29,7 +29,7 @@ fn setup() -> World {
 #[test]
 fn rev_init_resource_on_unexisting_inits_resource() {
     let mut world = setup();
-    let past_len = world.resource::<RevMeta>().non_log_past_len();
+    let past_len = world.resource::<RevMeta>().meta_past_len();
 
     world.rev_init_resource::<TestRes>(past_len);
     let mut buffer = world.remove_resource::<UndoRedoBuffer>().unwrap();
@@ -44,7 +44,7 @@ fn rev_init_resource_on_unexisting_inits_resource() {
 #[test]
 fn rev_init_resource_on_existing_noop() {
     let mut world = setup();
-    let past_len = world.resource::<RevMeta>().non_log_past_len();
+    let past_len = world.resource::<RevMeta>().meta_past_len();
     world.init_resource::<TestRes>();
     world.rev_init_resource::<TestRes>(past_len);
     assert!(world.resource::<UndoRedoBuffer>().is_empty());
@@ -53,7 +53,7 @@ fn rev_init_resource_on_existing_noop() {
 #[test]
 fn rev_insert_resource_on_unexisting_inserts() {
     let mut world = setup();
-    let past_len = world.resource::<RevMeta>().non_log_past_len();
+    let past_len = world.resource::<RevMeta>().meta_past_len();
 
     world.rev_insert_resource(past_len, TestRes(10));
     let mut buffer = world.remove_resource::<UndoRedoBuffer>().unwrap();
@@ -68,7 +68,7 @@ fn rev_insert_resource_on_unexisting_inserts() {
 #[test]
 fn rev_insert_resource_on_existing_overwrites() {
     let mut world = setup();
-    let past_len = world.resource::<RevMeta>().non_log_past_len();
+    let past_len = world.resource::<RevMeta>().meta_past_len();
 
     world.insert_resource(TestRes(10));
     world.rev_insert_resource(past_len, TestRes(20));
@@ -84,7 +84,7 @@ fn rev_insert_resource_on_existing_overwrites() {
 #[test]
 fn rev_remove_resource_on_existing_removes() {
     let mut world = setup();
-    let past_len = world.resource::<RevMeta>().non_log_past_len();
+    let past_len = world.resource::<RevMeta>().meta_past_len();
 
     world.insert_resource(TestRes(10));
     let out = world.rev_remove_resource::<TestRes, _>(past_len, |r| *r);
@@ -101,7 +101,7 @@ fn rev_remove_resource_on_existing_removes() {
 #[test]
 fn rev_remove_resource_on_unexisting_noop() {
     let mut world = setup();
-    let past_len = world.resource::<RevMeta>().non_log_past_len();
+    let past_len = world.resource::<RevMeta>().meta_past_len();
     let out = world.rev_remove_resource::<TestRes, _>(past_len, |r| *r);
     assert_eq!(out, None);
     assert!(world.resource::<UndoRedoBuffer>().is_empty());
@@ -110,7 +110,7 @@ fn rev_remove_resource_on_unexisting_noop() {
 #[test]
 fn rev_spawn_spawns() {
     let mut world = setup();
-    let past_len = world.resource::<RevMeta>().non_log_past_len();
+    let past_len = world.resource::<RevMeta>().meta_past_len();
     let entity = world.rev_spawn(past_len, Required(0)).id();
     let mut buffer = world.remove_resource::<UndoRedoBuffer>().unwrap();
 
@@ -132,7 +132,7 @@ fn rev_spawn_spawns() {
 #[test]
 fn rev_spawn_batch_spawns() {
     let mut world = setup();
-    let past_len = world.resource::<RevMeta>().non_log_past_len();
+    let past_len = world.resource::<RevMeta>().meta_past_len();
     let entities = world.rev_spawn_batch(past_len, [Explicit(10), Explicit(20)]);
     assert_eq!(entities.len(), 2);
     let entity1 = entities[0];
@@ -169,7 +169,7 @@ fn rev_spawn_batch_spawns() {
 #[test]
 fn rev_spawn_empty_spawns() {
     let mut world = setup();
-    let past_len = world.resource::<RevMeta>().non_log_past_len();
+    let past_len = world.resource::<RevMeta>().meta_past_len();
     let entity = world.rev_spawn_empty(past_len).id();
     let mut buffer = world.remove_resource::<UndoRedoBuffer>().unwrap();
 
@@ -185,7 +185,7 @@ fn rev_spawn_empty_spawns() {
 #[test]
 fn rev_try_despawn_single_despawns() {
     let mut world = setup();
-    let past_len = world.resource::<RevMeta>().non_log_past_len();
+    let past_len = world.resource::<RevMeta>().meta_past_len();
     let entity = world.spawn_empty().id();
     let result = world.rev_try_despawn_single(past_len, entity);
     let mut buffer = world.remove_resource::<UndoRedoBuffer>().unwrap();
@@ -203,7 +203,7 @@ fn rev_try_despawn_single_despawns() {
 #[test]
 fn rev_try_despawn_single_fails_at_invalid() {
     let mut world = setup();
-    let past_len = world.resource::<RevMeta>().non_log_past_len();
+    let past_len = world.resource::<RevMeta>().meta_past_len();
     let result = world.rev_try_despawn_single(past_len, Entity::PLACEHOLDER);
 
     assert!(
@@ -216,7 +216,7 @@ fn rev_try_despawn_single_fails_at_invalid() {
 #[test]
 fn rev_try_despawn_single_fails_at_rev_despawned() {
     let mut world = setup();
-    let past_len = world.resource::<RevMeta>().non_log_past_len();
+    let past_len = world.resource::<RevMeta>().meta_past_len();
     let entity = world.spawn(RevDespawned).id();
     let result = world.rev_try_despawn_single(past_len, entity);
 

@@ -13,17 +13,18 @@ pub(super) mod limit;
 mod offset;
 
 /// A log that keeps track when it was updated and provides an alternative value to
-/// [`RevMeta::past_len`] for when these updates do not happen exactly once per
+/// [`MetaPastLen`](crate::meta::MetaPastLen) for when these updates do not happen exactly once per
 /// [`RevUpdate`](crate::schedule::RevUpdate).
 ///
-/// This type is usually accompied by another log that would grow too large if `RevMeta::past_len`
-/// was used when it actually updates much more rarely. Another use case can be when it runs
-/// arbitrarily often per frame and there is no other way to determine to which length a log should
-/// be at most when updating.
+/// This type is usually accompied by another log that would grow too large if
+/// [`PastLen`](crate::meta::PastLen) from
+/// [`RevDirection::Forward`](crate::meta::RevDirection::Forward) was used when it actually updates
+/// much more rarely. Another use case can be when it runs arbitrarily often per frame and there is
+/// no other way to determine to which length a log should be at most when updating.
 ///
 /// If an update is missed, for example when the scope of the log is behind complicated and
 /// error-prone scheduling and is just not reached when it should, [`RevMeta::update`] and from that
-/// [`RevMeta::run_rev_update`] will detect this and return an error.
+/// [`RevMeta::run_rev_update`] will detect this at the end of the schedule and return an error.
 ///
 /// # Example
 ///
@@ -33,7 +34,7 @@ mod offset;
 /// there are no messages.
 ///
 /// But if this system in turn is also used with a run condition, then it is impossible to pick a
-/// good `max_past_len` value that makes sure not too many messages are drained or the log grows way
+/// good `past_len` value that makes sure not too many messages are drained or the log grows way
 /// beyond what is needed.
 ///
 /// For that case and other comparable ones, the solution is to pair the log(s) with a `UpdateLog`.
@@ -51,7 +52,7 @@ mod offset;
 ///     mut message_log: Local<TransitionsLog<MyMessage>>,
 /// ) -> Result {
 ///     match meta.running_direction() {
-///         RevDirection::NOT_LOG => {
+///         RevDirection::Forward(_) => {
 ///             if !messages.is_empty() {
 ///                 let iter = messages.read().cloned().inspect(|my_message| {
 ///                     // use message
@@ -60,7 +61,7 @@ mod offset;
 ///                 message_log.forward_extend(&meta, past_len, iter);
 ///             }
 ///         }
-///         RevDirection::FORWARD_LOG => {
+///         RevDirection::ForwardLog => {
 ///             if update_log.forward_log(&meta) {
 ///                 for my_message in message_log.forward_log(&meta)? {
 ///                     // use message
@@ -128,7 +129,7 @@ impl UpdateLog {
 
     /// Creates an empty log with space for at least `bytes_capacity` bytes.
     ///
-    /// See [`VecDeque::with_capacity`].
+    /// See [`VecDeque::with_capacity`](std::collections::VecDeque::with_capacity).
     ///
     /// Note that the number of bytes has no relation to the length of the log.
     pub fn with_capacity(bytes_capacity: usize) -> Self {
@@ -140,7 +141,7 @@ impl UpdateLog {
 
     /// Returns the number of bytes in the log.
     ///
-    /// See [`VecDeque::len`].
+    /// See [`VecDeque::len`](std::collections::VecDeque::len).
     ///
     /// Note that the number of bytes has no relation to the length of the log.
     pub fn bytes_len(&self) -> usize {
@@ -149,7 +150,7 @@ impl UpdateLog {
 
     /// Returns the number of bytes the log can hold without reallocating.
     ///
-    /// See [`VecDeque::capacity`].
+    /// See [`VecDeque::capacity`](std::collections::VecDeque::capacity).
     ///
     /// Note that the number of bytes has no relation to the length of the log.
     pub fn bytes_capacity(&self) -> usize {
@@ -158,7 +159,7 @@ impl UpdateLog {
 
     /// Returns `true` if the log contains no bytes.
     ///
-    /// See [`VecDeque::is_empty`].
+    /// See [`VecDeque::is_empty`](std::collections::VecDeque::is_empty).
     ///
     /// Note that the number of bytes has no relation to the length of the log.
     pub fn bytes_is_empty(&self) -> bool {
@@ -167,7 +168,7 @@ impl UpdateLog {
 
     /// Reserves capacity for at least `additional` more bytes.
     ///
-    /// See [`VecDeque::reserve`].
+    /// See [`VecDeque::reserve`](std::collections::VecDeque::reserve).
     ///
     /// Note that the number of bytes has no relation to the length of the log.
     pub fn bytes_reserve(&mut self, additional: usize) {
@@ -176,7 +177,7 @@ impl UpdateLog {
 
     /// Reserves capacity for at least `additional` more bytes.
     ///
-    /// See [`VecDeque::reserve_exact`].
+    /// See [`VecDeque::reserve_exact`](std::collections::VecDeque::reserve_exact).
     ///
     /// Note that the number of bytes has no relation to the length of the log.
     pub fn bytes_reserve_exact(&mut self, additional: usize) {
@@ -185,7 +186,7 @@ impl UpdateLog {
 
     /// Tries to reserve capacity for at least `additional` more bytes.
     ///
-    /// See [`VecDeque::try_reserve`].
+    /// See [`VecDeque::try_reserve`](std::collections::VecDeque::try_reserve).
     ///
     /// Note that the number of bytes has no relation to the length of the log.
     pub fn bytes_try_reserve(&mut self, additional: usize) -> Result<(), TryReserveError> {
@@ -194,7 +195,7 @@ impl UpdateLog {
 
     /// Tries to reserve capacity for at least `additional` more bytes.
     ///
-    /// See [`VecDeque::try_reserve_exact`].
+    /// See [`VecDeque::try_reserve_exact`](std::collections::VecDeque::try_reserve_exact).
     ///
     /// Note that the number of bytes has no relation to the length of the log.
     pub fn bytes_try_reserve_exact(&mut self, additional: usize) -> Result<(), TryReserveError> {
@@ -203,7 +204,7 @@ impl UpdateLog {
 
     /// Shrinks the capacity of the log with a lower bound.
     ///
-    /// See [`VecDeque::shrink_to`].
+    /// See [`VecDeque::shrink_to`](std::collections::VecDeque::shrink_to).
     ///
     /// Note that the number of bytes has no relation to the length of the log.
     pub fn bytes_shrink_to(&mut self, min_capacity: usize) {
@@ -212,17 +213,20 @@ impl UpdateLog {
 
     /// Shrinks the capacity of the log as much as possible.
     ///
-    /// See [`VecDeque::shrink_to_fit`].
+    /// See [`VecDeque::shrink_to_fit`](std::collections::VecDeque::shrink_to_fit).
     ///
     /// Note that the number of bytes has no relation to the length of the log.
     pub fn bytes_shrink_to_fit(&mut self) {
         self.offsets.get_bytes_mut().shrink_to_fit()
     }
 
-    /// The internal id of this log, which is only `Some` after it first ran. The id will change
-    /// when [`RevQueue::Clear`](crate::meta::RevQueue::Clear) is queued and applied.
+    /// The internal id of this log, which is only `Some` after the first update. The id will change
+    /// when [`RevQueue::ClearThenRunForward`](crate::meta::RevQueue::ClearThenRunForward) /
+    /// [`RevQueue::ClearThenPause`](crate::meta::RevQueue::ClearThenPause) is queued and applied.
     ///
     /// When this id changes, an info log with the id is written.
+    ///
+    /// The [`Display`] implemention of `UpdateLog` solely contains this id.
     ///
     /// This id is useful to identify missed updates from [`RevMeta::update`]. If
     /// [`RevMeta::run_rev_update`] is used, such errors are handled by the default error handler.
@@ -233,9 +237,7 @@ impl UpdateLog {
     /// Update the log and return the updated length of the log as an alternative to
     /// [`RevMeta::past_len`].
     ///
-    /// This is used during [`RevDirection::NOT_LOG`](crate::meta::RevDirection::NOT_LOG) when the
-    /// current scope has been determined for some operation to happen, most often in combination
-    /// with another log that is updated next with the returned value.
+    /// This is used during [`RevDirection::Forward`](crate::meta::RevDirection::Forward).
     #[track_caller]
     pub fn forward_past_len(&mut self, meta: &RevMeta) -> NonZeroU64 {
         self.forward_past_len_with_caller(meta, MaybeLocation::caller())
@@ -252,10 +254,10 @@ impl UpdateLog {
             // log is empty or all updates are out of log
             // it is not important what offset is pushed as long log_start + offset = now
             // asusming 1-offset streak are the most common offsets and that during
-            // RevDirection::NOT_LOG the value of now is non-zero, start such a 1-offset streak here
+            // RevDirection::Forward the value of now is non-zero, start such a 1-offset streak here
             self.offsets.clear();
             self.offsets.push(1);
-            self.log_start = meta.now() - 1;
+            self.log_start = meta.now() - 1; // now() is never 0 during RevDirection::Forward
             self.last_update = meta.now();
             self.past_len = 1;
             past_len = NonZeroU64::MIN;
@@ -268,13 +270,16 @@ impl UpdateLog {
         }
 
         meta.update_log_limits().push_limit(
-            &mut self.update_state,
-            UpdateLogLimit::new_not_log(meta.now(), caller),
+            self.update_state.as_mut().unwrap(), // set by not_log_should_clear
+            UpdateLogLimit::new_forward(meta.now(), caller),
         );
 
         past_len
     }
 
+    /// Sets/updates [`Self::update_state`] so it is `Some`.
+    ///
+    /// If this method returns `true`, call [`Self::clear`] or do comparable operations.
     fn not_log_should_clear(&mut self, meta: &RevMeta) -> bool {
         self.pre_update_to_clear(meta) || self.last_update < meta.past_end() || {
             if self.log_start <= meta.past_end() {
@@ -319,18 +324,17 @@ impl UpdateLog {
         self.last_update -= iter.next().unwrap();
         iter.sync();
         self.past_len -= 1;
-
         let backward_limit = iter.next().map_or(0, |_| self.last_update);
 
         meta.update_log_limits().push_limit(
-            &mut self.update_state,
+            self.update_state.as_mut().unwrap(), // set by pre_update_to_clear
             UpdateLogLimit::new_log(backward_limit, meta.now(), caller),
         );
 
         true
     }
 
-    /// Checks at [`RevDirection::FORWARD_LOG`](crate::meta::RevDirection::FORWARD_LOG) if this log
+    /// Checks at [`RevDirection::ForwardLog`](crate::meta::RevDirection::ForwardLog) if this log
     /// has been updated at this frame.
     ///
     /// Returns `true` if that is the case or `false` if not. This log is insensitive on
@@ -345,8 +349,6 @@ impl UpdateLog {
             self.clear();
             return false;
         }
-
-        let now_minus_1 = meta.now() - 1;
 
         let mut iter = self.offsets.now_to_future();
         match iter.next() {
@@ -363,10 +365,14 @@ impl UpdateLog {
         }
 
         iter.sync();
-        let forward_limit = iter.next().map_or(u64::MAX, |offset| now_minus_1 + offset);
+        let forward_limit = iter.next().map_or(u64::MAX, |offset| {
+            // order is important, offset may be 0 but now() is never 0 during ForwardLog
+            meta.now() + offset - 1
+        });
         self.past_len += 1;
+
         meta.update_log_limits().push_limit(
-            &mut self.update_state,
+            self.update_state.as_mut().unwrap(), // set by pre_update_to_clear
             UpdateLogLimit::new_log(meta.now(), forward_limit, caller),
         );
 
@@ -432,7 +438,7 @@ mod test {
     impl MetaAndLog {
         fn new(max_past_len: u64) -> Self {
             Self {
-                meta: RevMeta::new(core::num::NonZeroU64::new(max_past_len).unwrap(), false),
+                meta: RevMeta::new(NonZeroU64::new(max_past_len).unwrap(), false),
                 update_log: UpdateLog::new(),
                 last_update: MaybeLocation::caller(),
             }

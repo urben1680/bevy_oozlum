@@ -177,7 +177,7 @@ impl IntoIterator for Test {
 
 fn normalize_direction(direction: RevDirection) -> RevDirection {
     match direction {
-        RevDirection::Forward(_) => RevDirection::FORWARD_MIN,
+        RevDirection::Forward { .. } => RevDirection::FORWARD_MIN,
         RevDirection::ForwardLog => RevDirection::ForwardLog,
         RevDirection::BackwardLog => RevDirection::BackwardLog,
     }
@@ -263,8 +263,8 @@ fn system_command<const N: u8>(world: &mut World) {
         .0
         .push(LogEntry::SysCmd((N, RevDirection::FORWARD_MIN)));
 
-    let now = world.resource::<RevMeta>().non_log_past_len();
-    world.buffer_undo_redo(now, LogEntry::SysCmd(N));
+    let past_len = world.resource::<RevMeta>().meta_past_len();
+    world.buffer_undo_redo(past_len, LogEntry::SysCmd(N));
 }
 
 #[test]
@@ -474,10 +474,10 @@ fn duplicate_system_chain_builds() {
 fn truncates_future_command_log() {
     fn system(meta: Res<RevMeta>, mut commands: Commands, mut command_queued: Local<bool>) {
         if !*command_queued
-            && let Some(RevDirection::Forward(past_len)) = meta.get_running_direction()
+            && let Some(RevDirection::Forward { meta_past_len }) = meta.get_running_direction()
         {
             if meta.now() == 2 {
-                commands.rev_spawn_empty(past_len);
+                commands.rev_spawn_empty(meta_past_len);
                 *command_queued = true;
             }
         }
