@@ -430,6 +430,9 @@ impl UndoRedoLog {
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Resource)]
 pub enum RevOp {
     // todo: assert in tests
+    RevSchedule {
+        direction: RevDirection,
+    },
     Buffer {
         direction: RevDirection,
         buffer: Entity,

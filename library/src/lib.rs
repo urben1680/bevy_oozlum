@@ -1,36 +1,99 @@
+//! `bevy_oozlum` is a crate for [`bevy`] to write reversible systems and schedules and to control
+//! them by mutating a central resource, [`RevMeta`](crate::meta::RevMeta).
+//!
+//! "Oozlum" is a mythical bird that is able to fly backwards.
+//!
+//! This crate is experimential and may be discontinued at any time.
+//!
+//! # Example
+//!
+//! ```
+//! use bevy::prelude::*;
+//! use bevy_oozlum::prelude::*;
+//!
+//! fn main() {
+//!     App::new()
+//!         .add_plugins((MinimalPlugins, RevPlugin::default()))
+//!         .rev_add_systems(RevUpdate, hello_world_system)
+//!         .init_resource::<Time::<Fixed>>()
+//!         .run();
+//!  }
+//!  
+//!  fn hello_world_system(meta: Res<RevMeta>) {
+//!     if meta.running_direction().is_forward() {
+//!         println!("hello world");
+//!     } else {
+//!         println!("dlrow olleh");
+//!     }
+//!  }
+//! ```
+//!
+//! # Features
+//!
+//! This crate aims to support reversible variants of most of the `bevy` API. Most prominently:
+//!
+//! - Reversible system scheduling and set configurations
+//! - Reversible commands
+//!
+//! Systems themselves however need to be actively written to have reversible logic in mind.
+//! Passing existing systems from other crates to this crate's API is most likely not enough.
+//!
+//! Hooks and observers are in principial possible to be reversible as long they are just as systems
+//! written that way. The most easy way to do that is to just queue reversible commands and let the
+//! reversible sync points of the scheduling handle that. If needed,
+//! [`RevOp`](crate::undo_redo::RevOp) can help to identify if and which reversible operation is
+//! happening in the context of a hook or observer.
+//!
+//! # Limitations
+//!
+//! Currently some features do not have a reversible variant available.
+//!
+//! ## Change detection
+//!
+//! It is impossible to revert component or world change ticks to a previous value when undoing an
+//! update. It is also insufficient to just log what component is changed at a non-log update to
+//! undo/redo it at a log update. This is because the change during this log update impossible to
+//! not cause change detection themselves unless very careful and isolated handling.
+//!
+//! This crate offers no alternative and the user needs to invent their own solution that fits their
+//! use case.
+//!
+//! ## Relationships / Bundle Effects
+//!
+//! Relationships are not supported due the large API surface and current lack of dynamic inspection
+//! to make any support feasable in the scope of this crate.
+//!
+//! ## Dynamic commands
+//!
+//! Inserting and removing components via reflection is not supported because they are out-of-scope.
+//!
+//! ## Manual sync point configuration
+//!
+//! Changing a schedule's `auto_insert_apply_deferred` is not compatible with reversible scheduling
+//! and should not be done.
+//!
+//! ## Misc
+//!
+//! The following APIs have no reversible variants. This list may be incomplete.
+//!
+//! - `clone_with` (out of scope)
+//! - `insert_batch` (current lack of a more optimal algorithm to inserts-in-a-loop)
+//!
+//! # Cargo Features
+//!
+//! | feature        | description                                | default feature |
+//! | -------------- | ------------------------------------------ | --------------- |
+//! | `bevy_app`     | `App` related features                     | yes             |
+//! | `bevy_reflect` | Reflection derives on resources/components | yes             |
+
 /*
 TODO:
 
-- schedule/test
--- test not only multi-thread executor
 - update README
-- PastLenLog -> UpdateLog, rename push methods
-- StrLog
--- https://github.com/rust-lang/rust/issues/133253
-- retest drain_past logic without +1 special case
--- With UpdateLog it cannot be guaranteed that the drained items were pushed at an out-of-log frame
-- nach infallible non-log mutations, error enums überprüfen ob es obsolete varianten gibt
-
-log Idee:
-- Nothing works everywhere
-- RemoveLog only works at non-log
-- RemoveFuture works at non-log and backward log
--- backward lock could postpone it with another usize where it behaves like this is the log end
--- that way only non-log needs a draining API
--- .forward_log(meta)
--- .backward_log(meta)
--- TransitionLog
---- .push(meta, max_past_len, transition)
---- .push(meta, max_past_len, |_log| transition)
--- TransitionsLog
---- .push(meta, max_past_len, |_log| update)
-- wenn bei TransitionsLog TransitionsLogMut und LogDrains kombiniert werden, braucht es keine neue API
-- wenn bei TransitionLog TransitionLogMut und LogDrains erfunden und kombiniert werden
-  und transition T beide als valide parameter angenommen werden, braucht es keine neue API
-- UpdateLog integriert einfach pre_update in die anderen Methoden
+- https://github.com/rust-lang/rust/issues/133253
 
 Enhancements:
-- reduce todo!() and //todo and unwrap (in favor of expect)
+- reduce todo!() and //todo
 - #[inline]s
 - despawn_single -> despawn
 - missing apis:
@@ -66,7 +129,6 @@ ISSUES/DISCUSSIONS:
 -- backup components one by one
 -- insert closure for each is noop
 */
-
 // todo: deny
 #![deny(broken_intra_doc_links)] // works only in cargo doc --no-deps
 #![warn(missing_docs)]

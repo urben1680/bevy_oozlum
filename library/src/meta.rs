@@ -1,7 +1,7 @@
 use crate::{
     log::{PreUpdateKind, UpdateLogLimits, UpdateLogMissed, UpdateLogState},
     prelude::RevUpdate,
-    undo_redo::{BundleIdOfOpCache, DespawnCleanerErr, RevDespawnCleaner, UndoRedoBuffer},
+    undo_redo::{BundleIdOfOpCache, DespawnCleanerErr, RevDespawnCleaner, RevOp, UndoRedoBuffer},
 };
 use bevy_ecs::{error::BevyError, resource::Resource, world::World};
 use bevy_log::info;
@@ -259,9 +259,11 @@ impl RevMeta {
 
                 // update RevMeta and RevDespawnCleaner
                 let mut cleaner_result = Ok(());
-                let meta_result = meta.update(|meta, _| {
+                let meta_result = meta.update(|meta, direction| {
                     world.insert_resource(meta);
-                    schedule.run(world);
+                    RevOp::RevSchedule { direction }.scope(world, |world| {
+                        schedule.run(world);
+                    });
                     cleaner_result = RevDespawnCleaner::update(world);
                     world.remove_resource::<RevMeta>()
                 });

@@ -455,6 +455,8 @@ fn row6(app: &mut App) {
     // only exists during hooks and observers.
     fn on_add(mut world: DeferredWorld, context: HookContext) {
         match world.get_resource::<RevOp>() {
+            Some(RevOp::RevSchedule { direction: _ }) => {} // todo
+
             // RevOp::Buffer is present when a component is moved from or to these internal
             // entities. That can happen when you call EntityCommands::rev_remove as then the
             // components are not really removed but moved to a buffer entity. That is how

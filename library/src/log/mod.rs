@@ -5,8 +5,7 @@
 //! - [`TransitionLog`], for storing singular values to transition a state forward or backward.
 //! - [`TransitionsLog`], for storing multiple values to transition a state forward or backward.
 //! - [`UpdateLog`], for keeping track when, how often and with which `past_len` value the other
-//!   logs need to update in cases these updates happen irregularily. Can also be used as an compact
-//!   alternative to `TransitionLog<bool>`.
+//!   logs need to update in cases these updates happen irregularily.
 //!
 //! # Optimal log length
 //!

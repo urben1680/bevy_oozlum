@@ -20,31 +20,14 @@ use std::{
 /// transition a state forward or backward in time. For each of these updates, a type `U` is stored
 /// along it which is by default `()`.
 ///
-/// # Examples
+/// This log alone is only suited for a constant amount of updates per frame. For a variable amount
+/// of updates, like when the system is skipped completely sometimes, consider pairing it with an
+/// [`UpdateLog`](crate::log::UpdateLog).
 ///
-/// Generally, [`pre_update`](Self::pre_update) or [`pre_update_drain`](Self::pre_update_drain)
-/// need to be called before any other mutation. These methods handle when
-/// [`RevQueue::Clear`](crate::meta::RevQueue::Clear) was queued and applied or the
-/// [`RevDirection`](crate::meta::RevDirection) changed from a
-/// [log variant](crate::meta::RevDirection::is_log) to the
-/// [`RevDirection::Forward`](crate::meta::RevDirection::Forward) one.
+/// # Example
 ///
-/// These methods make sure the log catches such changes even if the current system does not run in
-/// the very same frame they took effect, like when that frame was missed because of run conditions.
-///
-/// If the log is mutated multiple times per frame, these `pre_update` methods only need to called
-/// once at the beginning.
-///
-/// After that, depending on the direction, either new transitions are pushed into the log or it is
-/// traversed forwards or backwards, yielding transition references.
-///
-/// This log alone is only suited for one update per frame. For a variable amount
-/// of updates, like when the system is skipped completely sometimes, consider pairing it with a
-/// [`PastLenLog`](crate::log::PastLenLog).
-///
-/// ## Basic `Local` usage
-///
-/// Usually transition types are just plain data the log can truncate when it is no longer needed.
+/// Depending on the direction, either a new log entry is pushed into the log or it is traversed
+/// forwards or backwards, yielding mutable log entry references.
 ///
 /// ```
 /// # use bevy_ecs::prelude::*;
@@ -65,12 +48,12 @@ use std::{
 ///             // mutate some state with the new transitions and update
 ///
 ///             // push transitions and update to the log
-///             let mut drain = log.extend_with(
+///             let mut drain = log.forward_extend_with(
 ///                 &meta,
 ///                 meta_past_len,
 ///                 new_transitions,
 ///                 new_update
-///             )?;
+///             );
 ///
 ///             // optional, iterate log entries that are now out-of-log
 ///             
@@ -87,7 +70,6 @@ use std::{
 ///             // one can also iterate per log entry
 ///             while let Some((iter, future_update)) = future.next_log_entry() {
 ///                 for future_transition in iter {
-///
 ///                     // do cleanup tasks with future transitions and updates
 ///                 }
 ///             }
@@ -301,6 +283,15 @@ impl<T, U> TransitionsLog<T, U> {
         self.updates.witnessed_log_clears()
     }
 
+    /// Updates the log with new `transitions` and `update` and returns [`TransitionsDrain`] that
+    /// can be used to iterate log entries that got out-of-log with this push.
+    ///
+    /// This is used during [`RevDirection::Forward`](crate::meta::RevDirection::Forward). Its
+    /// field, [`MetaPastLen`](crate::meta::MetaPastLen), can be used for the `past_len` parameter
+    /// here if this log is updated exactly once per frame. Otherwise, use
+    /// [`UpdateLog`](super::UpdateLog::forward_past_len) instead.
+    ///
+    /// For an example, see the [type level docs](TransitionsLog).
     pub fn forward_extend_with<'a, I: IntoIterator<Item = T>>(
         &'a mut self,
         meta: &RevMeta,
@@ -313,7 +304,8 @@ impl<T, U> TransitionsLog<T, U> {
             past_len,
             TransitionsLogUpdate {
                 update,
-                transitions_len: usize::MAX.to_ne_bytes(), // will be overwritten when transititons are counted
+                // transitions_len will be overwritten when transititons are counted
+                transitions_len: usize::MAX.to_ne_bytes(),
             },
         );
         let gap_range = if updates.is_clear() {
@@ -335,12 +327,9 @@ impl<T, U> TransitionsLog<T, U> {
         }
     }
 
-    /// Returns references to the log entry that was logged at the chronologically previous push. If
-    /// the log is at the past end before this call, this method returns an [`OutOfLog`] error,
+    /// Returns references to the log entry that was logged at the chronologically previous push.
+    /// If the log is at the past end before this call, this method returns an [`OutOfLog`] error,
     /// leaving the log unchanged.
-    ///
-    /// The references are returned in an transition (`T`) iterator, see [`TransitionsLogIterMut`].
-    /// It contains an accessible reference field to the update (`U`).
     ///
     /// The log entry can be mutated in case applying it is not only changing the state but also the
     /// log entry itself. This may be needed if a previously added value is taken again and stored
@@ -349,17 +338,7 @@ impl<T, U> TransitionsLog<T, U> {
     ///
     /// This is used during [`RevDirection::BackwardLog`](crate::meta::RevDirection::BackwardLog).
     ///
-    /// Before calling this, [`pre_update`](Self::pre_update) or
-    /// [`pre_update_drain`](Self::pre_update_drain) **must** be called at least once in the
-    /// [present reversible frame](RevMeta::now).
-    ///
-    /// For examples, see the [type level documentation](TransitionsLog).
-    ///
-    /// # Poisoning
-    ///
-    /// If this log [is poisoned](Self::poison), this always returns an error. If bevy's
-    /// `track_location` cargo feature is activated, the error here contains the location where it
-    /// originally occured.
+    /// For an example, see the [type level docs](TransitionsLog).
     #[track_caller]
     pub fn backward_log(
         &mut self,
@@ -379,9 +358,6 @@ impl<T, U> TransitionsLog<T, U> {
     /// log is at the future end before this call, this method returns an [`OutOfLog`] error,
     /// leaving the log unchanged.
     ///
-    /// The references are returned in an transition (`T`) iterator, see [`TransitionsLogIterMut`].
-    /// It contains an accessible reference field to the update (`U`).
-    ///
     /// The log entry can be mutated in case applying it is not only changing the state but also the
     /// log entry itself. This may be needed if a previously added value is taken again
     /// and stored in this log entry at [`backward_log`](Self::backward_log). `forward_log` would
@@ -389,17 +365,7 @@ impl<T, U> TransitionsLog<T, U> {
     ///
     /// This is used during [`RevDirection::ForwardLog`](crate::meta::RevDirection::ForwardLog).
     ///
-    /// Before calling this, [`pre_update`](Self::pre_update) or
-    /// [`pre_update_drain`](Self::pre_update_drain) **must** be called at least once in the
-    /// [present reversible frame](RevMeta::now).
-    ///
-    /// For examples, see the [type level documentation](TransitionsLog).
-    ///
-    /// # Poisoning
-    ///
-    /// If this log [is poisoned](Self::poison), this always returns an error. If bevy's
-    /// `track_location` cargo feature is activated, the error here contains the location where it
-    /// originally occured.
+    /// For an example, see the [type level docs](TransitionsLog).
     #[track_caller]
     pub fn forward_log(&mut self, meta: &RevMeta) -> Result<TransitionsLogIterMut<T, U>, OutOfLog> {
         let old_index = self.index;
@@ -414,6 +380,8 @@ impl<T, U> TransitionsLog<T, U> {
 }
 
 impl<T> TransitionsLog<T, ()> {
+    /// Shorthand method of [`forward_extend_with`](Self::forward_extend_with) without a meaningful
+    /// `update` value because this log did not opt into a type different than `()`.
     pub fn forward_extend<'a, I: IntoIterator<Item = T>>(
         &'a mut self,
         meta: &RevMeta,
@@ -424,6 +392,30 @@ impl<T> TransitionsLog<T, ()> {
     }
 }
 
+/// A container returned by [`TransitionsLog::forward_extend_with`] that can be used to iterate the
+/// log entries that are to be truncated because they are out of log now.
+///
+/// The content of the available drains look like this:
+///
+/// The letters are all stored log entries with the number below indicating how many updates ago the
+/// entry was pushed. Positive numbers are in the future, which is the case after
+/// [`TransitionsLog::backward_log`] was used three times. After the drains are performed, the
+/// actual new entry `X` is pushed.
+///
+/// ```text
+///  self.past       +      self.future  =  self.all
+/// |         |             |         |
+/// [A] [B] [C] [D] [E] [F] [G] [H] [I]
+/// -5  -4  -3  -2  -1   0   1   2   3
+///
+///               after  drop
+///             [D] [E] [F] [X]
+///             -3  -2   1   0
+/// ```
+///
+/// The `past_len` value would be `4` in this example:
+/// - 4 past states need 3 log entries to transition between them; `D`, `E` and `F`
+/// - `X` is the log entry to transition into the present state
 #[derive(Debug)]
 pub struct TransitionsDrain<'a, T, U, I>
 where
@@ -436,9 +428,6 @@ where
     gap_range: GapRange,
     gap_buffer: Box<[T]>,
 }
-
-pub(super) type DrainAndMaybePushedTransitions<'a, T, I> =
-    core::iter::Chain<Drain<'a, T>, core::iter::Flatten<core::option::IntoIter<I>>>;
 
 impl<'a, T, U, I> TransitionsDrain<'a, T, U, I>
 where
@@ -513,9 +502,15 @@ where
     }
 }
 
+/// Type returned by [`TransitionsDrain`]'s methods to drain either a specific part of the
+/// out-of-log log entries or all of them. The inner iterators can be accessed freely while an
+/// additional [`next_log_entry`](Self::next_log_entry) method is available to group the transitions
+/// to each update.
 #[derive(Debug)]
 pub struct TransitionsDrainIters<TI, UI, U> {
+    /// The transitions `T` draining iterator.
     pub transitions: TI,
+    /// The updates `U` draining iterator.
     pub updates: UI,
     _m: PhantomData<U>,
 }
@@ -528,6 +523,10 @@ where
     /// Returns the transitions and the update of the next log entry from the draining iterators.
     ///
     /// Returns `None` if no more log entries are to drain.
+    ///
+    /// Works best in a `while` loop.
+    ///
+    /// For an example, see the [`TransitionsLog` type level docs](TransitionsLog).
     pub fn next_log_entry(&mut self) -> Option<(Take<&'_ mut TI>, U)> {
         self.updates.next().map(|update| {
             (
@@ -643,6 +642,7 @@ pub struct TransitionsLogUpdate<U> {
 }
 
 impl<U> TransitionsLogUpdate<U> {
+    /// The amount of transitions that belong to a log entry.
     pub fn transitions_len(&self) -> usize {
         usize::from_ne_bytes(self.transitions_len)
     }

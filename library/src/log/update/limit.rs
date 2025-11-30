@@ -590,16 +590,16 @@ mod test {
         let mut limits = UpdateLogLimits::default();
 
         // add a past limit of 1
-        let mut state = None;
+        let mut past_state = None;
         let past_limit = UpdateLogLimit::new_log(1, u64::MAX, MaybeLocation::caller());
-        limits.set_update_state(&mut state, 0, 0);
-        limits.push_limit(state.as_mut().unwrap(), past_limit);
+        limits.set_update_state(&mut past_state, 0, 0);
+        limits.push_limit(past_state.as_mut().unwrap(), past_limit);
 
         // add a future limit of 1
         let mut future_state = None;
         let future_limit = UpdateLogLimit::new_log(u64::MIN, 1, MaybeLocation::caller());
         limits.set_update_state(&mut future_state, 0, 0);
-        limits.push_limit(state.as_mut().unwrap(), future_limit);
+        limits.push_limit(future_state.as_mut().unwrap(), future_limit);
 
         // 1 is in both limits
         let result = limits.update(1, 0, true);
@@ -608,7 +608,7 @@ mod test {
         // 0 is breaching the past limit
         let result = limits.update(0, 0, true);
         let past_missed = Err(vec![UpdateLogMissed {
-            id: state.unwrap().id(),
+            id: past_state.unwrap().id(),
             last_update: past_limit.last_update,
         }]);
         assert_eq!(result, past_missed);

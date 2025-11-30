@@ -17,8 +17,8 @@ use std::collections::{
 ///
 /// # Example
 ///
-/// Depending on the direction, either a new transition is pushed into the log or it is traversed
-/// forwards or backwards, yielding a mutable transition reference.
+/// Depending on the direction, either a new log entry is pushed into the log or it is traversed
+/// forwards or backwards, yielding mutable log entry references.
 ///
 /// ```
 /// # use bevy_ecs::prelude::*;
@@ -195,8 +195,8 @@ impl<T> TransitionLog<T> {
     /// iterate log entries that got out-of-log with this push.
     ///
     /// This is used during [`RevDirection::Forward`](crate::meta::RevDirection::Forward). Its
-    /// field, [`PastLen`](crate::meta::PastLen), can be used for the `past_len` parameter here if
-    /// this log is updated exactly once per frame. Otherwise, use
+    /// field, [`MetaPastLen`](crate::meta::MetaPastLen), can be used for the `past_len` parameter
+    /// here if this log is updated exactly once per frame. Otherwise, use
     /// [`UpdateLog`](super::UpdateLog::forward_past_len) instead.
     ///
     /// For an example, see the [type level docs](TransitionLog).
