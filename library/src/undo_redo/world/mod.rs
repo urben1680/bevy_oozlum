@@ -393,7 +393,7 @@ pub(crate) fn rev_try_despawn_single_with_caller_world(
             meta_past_len,
             caller,
         )?,
-        Err(EntityMutableFetchError::EntityDoesNotExist(err)) => Err(err)?,
+        Err(EntityMutableFetchError::NotSpawned(err)) => Err(err)?,
         Err(EntityMutableFetchError::AliasedMutability(_)) => unreachable!(), // fetching only a single entity
     }
     Ok(())

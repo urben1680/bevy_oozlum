@@ -3,7 +3,8 @@ use crate::{
     meta::{RevDirection, RevMeta},
 };
 use bevy_ecs::{
-    component::{CheckChangeTicks, ComponentId, Tick},
+    change_detection::{CheckChangeTicks, Tick},
+    component::ComponentId,
     error::BevyError,
     query::FilteredAccessSet,
     schedule::{BoxedCondition, InternedSystemSet, SystemCondition},

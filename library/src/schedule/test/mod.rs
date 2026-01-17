@@ -153,9 +153,9 @@ impl IntoIterator for Test {
             Self::ExclusiveSystem(n) => vec![
                 LogEntry::ExclusiveSys(n),
                 LogEntry::SysObsv(n),
+                LogEntry::SysHook(n),
                 LogEntry::SysObsvObsv(n),
                 LogEntry::SysObsvCmd(n),
-                LogEntry::SysHook(n),
                 LogEntry::SysHookObsv(n),
                 LogEntry::SysHookCmd(n),
             ],

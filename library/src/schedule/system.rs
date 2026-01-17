@@ -6,7 +6,7 @@ use crate::{
     undo_redo::UndoRedoLog,
 };
 use bevy_ecs::{
-    component::{CheckChangeTicks, Tick},
+    change_detection::{CheckChangeTicks, Tick},
     error::BevyError,
     query::FilteredAccessSet,
     schedule::{ApplyDeferred, InternedSystemSet, IntoScheduleConfigs, SystemSet},

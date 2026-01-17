@@ -1,7 +1,7 @@
 use bevy_ecs::{
     bundle::{Bundle, BundleFromComponents},
     change_detection::{DetectChangesMut, MaybeLocation},
-    entity::{Entity, EntityDoesNotExistError},
+    entity::{Entity, EntityNotSpawnedError},
     resource::Resource,
     system::{Commands, EntityCommands},
     world::{DeferredWorld, EntityWorldMut, World},
@@ -53,13 +53,13 @@ impl Error for EntityRevDespawnedError {}
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum RevEntityError {
-    EntityDoesNotExistError(EntityDoesNotExistError),
+    EntityNotSpawnedError(EntityNotSpawnedError),
     EntityRevDespawnedError(EntityRevDespawnedError),
 }
 
-impl From<EntityDoesNotExistError> for RevEntityError {
-    fn from(value: EntityDoesNotExistError) -> Self {
-        Self::EntityDoesNotExistError(value)
+impl From<EntityNotSpawnedError> for RevEntityError {
+    fn from(value: EntityNotSpawnedError) -> Self {
+        Self::EntityNotSpawnedError(value)
     }
 }
 
@@ -72,7 +72,7 @@ impl From<EntityRevDespawnedError> for RevEntityError {
 impl Display for RevEntityError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::EntityDoesNotExistError(inner) => write!(f, "{inner}"),
+            Self::EntityNotSpawnedError(inner) => write!(f, "{inner}"),
             Self::EntityRevDespawnedError(inner) => write!(f, "{inner}"),
         }
     }

@@ -207,7 +207,7 @@ fn rev_try_despawn_single_fails_at_invalid() {
     let result = world.rev_try_despawn_single(past_len, Entity::PLACEHOLDER);
 
     assert!(
-        matches!(result, Err(RevEntityError::EntityDoesNotExistError(_))),
+        matches!(result, Err(RevEntityError::EntityNotSpawnedError(_))),
         "{result:?}"
     );
     assert!(world.resource::<UndoRedoBuffer>().is_empty());

@@ -21,9 +21,9 @@
 //!  
 //!  fn hello_world_system(meta: Res<RevMeta>) {
 //!     if meta.running_direction().is_forward() {
-//!         println!("hello world");
+//!         println!("hello world!");
 //!     } else {
-//!         println!("dlrow olleh");
+//!         println!("!dlrow olleh");
 //!     }
 //!  }
 //! ```
