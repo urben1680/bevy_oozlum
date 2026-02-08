@@ -1,7 +1,7 @@
 use crate::{
     meta::RevMeta,
     schedule::{IntoRevScheduleConfigs, RevSchedule},
-    undo_redo::{BundleIdOfOpCache, RevDespawnCleaner, RevDespawned, UndoRedoBuffer},
+    undo_redo::{RevDespawned, UndoRedoBuffer},
 };
 use bevy_app::{App, FixedUpdate, Plugin};
 use bevy_ecs::{
@@ -182,9 +182,7 @@ impl Plugin for RevPlugin {
         }
 
         // other
-        app.init_resource::<RevDespawnCleaner>()
-            .init_resource::<UndoRedoBuffer>()
-            .init_resource::<BundleIdOfOpCache>()
+        app.init_resource::<UndoRedoBuffer>()
             .register_disabling_component::<RevDespawned>();
     }
 }

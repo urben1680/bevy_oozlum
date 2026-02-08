@@ -489,7 +489,7 @@ fn row6(app: &mut App) {
             //
             // The variable "buffer" here is a boolean and indicates if HookContext::entity is
             // a buffer entity or not.
-            Some(RevOp::FinalDespawn { buffer: _ }) => {}
+            Some(RevOp::FinalDespawn) => {}
 
             // No buffer or delayed despawn involved, this is the case we care for!
             None => {

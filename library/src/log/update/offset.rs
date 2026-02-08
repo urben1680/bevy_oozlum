@@ -141,7 +141,7 @@ impl OffsetLog {
     /// next offsets further into the future.
     ///
     /// Use [`NowToFuture::sync`] to synchronize the log position with the iterator.
-    pub(super) fn now_to_future(&mut self) -> NowToFuture {
+    pub(super) fn now_to_future<'a>(&'a mut self) -> NowToFuture<'a> {
         NowToFuture {
             iter: self.offsets.range(self.meta.index..),
             meta: self.meta,
@@ -153,7 +153,7 @@ impl OffsetLog {
     /// previous offsets further into the past.
     ///
     /// Use [`NowToPast::sync`] to synchronize the log position with the iterator.
-    pub(super) fn now_to_past(&mut self) -> NowToPast {
+    pub(super) fn now_to_past<'a>(&'a mut self) -> NowToPast<'a> {
         let mut to = self.meta.index;
         if self.meta.streak_and_step.is_some() {
             // The iterator uses `Streak` to yield multiple items for streaks without progressing

@@ -340,10 +340,10 @@ impl<T, U> TransitionsLog<T, U> {
     ///
     /// For an example, see the [type level docs](TransitionsLog).
     #[track_caller]
-    pub fn backward_log(
-        &mut self,
+    pub fn backward_log<'a>(
+        &'a mut self,
         meta: &RevMeta,
-    ) -> Result<TransitionsLogIterMut<T, U>, OutOfLog> {
+    ) -> Result<TransitionsLogIterMut<'a, T, U>, OutOfLog> {
         let old_index = self.index;
         let update_mut = self.updates.backward_log(meta)?;
         self.index -= update_mut.transitions_len();
@@ -367,7 +367,10 @@ impl<T, U> TransitionsLog<T, U> {
     ///
     /// For an example, see the [type level docs](TransitionsLog).
     #[track_caller]
-    pub fn forward_log(&mut self, meta: &RevMeta) -> Result<TransitionsLogIterMut<T, U>, OutOfLog> {
+    pub fn forward_log<'a>(
+        &'a mut self,
+        meta: &RevMeta,
+    ) -> Result<TransitionsLogIterMut<'a, T, U>, OutOfLog> {
         let old_index = self.index;
         let update_mut = self.updates.forward_log(meta)?;
         self.index += update_mut.transitions_len();
@@ -434,7 +437,9 @@ where
     I: IntoIterator<Item = T>,
 {
     /// Returns log entries that were pushed before [`RevMeta::past_end`].
-    pub fn past(&mut self) -> TransitionsDrainIters<Drain<T>, Drain<TransitionsLogUpdate<U>>, U> {
+    pub fn past<'b>(
+        &'b mut self,
+    ) -> TransitionsDrainIters<Drain<'b, T>, Drain<'b, TransitionsLogUpdate<U>>, U> {
         let end = self.gap_range.take_drain_past_end();
         let transitions = self.transitions.drain(..end);
         let updates = self.updates.past();
@@ -447,7 +452,9 @@ where
 
     /// Returns log entries that were pushed after [`RevMeta::now`] which, at this point of time,
     /// is equal to [`RevMeta::future_end`].
-    pub fn future(&mut self) -> TransitionsDrainIters<Drain<T>, Drain<TransitionsLogUpdate<U>>, U> {
+    pub fn future<'b>(
+        &'b mut self,
+    ) -> TransitionsDrainIters<Drain<'b, T>, Drain<'b, TransitionsLogUpdate<U>>, U> {
         let start = self.gap_range.drain_future_start();
         let transitions = self.transitions.drain(start..);
         let updates = self.updates.future();
@@ -460,9 +467,9 @@ where
 
     /// Returns log entries that were pushed before [`RevMeta::past_end`] or after [`RevMeta::now`]
     /// which, at this point of time, is equal to [`RevMeta::future_end`].
-    pub fn all(
-        &mut self,
-    ) -> TransitionsDrainIters<DrainAll<T>, DrainAll<TransitionsLogUpdate<U>>, U> {
+    pub fn all<'b>(
+        &'b mut self,
+    ) -> TransitionsDrainIters<DrainAll<'b, T>, DrainAll<'b, TransitionsLogUpdate<U>>, U> {
         let transitions = DrainAll::new(
             &mut self.transitions,
             &mut self.gap_range,

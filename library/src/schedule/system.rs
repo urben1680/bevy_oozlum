@@ -518,7 +518,7 @@ fn try_lock_validation_err<'a, T>(
 mod test {
     use bevy_app::{App, Update};
     use bevy_ecs::{
-        change_detection::{Res, ResMut},
+        change_detection::{MaybeLocation, Res, ResMut},
         component::Component,
         event::Event,
         lifecycle::HookContext,
@@ -592,7 +592,7 @@ mod test {
         assert_system_drains_all_undo_redo(
             |mut buffer: ResMut<UndoRedoBuffer>, meta: Res<RevMeta>, mut commands: Commands| {
                 let past_len = meta.meta_past_len();
-                buffer.buffer_undo_redo(past_len, blank_undo_redo);
+                buffer.buffer_undo_redo(past_len, MaybeLocation::caller(), blank_undo_redo);
                 commands.buffer_undo_redo(past_len, blank_undo_redo);
                 commands.queue(|world: &mut World| {
                     world.trigger(Observer);

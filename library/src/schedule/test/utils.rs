@@ -7,7 +7,7 @@ use crate::{
 };
 use bevy_app::FixedUpdate;
 use bevy_ecs::{
-    change_detection::ResMut,
+    change_detection::{MaybeLocation, ResMut},
     observer::On,
     schedule::{ApplyDeferred, IntoSystemSet, LogLevel, ScheduleBuildSettings},
     system::IntoSystem,
@@ -104,7 +104,7 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
                 .push(LogEntry::SysHookObsv((n, RevDirection::FORWARD_MIN)));
             let test = LogEntry::SysHookObsv(n);
             let past_len = meta.meta_past_len();
-            buffer.buffer_undo_redo(past_len, test);
+            buffer.buffer_undo_redo(past_len, MaybeLocation::caller(), test);
         },
     );
     world.add_observer(
@@ -117,7 +117,7 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
                 .push(LogEntry::SysObsvObsv((n, RevDirection::FORWARD_MIN)));
             let test = LogEntry::SysObsvObsv(n);
             let past_len = meta.meta_past_len();
-            buffer.buffer_undo_redo(past_len, test);
+            buffer.buffer_undo_redo(past_len, MaybeLocation::caller(), test);
         },
     );
     world.add_observer(
@@ -130,7 +130,7 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
                 .push(LogEntry::SysCmdObsv((n, RevDirection::FORWARD_MIN)));
             let test = LogEntry::SysCmdObsv(n);
             let past_len = meta.meta_past_len();
-            buffer.buffer_undo_redo(past_len, test);
+            buffer.buffer_undo_redo(past_len, MaybeLocation::caller(), test);
         },
     );
 

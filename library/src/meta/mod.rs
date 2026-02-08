@@ -1,15 +1,24 @@
 use crate::{
     log::{PreUpdateKind, UpdateLogLimits, UpdateLogMissed, UpdateLogState},
     prelude::RevUpdate,
-    undo_redo::{BundleIdOfOpCache, DespawnCleanerErr, RevDespawnCleaner, RevOp, UndoRedoBuffer},
+    undo_redo::{DespawnCleanerErr, UndoRedoBuffer, update_spawn_despawn},
 };
-use bevy_ecs::{error::BevyError, resource::Resource, world::World};
+use bevy_ecs::{
+    error::BevyError,
+    resource::Resource,
+    system::{RunSystemError, SystemParamValidationError},
+    world::World,
+};
 use bevy_log::info;
 use core::{
     error::Error,
     fmt::{Debug, Display},
     num::NonZeroU64,
 };
+use std::borrow::Cow;
+
+#[cfg(test)]
+mod test;
 
 #[derive(Resource, Debug)]
 #[cfg_attr(feature = "bevy_reflect", derive(bevy_reflect::Reflect))]
@@ -54,6 +63,12 @@ impl RevDirection {
     }
     pub fn is_not_log(self) -> bool {
         matches!(self, Self::Forward { .. })
+    }
+    pub fn meta_past_len(self) -> MetaPastLen {
+        match self {
+            Self::Forward { meta_past_len } => meta_past_len,
+            _ => panic!(),
+        }
     }
 }
 
@@ -236,51 +251,52 @@ impl RevMeta {
             self.log_clears
         )
     }
-    pub fn run_rev_update(world: &mut World) -> Result<(), BevyError> {
+    pub fn try_run_rev_update<'w>(
+        world: &'w mut World,
+    ) -> Result<(), TryRunRevUpdateError<&'w Self, impl Debug + 'w>> {
         world
             .try_schedule_scope(RevUpdate, |world, schedule| {
-                let meta = world.remove_resource::<Self>();
-                meta_or_schedule_presence::<false>(world, true);
-                meta_or_schedule_presence::<true>(world, meta.is_some());
-                let Some(meta) = meta else {
-                    return Ok(());
+                let Some(meta) = world.remove_resource::<Self>() else {
+                    return Err(TryRunRevUpdateError::MetaMissing);
                 };
 
-                // init other resources
-                world.init_resource::<RevDespawnCleaner>();
-                world.init_resource::<BundleIdOfOpCache>();
                 let buffer = world.get_resource_or_init::<UndoRedoBuffer>();
                 if !buffer.is_empty() {
+                    world.insert_resource(meta);
                     return Err(TryRunRevUpdateError::UndoRedoBufferNotEmptyBeforeUpdate {
-                        meta,
-                        buffer: world.remove_resource::<UndoRedoBuffer>().unwrap(),
-                    })?;
+                        meta: (),
+                        buffer: (),
+                    });
                 }
 
                 // update RevMeta and RevDespawnCleaner
                 let mut cleaner_result = Ok(());
-                let meta_result = meta.update(|meta, direction| {
+                let meta_result = meta.update(|meta, _| {
                     world.insert_resource(meta);
-                    RevOp::RevSchedule { direction }.scope(world, |world| {
-                        schedule.run(world);
-                    });
-                    cleaner_result = RevDespawnCleaner::update(world);
+                    schedule.run(world);
+                    cleaner_result = update_spawn_despawn(world);
                     world.remove_resource::<RevMeta>()
                 });
 
                 // map errors
                 match meta_result {
-                    Ok(meta) if cleaner_result.is_ok() => {
+                    Ok(meta) => {
                         world.insert_resource(meta);
-                        Ok(())
+                        match cleaner_result {
+                            Ok(()) => Ok(()),
+                            Err(err) => Err(TryRunRevUpdateError::AfterRunErrors {
+                                meta: None,
+                                update_logs_missed: Vec::new(),
+                                despawn_cleaner_err: Some(err),
+                            }),
+                        }
                     }
-                    Ok(meta) => Err(TryRunRevUpdateError::AfterRunErrors {
-                        meta: Some(meta),
-                        update_logs_missed: Vec::new(),
-                        despawn_cleaner_err: cleaner_result.err(),
-                    }),
                     Err(RevMetaUpdateErr::AlreadyRunning { meta, direction }) => {
-                        Err(TryRunRevUpdateError::AlreadyRunning { meta, direction })
+                        world.insert_resource(meta);
+                        Err(TryRunRevUpdateError::AlreadyRunning {
+                            meta: (),
+                            direction,
+                        })
                     }
                     Err(RevMetaUpdateErr::RevMetaNotReturned) => {
                         Err(TryRunRevUpdateError::AfterRunErrors {
@@ -292,20 +308,55 @@ impl RevMeta {
                     Err(RevMetaUpdateErr::UpdateLogsMissed {
                         meta,
                         update_logs_missed,
-                    }) => Err(TryRunRevUpdateError::AfterRunErrors {
-                        meta: Some(meta),
-                        update_logs_missed,
-                        despawn_cleaner_err: cleaner_result.err(),
-                    }),
+                    }) => {
+                        world.insert_resource(meta);
+                        Err(TryRunRevUpdateError::AfterRunErrors {
+                            meta: None,
+                            update_logs_missed,
+                            despawn_cleaner_err: cleaner_result.err(),
+                        })
+                    }
                 }
             })
             .unwrap_or_else(|_| {
-                let meta_exists = world.contains_resource::<RevMeta>();
-                meta_or_schedule_presence::<false>(world, false);
-                meta_or_schedule_presence::<true>(world, meta_exists);
-                Ok(())
+                if world.contains_resource::<RevMeta>() {
+                    Err(TryRunRevUpdateError::ScheduleMissing)
+                } else {
+                    Err(TryRunRevUpdateError::ScheduleAndMetaMissing)
+                }
             })
-            .map_err(Into::into)
+            .map_err(|err| match err {
+                TryRunRevUpdateError::ScheduleMissing => TryRunRevUpdateError::ScheduleMissing,
+                TryRunRevUpdateError::MetaMissing => TryRunRevUpdateError::MetaMissing,
+                TryRunRevUpdateError::ScheduleAndMetaMissing => {
+                    TryRunRevUpdateError::ScheduleAndMetaMissing
+                }
+                TryRunRevUpdateError::UndoRedoBufferNotEmptyBeforeUpdate { .. } => {
+                    TryRunRevUpdateError::UndoRedoBufferNotEmptyBeforeUpdate {
+                        meta: world.resource(),
+                        buffer: world.resource::<UndoRedoBuffer>(),
+                    }
+                }
+                TryRunRevUpdateError::AlreadyRunning { direction, .. } => {
+                    TryRunRevUpdateError::AlreadyRunning {
+                        meta: world.resource(),
+                        direction,
+                    }
+                }
+                TryRunRevUpdateError::AfterRunErrors {
+                    update_logs_missed,
+                    despawn_cleaner_err,
+                    ..
+                } => TryRunRevUpdateError::AfterRunErrors {
+                    meta: world.get_resource(),
+                    update_logs_missed,
+                    despawn_cleaner_err,
+                },
+            })
+    }
+
+    pub fn run_rev_update(world: &mut World) -> Result<(), RunSystemError> {
+        Self::try_run_rev_update(world).map_err(TryRunRevUpdateError::to_run_system_err)
     }
 
     pub fn update(
@@ -468,34 +519,6 @@ impl RevMeta {
     }
 }
 
-fn meta_or_schedule_presence<const META: bool>(world: &mut World, exists: bool) {
-    #[derive(Resource, Clone, Copy)]
-    struct Existed<const META: bool>(bool);
-
-    if exists {
-        world.insert_resource(Existed::<META>(true));
-        return;
-    }
-
-    let existed = world.remove_resource::<Existed<META>>();
-    world.insert_resource(Existed::<META>(false));
-    match existed {
-        None if META => info!(
-            "resource RevMeta does not exist yet, schedule RevUpdate will not be run until it is inserted"
-        ),
-        None => {
-            info!("schedule RevUpdate does not exist yet, it will not be run until it is inserted")
-        }
-        Some(Existed(true)) if META => info!(
-            "resource RevMeta was removed, reversible schedule RevUpdate will not be run until it is inserted again"
-        ),
-        Some(Existed(true)) => {
-            info!("schedule RevUpdate was removed, it will not be run until it is inserted again")
-        }
-        Some(Existed(false)) => {}
-    };
-}
-
 #[derive(Debug)]
 pub enum RevMetaUpdateErr {
     AlreadyRunning {
@@ -510,25 +533,64 @@ pub enum RevMetaUpdateErr {
 }
 
 #[derive(Debug)]
-enum TryRunRevUpdateError {
+pub enum TryRunRevUpdateError<M, B> {
+    ScheduleMissing,
+    MetaMissing,
+    ScheduleAndMetaMissing,
     UndoRedoBufferNotEmptyBeforeUpdate {
-        meta: RevMeta,
-        buffer: UndoRedoBuffer,
+        meta: M,
+        buffer: B,
     },
     AlreadyRunning {
-        meta: RevMeta,
+        meta: M,
         direction: RevDirection,
     },
     AfterRunErrors {
-        meta: Option<RevMeta>,
+        meta: Option<M>,
         update_logs_missed: Vec<UpdateLogMissed>,
         despawn_cleaner_err: Option<DespawnCleanerErr>,
     },
 }
 
-impl Display for TryRunRevUpdateError {
+impl<'w, B: Debug + 'w> TryRunRevUpdateError<&'w RevMeta, B> {
+    pub fn to_run_system_err(self) -> RunSystemError {
+        match self {
+            TryRunRevUpdateError::ScheduleMissing => RunSystemError::Skipped(
+                SystemParamValidationError::skipped::<RevMeta>(Cow::Borrowed(SCHEDULE_MISSING_MSG)),
+            ),
+            TryRunRevUpdateError::MetaMissing => RunSystemError::Skipped(
+                SystemParamValidationError::skipped::<RevMeta>(Cow::Borrowed(META_MISSING_MSG)),
+            ),
+            TryRunRevUpdateError::ScheduleAndMetaMissing => {
+                RunSystemError::Skipped(SystemParamValidationError::skipped::<RevMeta>(
+                    Cow::Borrowed(SCHEDULE_AND_META_MISSING_MSG),
+                ))
+            }
+            TryRunRevUpdateError::AlreadyRunning { .. }
+            | TryRunRevUpdateError::UndoRedoBufferNotEmptyBeforeUpdate { .. } => {
+                RunSystemError::Skipped(SystemParamValidationError::invalid::<RevMeta>(format!(
+                    "{self}"
+                )))
+            }
+            TryRunRevUpdateError::AfterRunErrors { .. } => {
+                RunSystemError::Failed(format!("{self}").into())
+            }
+        }
+    }
+}
+
+const SCHEDULE_MISSING_MSG: &str =
+    "schedule RevUpdate does not exist, it will not be run until it is inserted";
+const META_MISSING_MSG: &str =
+    "resource RevMeta does not exist, schedule RevUpdate will not be run until it is inserted";
+const SCHEDULE_AND_META_MISSING_MSG: &str = "schedule RevUpdate and resource RevMeta do not exist, the schedule will not be run until both are inserted";
+
+impl<M: Debug, B: Debug> Display for TryRunRevUpdateError<M, B> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::ScheduleMissing => write!(f, "{SCHEDULE_MISSING_MSG}"),
+            Self::MetaMissing => write!(f, "{META_MISSING_MSG}"),
+            Self::ScheduleAndMetaMissing => write!(f, "{SCHEDULE_AND_META_MISSING_MSG}"),
             Self::UndoRedoBufferNotEmptyBeforeUpdate { meta, buffer } => write!(
                 f,
                 "the resource containing buffered UndoRedo implementors was not empty, it contained the following types:\n{buffer:?}\n{meta:?}"
@@ -562,15 +624,6 @@ impl Display for TryRunRevUpdateError {
                         "the resource that finally despawns entities that were reversibly marked for despawn unexpectedly went out-of-log\n"
                     )?;
                 }
-                if matches!(
-                    *despawn_cleaner_err,
-                    Some(DespawnCleanerErr::CleanerMissing)
-                ) {
-                    write!(
-                        f,
-                        "the resource that finally despawns entities that were reversibly marked for despawn was removed\n"
-                    )?;
-                }
                 if meta.is_none() {
                     write!(f, "RevMeta was removed from the world while running")?;
                 }
@@ -583,355 +636,4 @@ impl Display for TryRunRevUpdateError {
     }
 }
 
-impl Error for TryRunRevUpdateError {}
-
-#[cfg(test)]
-mod test {
-    use core::mem::Discriminant;
-
-    use super::*;
-
-    impl RevDirection {
-        #[cfg(test)]
-        pub const FWD_DISCRIMINANT: Discriminant<Self> = Self::FORWARD_MIN.discriminant();
-        #[cfg(test)]
-        pub const fn discriminant(self) -> Discriminant<Self> {
-            core::mem::discriminant(&self)
-        }
-    }
-
-    struct RunValues {
-        past_end: u64,
-        now: u64,
-        future_end: u64,
-        log_exits: u64,
-        log_clears: u64,
-        direction: Discriminant<RevDirection>,
-    }
-
-    impl RevMeta {
-        fn update_assert(&mut self, queue: Option<RevQueue>, values: Option<RunValues>) {
-            match queue {
-                None if self.now == 0 => assert_eq!(self.get_queue(), Some(RevQueue::RunForward)),
-                None => assert_eq!(self.get_queue(), None),
-                Some(queue) => self.set_queue(queue),
-            }
-            self.update_ref(Ok(values.is_some()), |meta, direction| {
-                let values = values.unwrap();
-                assert_eq!(meta.past_end(), values.past_end);
-                assert_eq!(meta.now(), values.now);
-                assert_eq!(meta.future_end(), values.future_end);
-                assert_eq!(meta.log_exits(), values.log_exits);
-                assert_eq!(meta.log_clears(), values.log_clears);
-                assert_eq!(direction.discriminant(), values.direction);
-            });
-        }
-    }
-
-    #[test]
-    fn traverses_log() {
-        let mut meta = RevMeta::new(NonZeroU64::new(4).unwrap(), false);
-        meta.update_assert(
-            None,
-            Some(RunValues {
-                past_end: 0,
-                now: 1,
-                future_end: 1,
-                log_exits: 0,
-                log_clears: 0,
-                direction: RevDirection::FWD_DISCRIMINANT,
-            }),
-        );
-        meta.update_assert(
-            Some(RevQueue::RunForward),
-            Some(RunValues {
-                past_end: 0,
-                now: 2,
-                future_end: 2,
-                log_exits: 0,
-                log_clears: 0,
-                direction: RevDirection::FWD_DISCRIMINANT,
-            }),
-        );
-        meta.update_assert(
-            None,
-            Some(RunValues {
-                past_end: 0,
-                now: 3,
-                future_end: 3,
-                log_exits: 0,
-                log_clears: 0,
-                direction: RevDirection::FWD_DISCRIMINANT,
-            }),
-        );
-        meta.update_assert(
-            None,
-            Some(RunValues {
-                past_end: 0,
-                now: 4,
-                future_end: 4,
-                log_exits: 0,
-                log_clears: 0,
-                direction: RevDirection::FWD_DISCRIMINANT,
-            }),
-        );
-        meta.update_assert(
-            None,
-            Some(RunValues {
-                past_end: 1,
-                now: 5,
-                future_end: 5,
-                log_exits: 0,
-                log_clears: 0,
-                direction: RevDirection::FWD_DISCRIMINANT,
-            }),
-        );
-        meta.update_assert(
-            Some(RevQueue::RunBackwardLog),
-            Some(RunValues {
-                past_end: 1,
-                now: 4,
-                future_end: 5,
-                log_exits: 0,
-                log_clears: 0,
-                direction: RevDirection::BackwardLog.discriminant(),
-            }),
-        );
-        meta.update_assert(
-            None,
-            Some(RunValues {
-                past_end: 1,
-                now: 3,
-                future_end: 5,
-                log_exits: 0,
-                log_clears: 0,
-                direction: RevDirection::BackwardLog.discriminant(),
-            }),
-        );
-        meta.update_assert(
-            Some(RevQueue::RunBackwardLog),
-            Some(RunValues {
-                past_end: 1,
-                now: 2,
-                future_end: 5,
-                log_exits: 0,
-                log_clears: 0,
-                direction: RevDirection::BackwardLog.discriminant(),
-            }),
-        );
-        meta.update_assert(
-            None,
-            Some(RunValues {
-                past_end: 1,
-                now: 1,
-                future_end: 5,
-                log_exits: 0,
-                log_clears: 0,
-                direction: RevDirection::BackwardLog.discriminant(),
-            }),
-        );
-        meta.update_assert(None, None);
-        meta.update_assert(Some(RevQueue::RunBackwardLog), None);
-        meta.update_assert(
-            Some(RevQueue::RunForwardLog),
-            Some(RunValues {
-                past_end: 1,
-                now: 2,
-                future_end: 5,
-                log_exits: 0,
-                log_clears: 0,
-                direction: RevDirection::ForwardLog.discriminant(),
-            }),
-        );
-        meta.update_assert(
-            None,
-            Some(RunValues {
-                past_end: 1,
-                now: 3,
-                future_end: 5,
-                log_exits: 0,
-                log_clears: 0,
-                direction: RevDirection::ForwardLog.discriminant(),
-            }),
-        );
-        meta.update_assert(
-            Some(RevQueue::RunForwardLog),
-            Some(RunValues {
-                past_end: 1,
-                now: 4,
-                future_end: 5,
-                log_exits: 0,
-                log_clears: 0,
-                direction: RevDirection::ForwardLog.discriminant(),
-            }),
-        );
-        meta.update_assert(
-            None,
-            Some(RunValues {
-                past_end: 1,
-                now: 5,
-                future_end: 5,
-                log_exits: 0,
-                log_clears: 0,
-                direction: RevDirection::ForwardLog.discriminant(),
-            }),
-        );
-        meta.update_assert(None, None);
-        meta.update_assert(Some(RevQueue::RunForwardLog), None);
-        meta.update_assert(
-            Some(RevQueue::RunBackwardLog),
-            Some(RunValues {
-                past_end: 1,
-                now: 4,
-                future_end: 5,
-                log_exits: 0,
-                log_clears: 0,
-                direction: RevDirection::BackwardLog.discriminant(),
-            }),
-        );
-        meta.update_assert(
-            None,
-            Some(RunValues {
-                past_end: 1,
-                now: 3,
-                future_end: 5,
-                log_exits: 0,
-                log_clears: 0,
-                direction: RevDirection::BackwardLog.discriminant(),
-            }),
-        );
-        meta.update_assert(Some(RevQueue::Pause), None);
-        meta.update_assert(
-            Some(RevQueue::RunForward),
-            Some(RunValues {
-                past_end: 1,
-                now: 4,
-                future_end: 4,
-                log_exits: 1,
-                log_clears: 0,
-                direction: RevDirection::FWD_DISCRIMINANT,
-            }),
-        );
-        meta.update_assert(
-            Some(RevQueue::RunBackwardLog),
-            Some(RunValues {
-                past_end: 1,
-                now: 3,
-                future_end: 4,
-                log_exits: 1,
-                log_clears: 0,
-                direction: RevDirection::BackwardLog.discriminant(),
-            }),
-        );
-        meta.update_assert(
-            None,
-            Some(RunValues {
-                past_end: 1,
-                now: 2,
-                future_end: 4,
-                log_exits: 1,
-                log_clears: 0,
-                direction: RevDirection::BackwardLog.discriminant(),
-            }),
-        );
-        meta.update_assert(Some(RevQueue::ClearThenPause), None);
-        meta.update_assert(
-            Some(RevQueue::RunForward),
-            Some(RunValues {
-                past_end: 2,
-                now: 3,
-                future_end: 3,
-                log_exits: 0,
-                log_clears: 1,
-                direction: RevDirection::FWD_DISCRIMINANT,
-            }),
-        );
-        meta.update_assert(
-            None,
-            Some(RunValues {
-                past_end: 2,
-                now: 4,
-                future_end: 4,
-                log_exits: 0,
-                log_clears: 1,
-                direction: RevDirection::FWD_DISCRIMINANT,
-            }),
-        );
-        meta.update_assert(
-            None,
-            Some(RunValues {
-                past_end: 2,
-                now: 5,
-                future_end: 5,
-                log_exits: 0,
-                log_clears: 1,
-                direction: RevDirection::FWD_DISCRIMINANT,
-            }),
-        );
-        meta.update_assert(
-            Some(RevQueue::RunBackwardLog),
-            Some(RunValues {
-                past_end: 2,
-                now: 4,
-                future_end: 5,
-                log_exits: 0,
-                log_clears: 1,
-                direction: RevDirection::BackwardLog.discriminant(),
-            }),
-        );
-        meta.update_assert(
-            None,
-            Some(RunValues {
-                past_end: 2,
-                now: 3,
-                future_end: 5,
-                log_exits: 0,
-                log_clears: 1,
-                direction: RevDirection::BackwardLog.discriminant(),
-            }),
-        );
-        meta.update_assert(
-            Some(RevQueue::ClearThenRunForward),
-            Some(RunValues {
-                past_end: 3,
-                now: 4,
-                future_end: 4,
-                log_exits: 0,
-                log_clears: 2,
-                direction: RevDirection::FWD_DISCRIMINANT,
-            }),
-        );
-    }
-
-    #[test]
-    fn contains_returns_expected() {
-        let mut meta = RevMeta::new(NonZeroU64::MAX, true);
-        meta.past_end = 1;
-        meta.now = 3;
-        meta.future_end = 5;
-
-        assert_eq!(meta.contains(0), false, "{meta:#?}");
-        assert_eq!(meta.contains(1), true, "{meta:#?}");
-        assert_eq!(meta.contains(2), true, "{meta:#?}");
-        assert_eq!(meta.contains(3), true, "{meta:#?}");
-        assert_eq!(meta.contains(4), true, "{meta:#?}");
-        assert_eq!(meta.contains(5), true, "{meta:#?}");
-        assert_eq!(meta.contains(6), false, "{meta:#?}");
-
-        assert_eq!(meta.past_contains(0), false, "{meta:#?}");
-        assert_eq!(meta.past_contains(1), true, "{meta:#?}");
-        assert_eq!(meta.past_contains(2), true, "{meta:#?}");
-        assert_eq!(meta.past_contains(3), false, "{meta:#?}");
-        assert_eq!(meta.past_contains(4), false, "{meta:#?}");
-        assert_eq!(meta.past_contains(5), false, "{meta:#?}");
-        assert_eq!(meta.past_contains(6), false, "{meta:#?}");
-
-        assert_eq!(meta.future_contains(0), false, "{meta:#?}");
-        assert_eq!(meta.future_contains(1), false, "{meta:#?}");
-        assert_eq!(meta.future_contains(2), false, "{meta:#?}");
-        assert_eq!(meta.future_contains(3), false, "{meta:#?}");
-        assert_eq!(meta.future_contains(4), true, "{meta:#?}");
-        assert_eq!(meta.future_contains(5), true, "{meta:#?}");
-        assert_eq!(meta.future_contains(6), false, "{meta:#?}");
-    }
-}
+impl<M: Debug, B: Debug> Error for TryRunRevUpdateError<M, B> {}

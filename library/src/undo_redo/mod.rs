@@ -21,37 +21,51 @@ use crate::{
     meta::{MetaPastLen, RevDirection, RevMeta},
 };
 
-mod commands;
-mod entity_commands;
+//mod commands;
+//mod entity_commands;
 mod entity_world;
+mod insert_remove;
+mod relationship;
 mod spawn_despawn;
 mod world;
 
-pub use commands::*;
-pub use entity_commands::*;
+//pub use commands::*;
+//pub use entity_commands::*;
 pub use entity_world::*;
+pub use insert_remove::*;
+pub use relationship::*;
 pub use spawn_despawn::*;
 pub use world::*;
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+const LOCATION_PREFIX: &str = if size_of::<MaybeLocation>() == 0 {
+    ""
+} else {
+    " from "
+};
+
+const fn undo_redo_str<const UNDO: bool>() -> &'static str {
+    if UNDO { "undo" } else { "redo" }
+}
+
+#[derive(Copy, Clone, Debug)]
 pub struct EntityRevDespawnedError {
     pub entity: Entity,
-    //pub location: MaybeLocation, todo: implement with https://github.com/bevyengine/bevy/issues/20494
+    pub caller: MaybeLocation,
 }
 
 impl Display for EntityRevDespawnedError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "entity {} is marked as reversibly despawned",
-            self.entity
+            "entity {} is marked as reversibly despawned{LOCATION_PREFIX}{}",
+            self.entity, self.caller
         )
     }
 }
 
 impl Error for EntityRevDespawnedError {}
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone)]
 pub enum RevEntityError {
     EntityNotSpawnedError(EntityNotSpawnedError),
     EntityRevDespawnedError(EntityRevDespawnedError),
@@ -105,57 +119,96 @@ pub trait BuffersUndoRedo {
     /// | [`UndoRedoBuffer`] | ✅ | ❌ |
     /// | [`Commands`] | ❌ | ✅ |
     /// | [`EntityCommands`] | ❌ | ✅ |
-    fn buffer_undo_redo(&mut self, past_len: MetaPastLen, undo_redo: impl UndoRedo);
+    #[track_caller]
+    fn buffer_undo_redo(&mut self, meta_past_len: MetaPastLen, undo_redo: impl UndoRedo) {
+        self.buffer_undo_redo_with_caller(meta_past_len, undo_redo, MaybeLocation::caller());
+    }
+
+    /// As [`BuffersUndoRedo::buffer_undo_redo`] but with explicit [`MaybeLocation`].
+    ///
+    /// The location can be helpful for identifying non-reversible systems using reversible API.
+    /// [`RevMeta::run_rev_update`] may return the relevant error in that case.
+    fn buffer_undo_redo_with_caller(
+        &mut self,
+        meta_past_len: MetaPastLen,
+        undo_redo: impl UndoRedo,
+        caller: MaybeLocation,
+    );
 }
 
 impl BuffersUndoRedo for Commands<'_, '_> {
-    #[track_caller]
-    fn buffer_undo_redo(&mut self, past_len: MetaPastLen, undo_redo: impl UndoRedo) {
+    fn buffer_undo_redo_with_caller(
+        &mut self,
+        meta_past_len: MetaPastLen,
+        undo_redo: impl UndoRedo,
+        caller: MaybeLocation,
+    ) {
         self.queue(move |world: &mut World| {
-            world.buffer_undo_redo(past_len, undo_redo);
+            world.buffer_undo_redo_with_caller(meta_past_len, undo_redo, caller);
         });
     }
 }
 
 impl BuffersUndoRedo for EntityCommands<'_> {
-    #[track_caller]
-    fn buffer_undo_redo(&mut self, past_len: MetaPastLen, undo_redo: impl UndoRedo) {
+    fn buffer_undo_redo_with_caller(
+        &mut self,
+        meta_past_len: MetaPastLen,
+        undo_redo: impl UndoRedo,
+        caller: MaybeLocation,
+    ) {
         self.queue(move |mut world: EntityWorldMut| {
-            world.buffer_undo_redo(past_len, undo_redo);
+            world.buffer_undo_redo_with_caller(meta_past_len, undo_redo, caller);
         });
     }
 }
 
 impl BuffersUndoRedo for World {
-    #[track_caller]
-    fn buffer_undo_redo(&mut self, past_len: MetaPastLen, undo_redo: impl UndoRedo) {
-        DeferredWorld::buffer_undo_redo(&mut self.into(), past_len, undo_redo);
+    fn buffer_undo_redo_with_caller(
+        &mut self,
+        meta_past_len: MetaPastLen,
+        undo_redo: impl UndoRedo,
+        caller: MaybeLocation,
+    ) {
+        DeferredWorld::buffer_undo_redo_with_caller(
+            &mut self.into(),
+            meta_past_len,
+            undo_redo,
+            caller,
+        );
     }
 }
 
 impl BuffersUndoRedo for EntityWorldMut<'_> {
-    #[track_caller]
-    fn buffer_undo_redo(&mut self, past_len: MetaPastLen, undo_redo: impl UndoRedo) {
+    fn buffer_undo_redo_with_caller(
+        &mut self,
+        meta_past_len: MetaPastLen,
+        undo_redo: impl UndoRedo,
+        caller: MaybeLocation,
+    ) {
         // SAFETY: Only resources are accessed, entity location remains unchanged
         let world = unsafe { self.world_mut() };
-        world.buffer_undo_redo(past_len, undo_redo);
+        world.buffer_undo_redo_with_caller(meta_past_len, undo_redo, caller);
     }
 }
 
 impl BuffersUndoRedo for DeferredWorld<'_> {
-    #[track_caller]
-    fn buffer_undo_redo(&mut self, past_len: MetaPastLen, undo_redo: impl UndoRedo) {
+    fn buffer_undo_redo_with_caller(
+        &mut self,
+        meta_past_len: MetaPastLen,
+        undo_redo: impl UndoRedo,
+        caller: MaybeLocation,
+    ) {
         debug_assert!(self.get_resource::<RevMeta>().is_some_and(|meta| {
             meta.get_running_direction()
                 .is_some_and(|direction| match direction {
                     RevDirection::Forward {
                         meta_past_len: actual,
-                    } => actual == past_len,
+                    } => actual == meta_past_len,
                     _ => false,
                 })
         }));
         self.resource_mut::<UndoRedoBuffer>()
-            .buffer_undo_redo(past_len, undo_redo);
+            .buffer_undo_redo(meta_past_len, caller, undo_redo);
     }
 }
 
@@ -173,12 +226,17 @@ impl UndoRedoBuffer {
         self.0.is_empty()
     }
     #[track_caller]
-    pub(crate) fn buffer_undo_redo(&mut self, _: MetaPastLen, undo_redo: impl UndoRedo) {
+    pub(crate) fn buffer_undo_redo<T: UndoRedo>(
+        &mut self,
+        _: MetaPastLen,
+        caller: MaybeLocation,
+        undo_redo: T,
+    ) {
         let name = type_name_of_val(&undo_redo);
         let boxed = BoxedUndoRedo {
             undo_redo: SyncCell::new(Box::new(undo_redo)),
             name: DebugName::borrowed(name),
-            caller: MaybeLocation::caller(),
+            caller,
         };
         self.0.push(boxed);
     }
@@ -363,9 +421,10 @@ impl UndoRedoLog {
                 .try_resource_scope::<UndoRedoBuffer, _>(|world, mut buffer| {
                     if !buffer.0.is_empty() {
                         let meta = world.resource::<RevMeta>();
-                        let past_len = self.update_log.forward_past_len(meta);
+                        let meta_past_len = self.update_log.forward_past_len(meta);
                         let buffers = buffer.0.drain(..).map(|boxed| DebugHidden(boxed.undo_redo));
-                        self.undo_redo_log.forward_extend(meta, past_len, buffers);
+                        self.undo_redo_log
+                            .forward_extend(meta, meta_past_len, buffers);
                     }
                 })
                 .ok_or(UndoRedoLogError::UndoRedoBufferMissing { now }),
@@ -427,107 +486,94 @@ impl UndoRedoLog {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Resource)]
-pub enum RevOp {
-    // todo: assert in tests
-    RevSchedule {
-        direction: RevDirection,
-    },
-    Buffer {
-        direction: RevDirection,
-        buffer: Entity,
-    },
-    FinalDespawn {
-        buffer: bool,
-    },
-}
-
-impl RevOp {
-    pub(crate) fn scope(mut self, world: &mut World, c: impl FnOnce(&mut World)) {
-        match world.get_resource_mut::<Self>() {
-            None => {
-                world.insert_resource(self);
-                c(world);
-                world.remove_resource::<Self>();
-            }
-            Some(mut other) => {
-                core::mem::swap(&mut self, other.bypass_change_detection());
-                if matches!(*other, Self::FinalDespawn { .. }) {
-                    warn_once!(
-                        "a reversible buffering happens at the time of finalizing despawns, this may be unintentional"
-                    );
-                }
-                c(world);
-                world.insert_resource(self);
-            }
-        }
-    }
-}
-
-struct Take<B> {
-    bundle: Option<B>,
-    entity: Entity,
-}
-
-impl<B: Bundle + BundleFromComponents> UndoRedo for Take<B> {
-    fn undo(&mut self, world: &mut World) {
-        world
-            .entity_mut(self.entity)
-            .insert(self.bundle.take().expect("todo"));
-    }
-    fn redo(&mut self, world: &mut World) {
-        self.bundle = world.entity_mut(self.entity).take::<B>();
-    }
-}
-
-struct ResourceSwap<R: Resource>(Option<R>);
-
-impl<R: Resource> UndoRedo for ResourceSwap<R> {
-    fn undo(&mut self, world: &mut World) {
-        match world.get_resource_mut::<R>() {
-            Some(mut r1) => match self.0.as_mut() {
-                Some(r2) => core::mem::swap(&mut *r1, r2),
-                None => self.0 = world.remove_resource::<R>(),
-            },
-            None => {
-                if let Some(r2) = self.0.take() {
-                    world.insert_resource(r2)
-                }
-            }
-        }
-    }
-    fn redo(&mut self, world: &mut World) {
-        self.undo(world)
-    }
-}
-
-struct SpawnEmpty {
-    entity: Entity,
-    caller: MaybeLocation,
-}
-
-impl UndoRedo for SpawnEmpty {
-    fn undo(&mut self, world: &mut World) {
-        world.entity_mut(self.entity).insert(RevDespawned);
-    }
-    fn redo(&mut self, world: &mut World) {
-        world.entity_mut(self.entity).remove::<RevDespawned>();
-    }
-}
-
-fn rev_spawn_empty_inner(
-    entity_mut: &mut EntityWorldMut,
-    past_len: MetaPastLen,
-    caller: MaybeLocation,
-) {
-    let entity = entity_mut.id();
-    entity_mut.buffer_undo_redo(past_len, SpawnEmpty { entity, caller });
-    entity_mut
-        .resource_mut::<RevDespawnCleaner>()
-        .log_spawn(entity, caller, past_len);
-}
-
 #[cfg(test)]
 mod test {
-    // todo
+    use bevy_ecs::component::Component;
+
+    use super::*;
+
+    #[derive(Component)]
+    #[relationship(relationship_target = NonLinkedChildren)]
+    pub(super) struct NonLinkedChildOf(pub Entity);
+
+    #[derive(Component)]
+    #[relationship_target(relationship = NonLinkedChildOf)]
+    pub(super) struct NonLinkedChildren(Vec<Entity>);
+
+    pub(super) fn assert_undo_redo(
+        world: &mut World,
+        forward: impl FnOnce(&mut World, MetaPastLen),
+        backward_log: impl FnOnce(&mut World),
+        forward_log: impl FnOnce(&mut World),
+    ) {
+        assert_undo_redo_finalize(world, forward, backward_log, Some(forward_log), |_| {})
+    }
+
+    pub(super) fn assert_undo_redo_finalize(
+        world: &mut World,
+        forward: impl FnOnce(&mut World, MetaPastLen),
+        backward_log: impl FnOnce(&mut World),
+        forward_log: Option<impl FnOnce(&mut World)>,
+        finalize: impl FnOnce(&mut World),
+    ) {
+        use crate::meta::RevQueue;
+        use core::num::NonZeroU64;
+
+        crate::panic_on_error_events();
+        world.init_resource::<UndoRedoBuffer>();
+        world.register_disabling_component::<RevDespawned>();
+        let mut meta = RevMeta::new(NonZeroU64::MIN, false);
+
+        // forward
+        meta = meta
+            .update(|mut meta, direction| {
+                assert_eq!(direction, RevDirection::FORWARD_MIN);
+                meta.set_queue(RevQueue::RunBackwardLog);
+                world.insert_resource(meta);
+                forward(world, direction.meta_past_len());
+                world.remove_resource()
+            })
+            .unwrap();
+
+        // backward log
+        meta = meta
+            .update(|mut meta, direction| {
+                assert_eq!(direction, RevDirection::BackwardLog);
+                let queue = if forward_log.is_some() {
+                    RevQueue::RunForwardLog
+                } else {
+                    RevQueue::RunForward
+                };
+                meta.set_queue(queue);
+                world.insert_resource(meta);
+                world.resource_scope::<UndoRedoBuffer, _>(|world, mut buffer| buffer.undo(world));
+                backward_log(world);
+                world.remove_resource()
+            })
+            .unwrap();
+
+        if let Some(forward_log) = forward_log {
+            // forward log
+            meta = meta
+                .update(|mut meta, direction| {
+                    assert_eq!(direction, RevDirection::ForwardLog);
+                    meta.set_queue(RevQueue::RunForward);
+                    world.insert_resource(meta);
+                    world.resource_scope::<UndoRedoBuffer, _>(|world, mut buffer| {
+                        buffer.redo(world)
+                    });
+                    forward_log(world);
+                    world.remove_resource()
+                })
+                .unwrap();
+        }
+
+        // finalize
+        meta.update(|meta, _| {
+            world.insert_resource(meta);
+            finalize(world);
+            world.remove_resource()
+        })
+        .unwrap();
+    }
 }

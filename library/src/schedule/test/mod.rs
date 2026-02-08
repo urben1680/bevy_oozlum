@@ -4,7 +4,7 @@ use crate::{
     meta::{RevDirection, RevQueue},
     panic_on_error_events,
     schedule::RevUpdate,
-    undo_redo::{BuffersUndoRedo, RevCommands, UndoRedo},
+    undo_redo::{BuffersUndoRedo, /*RevCommands,*/ UndoRedo},
 };
 use bevy_app::{App, Update};
 use bevy_ecs::{
@@ -477,7 +477,7 @@ fn truncates_future_command_log() {
             && let Some(RevDirection::Forward { meta_past_len }) = meta.get_running_direction()
         {
             if meta.now() == 2 {
-                commands.rev_spawn_empty(meta_past_len);
+                //commands.rev_spawn_empty(meta_past_len); // todo
                 *command_queued = true;
             }
         }

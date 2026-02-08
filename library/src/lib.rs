@@ -128,6 +128,23 @@ ISSUES/DISCUSSIONS:
 - rev_insert_batch
 -- backup components one by one
 -- insert closure for each is noop
+
+
+undo_redo module is too big to maintain
+
+what do?
+
+- spawn_despawn
+-- rev_spawn
+-- rev_despawn with relationship linked despawn chain
+-- rev_log_scope for buffers
+- world / commands
+-- keep resource stuff
+-- spawn_despawn shorthand methods
+- entity world mut / commands
+-- rev_insert / rev_remove typed component
+--- new buffer approach: an centralized entity with EntityHashMap<C> component
+
 */
 // todo: deny
 #![deny(broken_intra_doc_links)] // works only in cargo doc --no-deps
@@ -150,9 +167,9 @@ pub mod prelude {
         IntoRevScheduleConfigs as _, RevSchedule as _, RevSystems, RevUpdate,
     };
     pub use crate::undo_redo::{
-        BuffersUndoRedo as _, RevCommands as _, RevComponentEntry, RevDeferredWorld as _,
-        RevEntityCommands as _, RevEntityWorldMut as _, RevIsDespawned as _, RevIsDespawned as _,
-        RevOp, RevWorld as _, UndoRedo, UndoRedoDirection,
+        BuffersUndoRedo as _, IsRevDespawned as _, IsRevDespawned as _,
+        RevComponentEntry, /*RevCommands as _, RevEntityCommands as _,*/
+        RevEntityWorldMut as _, RevWorld as _, UndoRedo, UndoRedoDirection,
     };
 }
 

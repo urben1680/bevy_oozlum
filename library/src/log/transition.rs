@@ -315,21 +315,21 @@ pub struct TransitionDrain<'a, T> {
 
 impl<'a, T> TransitionDrain<'a, T> {
     /// Returns log entries that were pushed before [`RevMeta::past_end`].
-    pub fn past(&mut self) -> Drain<T> {
+    pub fn past<'b>(&'b mut self) -> Drain<'b, T> {
         let end = self.gap_range.take_drain_past_end();
         self.log.transitions.drain(..end)
     }
 
     /// Returns log entries that were pushed after [`RevMeta::now`] which, at this point of time,
     /// is equal to [`RevMeta::future_end`].
-    pub fn future(&mut self) -> Drain<T> {
+    pub fn future<'b>(&'b mut self) -> Drain<'b, T> {
         let start = self.gap_range.drain_future_start();
         self.log.transitions.drain(start..)
     }
 
     /// Returns log entries that were pushed before [`RevMeta::past_end`] or after [`RevMeta::now`]
     /// which, at this point of time, is equal to [`RevMeta::future_end`].
-    pub fn all(&mut self) -> DrainAll<T> {
+    pub fn all<'b>(&'b mut self) -> DrainAll<'b, T> {
         DrainAll::new(
             &mut self.log.transitions,
             &mut self.gap_range,
@@ -343,7 +343,7 @@ impl<'a, T> TransitionDrain<'a, T> {
         self.gap_range.is_clear()
     }
 
-    pub(super) fn iter_past(&self) -> Iter<T> {
+    pub(super) fn iter_past<'b>(&'b self) -> Iter<'b, T> {
         self.log.transitions.range(..self.gap_range.start)
     }
 
