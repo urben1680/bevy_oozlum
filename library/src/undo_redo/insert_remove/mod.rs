@@ -356,6 +356,8 @@ impl<T: Send + 'static> UndoRedo for RevNewRequired<T> {
     }
 }
 
+/// Adapter trait for [`Bundle`] implementors to enable reversible insert/remove of the contained
+/// components and common bundle effects like [`children!`](bevy_ecs::children) returns.
 pub trait RevBundle<Marker>: Bundle {
     /// Inserts `self` into `entity` depending on `mode`.
     ///
@@ -373,8 +375,9 @@ pub trait RevBundle<Marker>: Bundle {
 
     /// This is called within [`RevBundle::rev_insert`] and should not be called elsewhere as this
     /// alone will not make the insertion of required components reversible.
+    // todo: remove by using a private wrapper?
     #[doc(hidden)]
-    fn rev_insert_nested(
+    fn rev_insert_inner(
         self,
         meta_past_len: MetaPastLen,
         entity: &mut EntityWorldMut,
@@ -454,7 +457,7 @@ fn required_inner<T: Send + 'static>(
 impl RevBundle<()> for () {
     fn rev_insert(self, _: MetaPastLen, _: &mut EntityWorldMut, _: InsertMode, _: MaybeLocation) {}
 
-    fn rev_insert_nested(
+    fn rev_insert_inner(
         self,
         _: MetaPastLen,
         _: &mut EntityWorldMut,
@@ -475,10 +478,10 @@ impl<C: Component> RevBundle<[C; 1]> for C {
         caller: MaybeLocation,
     ) {
         required_of_component::<C>(meta_past_len, entity, caller);
-        self.rev_insert_nested(meta_past_len, entity, mode, caller);
+        self.rev_insert_inner(meta_past_len, entity, mode, caller);
     }
 
-    fn rev_insert_nested(
+    fn rev_insert_inner(
         mut self,
         meta_past_len: MetaPastLen,
         entity: &mut EntityWorldMut,
@@ -548,10 +551,10 @@ impl<R: Relationship, B: Bundle> RevBundle<[R; 2]> for SpawnOneRelated<R, B> {
         mode: InsertMode,
         caller: MaybeLocation,
     ) {
-        self.rev_insert_nested(meta_past_len, entity, mode, caller);
+        self.rev_insert_inner(meta_past_len, entity, mode, caller);
     }
 
-    fn rev_insert_nested(
+    fn rev_insert_inner(
         self,
         meta_past_len: MetaPastLen,
         entity: &mut EntityWorldMut,
@@ -585,10 +588,10 @@ impl<R: Relationship, L: SpawnableList<R> + Send + Sync + 'static> RevBundle<[R;
         mode: InsertMode,
         caller: MaybeLocation,
     ) {
-        self.rev_insert_nested(meta_past_len, entity, mode, caller);
+        self.rev_insert_inner(meta_past_len, entity, mode, caller);
     }
 
-    fn rev_insert_nested(
+    fn rev_insert_inner(
         self,
         meta_past_len: MetaPastLen,
         entity: &mut EntityWorldMut,
@@ -630,10 +633,10 @@ macro_rules! impl_buffer_bundle {
                 caller: MaybeLocation,
             ) {
                 required_of_bundle::<Self>(meta_past_len, entity, caller);
-                self.rev_insert_nested(meta_past_len, entity, mode, caller);
+                self.rev_insert_inner(meta_past_len, entity, mode, caller);
             }
 
-            fn rev_insert_nested(
+            fn rev_insert_inner(
                 self,
                 meta_past_len: MetaPastLen,
                 entity: &mut EntityWorldMut,
@@ -641,7 +644,7 @@ macro_rules! impl_buffer_bundle {
                 caller: MaybeLocation,
             ) {
                 let ($($var,)*) = self;
-                ($($var.rev_insert_nested(meta_past_len, entity, mode, caller),)*);
+                ($($var.rev_insert_inner(meta_past_len, entity, mode, caller),)*);
             }
 
             fn rev_remove(

@@ -343,17 +343,18 @@ impl DespawnFinalizer {
     }
 }
 
-// todo: decide for either rev_is or is_rev
+/// Extension trait for entity pointers to check if an entity is reversibly despawned.
+///
+/// See the [`RevDespawned`](super::RevDespawned) documentation to understand the mechanics of
+/// reversible spawn/despawn.
 pub trait IsRevDespawned {
+    /// Returns `true` if the entity is markes as reversibly despawned. In that case the entity
+    /// should be treated as despawned. Returns `false` otherwise.
+    ///
+    /// See the [`RevDespawned`](super::RevDespawned) documentation to understand the mechanics of
+    /// reversible spawn/despawn.
     fn is_rev_despawned(&self) -> bool;
 }
-
-/* todo: implement for entity pointers when https://github.com/bevyengine/bevy/issues/20494 landed
-pub trait RevDespawnedBy {
-    fn get_rev_despawned_by(&self) -> Option<MaybeLocation>;
-    fn rev_despawned_by(&self) -> MaybeLocation<Option<&'static Location<'static>>>;
-}
-*/
 
 impl IsRevDespawned for EntityRef<'_> {
     fn is_rev_despawned(&self) -> bool {

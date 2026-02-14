@@ -1,4 +1,9 @@
-use crate::undo_redo::test::{NonLinkedChildOf, assert_undo_redo};
+use bevy_ecs::hierarchy::ChildOf;
+
+use crate::undo_redo::{
+    BuffersUndoRedo,
+    test::{NonLinkedChildOf, assert_undo_redo},
+};
 
 use super::*;
 

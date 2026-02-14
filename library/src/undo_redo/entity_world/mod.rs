@@ -15,18 +15,23 @@ use bevy_ecs::{
     relationship::{
         RelatedSpawner, Relationship, RelationshipSourceCollection, RelationshipTarget,
     },
-    world::{EntityRef, EntityWorldMut},
+    world::EntityWorldMut,
 };
 use core::marker::PhantomData;
 
 #[cfg(test)]
 mod test;
 
+/// Extension trait for [`RevEntityWorldMut`] with reversible variants of verious methods.
 pub trait RevEntityWorldMut<'w> {
+    /// Shorthand method of [`EntityWorldMut::buffer_undo_redo`] with applying
+    /// `undo_redo.redo(&mut self)` immediately. Useful when there is no difference between doing
+    /// and redoing.
     fn redo_and_buffer(&mut self, meta_past_len: MetaPastLen, undo_redo: impl UndoRedo) {
         self.redo_and_buffer_with_caller(meta_past_len, undo_redo, MaybeLocation::caller());
     }
 
+    #[doc(hidden)]
     fn redo_and_buffer_with_caller(
         &mut self,
         meta_past_len: MetaPastLen,
@@ -34,8 +39,16 @@ pub trait RevEntityWorldMut<'w> {
         caller: MaybeLocation,
     );
 
+    /// Shorthand method of [`RevMeta::get_running_direction`].
     fn get_running_direction(&self) -> Option<RevDirection>;
 
+    /// Helper method to mark an entity as reversibly spawned. Useful when the actual spawn is
+    /// hidden and cannot be done with [`World::rev_spawn`](super::World::rev_spawn).
+    ///
+    /// When possible, use `World::rev_spawn` instead.
+    ///
+    /// See the [`RevDespawned`](super::RevDespawned) documentation to understand the mechanics of
+    /// reversible spawn/despawn.
     #[track_caller]
     fn rev_mark_spawned(
         &mut self,
@@ -59,11 +72,14 @@ pub trait RevEntityWorldMut<'w> {
     ) -> Result<&mut Self, EntityRevDespawnedError>;
 
     /// Reversible version of [`EntityWorldMut::despawn`].
+    ///
+    /// See the [`RevDespawned`] documentation to understand the mechanics of reversible
+    /// spawn/despawn.
     fn rev_despawn(self, meta_past_len: MetaPastLen);
 
     #[doc(hidden)]
-    fn rev_mark_despawned_with_caller(
-        &mut self,
+    fn rev_despawn_with_caller(
+        self,
         meta_past_len: MetaPastLen,
         caller: MaybeLocation,
     ) -> Result<(), EntityRevDespawnedError>;
@@ -347,38 +363,43 @@ pub trait RevEntityWorldMut<'w> {
         self.rev_replace_related_with_caller::<ChildOf>(meta_past_len, children, caller)
     }
 
-    /// Reversible version of [`EntityWorldMut::despawned_related`].
+    /// Reversible version of [`EntityWorldMut::despawn_related`].
+    ///
+    /// See the [`RevDespawned`] documentation to understand the mechanics of reversible
+    /// spawn/despawn.
     #[track_caller]
-    fn rev_mark_despawned_related<S: RelationshipTarget>(
+    fn rev_despawn_related<S: RelationshipTarget>(
         &mut self,
         meta_past_len: MetaPastLen,
     ) -> &mut Self {
-        self.rev_mark_despawned_related_with_caller::<S>(meta_past_len, MaybeLocation::caller())
+        self.rev_despawn_related_with_caller::<S>(meta_past_len, MaybeLocation::caller())
             .unwrap()
     }
 
-    // todo: non-mark methods call this
     #[doc(hidden)]
-    fn rev_mark_despawned_related_with_caller<S: RelationshipTarget>(
+    fn rev_despawn_related_with_caller<S: RelationshipTarget>(
         &mut self,
         meta_past_len: MetaPastLen,
         caller: MaybeLocation,
     ) -> Result<&mut Self, EntityRevDespawnedError>;
 
-    /// Reversible version of [`EntityWorldMut::despawned_children`].
+    /// Reversible version of [`EntityWorldMut::despawn_children`].
+    ///
+    /// See the [`RevDespawned`] documentation to understand the mechanics of reversible
+    /// spawn/despawn.
     #[track_caller]
-    fn rev_mark_despawned_children(&mut self, meta_past_len: MetaPastLen) -> &mut Self {
-        self.rev_mark_despawned_children_with_caller(meta_past_len, MaybeLocation::caller())
+    fn rev_despawn_children(&mut self, meta_past_len: MetaPastLen) -> &mut Self {
+        self.rev_despawn_children_with_caller(meta_past_len, MaybeLocation::caller())
             .unwrap()
     }
 
     #[doc(hidden)]
-    fn rev_mark_despawned_children_with_caller(
+    fn rev_despawn_children_with_caller(
         &mut self,
         meta_past_len: MetaPastLen,
         caller: MaybeLocation,
     ) -> Result<&mut Self, EntityRevDespawnedError> {
-        self.rev_mark_despawned_related_with_caller::<Children>(meta_past_len, caller)
+        self.rev_despawn_related_with_caller::<Children>(meta_past_len, caller)
     }
 
     /// Reversible version of [`EntityWorldMut::entry`].
@@ -438,6 +459,9 @@ pub trait RevEntityWorldMut<'w> {
         meta_past_len: MetaPastLen,
         caller: MaybeLocation,
     ) -> Result<&mut Self, EntityRevDespawnedError>;
+
+    #[doc(hidden)]
+    fn assert_not_rev_despawned(&mut self) -> Result<(), EntityRevDespawnedError>;
 }
 
 impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
@@ -472,7 +496,7 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
         bundle: T,
         caller: MaybeLocation,
     ) -> Result<&mut Self, EntityRevDespawnedError> {
-        assert_not_rev_despawned(&*self)?;
+        self.assert_not_rev_despawned()?;
         bundle.rev_insert(meta_past_len, self, InsertMode::Replace, caller);
         Ok(self)
     }
@@ -483,7 +507,7 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
         bundle: T,
         caller: MaybeLocation,
     ) -> Result<&mut Self, EntityRevDespawnedError> {
-        assert_not_rev_despawned(&*self)?;
+        self.assert_not_rev_despawned()?;
         bundle.rev_insert(meta_past_len, self, InsertMode::Keep, caller);
         Ok(self)
     }
@@ -493,7 +517,7 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
         meta_past_len: MetaPastLen,
         caller: MaybeLocation,
     ) -> Result<&mut Self, EntityRevDespawnedError> {
-        assert_not_rev_despawned(&*self)?;
+        self.assert_not_rev_despawned()?;
         T::rev_remove(meta_past_len, self, caller);
         Ok(self)
     }
@@ -509,18 +533,18 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
         include_unlinked_related: bool,
         caller: MaybeLocation,
     ) -> Result<&mut Self, EntityRevDespawnedError> {
-        assert_not_rev_despawned(&*self)?;
+        self.assert_not_rev_despawned()?;
         mark_entity::<true>(meta_past_len, self, include_unlinked_related, caller);
         Ok(self)
     }
 
-    fn rev_mark_despawned_with_caller(
-        &mut self,
+    fn rev_despawn_with_caller(
+        mut self,
         meta_past_len: MetaPastLen,
         caller: MaybeLocation,
     ) -> Result<(), EntityRevDespawnedError> {
-        assert_not_rev_despawned(&*self)?;
-        mark_entity::<false>(meta_past_len, self, false, caller);
+        self.assert_not_rev_despawned()?;
+        mark_entity::<false>(meta_past_len, &mut self, false, caller);
         Ok(())
     }
 
@@ -530,7 +554,7 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
         func: impl FnOnce(&mut RelatedSpawner<'_, R>),
         caller: MaybeLocation,
     ) -> Result<&mut Self, EntityRevDespawnedError> {
-        assert_not_rev_despawned(&*self)?;
+        self.assert_not_rev_despawned()?;
         let new_related =
             get_new_related_entities::<R>(self, |entity| entity.with_related_entities(func));
         self.world_scope(|world| {
@@ -551,7 +575,7 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
         bundle: impl Bundle,
         caller: MaybeLocation,
     ) -> Result<&mut Self, EntityRevDespawnedError> {
-        assert_not_rev_despawned(&*self)?;
+        self.assert_not_rev_despawned()?;
         let new_related = get_new_related::<R>(self, |entity| entity.with_related::<R>(bundle));
         let id = self.id();
         self.world_scope(|world| {
@@ -572,14 +596,14 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
         related: E,
         caller: MaybeLocation,
     ) -> Result<&mut Self, EntityRevDespawnedError> {
-        assert_not_rev_despawned(&*self)?;
-        self.add_related::<R>(related.as_ref());
+        self.assert_not_rev_despawned()?;
         let id = self.id();
-        self.buffer_undo_redo_with_caller(
-            meta_past_len,
-            AddRemoveRelated::<R, _, true>::new(id, related, caller),
-            caller,
-        );
+        self.add_related::<R>(related.as_ref())
+            .buffer_undo_redo_with_caller(
+                meta_past_len,
+                AddRemoveRelated::<R, _, true>::new(id, related, caller),
+                caller,
+            );
         Ok(self)
     }
 
@@ -589,14 +613,14 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
         entity: Entity,
         caller: MaybeLocation,
     ) -> Result<&mut Self, EntityRevDespawnedError> {
-        assert_not_rev_despawned(&*self)?;
-        self.add_one_related::<R>(entity);
+        self.assert_not_rev_despawned()?;
         let id = self.id();
-        self.buffer_undo_redo_with_caller(
-            meta_past_len,
-            AddRemoveRelated::<R, _, true>::new(id, [entity], caller),
-            caller,
-        );
+        self.add_one_related::<R>(entity)
+            .buffer_undo_redo_with_caller(
+                meta_past_len,
+                AddRemoveRelated::<R, _, true>::new(id, [entity], caller),
+                caller,
+            );
         Ok(self)
     }
 
@@ -605,12 +629,12 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
         meta_past_len: MetaPastLen,
         caller: MaybeLocation,
     ) -> Result<&mut Self, EntityRevDespawnedError> {
-        assert_not_rev_despawned(&*self)?;
+        self.assert_not_rev_despawned()?;
         self.get::<R::RelationshipTarget>()
             .map(|related| related.collection().iter().collect::<Vec<_>>())
             .map(|related| {
                 let id = self.id();
-                self.buffer_undo_redo_with_caller(
+                self.detach_all_related::<R>().buffer_undo_redo_with_caller(
                     meta_past_len,
                     AddRemoveRelated::<R, _, false>::new(id, related, caller),
                     caller,
@@ -625,14 +649,19 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
         related: &[Entity],
         caller: MaybeLocation,
     ) -> Result<&mut Self, EntityRevDespawnedError> {
-        assert_not_rev_despawned(&*self)?;
+        self.assert_not_rev_despawned()?;
         if self.contains::<R::RelationshipTarget>() {
             let id = self.id();
-            self.buffer_undo_redo_with_caller(
-                meta_past_len,
-                AddRemoveRelated::<R, _, false>::new(id, Box::<[Entity]>::from(related), caller),
-                caller,
-            )
+            self.remove_related::<R>(related)
+                .buffer_undo_redo_with_caller(
+                    meta_past_len,
+                    AddRemoveRelated::<R, _, false>::new(
+                        id,
+                        Box::<[Entity]>::from(related),
+                        caller,
+                    ),
+                    caller,
+                )
         }
         Ok(self)
     }
@@ -652,53 +681,50 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
     }
 
     #[track_caller]
-    fn rev_despawn(mut self, meta_past_len: MetaPastLen) {
-        self.rev_mark_despawned_with_caller(meta_past_len, MaybeLocation::caller())
+    fn rev_despawn(self, meta_past_len: MetaPastLen) {
+        self.rev_despawn_with_caller(meta_past_len, MaybeLocation::caller())
             .unwrap();
     }
 
-    fn rev_mark_despawned_related_with_caller<S: RelationshipTarget>(
+    fn rev_despawn_related_with_caller<S: RelationshipTarget>(
         &mut self,
         meta_past_len: MetaPastLen,
         caller: MaybeLocation,
     ) -> Result<&mut Self, EntityRevDespawnedError> {
-        assert_not_rev_despawned(&*self)?;
+        self.assert_not_rev_despawned()?;
         let Some(target) = self.get::<S>() else {
             return Ok(self);
         };
         let related: Vec<Entity> = target.collection().iter().collect();
-        self.world_scope(|world| {
-            world.rev_mark_spawned_batch_with_caller(meta_past_len, &*related, false, caller)
-        });
         let id = self.id();
-        self.buffer_undo_redo_with_caller(
+        self.world_scope(|world| {
+            world.rev_despawn_batch_with_caller(meta_past_len, &*related, caller)
+        });
+        self.redo_and_buffer_with_caller(
             meta_past_len,
             AddRemoveRelated::<S::Relationship, _, false>::new(id, related, caller),
             caller,
         );
         Ok(self)
     }
-}
 
-pub(crate) fn assert_not_rev_despawned<'a, E: 'a + Into<EntityRef<'a>>>(
-    entity: E,
-) -> Result<(), EntityRevDespawnedError> {
-    let entity = entity.into();
-    let id = entity.id();
-    if size_of::<MaybeLocation>() == 0 {
-        if entity.is_rev_despawned() {
+    fn assert_not_rev_despawned(&mut self) -> Result<(), EntityRevDespawnedError> {
+        let id = self.id();
+        if size_of::<MaybeLocation>() == 0 {
+            if self.is_rev_despawned() {
+                return Err(EntityRevDespawnedError {
+                    entity: id,
+                    caller: MaybeLocation::caller(),
+                });
+            }
+        } else if let Some(marker) = self.get::<RevDespawned>() {
             return Err(EntityRevDespawnedError {
                 entity: id,
-                caller: MaybeLocation::caller(),
+                caller: marker.0,
             });
         }
-    } else if let Some(marker) = entity.get::<RevDespawned>() {
-        return Err(EntityRevDespawnedError {
-            entity: id,
-            caller: marker.0,
-        });
+        Ok(())
     }
-    Ok(())
 }
 
 /// [`ComponentEntry`](bevy_ecs::world::ComponentEntry) variant with additional reversible methods.

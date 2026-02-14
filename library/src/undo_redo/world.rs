@@ -15,10 +15,10 @@ use bevy_ecs::{
     world::{EntityWorldMut, FromWorld, Mut, World},
 };
 
-#[cfg(test)]
-mod test;
-
+/// Extension trait for [`World`] with reversible variants of verious methods.
 pub trait RevWorld {
+    /// Shorthand method of [`World::buffer_undo_redo`] with applying `undo_redo.redo(&mut self)`
+    /// immediately. Useful when there is no difference between doing and redoing.
     #[track_caller]
     fn redo_and_buffer(&mut self, meta_past_len: MetaPastLen, undo_redo: impl UndoRedo) {
         self.redo_and_buffer_with_caller(meta_past_len, undo_redo, MaybeLocation::caller());
@@ -32,8 +32,16 @@ pub trait RevWorld {
         caller: MaybeLocation,
     );
 
+    /// Shorthand method of [`RevMeta::get_running_direction`].
     fn get_running_direction(&self) -> Option<RevDirection>;
 
+    /// Helper method to mark an entity as reversibly spawned. Useful when the actual spawn is
+    /// hidden and cannot be done with [`World::rev_spawn`].
+    ///
+    /// When possible, use `World::rev_spawn` instead.
+    ///
+    /// See the [`RevDespawned`](super::RevDespawned) documentation to understand the mechanics of
+    /// reversible spawn/despawn.
     #[track_caller]
     fn rev_mark_spawned(
         &mut self,
@@ -58,9 +66,13 @@ pub trait RevWorld {
         caller: MaybeLocation,
     ) -> bool;
 
-    /// Helper method to mark a spawned batch as reversibly spawned.
+    /// Helper method to mark a spawned batch as reversibly spawned. Useful when the actual spawn is
+    /// hidden and cannot be done with [`World::rev_spawn_batch`].
     ///
-    /// When possible, use [`World::rev_spawn_batch`] instead.
+    /// When possible, use `World::rev_spawn_batch` instead.
+    ///
+    /// See the [`RevDespawned`](super::RevDespawned) documentation to understand the mechanics of
+    /// reversible spawn/despawn.
     #[track_caller]
     fn rev_mark_spawned_batch(
         &mut self,
@@ -85,27 +97,34 @@ pub trait RevWorld {
         caller: MaybeLocation,
     );
 
+    /// Reversible version of [`World::despawn`].
+    ///
+    /// See the [`RevDespawned`](super::RevDespawned) documentation to understand the mechanics of
+    /// reversible spawn/despawn.
     #[track_caller]
-    fn rev_mark_despawned(&mut self, meta_past_len: MetaPastLen, entity: Entity) -> bool {
-        self.rev_mark_despawned_with_caller(meta_past_len, entity, MaybeLocation::caller())
+    fn rev_despawn(&mut self, meta_past_len: MetaPastLen, entity: Entity) -> bool {
+        self.rev_despawn_with_caller(meta_past_len, entity, MaybeLocation::caller())
     }
 
     #[doc(hidden)]
-    fn rev_mark_despawned_with_caller(
+    fn rev_despawn_with_caller(
         &mut self,
         meta_past_len: MetaPastLen,
         entity: Entity,
         caller: MaybeLocation,
     ) -> bool;
 
-    /// Helper method to mark a spawned batch as reversibly despawned.
+    /// Reversibly despawn multiple entities.
+    ///
+    /// See the [`RevDespawned`](super::RevDespawned) documentation to understand the mechanics of
+    /// reversible spawn/despawn.
     #[track_caller]
-    fn rev_mark_despawned_batch(&mut self, meta_past_len: MetaPastLen, entities: &[Entity]) {
-        self.rev_mark_despawned_batch_with_caller(meta_past_len, entities, MaybeLocation::caller())
+    fn rev_despawn_batch(&mut self, meta_past_len: MetaPastLen, entities: &[Entity]) {
+        self.rev_despawn_batch_with_caller(meta_past_len, entities, MaybeLocation::caller())
     }
 
     #[doc(hidden)]
-    fn rev_mark_despawned_batch_with_caller(
+    fn rev_despawn_batch_with_caller(
         &mut self,
         meta_past_len: MetaPastLen,
         entities: &[Entity],
@@ -113,6 +132,9 @@ pub trait RevWorld {
     );
 
     /// Reversible version of [`World::spawn`].
+    ///
+    /// See the [`RevDespawned`](super::RevDespawned) documentation to understand the mechanics of
+    /// reversible spawn/despawn.
     #[track_caller]
     fn rev_spawn(&mut self, meta_past_len: MetaPastLen, bundle: impl Bundle) -> EntityWorldMut<'_> {
         self.rev_spawn_with_caller(meta_past_len, bundle, MaybeLocation::caller())
@@ -127,6 +149,9 @@ pub trait RevWorld {
     ) -> EntityWorldMut<'_>;
 
     /// Reversible version of [`World::spawn_at`].
+    ///
+    /// See the [`RevDespawned`](super::RevDespawned) documentation to understand the mechanics of
+    /// reversible spawn/despawn.
     #[track_caller]
     fn rev_spawn_at(
         &mut self,
@@ -147,6 +172,9 @@ pub trait RevWorld {
     ) -> Result<EntityWorldMut<'_>, SpawnError>;
 
     /// Reversible version of [`World::spawn_empty`].
+    ///
+    /// See the [`RevDespawned`](super::RevDespawned) documentation to understand the mechanics of
+    /// reversible spawn/despawn.
     #[track_caller]
     fn rev_spawn_empty(&mut self, meta_past_len: MetaPastLen) -> EntityWorldMut<'_> {
         self.rev_spawn_empty_with_caller(meta_past_len, MaybeLocation::caller())
@@ -160,6 +188,9 @@ pub trait RevWorld {
     ) -> EntityWorldMut<'_>;
 
     /// Reversible version of [`World::spawn_empty_at`].
+    ///
+    /// See the [`RevDespawned`](super::RevDespawned) documentation to understand the mechanics of
+    /// reversible spawn/despawn.
     #[track_caller]
     fn rev_spawn_empty_at(
         &mut self,
@@ -178,6 +209,9 @@ pub trait RevWorld {
     ) -> Result<EntityWorldMut<'_>, SpawnError>;
 
     /// Reversible version of [`World::spawn_batch`].
+    ///
+    /// See the [`RevDespawned`](super::RevDespawned) documentation to understand the mechanics of
+    /// reversible spawn/despawn.
     #[track_caller]
     fn rev_spawn_batch<I>(&mut self, meta_past_len: MetaPastLen, iter: I) -> Vec<Entity>
     where
@@ -327,7 +361,7 @@ impl RevWorld for World {
         );
     }
 
-    fn rev_mark_despawned_with_caller(
+    fn rev_despawn_with_caller(
         &mut self,
         meta_past_len: MetaPastLen,
         entity: Entity,
@@ -339,7 +373,7 @@ impl RevWorld for World {
         mark_entity::<false>(meta_past_len, &mut entity, false, caller)
     }
 
-    fn rev_mark_despawned_batch_with_caller(
+    fn rev_despawn_batch_with_caller(
         &mut self,
         meta_past_len: MetaPastLen,
         entities: &[Entity],
