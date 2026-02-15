@@ -43,13 +43,13 @@ fn test_add_remove_related<const ADD: bool>() {
                 AddRemoveRelated::<ChildOf, _, ADD>::new(parent, [child], MaybeLocation::caller()),
             );
         },
-        |world| {
+        |world, _| {
             assert_eq!(
                 world.get::<ChildOf>(child),
                 (!ADD).then_some(&ChildOf(parent))
             );
         },
-        |world| {
+        |world, _| {
             assert_eq!(world.get::<ChildOf>(child), ADD.then_some(&ChildOf(parent)));
         },
     );

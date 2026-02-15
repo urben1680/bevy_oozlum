@@ -488,6 +488,8 @@ impl UndoRedoLog {
 
 #[cfg(test)]
 mod test {
+    use std::ops::Deref;
+
     use bevy_ecs::component::Component;
 
     use super::*;
@@ -500,21 +502,28 @@ mod test {
     #[relationship_target(relationship = NonLinkedChildOf)]
     pub(super) struct NonLinkedChildren(Vec<Entity>);
 
-    pub(super) fn assert_undo_redo(
-        world: &mut World,
-        forward: impl FnOnce(&mut World, MetaPastLen),
-        backward_log: impl FnOnce(&mut World),
-        forward_log: impl FnOnce(&mut World),
-    ) {
-        assert_undo_redo_finalize(world, forward, backward_log, Some(forward_log), |_| {})
+    impl Deref for NonLinkedChildren {
+        type Target = Vec<Entity>;
+        fn deref(&self) -> &Self::Target {
+            &self.0
+        }
     }
 
-    pub(super) fn assert_undo_redo_finalize(
+    pub(super) fn assert_undo_redo<T>(
         world: &mut World,
-        forward: impl FnOnce(&mut World, MetaPastLen),
-        backward_log: impl FnOnce(&mut World),
-        forward_log: Option<impl FnOnce(&mut World)>,
-        finalize: impl FnOnce(&mut World),
+        forward: impl FnOnce(&mut World, MetaPastLen) -> T,
+        backward_log: impl FnOnce(&mut World, &mut T),
+        forward_log: impl FnOnce(&mut World, &mut T),
+    ) {
+        assert_undo_redo_finalize(world, forward, backward_log, Some(forward_log), |_, _| {})
+    }
+
+    pub(super) fn assert_undo_redo_finalize<T>(
+        world: &mut World,
+        forward: impl FnOnce(&mut World, MetaPastLen) -> T,
+        backward_log: impl FnOnce(&mut World, &mut T),
+        forward_log: Option<impl FnOnce(&mut World, &mut T)>,
+        finalize: impl FnOnce(&mut World, &mut T),
     ) {
         use crate::meta::RevQueue;
         use core::num::NonZeroU64;
@@ -523,6 +532,7 @@ mod test {
         world.init_resource::<UndoRedoBuffer>();
         world.register_disabling_component::<RevDespawned>();
         let mut meta = RevMeta::new(NonZeroU64::MIN, false);
+        let mut state = None;
 
         // forward
         meta = meta
@@ -530,7 +540,8 @@ mod test {
                 assert_eq!(direction, RevDirection::FORWARD_MIN);
                 meta.set_queue(RevQueue::RunBackwardLog);
                 world.insert_resource(meta);
-                forward(world, direction.meta_past_len());
+                state = Some(forward(world, direction.meta_past_len()));
+                update_spawn_despawn(world).unwrap();
                 world.remove_resource()
             })
             .unwrap();
@@ -547,7 +558,8 @@ mod test {
                 meta.set_queue(queue);
                 world.insert_resource(meta);
                 world.resource_scope::<UndoRedoBuffer, _>(|world, mut buffer| buffer.undo(world));
-                backward_log(world);
+                update_spawn_despawn(world).unwrap();
+                backward_log(world, state.as_mut().unwrap());
                 world.remove_resource()
             })
             .unwrap();
@@ -562,7 +574,8 @@ mod test {
                     world.resource_scope::<UndoRedoBuffer, _>(|world, mut buffer| {
                         buffer.redo(world)
                     });
-                    forward_log(world);
+                    update_spawn_despawn(world).unwrap();
+                    forward_log(world, state.as_mut().unwrap());
                     world.remove_resource()
                 })
                 .unwrap();
@@ -571,7 +584,8 @@ mod test {
         // finalize
         meta.update(|meta, _| {
             world.insert_resource(meta);
-            finalize(world);
+            update_spawn_despawn(world).unwrap();
+            finalize(world, state.as_mut().unwrap());
             world.remove_resource()
         })
         .unwrap();

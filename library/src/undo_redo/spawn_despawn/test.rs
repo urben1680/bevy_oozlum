@@ -192,19 +192,15 @@ fn test<const SPAWN: bool>(
                     caller,
                 );
             }
-            update_spawn_despawn(world).unwrap();
             hierarchy.assert_rev_despawned_nested(world, forward);
         },
-        |world| {
-            update_spawn_despawn(world).unwrap();
+        |world, _| {
             hierarchy.assert_rev_despawned_nested(world, backward);
         },
-        forward_finalized.then_some(|world: &mut World| {
-            update_spawn_despawn(world).unwrap();
+        forward_finalized.then_some(|world: &mut World, _: &mut _| {
             hierarchy.assert_rev_despawned_nested(world, forward);
         }),
-        |world| {
-            update_spawn_despawn(world).unwrap();
+        |world, _| {
             let finalized = if forward_finalized { forward } else { backward };
             hierarchy.assert_despawned_nested(world, finalized);
         },

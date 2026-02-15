@@ -1,5 +1,3 @@
-use std::cell::OnceCell;
-
 use bevy_ecs::{
     hierarchy::{ChildOf, Children},
     spawn::SpawnRelated,
@@ -154,7 +152,7 @@ fn insert(mode: InsertMode) {
                 Some(&RequiredComponent2(2))
             );
         },
-        |world| {
+        |world, _| {
             let entity = world.entity(entity);
             assert_eq!(entity.get::<PlainComponent>(), Some(&PlainComponent(2)));
             assert_eq!(entity.get::<RequiringComponent>(), None);
@@ -164,7 +162,7 @@ fn insert(mode: InsertMode) {
                 Some(&RequiredComponent2(2))
             );
         },
-        |world| {
+        |world, _| {
             let entity = world.entity(entity);
             assert_eq!(entity.get::<PlainComponent>(), Some(&maybe_overwritten));
             assert_eq!(
@@ -209,13 +207,13 @@ fn remove() {
             );
             assert_eq!(entity.get::<PlainComponent>(), None);
         },
-        |world| {
+        |world, _| {
             assert_eq!(
                 world.get::<PlainComponent>(entity),
                 Some(&PlainComponent(1))
             );
         },
-        |world| {
+        |world, _| {
             assert_eq!(world.get::<PlainComponent>(entity), None);
         },
     );
@@ -224,7 +222,6 @@ fn remove() {
 fn insert_related(one: bool) {
     let mut world = World::new();
     let parent = world.spawn_empty().id();
-    let child = OnceCell::new();
 
     assert_undo_redo(
         &mut world,
@@ -246,24 +243,25 @@ fn insert_related(one: bool) {
                 );
             }
             let child_id = *parent_mut.get::<Children>().unwrap().iter().next().unwrap();
-            child.set(child_id).unwrap();
             let child_ref = world.get_entity(child_id).unwrap();
             assert_eq!(child_ref.get::<ChildOf>(), Some(&ChildOf(parent)));
             assert!(!child_ref.is_rev_despawned());
+            child_id
         },
-        |world| {
+        |world, child| {
             assert_eq!(world.get::<Children>(parent), None);
-            let child_ref = world.get_entity(*child.get().unwrap()).unwrap();
+            let child_ref = world.get_entity(*child).unwrap();
             assert_eq!(child_ref.get::<ChildOf>(), None);
             assert!(child_ref.is_rev_despawned());
         },
-        |world| {
+        |world, child| {
             let child_id = *world
                 .get::<Children>(parent)
                 .unwrap()
                 .iter()
                 .next()
                 .unwrap();
+            assert_eq!(child_id, *child);
             let child_ref = world.get_entity(child_id).unwrap();
             assert_eq!(child_ref.get::<ChildOf>(), Some(&ChildOf(parent)));
             assert!(!child_ref.is_rev_despawned());
