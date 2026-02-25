@@ -271,7 +271,7 @@ pub trait RevEntityWorldMut<'w> {
     fn rev_remove_related<R: Relationship>(
         &mut self,
         meta_past_len: MetaPastLen,
-        related: &[Entity],
+        related: impl AsRef<[Entity]> + Send + 'static,
     ) -> &mut Self {
         self.rev_remove_related_with_caller::<R>(meta_past_len, related, MaybeLocation::caller())
             .unwrap()
@@ -281,7 +281,7 @@ pub trait RevEntityWorldMut<'w> {
     fn rev_remove_related_with_caller<R: Relationship>(
         &mut self,
         meta_past_len: MetaPastLen,
-        related: &[Entity],
+        related: impl AsRef<[Entity]> + Send + 'static,
         caller: MaybeLocation,
     ) -> Result<&mut Self, EntityRevDespawnedError>;
 
@@ -290,7 +290,7 @@ pub trait RevEntityWorldMut<'w> {
     fn rev_detach_children(
         &mut self,
         meta_past_len: MetaPastLen,
-        children: &[Entity],
+        children: impl AsRef<[Entity]> + Send + 'static,
     ) -> &mut Self {
         self.rev_detach_children_with_caller(meta_past_len, children, MaybeLocation::caller())
             .unwrap()
@@ -300,7 +300,7 @@ pub trait RevEntityWorldMut<'w> {
     fn rev_detach_children_with_caller(
         &mut self,
         meta_past_len: MetaPastLen,
-        children: &[Entity],
+        children: impl AsRef<[Entity]> + Send + 'static,
         caller: MaybeLocation,
     ) -> Result<&mut Self, EntityRevDespawnedError> {
         self.rev_remove_related_with_caller::<ChildOf>(meta_past_len, children, caller)
@@ -320,7 +320,7 @@ pub trait RevEntityWorldMut<'w> {
         child: Entity,
         caller: MaybeLocation,
     ) -> Result<&mut Self, EntityRevDespawnedError> {
-        self.rev_remove_related_with_caller::<ChildOf>(meta_past_len, &[child], caller)
+        self.rev_remove_related_with_caller::<ChildOf>(meta_past_len, [child], caller)
     }
 
     /// Reversible version of [`EntityWorldMut::replace_related`].
@@ -328,7 +328,7 @@ pub trait RevEntityWorldMut<'w> {
     fn rev_replace_related<R: Relationship>(
         &mut self,
         meta_past_len: MetaPastLen,
-        related: &[Entity],
+        related: impl AsRef<[Entity]> + Send + 'static,
     ) -> &mut Self {
         self.rev_replace_related_with_caller::<R>(meta_past_len, related, MaybeLocation::caller())
             .unwrap()
@@ -338,7 +338,7 @@ pub trait RevEntityWorldMut<'w> {
     fn rev_replace_related_with_caller<R: Relationship>(
         &mut self,
         meta_past_len: MetaPastLen,
-        related: &[Entity],
+        related: impl AsRef<[Entity]> + Send + 'static,
         caller: MaybeLocation,
     ) -> Result<&mut Self, EntityRevDespawnedError>;
 
@@ -347,7 +347,7 @@ pub trait RevEntityWorldMut<'w> {
     fn rev_replace_children(
         &mut self,
         meta_past_len: MetaPastLen,
-        children: &[Entity],
+        children: impl AsRef<[Entity]> + Send + 'static,
     ) -> &mut Self {
         self.rev_replace_children_witch_caller(meta_past_len, children, MaybeLocation::caller())
             .unwrap()
@@ -357,7 +357,7 @@ pub trait RevEntityWorldMut<'w> {
     fn rev_replace_children_witch_caller(
         &mut self,
         meta_past_len: MetaPastLen,
-        children: &[Entity],
+        children: impl AsRef<[Entity]> + Send + 'static,
         caller: MaybeLocation,
     ) -> Result<&mut Self, EntityRevDespawnedError> {
         self.rev_replace_related_with_caller::<ChildOf>(meta_past_len, children, caller)
@@ -646,20 +646,16 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
     fn rev_remove_related_with_caller<R: Relationship>(
         &mut self,
         meta_past_len: MetaPastLen,
-        related: &[Entity],
+        related: impl AsRef<[Entity]> + Send + 'static,
         caller: MaybeLocation,
     ) -> Result<&mut Self, EntityRevDespawnedError> {
         self.assert_not_rev_despawned()?;
         if self.contains::<R::RelationshipTarget>() {
             let id = self.id();
-            self.remove_related::<R>(related)
+            self.remove_related::<R>(related.as_ref())
                 .buffer_undo_redo_with_caller(
                     meta_past_len,
-                    AddRemoveRelated::<R, _, false>::new(
-                        id,
-                        Box::<[Entity]>::from(related),
-                        caller,
-                    ),
+                    AddRemoveRelated::<R, _, false>::new(id, related, caller),
                     caller,
                 )
         }
@@ -669,15 +665,11 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
     fn rev_replace_related_with_caller<R: Relationship>(
         &mut self,
         meta_past_len: MetaPastLen,
-        related: &[Entity],
+        related: impl AsRef<[Entity]> + Send + 'static,
         caller: MaybeLocation,
     ) -> Result<&mut Self, EntityRevDespawnedError> {
         self.rev_detach_all_related_with_caller::<R>(meta_past_len, caller)?
-            .rev_add_related_with_caller::<R, _>(
-                meta_past_len,
-                Box::<[Entity]>::from(related),
-                caller,
-            )
+            .rev_add_related_with_caller::<R, _>(meta_past_len, related, caller)
     }
 
     #[track_caller]
@@ -709,17 +701,16 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
     }
 
     fn assert_not_rev_despawned(&mut self) -> Result<(), EntityRevDespawnedError> {
-        let id = self.id();
         if size_of::<MaybeLocation>() == 0 {
             if self.is_rev_despawned() {
                 return Err(EntityRevDespawnedError {
-                    entity: id,
+                    entity: self.id(),
                     caller: MaybeLocation::caller(),
                 });
             }
-        } else if let Some(marker) = self.get::<RevDespawned>() {
+        } else if let Some(&marker) = self.get::<RevDespawned>() {
             return Err(EntityRevDespawnedError {
-                entity: id,
+                entity: self.id(),
                 caller: marker.0,
             });
         }

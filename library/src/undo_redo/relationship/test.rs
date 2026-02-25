@@ -2,7 +2,7 @@ use bevy_ecs::hierarchy::ChildOf;
 
 use crate::undo_redo::{
     BuffersUndoRedo,
-    test::{NonLinkedChildOf, assert_undo_redo},
+    test::{UnlinkedChildOf, assert_undo_redo},
 };
 
 use super::*;
@@ -11,7 +11,7 @@ fn test_children(include_unlinked_related: bool) {
     let mut world = World::new();
     let root = world.spawn_empty().id();
     let linked = world.spawn(ChildOf(root)).id();
-    let unlinked = world.spawn(NonLinkedChildOf(linked)).id();
+    let unlinked = world.spawn(UnlinkedChildOf(linked)).id();
     let mut entities_set = EntityHashSet::new();
 
     add_children(

@@ -2,15 +2,16 @@ use bevy_ecs::{
     entity::Entity,
     hierarchy::{ChildOf, Children},
     related,
+    relationship::RelationshipTarget,
     world::World,
 };
 
 use crate::undo_redo::{
     IsRevDespawned, RevEntityWorldMut,
-    test::{NonLinkedChildren, assert_undo_redo_finalize},
+    test::{UnlinkedChildren, assert_undo_redo, assert_undo_redo_finalize},
 };
 
-fn rev_with_children<const FORWARD_FINALIZE: bool>() {
+fn rev_with_child_or_children(forward_finalize: bool, one: bool) {
     let mut world = World::new();
     let parent = world.spawn_empty().id();
 
@@ -25,13 +26,19 @@ fn rev_with_children<const FORWARD_FINALIZE: bool>() {
         &mut world,
         |world, meta_past_len| {
             let [mut child, mut grandchild] = [Entity::PLACEHOLDER; 2];
-            world
-                .entity_mut(parent)
-                .rev_with_children(meta_past_len, |spawner| {
-                    let child_ref = spawner.spawn(related!(NonLinkedChildren[()]));
+            let mut parent_mut = world.entity_mut(parent);
+            if one {
+                parent_mut.rev_with_child(meta_past_len, related!(UnlinkedChildren[()]));
+                child = parent_mut.get::<Children>().unwrap().iter().next().unwrap();
+                let child_ref = parent_mut.world().entity(child);
+                grandchild = child_ref.get::<UnlinkedChildren>().unwrap()[0];
+            } else {
+                parent_mut.rev_with_children(meta_past_len, |spawner| {
+                    let child_ref = spawner.spawn(related!(UnlinkedChildren[()]));
                     child = child_ref.id();
-                    grandchild = child_ref.get::<NonLinkedChildren>().unwrap()[0];
+                    grandchild = child_ref.get::<UnlinkedChildren>().unwrap()[0];
                 });
+            }
             [child, grandchild]
         },
         |world, children| {
@@ -40,9 +47,9 @@ fn rev_with_children<const FORWARD_FINALIZE: bool>() {
             assert!(child_ref.is_rev_despawned());
             assert!(grandchild_ref.is_rev_despawned());
         },
-        FORWARD_FINALIZE.then_some(forward_assert),
+        forward_finalize.then_some(forward_assert),
         |world, children| {
-            if FORWARD_FINALIZE {
+            if forward_finalize {
                 forward_assert(world, children)
             } else {
                 let &mut [child, grandchild] = children;
@@ -55,11 +62,151 @@ fn rev_with_children<const FORWARD_FINALIZE: bool>() {
 }
 
 #[test]
+fn rev_with_child_finalize_forward() {
+    rev_with_child_or_children(true, true);
+}
+
+#[test]
+fn rev_with_child_finalize_backward() {
+    rev_with_child_or_children(false, true);
+}
+
+#[test]
 fn rev_with_children_finalize_forward() {
-    rev_with_children::<true>();
+    rev_with_child_or_children(true, false);
 }
 
 #[test]
 fn rev_with_children_finalize_backward() {
-    rev_with_children::<false>();
+    rev_with_child_or_children(false, false);
+}
+
+fn rev_add_child_or_children(one: bool) {
+    let mut world = World::new();
+    let parent = world.spawn_empty().id();
+    let child = world.spawn(ChildOf(parent)).id();
+
+    assert_undo_redo(
+        &mut world,
+        |world, meta_past_len| {
+            let new_child = world.spawn_empty().id();
+            let mut parent_mut = world.entity_mut(parent);
+            if one {
+                parent_mut.rev_add_child(meta_past_len, new_child);
+            } else {
+                parent_mut.rev_add_children(meta_past_len, [new_child]);
+            }
+            new_child
+        },
+        |world, new_child| {
+            assert_eq!(world.get::<ChildOf>(*new_child), None);
+            assert_eq!(world.get::<ChildOf>(child), Some(&ChildOf(parent)));
+        },
+        |world, new_child| {
+            assert_eq!(world.get::<ChildOf>(*new_child), Some(&ChildOf(parent)));
+            assert_eq!(world.get::<ChildOf>(child), Some(&ChildOf(parent)));
+        },
+    );
+}
+
+#[test]
+fn rev_add_child() {
+    rev_add_child_or_children(true);
+}
+
+#[test]
+fn rev_add_children() {
+    rev_add_child_or_children(false);
+}
+
+#[test]
+fn rev_detach_all_children() {
+    let mut world = World::new();
+    let parent = world.spawn_empty().id();
+    let child = world.spawn(ChildOf(parent)).id();
+
+    assert_undo_redo(
+        &mut world,
+        |world, meta_past_len| {
+            let mut parent_mut = world.entity_mut(parent);
+            parent_mut.rev_detach_all_children(meta_past_len);
+        },
+        |world, _| {
+            assert_eq!(world.get::<ChildOf>(child), Some(&ChildOf(parent)));
+        },
+        |world, _| {
+            assert_eq!(world.get::<ChildOf>(child), None);
+        },
+    );
+}
+
+#[test]
+fn rev_detach_child() {
+    let mut world = World::new();
+    let parent = world.spawn_empty().id();
+    let child1 = world.spawn(ChildOf(parent)).id();
+    let child2 = world.spawn(ChildOf(parent)).id();
+
+    let forward_assert = |world: &mut World, _: &mut ()| {
+        assert_eq!(world.get::<ChildOf>(child1), Some(&ChildOf(parent)));
+        assert_eq!(world.get::<ChildOf>(child2), None);
+    };
+
+    assert_undo_redo(
+        &mut world,
+        |world, meta_past_len| {
+            let mut parent_mut = world.entity_mut(parent);
+            parent_mut.rev_detach_child(meta_past_len, child2);
+        },
+        |world, _| {
+            assert_eq!(world.get::<ChildOf>(child1), Some(&ChildOf(parent)));
+            assert_eq!(world.get::<ChildOf>(child2), Some(&ChildOf(parent)));
+        },
+        forward_assert,
+    );
+}
+
+fn rev_despawn_children(forward_finalize: bool) {
+    let mut world = World::new();
+    let parent = world.spawn_empty().id();
+    let child = world.spawn(ChildOf(parent)).id();
+    let grandchild = world.spawn(ChildOf(child)).id();
+
+    let backward_assert = |world: &mut World, _: &mut ()| {
+        let [child_ref, grandchild_ref] = world.entity([child, grandchild]);
+        assert!(!child_ref.is_rev_despawned());
+        assert!(!grandchild_ref.is_rev_despawned());
+    };
+
+    assert_undo_redo_finalize(
+        &mut world,
+        |world, meta_past_len| {
+            world.entity_mut(parent).rev_despawn_children(meta_past_len);
+        },
+        backward_assert,
+        forward_finalize.then_some(|world: &mut World, _: &mut ()| {
+            let [child_ref, grandchild_ref] = world.entity([child, grandchild]);
+            assert!(child_ref.is_rev_despawned());
+            assert!(grandchild_ref.is_rev_despawned());
+        }),
+        |world, unused| {
+            if forward_finalize {
+                assert_eq!(world.get::<Children>(parent), None);
+                assert!(world.get_entity(child).is_err());
+                assert!(world.get_entity(grandchild).is_err());
+            } else {
+                backward_assert(world, unused)
+            }
+        },
+    );
+}
+
+#[test]
+fn rev_despawn_children_finalize_forward() {
+    rev_despawn_children(true);
+}
+
+#[test]
+fn rev_despawn_children_finalize_backward() {
+    rev_despawn_children(false);
 }

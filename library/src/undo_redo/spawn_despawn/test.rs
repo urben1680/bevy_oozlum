@@ -1,6 +1,6 @@
 use bevy_ecs::hierarchy::ChildOf;
 
-use crate::undo_redo::test::{NonLinkedChildOf, assert_undo_redo_finalize};
+use crate::undo_redo::test::{UnlinkedChildOf, assert_undo_redo_finalize};
 
 use super::*;
 
@@ -18,9 +18,9 @@ impl Hierarchy<Entity, Entity> {
         let rev_despawned = RevDespawned(MaybeLocation::caller());
         let root = world.spawn(bundle).id();
         let rev_spawned_linked = world.spawn(ChildOf(root)).id();
-        let rev_spawned_unlinked = world.spawn(NonLinkedChildOf(root)).id();
+        let rev_spawned_unlinked = world.spawn(UnlinkedChildOf(root)).id();
         let rev_despawned_linked = world.spawn((ChildOf(root), rev_despawned)).id();
-        let rev_despawned_unlinked = world.spawn((NonLinkedChildOf(root), rev_despawned)).id();
+        let rev_despawned_unlinked = world.spawn((UnlinkedChildOf(root), rev_despawned)).id();
         Self {
             root,
             rev_spawned_linked,
@@ -84,9 +84,9 @@ impl Hierarchy<Entity, Hierarchy<Entity, Entity>> {
         let rev_despawned = RevDespawned(MaybeLocation::caller());
         let root = world.spawn_empty().id();
         let rev_spawned_linked = Hierarchy::new(world, ChildOf(root));
-        let rev_spawned_unlinked = Hierarchy::new(world, NonLinkedChildOf(root));
+        let rev_spawned_unlinked = Hierarchy::new(world, UnlinkedChildOf(root));
         let rev_despawned_linked = Hierarchy::new(world, (ChildOf(root), rev_despawned));
-        let rev_despawned_unlinked = Hierarchy::new(world, (NonLinkedChildOf(root), rev_despawned));
+        let rev_despawned_unlinked = Hierarchy::new(world, (UnlinkedChildOf(root), rev_despawned));
         Self {
             root,
             rev_spawned_linked,

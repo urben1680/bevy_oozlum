@@ -1,19 +1,16 @@
 use bevy_ecs::{
-    bundle::{Bundle, BundleFromComponents},
-    change_detection::{DetectChangesMut, MaybeLocation},
+    change_detection::MaybeLocation,
     entity::{Entity, EntityNotSpawnedError},
     resource::Resource,
     system::{Commands, EntityCommands},
     world::{DeferredWorld, EntityWorldMut, World},
 };
-use bevy_log::warn_once;
 use bevy_platform::cell::SyncCell;
 use bevy_utils::prelude::DebugName;
 use core::{
     any::type_name_of_val,
     error::Error,
     fmt::{Debug, Display},
-    hash::Hash,
 };
 
 use crate::{
@@ -33,7 +30,7 @@ mod world;
 //pub use entity_commands::*;
 pub use entity_world::*;
 pub use insert_remove::*;
-pub use relationship::*;
+use relationship::*;
 pub use spawn_despawn::*;
 pub use world::*;
 
@@ -276,9 +273,33 @@ pub trait UndoRedo: Send + 'static {
     fn redo(&mut self, world: &mut World);
 }
 
+/// Second argument for closures implementing [`UndoRedo`].
+///
+/// ```
+/// # use bevy_ecs::world::World;
+/// # use bevy_oozlum::prelude::*;
+/// # let RevDirection::Forward { meta_past_len } = RevDirection::BackwardLog else {
+/// #     return;
+/// # };
+/// # let mut world = World::new();
+/// # let mut commands = world.commands();
+/// commands.buffer_undo_redo(meta_past_len, |world: &mut World, direction| {
+///     match direction {
+///         UndoRedoDirection::Undo => {
+///             // undo logic
+///         },
+///         UndoRedoDirection::Redo => {
+///             // redo logic
+///         }
+///     }
+/// })
+/// ```
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum UndoRedoDirection {
+    /// Apply undo logic when this is matched.
     Undo,
+
+    /// Apply redo logic when this is matched
     Redo,
 }
 
@@ -495,15 +516,15 @@ mod test {
     use super::*;
 
     #[derive(Component)]
-    #[relationship(relationship_target = NonLinkedChildren)]
-    pub(super) struct NonLinkedChildOf(pub Entity);
+    #[relationship(relationship_target = UnlinkedChildren)]
+    pub(super) struct UnlinkedChildOf(pub Entity);
 
     #[derive(Component)]
-    #[relationship_target(relationship = NonLinkedChildOf)]
-    pub(super) struct NonLinkedChildren(Vec<Entity>);
+    #[relationship_target(relationship = UnlinkedChildOf)]
+    pub(super) struct UnlinkedChildren(Vec<Entity>);
 
-    impl Deref for NonLinkedChildren {
-        type Target = Vec<Entity>;
+    impl Deref for UnlinkedChildren {
+        type Target = [Entity];
         fn deref(&self) -> &Self::Target {
             &self.0
         }
