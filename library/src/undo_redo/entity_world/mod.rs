@@ -1,9 +1,8 @@
-use super::{BuffersUndoRedo, RevWorld, UndoRedo};
+use super::{BuffersUndoRedo, UndoRedo};
 use crate::{
     meta::{MetaPastLen, RevDirection, RevMeta},
     undo_redo::{
-        AddRemoveRelated, EntityRevDespawnedError, IsRevDespawned, RevBundle, RevDespawned,
-        get_new_related, get_new_related_entities, mark_entity,
+        AddRemoveRelated, EntityRevDespawnedError, IsRevDespawned, RevBundle, RevDespawned, RevWorldInternal, get_new_related, get_new_related_entities, mark_entity
     },
 };
 use bevy_ecs::{
@@ -27,17 +26,7 @@ pub trait RevEntityWorldMut<'w> {
     /// Shorthand method of [`EntityWorldMut::buffer_undo_redo`] with applying
     /// `undo_redo.redo(&mut self)` immediately. Useful when there is no difference between doing
     /// and redoing.
-    fn redo_and_buffer(&mut self, meta_past_len: MetaPastLen, undo_redo: impl UndoRedo) {
-        self.redo_and_buffer_with_caller(meta_past_len, undo_redo, MaybeLocation::caller());
-    }
-
-    #[doc(hidden)]
-    fn redo_and_buffer_with_caller(
-        &mut self,
-        meta_past_len: MetaPastLen,
-        undo_redo: impl UndoRedo,
-        caller: MaybeLocation,
-    );
+    fn redo_and_buffer(&mut self, meta_past_len: MetaPastLen, undo_redo: impl UndoRedo);
 
     /// Shorthand method of [`RevMeta::get_running_direction`].
     fn get_running_direction(&self) -> Option<RevDirection>;
@@ -49,27 +38,11 @@ pub trait RevEntityWorldMut<'w> {
     ///
     /// See the [`RevDespawned`](super::RevDespawned) documentation to understand the mechanics of
     /// reversible spawn/despawn.
-    #[track_caller]
     fn rev_mark_spawned(
         &mut self,
         meta_past_len: MetaPastLen,
         include_unlinked_related: bool,
-    ) -> &mut Self {
-        self.rev_mark_spawned_with_caller(
-            meta_past_len,
-            include_unlinked_related,
-            MaybeLocation::caller(),
-        )
-        .unwrap()
-    }
-
-    #[doc(hidden)]
-    fn rev_mark_spawned_with_caller(
-        &mut self,
-        meta_past_len: MetaPastLen,
-        include_unlinked_related: bool,
-        caller: MaybeLocation,
-    ) -> Result<&mut Self, EntityRevDespawnedError>;
+    ) -> &mut Self;
 
     /// Reversible version of [`EntityWorldMut::despawn`].
     ///
@@ -77,403 +50,134 @@ pub trait RevEntityWorldMut<'w> {
     /// spawn/despawn.
     fn rev_despawn(self, meta_past_len: MetaPastLen);
 
-    #[doc(hidden)]
-    fn rev_despawn_with_caller(
-        self,
-        meta_past_len: MetaPastLen,
-        caller: MaybeLocation,
-    ) -> Result<(), EntityRevDespawnedError>;
-
     /// Reversible version of [`EntityWorldMut::with_related_entities`].
-    #[track_caller]
     fn rev_with_related_entities<R: Relationship>(
         &mut self,
         meta_past_len: MetaPastLen,
         func: impl FnOnce(&mut RelatedSpawner<'_, R>),
-    ) -> &mut Self {
-        self.rev_with_related_entities_with_caller(meta_past_len, func, MaybeLocation::caller())
-            .unwrap()
-    }
-
-    #[doc(hidden)]
-    fn rev_with_related_entities_with_caller<R: Relationship>(
-        &mut self,
-        meta_past_len: MetaPastLen,
-        func: impl FnOnce(&mut RelatedSpawner<'_, R>),
-        caller: MaybeLocation,
-    ) -> Result<&mut Self, EntityRevDespawnedError>;
+    ) -> &mut Self;
 
     /// Reversible version of [`EntityWorldMut::with_children`].
-    #[track_caller]
     fn rev_with_children(
         &mut self,
         meta_past_len: MetaPastLen,
         func: impl FnOnce(&mut RelatedSpawner<'_, ChildOf>),
-    ) -> &mut Self {
-        self.rev_with_children_with_caller(meta_past_len, func, MaybeLocation::caller())
-            .unwrap()
-    }
-
-    #[doc(hidden)]
-    fn rev_with_children_with_caller(
-        &mut self,
-        meta_past_len: MetaPastLen,
-        func: impl FnOnce(&mut RelatedSpawner<'_, ChildOf>),
-        caller: MaybeLocation,
-    ) -> Result<&mut Self, EntityRevDespawnedError> {
-        self.rev_with_related_entities_with_caller(meta_past_len, func, caller)
-    }
+    ) -> &mut Self;
 
     /// Reversible version of [`EntityWorldMut::with_related`].
-    #[track_caller]
     fn rev_with_related<R: Relationship>(
         &mut self,
         meta_past_len: MetaPastLen,
         bundle: impl Bundle,
-    ) -> &mut Self {
-        self.rev_with_related_with_caller::<R>(meta_past_len, bundle, MaybeLocation::caller())
-            .unwrap()
-    }
-
-    #[doc(hidden)]
-    fn rev_with_related_with_caller<R: Relationship>(
-        &mut self,
-        meta_past_len: MetaPastLen,
-        bundle: impl Bundle,
-        caller: MaybeLocation,
-    ) -> Result<&mut Self, EntityRevDespawnedError>;
+    ) -> &mut Self;
 
     /// Reversible version of [`EntityWorldMut::with_child`].
-    #[track_caller]
-    fn rev_with_child(&mut self, meta_past_len: MetaPastLen, bundle: impl Bundle) -> &mut Self {
-        self.rev_with_child_with_caller(meta_past_len, bundle, MaybeLocation::caller())
-            .unwrap()
-    }
-
-    #[doc(hidden)]
-    fn rev_with_child_with_caller(
-        &mut self,
-        meta_past_len: MetaPastLen,
-        bundle: impl Bundle,
-        caller: MaybeLocation,
-    ) -> Result<&mut Self, EntityRevDespawnedError> {
-        self.rev_with_related_with_caller::<ChildOf>(meta_past_len, bundle, caller)
-    }
+    fn rev_with_child(&mut self, meta_past_len: MetaPastLen, bundle: impl Bundle) -> &mut Self;
 
     /// Reversible version of [`EntityWorldMut::add_related`].
-    #[track_caller]
     fn rev_add_related<R: Relationship, E: AsRef<[Entity]> + Send + 'static>(
         &mut self,
         meta_past_len: MetaPastLen,
         related: E,
-    ) -> &mut Self {
-        self.rev_add_related_with_caller::<R, E>(meta_past_len, related, MaybeLocation::caller())
-            .unwrap()
-    }
-
-    #[doc(hidden)]
-    fn rev_add_related_with_caller<R: Relationship, E: AsRef<[Entity]> + Send + 'static>(
-        &mut self,
-        meta_past_len: MetaPastLen,
-        related: E,
-        caller: MaybeLocation,
-    ) -> Result<&mut Self, EntityRevDespawnedError>;
+    ) -> &mut Self;
 
     /// Reversible version of [`EntityWorldMut::add_children`].
-    #[track_caller]
     fn rev_add_children<E: AsRef<[Entity]> + Send + 'static>(
         &mut self,
         meta_past_len: MetaPastLen,
         children: E,
-    ) -> &mut Self {
-        self.rev_add_children_with_caller(meta_past_len, children, MaybeLocation::caller())
-            .unwrap()
-    }
-
-    #[doc(hidden)]
-    fn rev_add_children_with_caller<E: AsRef<[Entity]> + Send + 'static>(
-        &mut self,
-        meta_past_len: MetaPastLen,
-        children: E,
-        caller: MaybeLocation,
-    ) -> Result<&mut Self, EntityRevDespawnedError> {
-        self.rev_add_related_with_caller::<ChildOf, _>(meta_past_len, children, caller)
-    }
+    ) -> &mut Self;
 
     /// Reversible version of [`EntityWorldMut::add_one_related`].
-    #[track_caller]
     fn rev_add_one_related<R: Relationship>(
         &mut self,
         meta_past_len: MetaPastLen,
         entity: Entity,
-    ) -> &mut Self {
-        self.rev_add_one_related_with_caller::<R>(meta_past_len, entity, MaybeLocation::caller())
-            .unwrap()
-    }
-
-    #[doc(hidden)]
-    fn rev_add_one_related_with_caller<R: Relationship>(
-        &mut self,
-        meta_past_len: MetaPastLen,
-        entity: Entity,
-        caller: MaybeLocation,
-    ) -> Result<&mut Self, EntityRevDespawnedError>;
+    ) -> &mut Self;
 
     /// Reversible version of [`EntityWorldMut::add_child`].
-    #[track_caller]
-    fn rev_add_child(&mut self, meta_past_len: MetaPastLen, child: Entity) -> &mut Self {
-        self.rev_add_child_with_caller(meta_past_len, child, MaybeLocation::caller())
-            .unwrap()
-    }
-
-    #[doc(hidden)]
-    fn rev_add_child_with_caller(
-        &mut self,
-        meta_past_len: MetaPastLen,
-        child: Entity,
-        caller: MaybeLocation,
-    ) -> Result<&mut Self, EntityRevDespawnedError> {
-        self.rev_add_one_related_with_caller::<ChildOf>(meta_past_len, child, caller)
-    }
+    fn rev_add_child(&mut self, meta_past_len: MetaPastLen, child: Entity) -> &mut Self;
 
     /// Reversible version of [`EntityWorldMut::detach_all_related`].
-    #[track_caller]
-    fn rev_detach_all_related<R: Relationship>(&mut self, meta_past_len: MetaPastLen) -> &mut Self {
-        self.rev_detach_all_related_with_caller::<R>(meta_past_len, MaybeLocation::caller())
-            .unwrap()
-    }
-
-    #[doc(hidden)]
-    fn rev_detach_all_related_with_caller<R: Relationship>(
-        &mut self,
-        meta_past_len: MetaPastLen,
-        caller: MaybeLocation,
-    ) -> Result<&mut Self, EntityRevDespawnedError>;
+    fn rev_detach_all_related<R: Relationship>(&mut self, meta_past_len: MetaPastLen) -> &mut Self;
 
     /// Reversible version of [`EntityWorldMut::detach_all_children`].
-    #[track_caller]
-    fn rev_detach_all_children(&mut self, meta_past_len: MetaPastLen) -> &mut Self {
-        self.rev_detach_all_children_with_caller(meta_past_len, MaybeLocation::caller())
-            .unwrap()
-    }
-
-    #[doc(hidden)]
-    fn rev_detach_all_children_with_caller(
-        &mut self,
-        meta_past_len: MetaPastLen,
-        caller: MaybeLocation,
-    ) -> Result<&mut Self, EntityRevDespawnedError> {
-        self.rev_detach_all_related_with_caller::<ChildOf>(meta_past_len, caller)
-    }
+    fn rev_detach_all_children(&mut self, meta_past_len: MetaPastLen) -> &mut Self;
 
     /// Reversible version of [`EntityWorldMut::remove_related`].
-    #[track_caller]
     fn rev_remove_related<R: Relationship>(
         &mut self,
         meta_past_len: MetaPastLen,
         related: impl AsRef<[Entity]> + Send + 'static,
-    ) -> &mut Self {
-        self.rev_remove_related_with_caller::<R>(meta_past_len, related, MaybeLocation::caller())
-            .unwrap()
-    }
-
-    #[doc(hidden)]
-    fn rev_remove_related_with_caller<R: Relationship>(
-        &mut self,
-        meta_past_len: MetaPastLen,
-        related: impl AsRef<[Entity]> + Send + 'static,
-        caller: MaybeLocation,
-    ) -> Result<&mut Self, EntityRevDespawnedError>;
+    ) -> &mut Self;
 
     /// Reversible version of [`EntityWorldMut::detach_children`].
-    #[track_caller]
     fn rev_detach_children(
         &mut self,
         meta_past_len: MetaPastLen,
         children: impl AsRef<[Entity]> + Send + 'static,
-    ) -> &mut Self {
-        self.rev_detach_children_with_caller(meta_past_len, children, MaybeLocation::caller())
-            .unwrap()
-    }
-
-    #[doc(hidden)]
-    fn rev_detach_children_with_caller(
-        &mut self,
-        meta_past_len: MetaPastLen,
-        children: impl AsRef<[Entity]> + Send + 'static,
-        caller: MaybeLocation,
-    ) -> Result<&mut Self, EntityRevDespawnedError> {
-        self.rev_remove_related_with_caller::<ChildOf>(meta_past_len, children, caller)
-    }
+    ) -> &mut Self;
 
     /// Reversible version of [`EntityWorldMut::detach_child`].
-    #[track_caller]
-    fn rev_detach_child(&mut self, meta_past_len: MetaPastLen, child: Entity) -> &mut Self {
-        self.rev_detach_child_with_caller(meta_past_len, child, MaybeLocation::caller())
-            .unwrap()
-    }
-
-    #[doc(hidden)]
-    fn rev_detach_child_with_caller(
-        &mut self,
-        meta_past_len: MetaPastLen,
-        child: Entity,
-        caller: MaybeLocation,
-    ) -> Result<&mut Self, EntityRevDespawnedError> {
-        self.rev_remove_related_with_caller::<ChildOf>(meta_past_len, [child], caller)
-    }
+    fn rev_detach_child(&mut self, meta_past_len: MetaPastLen, child: Entity) -> &mut Self;
 
     /// Reversible version of [`EntityWorldMut::replace_related`].
-    #[track_caller]
     fn rev_replace_related<R: Relationship>(
         &mut self,
         meta_past_len: MetaPastLen,
         related: impl AsRef<[Entity]> + Send + 'static,
-    ) -> &mut Self {
-        self.rev_replace_related_with_caller::<R>(meta_past_len, related, MaybeLocation::caller())
-            .unwrap()
-    }
-
-    #[doc(hidden)]
-    fn rev_replace_related_with_caller<R: Relationship>(
-        &mut self,
-        meta_past_len: MetaPastLen,
-        related: impl AsRef<[Entity]> + Send + 'static,
-        caller: MaybeLocation,
-    ) -> Result<&mut Self, EntityRevDespawnedError>;
+    ) -> &mut Self;
 
     /// Reversible version of [`EntityWorldMut::replace_children`].
-    #[track_caller]
     fn rev_replace_children(
         &mut self,
         meta_past_len: MetaPastLen,
         children: impl AsRef<[Entity]> + Send + 'static,
-    ) -> &mut Self {
-        self.rev_replace_children_witch_caller(meta_past_len, children, MaybeLocation::caller())
-            .unwrap()
-    }
-
-    #[doc(hidden)]
-    fn rev_replace_children_witch_caller(
-        &mut self,
-        meta_past_len: MetaPastLen,
-        children: impl AsRef<[Entity]> + Send + 'static,
-        caller: MaybeLocation,
-    ) -> Result<&mut Self, EntityRevDespawnedError> {
-        self.rev_replace_related_with_caller::<ChildOf>(meta_past_len, children, caller)
-    }
+    ) -> &mut Self;
 
     /// Reversible version of [`EntityWorldMut::despawn_related`].
     ///
     /// See the [`RevDespawned`] documentation to understand the mechanics of reversible
     /// spawn/despawn.
-    #[track_caller]
     fn rev_despawn_related<S: RelationshipTarget>(
         &mut self,
         meta_past_len: MetaPastLen,
-    ) -> &mut Self {
-        self.rev_despawn_related_with_caller::<S>(meta_past_len, MaybeLocation::caller())
-            .unwrap()
-    }
-
-    #[doc(hidden)]
-    fn rev_despawn_related_with_caller<S: RelationshipTarget>(
-        &mut self,
-        meta_past_len: MetaPastLen,
-        caller: MaybeLocation,
-    ) -> Result<&mut Self, EntityRevDespawnedError>;
+    ) -> &mut Self;
 
     /// Reversible version of [`EntityWorldMut::despawn_children`].
     ///
     /// See the [`RevDespawned`] documentation to understand the mechanics of reversible
     /// spawn/despawn.
-    #[track_caller]
-    fn rev_despawn_children(&mut self, meta_past_len: MetaPastLen) -> &mut Self {
-        self.rev_despawn_children_with_caller(meta_past_len, MaybeLocation::caller())
-            .unwrap()
-    }
-
-    #[doc(hidden)]
-    fn rev_despawn_children_with_caller(
-        &mut self,
-        meta_past_len: MetaPastLen,
-        caller: MaybeLocation,
-    ) -> Result<&mut Self, EntityRevDespawnedError> {
-        self.rev_despawn_related_with_caller::<Children>(meta_past_len, caller)
-    }
+    fn rev_despawn_children(&mut self, meta_past_len: MetaPastLen) -> &mut Self;
 
     /// Reversible version of [`EntityWorldMut::entry`].
     fn rev_entry<'a, T: Component>(&'a mut self) -> RevComponentEntry<'w, 'a, T>;
 
     /// Reversible version of [`EntityWorldMut::insert`].
-    #[track_caller]
     fn rev_insert<T: RevBundle<Marker>, Marker>(
         &mut self,
         meta_past_len: MetaPastLen,
         bundle: T,
-    ) -> &mut Self {
-        self.rev_insert_with_caller(meta_past_len, bundle, MaybeLocation::caller())
-            .unwrap()
-    }
-
-    #[doc(hidden)]
-    fn rev_insert_with_caller<T: RevBundle<Marker>, Marker>(
-        &mut self,
-        meta_past_len: MetaPastLen,
-        bundle: T,
-        caller: MaybeLocation,
-    ) -> Result<&mut Self, EntityRevDespawnedError>;
+    ) -> &mut Self;
 
     /// Reversible version of [`EntityWorldMut::insert_if_new`].
-    #[track_caller]
     fn rev_insert_if_new<T: RevBundle<Marker>, Marker>(
         &mut self,
         meta_past_len: MetaPastLen,
         bundle: T,
-    ) -> &mut Self {
-        self.rev_insert_if_new_with_caller(meta_past_len, bundle, MaybeLocation::caller())
-            .unwrap()
-    }
-
-    #[doc(hidden)]
-    fn rev_insert_if_new_with_caller<T: RevBundle<Marker>, Marker>(
-        &mut self,
-        meta_past_len: MetaPastLen,
-        bundle: T,
-        caller: MaybeLocation,
-    ) -> Result<&mut Self, EntityRevDespawnedError>;
+    ) -> &mut Self;
 
     /// Reversible version of [`EntityWorldMut::remove`]. Let the second generic be inferred as `_`.
-    #[track_caller]
     fn rev_remove<T: RevBundle<Marker>, Marker>(
         &mut self,
         meta_past_len: MetaPastLen,
-    ) -> &mut Self {
-        self.rev_remove_with_caller::<T, _>(meta_past_len, MaybeLocation::caller())
-            .unwrap()
-    }
-
-    #[doc(hidden)]
-    fn rev_remove_with_caller<T: RevBundle<Marker>, Marker>(
-        &mut self,
-        meta_past_len: MetaPastLen,
-        caller: MaybeLocation,
-    ) -> Result<&mut Self, EntityRevDespawnedError>;
-
-    #[doc(hidden)]
-    fn assert_not_rev_despawned(&mut self) -> Result<(), EntityRevDespawnedError>;
+    ) -> &mut Self;
 }
 
 impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
-    fn redo_and_buffer_with_caller(
-        &mut self,
-        meta_past_len: MetaPastLen,
-        undo_redo: impl UndoRedo,
-        caller: MaybeLocation,
-    ) {
-        self.world_scope(|world| {
-            world.redo_and_buffer_with_caller(meta_past_len, undo_redo, caller)
-        })
+    #[track_caller]
+    fn redo_and_buffer(&mut self, meta_past_len: MetaPastLen, undo_redo: impl UndoRedo) {
+        self.redo_and_buffer_with_caller(meta_past_len, undo_redo, MaybeLocation::caller());
     }
 
     fn rev_entry<'a, T: Component>(&'a mut self) -> RevComponentEntry<'w, 'a, T> {
@@ -488,6 +192,395 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
                 _marker: PhantomData,
             })
         }
+    }
+    
+    #[track_caller]
+    fn rev_mark_spawned(
+        &mut self,
+        meta_past_len: MetaPastLen,
+        include_unlinked_related: bool,
+    ) -> &mut Self {
+        self.rev_mark_spawned_with_caller(
+            meta_past_len,
+            include_unlinked_related,
+            MaybeLocation::caller(),
+        )
+        .unwrap()
+    }
+
+    fn get_running_direction(&self) -> Option<RevDirection> {
+        self.get_resource::<RevMeta>()
+            .and_then(RevMeta::get_running_direction)
+    }
+    
+    #[track_caller]
+    fn rev_with_related_entities<R: Relationship>(
+        &mut self,
+        meta_past_len: MetaPastLen,
+        func: impl FnOnce(&mut RelatedSpawner<'_, R>),
+    ) -> &mut Self {
+        self.rev_with_related_entities_with_caller(meta_past_len, func, MaybeLocation::caller())
+            .unwrap()
+    }
+
+    #[track_caller]
+    fn rev_despawn(self, meta_past_len: MetaPastLen) {
+        self.rev_despawn_with_caller(meta_past_len, MaybeLocation::caller())
+            .unwrap();
+    }
+    
+    #[track_caller]
+    fn rev_with_children(
+        &mut self,
+        meta_past_len: MetaPastLen,
+        func: impl FnOnce(&mut RelatedSpawner<'_, ChildOf>),
+    ) -> &mut Self {
+        self.rev_with_children_with_caller(meta_past_len, func, MaybeLocation::caller())
+            .unwrap()
+    }
+    
+    #[track_caller]
+    fn rev_with_related<R: Relationship>(
+        &mut self,
+        meta_past_len: MetaPastLen,
+        bundle: impl Bundle,
+    ) -> &mut Self {
+        self.rev_with_related_with_caller::<R>(meta_past_len, bundle, MaybeLocation::caller())
+            .unwrap()
+    }
+    
+    #[track_caller]
+    fn rev_with_child(&mut self, meta_past_len: MetaPastLen, bundle: impl Bundle) -> &mut Self {
+        self.rev_with_child_with_caller(meta_past_len, bundle, MaybeLocation::caller())
+            .unwrap()
+    }
+    
+    #[track_caller]
+    fn rev_add_related<R: Relationship, E: AsRef<[Entity]> + Send + 'static>(
+        &mut self,
+        meta_past_len: MetaPastLen,
+        related: E,
+    ) -> &mut Self {
+        self.rev_add_related_with_caller::<R, E>(meta_past_len, related, MaybeLocation::caller())
+            .unwrap()
+    }
+    
+    #[track_caller]
+    fn rev_add_children<E: AsRef<[Entity]> + Send + 'static>(
+        &mut self,
+        meta_past_len: MetaPastLen,
+        children: E,
+    ) -> &mut Self {
+        self.rev_add_children_with_caller(meta_past_len, children, MaybeLocation::caller())
+            .unwrap()
+    }
+    
+    #[track_caller]
+    fn rev_add_one_related<R: Relationship>(
+        &mut self,
+        meta_past_len: MetaPastLen,
+        entity: Entity,
+    ) -> &mut Self {
+        self.rev_add_one_related_with_caller::<R>(meta_past_len, entity, MaybeLocation::caller())
+            .unwrap()
+    }
+    
+    #[track_caller]
+    fn rev_add_child(&mut self, meta_past_len: MetaPastLen, child: Entity) -> &mut Self {
+        self.rev_add_child_with_caller(meta_past_len, child, MaybeLocation::caller())
+            .unwrap()
+    }
+    
+    #[track_caller]
+    fn rev_detach_all_related<R: Relationship>(&mut self, meta_past_len: MetaPastLen) -> &mut Self {
+        self.rev_detach_all_related_with_caller::<R>(meta_past_len, MaybeLocation::caller())
+            .unwrap()
+    }
+    
+    #[track_caller]
+    fn rev_detach_all_children(&mut self, meta_past_len: MetaPastLen) -> &mut Self {
+        self.rev_detach_all_children_with_caller(meta_past_len, MaybeLocation::caller())
+            .unwrap()
+    }
+    
+    #[track_caller]
+    fn rev_remove_related<R: Relationship>(
+        &mut self,
+        meta_past_len: MetaPastLen,
+        related: impl AsRef<[Entity]> + Send + 'static,
+    ) -> &mut Self {
+        self.rev_remove_related_with_caller::<R>(meta_past_len, related, MaybeLocation::caller())
+            .unwrap()
+    }
+    
+    #[track_caller]
+    fn rev_detach_children(
+        &mut self,
+        meta_past_len: MetaPastLen,
+        children: impl AsRef<[Entity]> + Send + 'static,
+    ) -> &mut Self {
+        self.rev_detach_children_with_caller(meta_past_len, children, MaybeLocation::caller())
+            .unwrap()
+    }
+    
+    #[track_caller]
+    fn rev_detach_child(&mut self, meta_past_len: MetaPastLen, child: Entity) -> &mut Self {
+        self.rev_detach_child_with_caller(meta_past_len, child, MaybeLocation::caller())
+            .unwrap()
+    }
+    
+    #[track_caller]
+    fn rev_replace_related<R: Relationship>(
+        &mut self,
+        meta_past_len: MetaPastLen,
+        related: impl AsRef<[Entity]> + Send + 'static,
+    ) -> &mut Self {
+        self.rev_replace_related_with_caller::<R>(meta_past_len, related, MaybeLocation::caller())
+            .unwrap()
+    }
+    
+    #[track_caller]
+    fn rev_replace_children(
+        &mut self,
+        meta_past_len: MetaPastLen,
+        children: impl AsRef<[Entity]> + Send + 'static,
+    ) -> &mut Self {
+        self.rev_replace_children_witch_caller(meta_past_len, children, MaybeLocation::caller())
+            .unwrap()
+    }
+    
+    #[track_caller]
+    fn rev_despawn_related<S: RelationshipTarget>(
+        &mut self,
+        meta_past_len: MetaPastLen,
+    ) -> &mut Self {
+        self.rev_despawn_related_with_caller::<S>(meta_past_len, MaybeLocation::caller())
+            .unwrap()
+    }
+    
+    #[track_caller]
+    fn rev_despawn_children(&mut self, meta_past_len: MetaPastLen) -> &mut Self {
+        self.rev_despawn_children_with_caller(meta_past_len, MaybeLocation::caller())
+            .unwrap()
+    }
+    
+    #[track_caller]
+    fn rev_insert<T: RevBundle<Marker>, Marker>(
+        &mut self,
+        meta_past_len: MetaPastLen,
+        bundle: T,
+    ) -> &mut Self {
+        self.rev_insert_with_caller(meta_past_len, bundle, MaybeLocation::caller())
+            .unwrap()
+    }
+    
+    #[track_caller]
+    fn rev_insert_if_new<T: RevBundle<Marker>, Marker>(
+        &mut self,
+        meta_past_len: MetaPastLen,
+        bundle: T,
+    ) -> &mut Self {
+        self.rev_insert_if_new_with_caller(meta_past_len, bundle, MaybeLocation::caller())
+            .unwrap()
+    }
+    
+    #[track_caller]
+    fn rev_remove<T: RevBundle<Marker>, Marker>(
+        &mut self,
+        meta_past_len: MetaPastLen,
+    ) -> &mut Self {
+        self.rev_remove_with_caller::<T, _>(meta_past_len, MaybeLocation::caller())
+            .unwrap()
+    }
+}
+
+pub(super) trait RevEntityWorldMutInternal<'w> {
+    fn redo_and_buffer_with_caller(
+        &mut self,
+        meta_past_len: MetaPastLen,
+        undo_redo: impl UndoRedo,
+        caller: MaybeLocation,
+    );
+
+    fn rev_mark_spawned_with_caller(
+        &mut self,
+        meta_past_len: MetaPastLen,
+        include_unlinked_related: bool,
+        caller: MaybeLocation,
+    ) -> Result<&mut Self, EntityRevDespawnedError>;
+
+    fn rev_despawn_with_caller(
+        self,
+        meta_past_len: MetaPastLen,
+        caller: MaybeLocation,
+    ) -> Result<(), EntityRevDespawnedError>;
+
+    fn rev_with_related_entities_with_caller<R: Relationship>(
+        &mut self,
+        meta_past_len: MetaPastLen,
+        func: impl FnOnce(&mut RelatedSpawner<'_, R>),
+        caller: MaybeLocation,
+    ) -> Result<&mut Self, EntityRevDespawnedError>;
+
+    fn rev_with_children_with_caller(
+        &mut self,
+        meta_past_len: MetaPastLen,
+        func: impl FnOnce(&mut RelatedSpawner<'_, ChildOf>),
+        caller: MaybeLocation,
+    ) -> Result<&mut Self, EntityRevDespawnedError> {
+        self.rev_with_related_entities_with_caller(meta_past_len, func, caller)
+    }
+
+    fn rev_with_related_with_caller<R: Relationship>(
+        &mut self,
+        meta_past_len: MetaPastLen,
+        bundle: impl Bundle,
+        caller: MaybeLocation,
+    ) -> Result<&mut Self, EntityRevDespawnedError>;
+
+    fn rev_with_child_with_caller(
+        &mut self,
+        meta_past_len: MetaPastLen,
+        bundle: impl Bundle,
+        caller: MaybeLocation,
+    ) -> Result<&mut Self, EntityRevDespawnedError> {
+        self.rev_with_related_with_caller::<ChildOf>(meta_past_len, bundle, caller)
+    }
+
+    fn rev_add_related_with_caller<R: Relationship, E: AsRef<[Entity]> + Send + 'static>(
+        &mut self,
+        meta_past_len: MetaPastLen,
+        related: E,
+        caller: MaybeLocation,
+    ) -> Result<&mut Self, EntityRevDespawnedError>;
+
+    fn rev_add_children_with_caller<E: AsRef<[Entity]> + Send + 'static>(
+        &mut self,
+        meta_past_len: MetaPastLen,
+        children: E,
+        caller: MaybeLocation,
+    ) -> Result<&mut Self, EntityRevDespawnedError> {
+        self.rev_add_related_with_caller::<ChildOf, _>(meta_past_len, children, caller)
+    }
+
+    fn rev_add_one_related_with_caller<R: Relationship>(
+        &mut self,
+        meta_past_len: MetaPastLen,
+        entity: Entity,
+        caller: MaybeLocation,
+    ) -> Result<&mut Self, EntityRevDespawnedError>;
+
+    fn rev_add_child_with_caller(
+        &mut self,
+        meta_past_len: MetaPastLen,
+        child: Entity,
+        caller: MaybeLocation,
+    ) -> Result<&mut Self, EntityRevDespawnedError> {
+        self.rev_add_one_related_with_caller::<ChildOf>(meta_past_len, child, caller)
+    }
+
+    fn rev_detach_all_related_with_caller<R: Relationship>(
+        &mut self,
+        meta_past_len: MetaPastLen,
+        caller: MaybeLocation,
+    ) -> Result<&mut Self, EntityRevDespawnedError>;
+
+    fn rev_detach_all_children_with_caller(
+        &mut self,
+        meta_past_len: MetaPastLen,
+        caller: MaybeLocation,
+    ) -> Result<&mut Self, EntityRevDespawnedError> {
+        self.rev_detach_all_related_with_caller::<ChildOf>(meta_past_len, caller)
+    }
+
+    fn rev_remove_related_with_caller<R: Relationship>(
+        &mut self,
+        meta_past_len: MetaPastLen,
+        related: impl AsRef<[Entity]> + Send + 'static,
+        caller: MaybeLocation,
+    ) -> Result<&mut Self, EntityRevDespawnedError>;
+
+    fn rev_detach_children_with_caller(
+        &mut self,
+        meta_past_len: MetaPastLen,
+        children: impl AsRef<[Entity]> + Send + 'static,
+        caller: MaybeLocation,
+    ) -> Result<&mut Self, EntityRevDespawnedError> {
+        self.rev_remove_related_with_caller::<ChildOf>(meta_past_len, children, caller)
+    }
+
+    fn rev_detach_child_with_caller(
+        &mut self,
+        meta_past_len: MetaPastLen,
+        child: Entity,
+        caller: MaybeLocation,
+    ) -> Result<&mut Self, EntityRevDespawnedError> {
+        self.rev_remove_related_with_caller::<ChildOf>(meta_past_len, [child], caller)
+    }
+
+    fn rev_replace_related_with_caller<R: Relationship>(
+        &mut self,
+        meta_past_len: MetaPastLen,
+        related: impl AsRef<[Entity]> + Send + 'static,
+        caller: MaybeLocation,
+    ) -> Result<&mut Self, EntityRevDespawnedError>;
+
+    fn rev_replace_children_witch_caller(
+        &mut self,
+        meta_past_len: MetaPastLen,
+        children: impl AsRef<[Entity]> + Send + 'static,
+        caller: MaybeLocation,
+    ) -> Result<&mut Self, EntityRevDespawnedError> {
+        self.rev_replace_related_with_caller::<ChildOf>(meta_past_len, children, caller)
+    }
+
+    fn rev_despawn_related_with_caller<S: RelationshipTarget>(
+        &mut self,
+        meta_past_len: MetaPastLen,
+        caller: MaybeLocation,
+    ) -> Result<&mut Self, EntityRevDespawnedError>;
+
+    fn rev_despawn_children_with_caller(
+        &mut self,
+        meta_past_len: MetaPastLen,
+        caller: MaybeLocation,
+    ) -> Result<&mut Self, EntityRevDespawnedError> {
+        self.rev_despawn_related_with_caller::<Children>(meta_past_len, caller)
+    }
+
+    fn rev_insert_with_caller<T: RevBundle<Marker>, Marker>(
+        &mut self,
+        meta_past_len: MetaPastLen,
+        bundle: T,
+        caller: MaybeLocation,
+    ) -> Result<&mut Self, EntityRevDespawnedError>;
+
+    fn rev_insert_if_new_with_caller<T: RevBundle<Marker>, Marker>(
+        &mut self,
+        meta_past_len: MetaPastLen,
+        bundle: T,
+        caller: MaybeLocation,
+    ) -> Result<&mut Self, EntityRevDespawnedError>;
+
+    fn rev_remove_with_caller<T: RevBundle<Marker>, Marker>(
+        &mut self,
+        meta_past_len: MetaPastLen,
+        caller: MaybeLocation,
+    ) -> Result<&mut Self, EntityRevDespawnedError>;
+
+    fn assert_not_rev_despawned(&mut self) -> Result<(), EntityRevDespawnedError>;
+}
+
+impl<'w> RevEntityWorldMutInternal<'w> for EntityWorldMut<'w> {
+    fn redo_and_buffer_with_caller(
+        &mut self,
+        meta_past_len: MetaPastLen,
+        undo_redo: impl UndoRedo,
+        caller: MaybeLocation,
+    ) {
+        self.world_scope(|world| {
+            world.redo_and_buffer_with_caller(meta_past_len, undo_redo, caller)
+        })
     }
 
     fn rev_insert_with_caller<T: RevBundle<Marker>, Marker>(
@@ -520,11 +613,6 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
         self.assert_not_rev_despawned()?;
         T::rev_remove(meta_past_len, self, caller);
         Ok(self)
-    }
-
-    fn get_running_direction(&self) -> Option<RevDirection> {
-        self.get_resource::<RevMeta>()
-            .and_then(RevMeta::get_running_direction)
     }
 
     fn rev_mark_spawned_with_caller(
@@ -670,12 +758,6 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
     ) -> Result<&mut Self, EntityRevDespawnedError> {
         self.rev_detach_all_related_with_caller::<R>(meta_past_len, caller)?
             .rev_add_related_with_caller::<R, _>(meta_past_len, related, caller)
-    }
-
-    #[track_caller]
-    fn rev_despawn(self, meta_past_len: MetaPastLen) {
-        self.rev_despawn_with_caller(meta_past_len, MaybeLocation::caller())
-            .unwrap();
     }
 
     fn rev_despawn_related_with_caller<S: RelationshipTarget>(

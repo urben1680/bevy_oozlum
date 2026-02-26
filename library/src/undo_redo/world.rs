@@ -2,8 +2,7 @@ use super::{BuffersUndoRedo, UndoRedo};
 use crate::{
     meta::{MetaPastLen, RevDirection, RevMeta},
     undo_redo::{
-        RevEntityWorldMut, RevInsertResourceNew, RevInsertResourceOverwrite, RevRemoveResource,
-        mark_entities, mark_entity,
+        RevEntityWorldMutInternal, RevInsertResourceNew, RevInsertResourceOverwrite, RevRemoveResource, mark_entities, mark_entity
     },
 };
 use bevy_ecs::{
@@ -19,18 +18,7 @@ use bevy_ecs::{
 pub trait RevWorld {
     /// Shorthand method of [`World::buffer_undo_redo`] with applying `undo_redo.redo(&mut self)`
     /// immediately. Useful when there is no difference between doing and redoing.
-    #[track_caller]
-    fn redo_and_buffer(&mut self, meta_past_len: MetaPastLen, undo_redo: impl UndoRedo) {
-        self.redo_and_buffer_with_caller(meta_past_len, undo_redo, MaybeLocation::caller());
-    }
-
-    #[doc(hidden)]
-    fn redo_and_buffer_with_caller(
-        &mut self,
-        meta_past_len: MetaPastLen,
-        undo_redo: impl UndoRedo,
-        caller: MaybeLocation,
-    );
+    fn redo_and_buffer(&mut self, meta_past_len: MetaPastLen, undo_redo: impl UndoRedo);
 
     /// Shorthand method of [`RevMeta::get_running_direction`].
     fn get_running_direction(&self) -> Option<RevDirection>;
@@ -42,6 +30,120 @@ pub trait RevWorld {
     ///
     /// See the [`RevDespawned`](super::RevDespawned) documentation to understand the mechanics of
     /// reversible spawn/despawn.
+    fn rev_mark_spawned(
+        &mut self,
+        meta_past_len: MetaPastLen,
+        entity: Entity,
+        include_unlinked_related: bool,
+    ) -> bool;
+
+    /// Helper method to mark a spawned batch as reversibly spawned. Useful when the actual spawn is
+    /// hidden and cannot be done with [`World::rev_spawn_batch`].
+    ///
+    /// When possible, use `World::rev_spawn_batch` instead.
+    ///
+    /// See the [`RevDespawned`](super::RevDespawned) documentation to understand the mechanics of
+    /// reversible spawn/despawn.
+    fn rev_mark_spawned_batch(
+        &mut self,
+        meta_past_len: MetaPastLen,
+        entities: &[Entity],
+        include_unlinked_related: bool,
+    );
+
+    /// Reversible version of [`World::despawn`].
+    ///
+    /// See the [`RevDespawned`](super::RevDespawned) documentation to understand the mechanics of
+    /// reversible spawn/despawn.
+    fn rev_despawn(&mut self, meta_past_len: MetaPastLen, entity: Entity) -> bool;
+
+    /// Reversibly despawn multiple entities.
+    ///
+    /// See the [`RevDespawned`](super::RevDespawned) documentation to understand the mechanics of
+    /// reversible spawn/despawn.
+    fn rev_despawn_batch(&mut self, meta_past_len: MetaPastLen, entities: &[Entity]);
+
+    /// Reversible version of [`World::spawn`].
+    ///
+    /// See the [`RevDespawned`](super::RevDespawned) documentation to understand the mechanics of
+    /// reversible spawn/despawn.
+    fn rev_spawn(&mut self, meta_past_len: MetaPastLen, bundle: impl Bundle) -> EntityWorldMut<'_>;
+
+    /// Reversible version of [`World::spawn_at`].
+    ///
+    /// See the [`RevDespawned`](super::RevDespawned) documentation to understand the mechanics of
+    /// reversible spawn/despawn.
+    fn rev_spawn_at(
+        &mut self,
+        meta_past_len: MetaPastLen,
+        entity: Entity,
+        bundle: impl Bundle,
+    ) -> Result<EntityWorldMut<'_>, SpawnError>;
+
+    /// Reversible version of [`World::spawn_empty`].
+    ///
+    /// See the [`RevDespawned`](super::RevDespawned) documentation to understand the mechanics of
+    /// reversible spawn/despawn.
+    fn rev_spawn_empty(&mut self, meta_past_len: MetaPastLen) -> EntityWorldMut<'_>;
+
+    /// Reversible version of [`World::spawn_empty_at`].
+    ///
+    /// See the [`RevDespawned`](super::RevDespawned) documentation to understand the mechanics of
+    /// reversible spawn/despawn.
+    fn rev_spawn_empty_at(
+        &mut self,
+        meta_past_len: MetaPastLen,
+        entity: Entity,
+    ) -> Result<EntityWorldMut<'_>, SpawnError>;
+
+    /// Reversible version of [`World::spawn_batch`].
+    ///
+    /// See the [`RevDespawned`](super::RevDespawned) documentation to understand the mechanics of
+    /// reversible spawn/despawn.
+    fn rev_spawn_batch<I>(&mut self, meta_past_len: MetaPastLen, iter: I) -> Vec<Entity>
+    where
+        I: IntoIterator<Item: Bundle<Effect: NoBundleEffect>>;
+
+    /// Reversible version of [`World::get_resource_or_init`].
+    fn rev_get_resource_or_init<R: Resource + FromWorld>(
+        &mut self,
+        meta_past_len: MetaPastLen,
+    ) -> Mut<'_, R>;
+
+    /// Reversible version of [`World::get_resource_or_insert_with`].
+    fn rev_get_resource_or_insert_with<R: Resource>(
+        &mut self,
+        meta_past_len: MetaPastLen,
+        func: impl FnOnce() -> R,
+    ) -> Mut<'_, R>;
+
+    /// Reversible version of [`World::init_resource`].
+    fn rev_init_resource<R: Resource + FromWorld>(
+        &mut self,
+        meta_past_len: MetaPastLen,
+    ) -> ComponentId;
+
+    /// Reversible version of [`World::insert_resource`].
+    fn rev_insert_resource<R: Resource>(&mut self, meta_past_len: MetaPastLen, resource: R);
+
+    /// Reversible version of [`World::remove_resource`].
+    fn rev_remove_resource<R: Resource, Out>(
+        &mut self,
+        meta_past_len: MetaPastLen,
+        c: impl FnOnce(&R) -> Out,
+    ) -> Option<Out>;
+}
+
+impl RevWorld for World {
+    #[track_caller]
+    fn redo_and_buffer(&mut self, meta_past_len: MetaPastLen, undo_redo: impl UndoRedo) {
+        self.redo_and_buffer_with_caller(meta_past_len, undo_redo, MaybeLocation::caller());
+    }
+
+    fn get_running_direction(&self) -> Option<RevDirection> {
+        self.get_resource::<RevMeta>()?.get_running_direction()
+    }
+    
     #[track_caller]
     fn rev_mark_spawned(
         &mut self,
@@ -56,23 +158,7 @@ pub trait RevWorld {
             MaybeLocation::caller(),
         )
     }
-
-    #[doc(hidden)]
-    fn rev_mark_spawned_with_caller(
-        &mut self,
-        meta_past_len: MetaPastLen,
-        entity: Entity,
-        include_unlinked_related: bool,
-        caller: MaybeLocation,
-    ) -> bool;
-
-    /// Helper method to mark a spawned batch as reversibly spawned. Useful when the actual spawn is
-    /// hidden and cannot be done with [`World::rev_spawn_batch`].
-    ///
-    /// When possible, use `World::rev_spawn_batch` instead.
-    ///
-    /// See the [`RevDespawned`](super::RevDespawned) documentation to understand the mechanics of
-    /// reversible spawn/despawn.
+    
     #[track_caller]
     fn rev_mark_spawned_batch(
         &mut self,
@@ -87,71 +173,22 @@ pub trait RevWorld {
             MaybeLocation::caller(),
         );
     }
-
-    #[doc(hidden)]
-    fn rev_mark_spawned_batch_with_caller(
-        &mut self,
-        meta_past_len: MetaPastLen,
-        entities: &[Entity],
-        include_unlinked_related: bool,
-        caller: MaybeLocation,
-    );
-
-    /// Reversible version of [`World::despawn`].
-    ///
-    /// See the [`RevDespawned`](super::RevDespawned) documentation to understand the mechanics of
-    /// reversible spawn/despawn.
+    
     #[track_caller]
     fn rev_despawn(&mut self, meta_past_len: MetaPastLen, entity: Entity) -> bool {
         self.rev_despawn_with_caller(meta_past_len, entity, MaybeLocation::caller())
     }
-
-    #[doc(hidden)]
-    fn rev_despawn_with_caller(
-        &mut self,
-        meta_past_len: MetaPastLen,
-        entity: Entity,
-        caller: MaybeLocation,
-    ) -> bool;
-
-    /// Reversibly despawn multiple entities.
-    ///
-    /// See the [`RevDespawned`](super::RevDespawned) documentation to understand the mechanics of
-    /// reversible spawn/despawn.
+    
     #[track_caller]
     fn rev_despawn_batch(&mut self, meta_past_len: MetaPastLen, entities: &[Entity]) {
         self.rev_despawn_batch_with_caller(meta_past_len, entities, MaybeLocation::caller())
     }
-
-    #[doc(hidden)]
-    fn rev_despawn_batch_with_caller(
-        &mut self,
-        meta_past_len: MetaPastLen,
-        entities: &[Entity],
-        caller: MaybeLocation,
-    );
-
-    /// Reversible version of [`World::spawn`].
-    ///
-    /// See the [`RevDespawned`](super::RevDespawned) documentation to understand the mechanics of
-    /// reversible spawn/despawn.
+    
     #[track_caller]
     fn rev_spawn(&mut self, meta_past_len: MetaPastLen, bundle: impl Bundle) -> EntityWorldMut<'_> {
         self.rev_spawn_with_caller(meta_past_len, bundle, MaybeLocation::caller())
     }
-
-    #[doc(hidden)]
-    fn rev_spawn_with_caller(
-        &mut self,
-        meta_past_len: MetaPastLen,
-        bundle: impl Bundle,
-        caller: MaybeLocation,
-    ) -> EntityWorldMut<'_>;
-
-    /// Reversible version of [`World::spawn_at`].
-    ///
-    /// See the [`RevDespawned`](super::RevDespawned) documentation to understand the mechanics of
-    /// reversible spawn/despawn.
+    
     #[track_caller]
     fn rev_spawn_at(
         &mut self,
@@ -161,36 +198,12 @@ pub trait RevWorld {
     ) -> Result<EntityWorldMut<'_>, SpawnError> {
         self.rev_spawn_at_with_caller(meta_past_len, entity, bundle, MaybeLocation::caller())
     }
-
-    #[doc(hidden)]
-    fn rev_spawn_at_with_caller(
-        &mut self,
-        meta_past_len: MetaPastLen,
-        entity: Entity,
-        bundle: impl Bundle,
-        caller: MaybeLocation,
-    ) -> Result<EntityWorldMut<'_>, SpawnError>;
-
-    /// Reversible version of [`World::spawn_empty`].
-    ///
-    /// See the [`RevDespawned`](super::RevDespawned) documentation to understand the mechanics of
-    /// reversible spawn/despawn.
+    
     #[track_caller]
     fn rev_spawn_empty(&mut self, meta_past_len: MetaPastLen) -> EntityWorldMut<'_> {
         self.rev_spawn_empty_with_caller(meta_past_len, MaybeLocation::caller())
     }
-
-    #[doc(hidden)]
-    fn rev_spawn_empty_with_caller(
-        &mut self,
-        meta_past_len: MetaPastLen,
-        caller: MaybeLocation,
-    ) -> EntityWorldMut<'_>;
-
-    /// Reversible version of [`World::spawn_empty_at`].
-    ///
-    /// See the [`RevDespawned`](super::RevDespawned) documentation to understand the mechanics of
-    /// reversible spawn/despawn.
+    
     #[track_caller]
     fn rev_spawn_empty_at(
         &mut self,
@@ -199,19 +212,7 @@ pub trait RevWorld {
     ) -> Result<EntityWorldMut<'_>, SpawnError> {
         self.rev_spawn_empty_at_with_caller(meta_past_len, entity, MaybeLocation::caller())
     }
-
-    #[doc(hidden)]
-    fn rev_spawn_empty_at_with_caller(
-        &mut self,
-        meta_past_len: MetaPastLen,
-        entity: Entity,
-        caller: MaybeLocation,
-    ) -> Result<EntityWorldMut<'_>, SpawnError>;
-
-    /// Reversible version of [`World::spawn_batch`].
-    ///
-    /// See the [`RevDespawned`](super::RevDespawned) documentation to understand the mechanics of
-    /// reversible spawn/despawn.
+    
     #[track_caller]
     fn rev_spawn_batch<I>(&mut self, meta_past_len: MetaPastLen, iter: I) -> Vec<Entity>
     where
@@ -219,18 +220,7 @@ pub trait RevWorld {
     {
         self.rev_spawn_batch_with_caller(meta_past_len, iter, MaybeLocation::caller())
     }
-
-    #[doc(hidden)]
-    fn rev_spawn_batch_with_caller<I>(
-        &mut self,
-        meta_past_len: MetaPastLen,
-        iter: I,
-        caller: MaybeLocation,
-    ) -> Vec<Entity>
-    where
-        I: IntoIterator<Item: Bundle<Effect: NoBundleEffect>>;
-
-    /// Reversible version of [`World::get_resource_or_init`].
+    
     #[track_caller]
     fn rev_get_resource_or_init<R: Resource + FromWorld>(
         &mut self,
@@ -238,15 +228,7 @@ pub trait RevWorld {
     ) -> Mut<'_, R> {
         self.rev_get_resource_or_init_with_caller(meta_past_len, MaybeLocation::caller())
     }
-
-    #[doc(hidden)]
-    fn rev_get_resource_or_init_with_caller<R: Resource + FromWorld>(
-        &mut self,
-        meta_past_len: MetaPastLen,
-        caller: MaybeLocation,
-    ) -> Mut<'_, R>;
-
-    /// Reversible version of [`World::get_resource_or_insert_with`].
+    
     #[track_caller]
     fn rev_get_resource_or_insert_with<R: Resource>(
         &mut self,
@@ -259,16 +241,7 @@ pub trait RevWorld {
             MaybeLocation::caller(),
         )
     }
-
-    #[doc(hidden)]
-    fn rev_get_resource_or_insert_with_with_caller<R: Resource>(
-        &mut self,
-        meta_past_len: MetaPastLen,
-        func: impl FnOnce() -> R,
-        caller: MaybeLocation,
-    ) -> Mut<'_, R>;
-
-    /// Reversible version of [`World::init_resource`].
+    
     #[track_caller]
     fn rev_init_resource<R: Resource + FromWorld>(
         &mut self,
@@ -276,29 +249,12 @@ pub trait RevWorld {
     ) -> ComponentId {
         self.rev_init_resource_with_caller::<R>(meta_past_len, MaybeLocation::caller())
     }
-
-    #[doc(hidden)]
-    fn rev_init_resource_with_caller<R: Resource + FromWorld>(
-        &mut self,
-        meta_past_len: MetaPastLen,
-        caller: MaybeLocation,
-    ) -> ComponentId;
-
-    /// Reversible version of [`World::insert_resource`].
+    
     #[track_caller]
     fn rev_insert_resource<R: Resource>(&mut self, meta_past_len: MetaPastLen, resource: R) {
         self.rev_insert_resource_with_caller(meta_past_len, resource, MaybeLocation::caller());
     }
-
-    #[doc(hidden)]
-    fn rev_insert_resource_with_caller<R: Resource>(
-        &mut self,
-        meta_past_len: MetaPastLen,
-        resource: R,
-        caller: MaybeLocation,
-    );
-
-    /// Reversible version of [`World::remove_resource`].
+    
     #[track_caller]
     fn rev_remove_resource<R: Resource, Out>(
         &mut self,
@@ -307,8 +263,109 @@ pub trait RevWorld {
     ) -> Option<Out> {
         self.rev_remove_resource_with_caller(meta_past_len, c, MaybeLocation::caller())
     }
+}
 
-    #[doc(hidden)]
+pub(super) trait RevWorldInternal {
+    fn redo_and_buffer_with_caller(
+        &mut self,
+        meta_past_len: MetaPastLen,
+        undo_redo: impl UndoRedo,
+        caller: MaybeLocation,
+    );
+
+    fn rev_mark_spawned_with_caller(
+        &mut self,
+        meta_past_len: MetaPastLen,
+        entity: Entity,
+        include_unlinked_related: bool,
+        caller: MaybeLocation,
+    ) -> bool;
+
+    fn rev_mark_spawned_batch_with_caller(
+        &mut self,
+        meta_past_len: MetaPastLen,
+        entities: &[Entity],
+        include_unlinked_related: bool,
+        caller: MaybeLocation,
+    );
+
+    fn rev_despawn_with_caller(
+        &mut self,
+        meta_past_len: MetaPastLen,
+        entity: Entity,
+        caller: MaybeLocation,
+    ) -> bool;
+
+    fn rev_despawn_batch_with_caller(
+        &mut self,
+        meta_past_len: MetaPastLen,
+        entities: &[Entity],
+        caller: MaybeLocation,
+    );
+
+    fn rev_spawn_with_caller(
+        &mut self,
+        meta_past_len: MetaPastLen,
+        bundle: impl Bundle,
+        caller: MaybeLocation,
+    ) -> EntityWorldMut<'_>;
+
+    fn rev_spawn_at_with_caller(
+        &mut self,
+        meta_past_len: MetaPastLen,
+        entity: Entity,
+        bundle: impl Bundle,
+        caller: MaybeLocation,
+    ) -> Result<EntityWorldMut<'_>, SpawnError>;
+
+    fn rev_spawn_empty_with_caller(
+        &mut self,
+        meta_past_len: MetaPastLen,
+        caller: MaybeLocation,
+    ) -> EntityWorldMut<'_>;
+
+    fn rev_spawn_empty_at_with_caller(
+        &mut self,
+        meta_past_len: MetaPastLen,
+        entity: Entity,
+        caller: MaybeLocation,
+    ) -> Result<EntityWorldMut<'_>, SpawnError>;
+
+    fn rev_spawn_batch_with_caller<I>(
+        &mut self,
+        meta_past_len: MetaPastLen,
+        iter: I,
+        caller: MaybeLocation,
+    ) -> Vec<Entity>
+    where
+        I: IntoIterator<Item: Bundle<Effect: NoBundleEffect>>;
+
+    fn rev_get_resource_or_init_with_caller<R: Resource + FromWorld>(
+        &mut self,
+        meta_past_len: MetaPastLen,
+        caller: MaybeLocation,
+    ) -> Mut<'_, R>;
+
+    fn rev_get_resource_or_insert_with_with_caller<R: Resource>(
+        &mut self,
+        meta_past_len: MetaPastLen,
+        func: impl FnOnce() -> R,
+        caller: MaybeLocation,
+    ) -> Mut<'_, R>;
+
+    fn rev_init_resource_with_caller<R: Resource + FromWorld>(
+        &mut self,
+        meta_past_len: MetaPastLen,
+        caller: MaybeLocation,
+    ) -> ComponentId;
+
+    fn rev_insert_resource_with_caller<R: Resource>(
+        &mut self,
+        meta_past_len: MetaPastLen,
+        resource: R,
+        caller: MaybeLocation,
+    );
+
     fn rev_remove_resource_with_caller<R: Resource, Out>(
         &mut self,
         meta_past_len: MetaPastLen,
@@ -317,7 +374,7 @@ pub trait RevWorld {
     ) -> Option<Out>;
 }
 
-impl RevWorld for World {
+impl RevWorldInternal for World {
     fn redo_and_buffer_with_caller(
         &mut self,
         meta_past_len: MetaPastLen,
@@ -326,10 +383,6 @@ impl RevWorld for World {
     ) {
         undo_redo.redo(self);
         self.buffer_undo_redo_with_caller(meta_past_len, undo_redo, caller)
-    }
-
-    fn get_running_direction(&self) -> Option<RevDirection> {
-        self.get_resource::<RevMeta>()?.get_running_direction()
     }
 
     fn rev_mark_spawned_with_caller(

@@ -1,6 +1,6 @@
 use bevy_ecs::{
     change_detection::MaybeLocation,
-    entity::{Entity, EntityNotSpawnedError},
+    entity::Entity,
     resource::Resource,
     system::{Commands, EntityCommands},
     world::{DeferredWorld, EntityWorldMut, World},
@@ -61,35 +61,6 @@ impl Display for EntityRevDespawnedError {
 }
 
 impl Error for EntityRevDespawnedError {}
-
-#[derive(Debug, Copy, Clone)]
-pub enum RevEntityError {
-    EntityNotSpawnedError(EntityNotSpawnedError),
-    EntityRevDespawnedError(EntityRevDespawnedError),
-}
-
-impl From<EntityNotSpawnedError> for RevEntityError {
-    fn from(value: EntityNotSpawnedError) -> Self {
-        Self::EntityNotSpawnedError(value)
-    }
-}
-
-impl From<EntityRevDespawnedError> for RevEntityError {
-    fn from(value: EntityRevDespawnedError) -> Self {
-        Self::EntityRevDespawnedError(value)
-    }
-}
-
-impl Display for RevEntityError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::EntityNotSpawnedError(inner) => write!(f, "{inner}"),
-            Self::EntityRevDespawnedError(inner) => write!(f, "{inner}"),
-        }
-    }
-}
-
-impl Error for RevEntityError {}
 
 // todo: split trait for _deferred variant? try to trigger bugs by using trait as-is in wrong contexts
 pub trait BuffersUndoRedo {
@@ -299,7 +270,7 @@ pub enum UndoRedoDirection {
     /// Apply undo logic when this is matched.
     Undo,
 
-    /// Apply redo logic when this is matched
+    /// Apply redo logic when this is matched.
     Redo,
 }
 

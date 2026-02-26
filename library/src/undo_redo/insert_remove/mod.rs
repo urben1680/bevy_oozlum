@@ -22,8 +22,7 @@ use crate::{
     meta::MetaPastLen,
     prelude::UndoRedo,
     undo_redo::{
-        AddRemoveRelated, BuffersUndoRedo, LOCATION_PREFIX, RevEntityWorldMut, get_new_related,
-        get_new_related_entities, mark_entities,
+        AddRemoveRelated, BuffersUndoRedo, LOCATION_PREFIX, RevEntityWorldMut, RevEntityWorldMutInternal, get_new_related, get_new_related_entities, mark_entities
     },
 };
 

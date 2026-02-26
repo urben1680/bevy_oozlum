@@ -17,7 +17,7 @@ use crate::{
     log::{OutOfLog, TransitionsLog},
     meta::{MetaPastLen, RevDirection, RevMeta},
     prelude::UndoRedo,
-    undo_redo::{BuffersUndoRedo, LOCATION_PREFIX, RevWorld, add_children, undo_redo_str},
+    undo_redo::{BuffersUndoRedo, LOCATION_PREFIX, RevWorld, RevWorldInternal, add_children, undo_redo_str},
 };
 
 #[cfg(test)]
