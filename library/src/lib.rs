@@ -14,18 +14,47 @@
 //! fn main() {
 //!     App::new()
 //!         .add_plugins((MinimalPlugins, RevPlugin::default()))
-//!         .rev_add_systems(RevUpdate, hello_world_system)
+//!         .rev_add_systems(RevUpdate, rev_system)
+//!         .add_systems(Update, input_system)
 //!         .init_resource::<Time::<Fixed>>()
 //!         .run();
-//!  }
-//!  
-//!  fn hello_world_system(meta: Res<RevMeta>) {
-//!     if meta.running_direction().is_forward() {
-//!         println!("hello world!");
-//!     } else {
-//!         println!("!dlrow olleh");
+//! }
+//!
+//! fn rev_system(meta: Res<RevMeta>, mut commands: Commands) {
+//!     match meta.running_direction() {
+//!         RevDirection::Forward { meta_past_len } => {
+//!             println!("rev sys: hello world!")
+//!
+//!             commands.queue(move |world: &mut World| {
+//!                 println!("rev cmd: hello world!");
+//!                 
+//!                 world.buffer_undo_redo(meta_past_len, |_: &mut World, direction| {
+//!                     match direction {
+//!                         UndoRedoDirection::Redo => println!("rev cmd: hello world! (log)")
+//!                         UndoRedoDirection::Undo => println!("rev cmd: !dlrow olleh (log)")
+//!                     }
+//!                 })
+//!             })
+//!         },
+//!         RevDirection::ForwardLog => println!("rev sys: hello world! (log)"),
+//!         RevDirection::BackwardLog => println!("rev sys: !dlrow olleh (log)")
 //!     }
-//!  }
+//! }
+//!
+//! fn input_system(
+//!     keyboard_input: Res<ButtonInput<KeyCode>>,
+//!     meta: ResMut<RevMeta>
+//! ) {
+//!     if keyboard_input.pressed(KeyCode::ArrowUp) {
+//!         meta.set_queue(RevQueue::RunForward);
+//!     } else if keyboard_input.pressed(KeyCode::ArrowDown) {
+//!         meta.set_queue(RevQueue::Pause);
+//!     } else if keyboard_input.pressed(KeyCode::ArrowRight) {
+//!         meta.set_queue(RevQueue::RunForwardLog);
+//!     } else if keyboard_input.pressed(KeyCode::ArrowLeft) {
+//!         meta.set_queue(RevQueue::RunBackwardLog);
+//!     }
+//! }
 //! ```
 //!
 //! # Features
@@ -90,45 +119,26 @@
 TODO:
 
 - update README
-- https://github.com/rust-lang/rust/issues/133253
 
 Enhancements:
 - reduce todo!() and //todo
 - #[inline]s
-- despawn_single -> despawn
-- missing apis:
--- EntityWorldMut::clone_with
--- EntityWorldMut::insert_reflect
--- EntityWorldMut::insert_reflect_with_registry
--- EntityWorldMut::insert_with_relationship_hook_mode
--- EntityWorldMut::remove_reflect
--- EntityWorldMut::remove_reflect_with_registry
--- ... (check Commands + friends)
 
 Docs
+- no reversible change detection (copy over to new repo)
+- no manual sync point configuration
+-- ScheduleBuildSettings::auto_insert_apply_deferred
+- subset of EntityWorld/EntityCommands as scope limit
 - make fake variadics docs work
-- check with optional features off that these still show up in docs
-- documentations
--- point out determinism aspects of methods
--- docs for private UndoRedo types
--- point out additional conditions to not panic/return err and how some are only needed in observers/hooks
--- remind in Apis with HasEffect bound to use App::register_non_entity_buffer
+- docs for private UndoRedo types
 
 ISSUES/DISCUSSIONS:
-- reversible change detection (copy over to new repo)
-- manual sync point configuration
--- ScheduleBuildSettings::auto_insert_apply_deferred
-- not supported:
--- EntityWorldMut::clone_with because EntityClonerBuilder is not offering reads on which components are cloned
---- could be supported with RevEntityClonerBuilder
-- RevBundleEffect
-- RevRelationship
--- support via Observers:
---- if added during NOT_LOG to a buffer entity, Relationship uses non-buffer-entity UndoRedo
-- rev_insert_batch
--- backup components one by one
--- insert closure for each is noop
-
+- feature track_update_logs to opt-out
+- iter/iter mut for transition logs, ideally separated in past/future
+  disjoint iterators work with as_slices
+   -> split pair into two pairs
+   -> construct iters (not Chain without TrustedLen)
+- RevBundle::rev_insert_inner out of trait
 
 */
 // todo: deny
@@ -152,8 +162,9 @@ pub mod prelude {
         IntoRevScheduleConfigs as _, RevSchedule as _, RevSystems, RevUpdate,
     };
     pub use crate::undo_redo::{
-        BuffersUndoRedo as _, IsRevDespawned as _, RevEntityWorldMut as _, RevWorld as _, UndoRedo,
-        UndoRedoDirection,
+        BuffersUndoRedo as _, IsRevDespawned as _, RevCommands as _, RevEntityCommands as _,
+        RevEntityEntryCommands as _, RevEntityWorldMut as _, RevRelatedSpawnerCommands as _,
+        RevWorld as _, UndoRedo, UndoRedoDirection,
     };
 }
 

@@ -56,6 +56,16 @@ const NON_WRAPPED_BYTE_MASK: u8 = 0b00_111111;
 const WRAPPING_OFFSET_OR: u8 = 0b11_000000;
 const STREAK_ZERO_OR: u8 = 0b01_000000;
 const STREAK_ONE_OR: u8 = 0b10_000000;
+const SINGLE_BYTE_OFFSET: u64 = 2;
+const MULTI_BYTE_OFFSET_0: u64 = 66;
+const MULTI_BYTE_OFFSET_1: u64 = 4162;
+const MULTI_BYTE_OFFSET_2: u64 = 528450;
+const MULTI_BYTE_OFFSET_3: u64 = 67637314;
+const MULTI_BYTE_OFFSET_4: u64 = 8657571906;
+const MULTI_BYTE_OFFSET_5: u64 = 1108169199682;
+const MULTI_BYTE_OFFSET_6: u64 = 141845657555010;
+const MULTI_BYTE_OFFSET_7: u64 = 18156244167036994;
+const MULTI_BYTE_OFFSET_8: u64 = 2323999253380730946;
 const MULTI_BYTE_OFFSETS: [u64; 9] = [
     MULTI_BYTE_OFFSET_0,
     MULTI_BYTE_OFFSET_1,
@@ -67,16 +77,6 @@ const MULTI_BYTE_OFFSETS: [u64; 9] = [
     MULTI_BYTE_OFFSET_7,
     MULTI_BYTE_OFFSET_8,
 ];
-const SINGLE_BYTE_OFFSET: u64 = 2;
-const MULTI_BYTE_OFFSET_0: u64 = 66;
-const MULTI_BYTE_OFFSET_1: u64 = 4162;
-const MULTI_BYTE_OFFSET_2: u64 = 528450;
-const MULTI_BYTE_OFFSET_3: u64 = 67637314;
-const MULTI_BYTE_OFFSET_4: u64 = 8657571906;
-const MULTI_BYTE_OFFSET_5: u64 = 1108169199682;
-const MULTI_BYTE_OFFSET_6: u64 = 141845657555010;
-const MULTI_BYTE_OFFSET_7: u64 = 18156244167036994;
-const MULTI_BYTE_OFFSET_8: u64 = 2323999253380730946;
 
 /// Stores `u64` offsets and allows forward/backward traversals and past/future truncations.
 #[derive(Debug, Default)]
@@ -348,12 +348,12 @@ impl OffsetLog {
 
         let byte = (offset & NON_WRAPPED_BYTE_MASK as u64) as u8 | WRAPPING_OFFSET_OR;
         self.offsets.push_back(byte);
-        offset >>= 6;
+        offset >>= NON_WRAPPED_BYTE_MASK.trailing_ones();
 
         for _ in 0..WRAPPED {
             let byte = (offset & WRAPPED_OFFSET_MASK as u64) as u8;
             self.offsets.push_back(byte);
-            offset >>= 7;
+            offset >>= WRAPPED_OFFSET_MASK.trailing_ones();
         }
 
         self.offsets.push_back(offset as u8 | WRAPPING_OFFSET_OR);
@@ -485,7 +485,7 @@ fn read_bytes_forward<B: Borrow<u8>>(
     let mut extra_offsets_index = 0;
 
     // wrapping bytes contain 6 usable bits for the offset
-    let mut shift = 6;
+    let mut shift = NON_WRAPPED_BYTE_MASK.trailing_ones();
 
     loop {
         let byte = *iter.next().unwrap().borrow(); // encoding expects more bytes to follow
@@ -511,7 +511,7 @@ fn read_bytes_forward<B: Borrow<u8>>(
         *offset |= (byte as u64) << shift;
 
         // wrapped bytes contain 7 usable bits for the offset
-        shift += 7;
+        shift += WRAPPED_OFFSET_MASK.trailing_ones();
 
         extra_offsets_index += 1;
     }
@@ -589,7 +589,8 @@ impl Iterator for NowToPast<'_> {
 
                 // the added bits are less significant, wrapping bytes contain 6 usable bits for the
                 // offset
-                offset = (offset << 6) | (byte & NON_WRAPPED_BYTE_MASK) as u64;
+                offset = (offset << NON_WRAPPED_BYTE_MASK.trailing_ones())
+                    | (byte & NON_WRAPPED_BYTE_MASK) as u64;
 
                 // multi-byte offsets are always at least MULTI_BYTE_OFFSET, so the encoded
                 // offset is less than that to potenitally require a byte less
@@ -602,7 +603,7 @@ impl Iterator for NowToPast<'_> {
 
             // the added bits are less significant, has no marker bits that need to be masked away,
             // wrapped bytes contain 7 usable bits for the offset
-            offset = (offset << 7) | byte as u64;
+            offset = (offset << WRAPPED_OFFSET_MASK.trailing_ones()) | byte as u64;
 
             extra_offsets_index += 1;
         }

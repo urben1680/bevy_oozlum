@@ -12,7 +12,6 @@ impl RevDirection {
 struct RunValues {
     past_end: u64,
     now: u64,
-    future_end: u64,
     log_exits: u64,
     log_clears: u64,
     direction: Discriminant<RevDirection>,
@@ -29,7 +28,6 @@ impl RevMeta {
             let values = values.unwrap();
             assert_eq!(meta.past_end(), values.past_end);
             assert_eq!(meta.now(), values.now);
-            assert_eq!(meta.future_end(), values.future_end);
             assert_eq!(meta.log_exits(), values.log_exits);
             assert_eq!(meta.log_clears(), values.log_clears);
             assert_eq!(direction.discriminant(), values.direction);
@@ -45,7 +43,6 @@ fn traverses_log() {
         Some(RunValues {
             past_end: 0,
             now: 1,
-            future_end: 1,
             log_exits: 0,
             log_clears: 0,
             direction: RevDirection::FWD_DISCRIMINANT,
@@ -56,7 +53,6 @@ fn traverses_log() {
         Some(RunValues {
             past_end: 0,
             now: 2,
-            future_end: 2,
             log_exits: 0,
             log_clears: 0,
             direction: RevDirection::FWD_DISCRIMINANT,
@@ -67,7 +63,6 @@ fn traverses_log() {
         Some(RunValues {
             past_end: 0,
             now: 3,
-            future_end: 3,
             log_exits: 0,
             log_clears: 0,
             direction: RevDirection::FWD_DISCRIMINANT,
@@ -78,7 +73,6 @@ fn traverses_log() {
         Some(RunValues {
             past_end: 0,
             now: 4,
-            future_end: 4,
             log_exits: 0,
             log_clears: 0,
             direction: RevDirection::FWD_DISCRIMINANT,
@@ -89,7 +83,6 @@ fn traverses_log() {
         Some(RunValues {
             past_end: 1,
             now: 5,
-            future_end: 5,
             log_exits: 0,
             log_clears: 0,
             direction: RevDirection::FWD_DISCRIMINANT,
@@ -100,7 +93,6 @@ fn traverses_log() {
         Some(RunValues {
             past_end: 1,
             now: 4,
-            future_end: 5,
             log_exits: 0,
             log_clears: 0,
             direction: RevDirection::BackwardLog.discriminant(),
@@ -111,7 +103,6 @@ fn traverses_log() {
         Some(RunValues {
             past_end: 1,
             now: 3,
-            future_end: 5,
             log_exits: 0,
             log_clears: 0,
             direction: RevDirection::BackwardLog.discriminant(),
@@ -122,7 +113,6 @@ fn traverses_log() {
         Some(RunValues {
             past_end: 1,
             now: 2,
-            future_end: 5,
             log_exits: 0,
             log_clears: 0,
             direction: RevDirection::BackwardLog.discriminant(),
@@ -133,7 +123,6 @@ fn traverses_log() {
         Some(RunValues {
             past_end: 1,
             now: 1,
-            future_end: 5,
             log_exits: 0,
             log_clears: 0,
             direction: RevDirection::BackwardLog.discriminant(),
@@ -146,7 +135,6 @@ fn traverses_log() {
         Some(RunValues {
             past_end: 1,
             now: 2,
-            future_end: 5,
             log_exits: 0,
             log_clears: 0,
             direction: RevDirection::ForwardLog.discriminant(),
@@ -157,7 +145,6 @@ fn traverses_log() {
         Some(RunValues {
             past_end: 1,
             now: 3,
-            future_end: 5,
             log_exits: 0,
             log_clears: 0,
             direction: RevDirection::ForwardLog.discriminant(),
@@ -168,7 +155,6 @@ fn traverses_log() {
         Some(RunValues {
             past_end: 1,
             now: 4,
-            future_end: 5,
             log_exits: 0,
             log_clears: 0,
             direction: RevDirection::ForwardLog.discriminant(),
@@ -179,7 +165,6 @@ fn traverses_log() {
         Some(RunValues {
             past_end: 1,
             now: 5,
-            future_end: 5,
             log_exits: 0,
             log_clears: 0,
             direction: RevDirection::ForwardLog.discriminant(),
@@ -192,7 +177,6 @@ fn traverses_log() {
         Some(RunValues {
             past_end: 1,
             now: 4,
-            future_end: 5,
             log_exits: 0,
             log_clears: 0,
             direction: RevDirection::BackwardLog.discriminant(),
@@ -203,7 +187,6 @@ fn traverses_log() {
         Some(RunValues {
             past_end: 1,
             now: 3,
-            future_end: 5,
             log_exits: 0,
             log_clears: 0,
             direction: RevDirection::BackwardLog.discriminant(),
@@ -215,7 +198,6 @@ fn traverses_log() {
         Some(RunValues {
             past_end: 1,
             now: 4,
-            future_end: 4,
             log_exits: 1,
             log_clears: 0,
             direction: RevDirection::FWD_DISCRIMINANT,
@@ -226,7 +208,6 @@ fn traverses_log() {
         Some(RunValues {
             past_end: 1,
             now: 3,
-            future_end: 4,
             log_exits: 1,
             log_clears: 0,
             direction: RevDirection::BackwardLog.discriminant(),
@@ -237,7 +218,6 @@ fn traverses_log() {
         Some(RunValues {
             past_end: 1,
             now: 2,
-            future_end: 4,
             log_exits: 1,
             log_clears: 0,
             direction: RevDirection::BackwardLog.discriminant(),
@@ -249,7 +229,6 @@ fn traverses_log() {
         Some(RunValues {
             past_end: 2,
             now: 3,
-            future_end: 3,
             log_exits: 0,
             log_clears: 1,
             direction: RevDirection::FWD_DISCRIMINANT,
@@ -260,7 +239,6 @@ fn traverses_log() {
         Some(RunValues {
             past_end: 2,
             now: 4,
-            future_end: 4,
             log_exits: 0,
             log_clears: 1,
             direction: RevDirection::FWD_DISCRIMINANT,
@@ -271,7 +249,6 @@ fn traverses_log() {
         Some(RunValues {
             past_end: 2,
             now: 5,
-            future_end: 5,
             log_exits: 0,
             log_clears: 1,
             direction: RevDirection::FWD_DISCRIMINANT,
@@ -282,7 +259,6 @@ fn traverses_log() {
         Some(RunValues {
             past_end: 2,
             now: 4,
-            future_end: 5,
             log_exits: 0,
             log_clears: 1,
             direction: RevDirection::BackwardLog.discriminant(),
@@ -293,7 +269,6 @@ fn traverses_log() {
         Some(RunValues {
             past_end: 2,
             now: 3,
-            future_end: 5,
             log_exits: 0,
             log_clears: 1,
             direction: RevDirection::BackwardLog.discriminant(),
@@ -304,42 +279,9 @@ fn traverses_log() {
         Some(RunValues {
             past_end: 3,
             now: 4,
-            future_end: 4,
             log_exits: 0,
             log_clears: 2,
             direction: RevDirection::FWD_DISCRIMINANT,
         }),
     );
-}
-
-#[test]
-fn contains_returns_expected() {
-    let mut meta = RevMeta::new(NonZeroU64::MAX, true);
-    meta.past_end = 1;
-    meta.now = 3;
-    meta.future_end = 5;
-
-    assert_eq!(meta.contains(0), false, "{meta:#?}");
-    assert_eq!(meta.contains(1), true, "{meta:#?}");
-    assert_eq!(meta.contains(2), true, "{meta:#?}");
-    assert_eq!(meta.contains(3), true, "{meta:#?}");
-    assert_eq!(meta.contains(4), true, "{meta:#?}");
-    assert_eq!(meta.contains(5), true, "{meta:#?}");
-    assert_eq!(meta.contains(6), false, "{meta:#?}");
-
-    assert_eq!(meta.past_contains(0), false, "{meta:#?}");
-    assert_eq!(meta.past_contains(1), true, "{meta:#?}");
-    assert_eq!(meta.past_contains(2), true, "{meta:#?}");
-    assert_eq!(meta.past_contains(3), false, "{meta:#?}");
-    assert_eq!(meta.past_contains(4), false, "{meta:#?}");
-    assert_eq!(meta.past_contains(5), false, "{meta:#?}");
-    assert_eq!(meta.past_contains(6), false, "{meta:#?}");
-
-    assert_eq!(meta.future_contains(0), false, "{meta:#?}");
-    assert_eq!(meta.future_contains(1), false, "{meta:#?}");
-    assert_eq!(meta.future_contains(2), false, "{meta:#?}");
-    assert_eq!(meta.future_contains(3), false, "{meta:#?}");
-    assert_eq!(meta.future_contains(4), true, "{meta:#?}");
-    assert_eq!(meta.future_contains(5), true, "{meta:#?}");
-    assert_eq!(meta.future_contains(6), false, "{meta:#?}");
 }

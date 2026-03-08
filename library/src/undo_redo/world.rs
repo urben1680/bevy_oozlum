@@ -1,20 +1,25 @@
+use std::{error::Error, fmt::Display};
+
 use super::{BuffersUndoRedo, UndoRedo};
 use crate::{
     meta::{MetaPastLen, RevDirection, RevMeta},
     undo_redo::{
-        RevEntityWorldMutInternal, RevInsertResourceNew, RevInsertResourceOverwrite, RevRemoveResource, mark_entities, mark_entity
+        EntityRevDespawnedError, RevBundle, RevEntityWorldMutInternal, RevInsertResourceNew,
+        RevInsertResourceOverwrite, RevRemoveResource, mark_entities, mark_entity,
+        mark_spawn_empty,
     },
 };
 use bevy_ecs::{
     bundle::{Bundle, NoBundleEffect},
     change_detection::MaybeLocation,
     component::ComponentId,
-    entity::{Entity, SpawnError},
+    entity::{Entity, EntityNotSpawnedError, SpawnError},
     resource::Resource,
-    world::{EntityWorldMut, FromWorld, Mut, World},
+    world::{EntityWorldMut, FromWorld, Mut, World, error::EntityMutableFetchError},
 };
+use bevy_utils::prelude::DebugName;
 
-/// Extension trait for [`World`] with reversible variants of verious methods.
+/// Extension trait for [`World`] with reversible variants of various methods.
 pub trait RevWorld {
     /// Shorthand method of [`World::buffer_undo_redo`] with applying `undo_redo.redo(&mut self)`
     /// immediately. Useful when there is no difference between doing and redoing.
@@ -104,6 +109,48 @@ pub trait RevWorld {
     where
         I: IntoIterator<Item: Bundle<Effect: NoBundleEffect>>;
 
+    /// Reversible version of [`World::insert_batch`].
+    fn rev_insert_batch<I, B, Marker>(
+        &mut self,
+        meta_past_len: MetaPastLen,
+        iter: I,
+        caller: MaybeLocation,
+    ) where
+        I: IntoIterator<IntoIter: Iterator<Item = (Entity, B)>>,
+        B: RevBundle<Marker>;
+
+    /// Reversible version of [`World::insert_batch_if_new`].
+    fn rev_insert_batch_if_new<I, B, Marker>(
+        &mut self,
+        meta_past_len: MetaPastLen,
+        iter: I,
+        caller: MaybeLocation,
+    ) where
+        I: IntoIterator<IntoIter: Iterator<Item = (Entity, B)>>,
+        B: RevBundle<Marker>;
+
+    /// Reversible version of [`World::try_insert_batch`].
+    fn rev_try_insert_batch<I, B, Marker>(
+        &mut self,
+        meta_past_len: MetaPastLen,
+        iter: I,
+        caller: MaybeLocation,
+    ) -> Result<(), TryRevInsertBatchError>
+    where
+        I: IntoIterator<IntoIter: Iterator<Item = (Entity, B)>>,
+        B: RevBundle<Marker>;
+
+    /// Reversible version of [`World::try_insert_batch_if_new`].
+    fn rev_try_insert_batch_if_new<I, B, Marker>(
+        &mut self,
+        meta_past_len: MetaPastLen,
+        iter: I,
+        caller: MaybeLocation,
+    ) -> Result<(), TryRevInsertBatchError>
+    where
+        I: IntoIterator<IntoIter: Iterator<Item = (Entity, B)>>,
+        B: RevBundle<Marker>;
+
     /// Reversible version of [`World::get_resource_or_init`].
     fn rev_get_resource_or_init<R: Resource + FromWorld>(
         &mut self,
@@ -143,7 +190,7 @@ impl RevWorld for World {
     fn get_running_direction(&self) -> Option<RevDirection> {
         self.get_resource::<RevMeta>()?.get_running_direction()
     }
-    
+
     #[track_caller]
     fn rev_mark_spawned(
         &mut self,
@@ -158,7 +205,7 @@ impl RevWorld for World {
             MaybeLocation::caller(),
         )
     }
-    
+
     #[track_caller]
     fn rev_mark_spawned_batch(
         &mut self,
@@ -173,22 +220,22 @@ impl RevWorld for World {
             MaybeLocation::caller(),
         );
     }
-    
+
     #[track_caller]
     fn rev_despawn(&mut self, meta_past_len: MetaPastLen, entity: Entity) -> bool {
         self.rev_despawn_with_caller(meta_past_len, entity, MaybeLocation::caller())
     }
-    
+
     #[track_caller]
     fn rev_despawn_batch(&mut self, meta_past_len: MetaPastLen, entities: &[Entity]) {
         self.rev_despawn_batch_with_caller(meta_past_len, entities, MaybeLocation::caller())
     }
-    
+
     #[track_caller]
     fn rev_spawn(&mut self, meta_past_len: MetaPastLen, bundle: impl Bundle) -> EntityWorldMut<'_> {
         self.rev_spawn_with_caller(meta_past_len, bundle, MaybeLocation::caller())
     }
-    
+
     #[track_caller]
     fn rev_spawn_at(
         &mut self,
@@ -198,12 +245,12 @@ impl RevWorld for World {
     ) -> Result<EntityWorldMut<'_>, SpawnError> {
         self.rev_spawn_at_with_caller(meta_past_len, entity, bundle, MaybeLocation::caller())
     }
-    
+
     #[track_caller]
     fn rev_spawn_empty(&mut self, meta_past_len: MetaPastLen) -> EntityWorldMut<'_> {
         self.rev_spawn_empty_with_caller(meta_past_len, MaybeLocation::caller())
     }
-    
+
     #[track_caller]
     fn rev_spawn_empty_at(
         &mut self,
@@ -212,7 +259,7 @@ impl RevWorld for World {
     ) -> Result<EntityWorldMut<'_>, SpawnError> {
         self.rev_spawn_empty_at_with_caller(meta_past_len, entity, MaybeLocation::caller())
     }
-    
+
     #[track_caller]
     fn rev_spawn_batch<I>(&mut self, meta_past_len: MetaPastLen, iter: I) -> Vec<Entity>
     where
@@ -220,7 +267,7 @@ impl RevWorld for World {
     {
         self.rev_spawn_batch_with_caller(meta_past_len, iter, MaybeLocation::caller())
     }
-    
+
     #[track_caller]
     fn rev_get_resource_or_init<R: Resource + FromWorld>(
         &mut self,
@@ -228,7 +275,7 @@ impl RevWorld for World {
     ) -> Mut<'_, R> {
         self.rev_get_resource_or_init_with_caller(meta_past_len, MaybeLocation::caller())
     }
-    
+
     #[track_caller]
     fn rev_get_resource_or_insert_with<R: Resource>(
         &mut self,
@@ -241,7 +288,7 @@ impl RevWorld for World {
             MaybeLocation::caller(),
         )
     }
-    
+
     #[track_caller]
     fn rev_init_resource<R: Resource + FromWorld>(
         &mut self,
@@ -249,12 +296,12 @@ impl RevWorld for World {
     ) -> ComponentId {
         self.rev_init_resource_with_caller::<R>(meta_past_len, MaybeLocation::caller())
     }
-    
+
     #[track_caller]
     fn rev_insert_resource<R: Resource>(&mut self, meta_past_len: MetaPastLen, resource: R) {
         self.rev_insert_resource_with_caller(meta_past_len, resource, MaybeLocation::caller());
     }
-    
+
     #[track_caller]
     fn rev_remove_resource<R: Resource, Out>(
         &mut self,
@@ -262,6 +309,70 @@ impl RevWorld for World {
         c: impl FnOnce(&R) -> Out,
     ) -> Option<Out> {
         self.rev_remove_resource_with_caller(meta_past_len, c, MaybeLocation::caller())
+    }
+
+    #[track_caller]
+    fn rev_insert_batch<I, B, Marker>(
+        &mut self,
+        meta_past_len: MetaPastLen,
+        iter: I,
+        caller: MaybeLocation,
+    ) where
+        I: IntoIterator<IntoIter: Iterator<Item = (Entity, B)>>,
+        B: RevBundle<Marker>,
+    {
+        self.rev_try_insert_batch(meta_past_len, iter, caller)
+            .unwrap()
+    }
+
+    #[track_caller]
+    fn rev_insert_batch_if_new<I, B, Marker>(
+        &mut self,
+        meta_past_len: MetaPastLen,
+        iter: I,
+        caller: MaybeLocation,
+    ) where
+        I: IntoIterator<IntoIter: Iterator<Item = (Entity, B)>>,
+        B: RevBundle<Marker>,
+    {
+        self.rev_try_insert_batch_if_new(meta_past_len, iter, caller)
+            .unwrap()
+    }
+
+    #[track_caller]
+    fn rev_try_insert_batch<I, B, Marker>(
+        &mut self,
+        meta_past_len: MetaPastLen,
+        iter: I,
+        caller: MaybeLocation,
+    ) -> Result<(), TryRevInsertBatchError>
+    where
+        I: IntoIterator<IntoIter: Iterator<Item = (Entity, B)>>,
+        B: RevBundle<Marker>,
+    {
+        self.rev_try_insert_batch_inner(iter, |mut entity_mut, bundle| {
+            entity_mut
+                .rev_insert_with_caller(meta_past_len, bundle, caller)
+                .map(|_| ())
+        })
+    }
+
+    #[track_caller]
+    fn rev_try_insert_batch_if_new<I, B, Marker>(
+        &mut self,
+        meta_past_len: MetaPastLen,
+        iter: I,
+        caller: MaybeLocation,
+    ) -> Result<(), TryRevInsertBatchError>
+    where
+        I: IntoIterator<IntoIter: Iterator<Item = (Entity, B)>>,
+        B: RevBundle<Marker>,
+    {
+        self.rev_try_insert_batch_inner(iter, |mut entity_mut, bundle| {
+            entity_mut
+                .rev_insert_if_new_with_caller(meta_past_len, bundle, caller)
+                .map(|_| ())
+        })
     }
 }
 
@@ -339,6 +450,15 @@ pub(super) trait RevWorldInternal {
     ) -> Vec<Entity>
     where
         I: IntoIterator<Item: Bundle<Effect: NoBundleEffect>>;
+
+    fn rev_try_insert_batch_inner<I, B, Marker>(
+        &mut self,
+        iter: I,
+        op: impl FnMut(EntityWorldMut, B) -> Result<(), EntityRevDespawnedError>,
+    ) -> Result<(), TryRevInsertBatchError>
+    where
+        I: IntoIterator<IntoIter: Iterator<Item = (Entity, B)>>,
+        B: RevBundle<Marker>;
 
     fn rev_get_resource_or_init_with_caller<R: Resource + FromWorld>(
         &mut self,
@@ -546,9 +666,7 @@ impl RevWorldInternal for World {
         caller: MaybeLocation,
     ) -> EntityWorldMut<'_> {
         let mut entity = self.spawn_empty();
-        entity
-            .rev_mark_spawned_with_caller(meta_past_len, true, caller)
-            .unwrap();
+        mark_spawn_empty(meta_past_len, &mut entity, caller);
         entity
     }
 
@@ -578,4 +696,82 @@ impl RevWorldInternal for World {
         mark_entities::<true>(meta_past_len, self, &*entities, true, caller);
         entities
     }
+
+    fn rev_try_insert_batch_inner<I, B, Marker>(
+        &mut self,
+        iter: I,
+        mut op: impl FnMut(EntityWorldMut, B) -> Result<(), EntityRevDespawnedError>,
+    ) -> Result<(), TryRevInsertBatchError>
+    where
+        I: IntoIterator<IntoIter: Iterator<Item = (Entity, B)>>,
+        B: RevBundle<Marker>,
+    {
+        let mut not_existing_entities = Vec::new();
+        let mut rev_despawned_entities = Vec::new();
+        for (entity, bundle) in iter.into_iter() {
+            match self.get_entity_mut(entity) {
+                Ok(entity_mut) => {
+                    if let Err(err) = op(entity_mut, bundle) {
+                        rev_despawned_entities.push(err);
+                    }
+                }
+                Err(EntityMutableFetchError::NotSpawned(err)) => {
+                    not_existing_entities.push(err);
+                }
+                Err(EntityMutableFetchError::AliasedMutability(_)) => unreachable!(),
+            }
+        }
+
+        if not_existing_entities.is_empty() && rev_despawned_entities.is_empty() {
+            Ok(())
+        } else {
+            Err(TryRevInsertBatchError {
+                bundle_type: DebugName::type_name::<B>(),
+                not_existing_entities,
+                rev_despawned_entities,
+            })
+        }
+    }
 }
+
+/// The error type returned by [`World::rev_try_insert_batch`] and
+/// [`World::rev_try_insert_batch_if_new`] if any of the provided entities do not exist or were
+/// reversibly despawned.
+///
+/// See the [`RevDespawned`](super::RevDespawned) documentation to understand the mechanics of
+/// reversible spawn/despawn.
+#[derive(Debug, Clone)]
+pub struct TryRevInsertBatchError {
+    /// The bundles' type name.
+    pub bundle_type: DebugName,
+    /// The IDs of the provided entities that do not exist.
+    pub not_existing_entities: Vec<EntityNotSpawnedError>,
+    /// The IDs of the provided entities that are reversibly despawned.
+    pub rev_despawned_entities: Vec<EntityRevDespawnedError>,
+}
+
+impl Display for TryRevInsertBatchError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.rev_despawned_entities.is_empty() {
+            write!(
+                f,
+                "Could not insert bundles of type {} into the entities with the following IDs because they do not exist: {:?}",
+                self.bundle_type, self.not_existing_entities
+            )
+        } else if self.not_existing_entities.is_empty() {
+            write!(
+                f,
+                "Could not insert bundles of type {} into the entities with the following IDs because they were reversibly despawned: {:?}",
+                self.bundle_type, self.rev_despawned_entities
+            )
+        } else {
+            write!(
+                f,
+                "Could not insert bundles of type {} into the entities with the following IDs because they do not exist: {:?} or were reversibly despawned: {:?}",
+                self.bundle_type, self.not_existing_entities, self.rev_despawned_entities
+            )
+        }
+    }
+}
+
+impl Error for TryRevInsertBatchError {}

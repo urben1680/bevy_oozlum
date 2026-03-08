@@ -4,7 +4,6 @@ use crate::{
     undo_redo::{DespawnCleanerErr, UndoRedoBuffer, update_spawn_despawn},
 };
 use bevy_ecs::{
-    error::BevyError,
     resource::Resource,
     system::{RunSystemError, SystemParamValidationError},
     world::World,
@@ -127,20 +126,6 @@ impl RevMeta {
             update_log_limits: UpdateLogLimits::default(),
         }
     }
-    #[cfg(test)]
-    pub(crate) fn running_new() -> Self {
-        Self {
-            past_end: 0,
-            now: 1,
-            future_end: 1,
-            max_past_len: NonZeroU64::MAX,
-            direction: RunningOrRan::Running(RevDirection::FORWARD_MIN),
-            queue: None,
-            log_exits: 0,
-            log_clears: 0,
-            update_log_limits: UpdateLogLimits::default(),
-        }
-    }
     pub fn set_queue(&mut self, queue: RevQueue) {
         self.queue = Some(queue);
     }
@@ -174,9 +159,6 @@ impl RevMeta {
     pub fn paused(&self) -> bool {
         matches!(self.direction, RunningOrRan::Pause { .. })
     }
-    pub fn future_end(&self) -> u64 {
-        self.future_end
-    }
     /// The reversible frame of the [`RevUpdate`] schedule.
     ///
     /// When the schedule is not running, this frame can be understood as the id of the present
@@ -192,14 +174,10 @@ impl RevMeta {
     /// the world from `n+1` back to `n` again.
     ///
     /// Can only be `0` at or after [`RevDirection::BackwardLog`] and is otherwise non-zero.
-    ///
-    /// This is the only frame returned by `RevMeta` that may be used for reversible logic, for
-    /// example as a seed for RNG. [`RevMeta::past_end`] and [`RevMeta::future_end`] on the other
-    /// hand are _not deterministic_ for the simulation at the present frame.
-    pub const fn now(&self) -> u64 {
+    pub(super) const fn now(&self) -> u64 {
         self.now
     }
-    pub fn past_end(&self) -> u64 {
+    pub(super) fn past_end(&self) -> u64 {
         self.past_end
     }
     pub fn past_len(&self) -> u64 {
@@ -223,15 +201,6 @@ impl RevMeta {
     }
     pub fn log_clears(&self) -> u64 {
         self.log_clears
-    }
-    pub fn contains(&self, frame: u64) -> bool {
-        self.future_end.wrapping_sub(frame) <= (self.future_end - self.past_end)
-    }
-    pub fn past_contains(&self, frame: u64) -> bool {
-        self.now.wrapping_sub(frame).wrapping_sub(1) < self.past_len()
-    }
-    pub fn future_contains(&self, frame: u64) -> bool {
-        self.future_end.wrapping_sub(frame) < self.future_len()
     }
     pub fn end_of_log_backward(&self) -> bool {
         self.now == self.past_end
@@ -532,6 +501,7 @@ pub enum RevMetaUpdateErr {
     },
 }
 
+// todo: pub enum should not be generic
 #[derive(Debug)]
 pub enum TryRunRevUpdateError<M, B> {
     ScheduleMissing,

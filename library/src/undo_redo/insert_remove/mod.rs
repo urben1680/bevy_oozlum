@@ -22,7 +22,8 @@ use crate::{
     meta::MetaPastLen,
     prelude::UndoRedo,
     undo_redo::{
-        AddRemoveRelated, BuffersUndoRedo, LOCATION_PREFIX, RevEntityWorldMut, RevEntityWorldMutInternal, get_new_related, get_new_related_entities, mark_entities
+        AddRemoveRelated, BuffersUndoRedo, LOCATION_PREFIX, RevEntityWorldMut,
+        RevEntityWorldMutInternal, get_new_related, get_new_related_entities, mark_entities,
     },
 };
 
@@ -121,7 +122,6 @@ impl<C: Component> InnerComponentBuffer<C> {
         &mut self,
         world: &mut World,
     ) -> Result<ToggleResult, impl Error + 'static> {
-        // todo: test
         world.get_entity_mut(self.entity).map(|mut entity| {
             match self.buffer.as_mut() {
                 None => {
@@ -150,7 +150,6 @@ impl<C: Component> InnerComponentBuffer<C> {
 
 impl<R: Resource> InnerResourceBuffer<R> {
     fn toggle_resource(&mut self, world: &mut World) -> ToggleResult {
-        // todo: test
         match self.buffer.as_mut() {
             None => {
                 self.buffer = world.remove_resource::<R>();
@@ -339,7 +338,6 @@ struct RevNewRequired<T> {
 
 impl<T: Send + 'static> UndoRedo for RevNewRequired<T> {
     fn undo(&mut self, world: &mut World) {
-        // todo: test
         match world.get_entity_mut(self.entity) {
             Ok(mut entity) => {
                 entity.remove_by_ids(&self.new_required);

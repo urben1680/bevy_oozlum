@@ -18,16 +18,16 @@ use crate::{
     meta::{MetaPastLen, RevDirection, RevMeta},
 };
 
-//mod commands;
-//mod entity_commands;
+mod commands;
+mod entity_commands;
 mod entity_world;
 mod insert_remove;
 mod relationship;
 mod spawn_despawn;
 mod world;
 
-//pub use commands::*;
-//pub use entity_commands::*;
+pub use commands::*;
+pub use entity_commands::*;
 pub use entity_world::*;
 pub use insert_remove::*;
 use relationship::*;
@@ -185,7 +185,7 @@ impl BuffersUndoRedo for DeferredWorld<'_> {
 /// Commands and hooks can buffer [`UndoRedo`] implementors via [`&mut World`](World)/[`DeferredWorld`] instead.
 ///
 /// Do not remove or overwrite this resource.
-#[derive(Resource, Default, Debug)] // todo: wrap in private resource
+#[derive(Resource, Default, Debug)]
 pub(crate) struct UndoRedoBuffer(Vec<BoxedUndoRedo>);
 
 impl UndoRedoBuffer {

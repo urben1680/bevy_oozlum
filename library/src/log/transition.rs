@@ -266,7 +266,7 @@ impl<T> TransitionLog<T> {
     ///
     /// For an example, see the [type level docs](TransitionLog).
     #[track_caller]
-    pub fn forward_log<'a, 'm>(&'a mut self, meta: &'m RevMeta) -> Result<&'a mut T, OutOfLog> {
+    pub fn forward_log<'a>(&'a mut self, meta: &RevMeta) -> Result<&'a mut T, OutOfLog> {
         if self.witnessed_log_clears < meta.log_clears()
             || self.witnessed_log_exits < meta.log_exits()
             || self.index >= self.index_max

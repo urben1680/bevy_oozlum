@@ -17,7 +17,7 @@ use crate::{
     log::{OutOfLog, TransitionsLog},
     meta::{MetaPastLen, RevDirection, RevMeta},
     prelude::UndoRedo,
-    undo_redo::{BuffersUndoRedo, LOCATION_PREFIX, RevWorld, RevWorldInternal, add_children, undo_redo_str},
+    undo_redo::{BuffersUndoRedo, LOCATION_PREFIX, RevWorldInternal, add_children, undo_redo_str},
 };
 
 #[cfg(test)]
@@ -182,6 +182,26 @@ pub(super) fn mark_entity<const SPAWN: bool>(
     true
 }
 
+pub(super) fn mark_spawn_empty(
+    meta_past_len: MetaPastLen,
+    entity: &mut EntityWorldMut,
+    caller: MaybeLocation,
+) {
+    let id = entity.id();
+    let spawn_despawn = RevSpawnDespawn::<_, true> {
+        entities: id,
+        caller,
+    };
+
+    entity.world_scope(|world| {
+        world
+            .get_resource_or_init::<DespawnFinalizer>()
+            .spawn_queue
+            .push((id, caller));
+        world.buffer_undo_redo_with_caller(meta_past_len, spawn_despawn, caller);
+    })
+}
+
 fn mark_inner<const SPAWN: bool>(
     meta_past_len: MetaPastLen,
     world: &mut World,
@@ -268,6 +288,12 @@ impl EntityCollection for EntityHashSet {
 impl EntityCollection for Arc<[Entity]> {
     fn iter_entities(&self) -> impl Iterator<Item = Entity> {
         self.iter().copied()
+    }
+}
+
+impl EntityCollection for Entity {
+    fn iter_entities(&self) -> impl Iterator<Item = Entity> {
+        [*self].into_iter()
     }
 }
 

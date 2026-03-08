@@ -27,9 +27,12 @@ pub(crate) struct UpdateLogLimits {
 
     /// The locals contain 2D vectors:
     ///
-    /// - the outer vector's index represents with which [`UpdateLogState::updates_this_frame`] value
-    /// limits were pushed
-    /// - the inner vector contains all limits to said `updates_this_frame`
+    /// - the outer vector's index represents with which [`UpdateLogState::updates_this_frame`]
+    ///   value limits were pushed.
+    /// - the inner vector contains all limits to said `updates_this_frame`.
+    /// - the [`NonMaxU32`] value contains the id of the limit this log is associated with, the
+    ///   draining order will ensure only the last limit of a specific log is stored in
+    ///   [`Self::update_log_limits`].
     #[cfg_attr(feature = "bevy_reflect", reflect(ignore))]
     update_log_updates: Parallel<Vec<Vec<(NonMaxU32, UpdateLogLimit)>>>,
 
