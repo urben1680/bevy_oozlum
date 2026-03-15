@@ -29,7 +29,7 @@ fn main() {
             control::plugin::<ROWS>,
             render::plugin::<ROWS>,
         ))
-        .add_systems(RevUpdate, despawn_out_of_log_waste.after(RevSystems))
+        .add_systems(RevUpdate, despawn_not_undoable_waste.after(RevSystems))
         .init_state::<GameState>()
         .init_resource::<Stats>()
         .insert_resource(Time::<Fixed>::from_duration(FRAME_DURATION_MAX))
@@ -79,7 +79,7 @@ fn increase_score(mut world: DeferredWorld, _: HookContext) {
     time.set_timestep(Duration::from_micros(micros));
 }
 
-fn despawn_out_of_log_waste(
+fn despawn_not_undoable_waste(
     meta: Res<RevMeta>,
     waste_query: Query<(Entity, &TossedAt, Has<Waste>)>,
     this_state: Res<State<GameState>>,

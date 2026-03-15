@@ -5,7 +5,7 @@ mod rev_command;
 mod rev_condiiton;
 mod rev_hook;
 mod rev_logs_drain;
-mod rev_logs_overwrite;
+mod rev_logs_mut;
 mod rev_observer;
 mod rev_world;
 
@@ -15,7 +15,7 @@ pub fn plugin(app: &mut App) {
         rev_condiiton::plugin::<2>,
         rev_hook::plugin::<3>,
         rev_logs_drain::plugin::<4>,
-        rev_logs_overwrite::plugin::<5>,
+        rev_logs_mut::plugin::<5>,
         rev_observer::plugin::<6>,
         rev_world::plugin::<7>,
     ))
