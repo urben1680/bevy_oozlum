@@ -9,10 +9,10 @@ use bevy_ecs::change_detection::MaybeLocation;
 use bevy_utils::Parallel;
 use core::{
     fmt::{Debug, Display, Formatter, Result as FmtResult},
-    panic::Location,
     sync::atomic::AtomicU32,
 };
 use nonmax::NonMaxU32;
+use std::panic::Location;
 
 /// Part of [`RevMeta`](crate::meta::RevMeta) that keeps track of [`UpdateLog`](super::UpdateLog)
 /// updates and reports when such an update was expected for a present frame but did not happen.
@@ -66,8 +66,8 @@ impl UpdateLogLimits {
         state: &mut Option<UpdateLogState>,
         meta_log_exits: u64,
         meta_log_clears: u64,
+        caller: MaybeLocation<Option<&'static Location>>,
     ) -> PreUpdateKind {
-        let caller = Location::caller();
         let new_state = || {
             let index = self
                 .past_len_count
@@ -80,11 +80,13 @@ impl UpdateLogLimits {
                 witnessed_log_exits: meta_log_exits,
                 witnessed_log_clears: meta_log_clears,
             };
-            bevy_log::info!(
-                "A `UpdateLog` with the id `{}` was initiated at {caller}, \
-                this id remains valid until a `RevQueue::Clear` is applied",
-                state.id()
-            );
+            if let Some(caller) = caller.into_option().flatten() {
+                bevy_log::info!(
+                    "A `UpdateLog` with the id `{}` was initiated at {caller}, \
+                    this id remains valid until a `RevQueue::Clear` is applied",
+                    state.id()
+                );
+            }
             state
         };
         let Some(state) = state else {
@@ -114,15 +116,17 @@ impl UpdateLogLimits {
 
     /// Forget all limits and any [`UpdateLog`](super::UpdateLog) that did register so far.
     ///
-    /// `UpdateLog`s have to reregister themselves with a new [`UpdateLogState`].
-    pub(crate) fn clear(&mut self) {
-        self.past_len_count = AtomicU32::new(0);
+    /// `UpdateLog`s have to reregister themselves with a new [`UpdateLogState`]. If none registered
+    /// since the last clear or app start, this returns `false`. Returns `true` otherwise.
+    pub(crate) fn clear(&mut self) -> bool {
+        let any_registered = core::mem::take(&mut self.past_len_count).into_inner() > 0;
         self.limits_updates = 0;
         self.update_log_updates
             .iter_mut()
             .flatten()
             .for_each(Vec::clear);
         self.update_log_limits.clear();
+        any_registered
     }
 
     /// Update internal list of [`UpdateLogLimit`] with new updates and check if `now` is breaching
@@ -459,9 +463,10 @@ mod test {
         let mut limits = UpdateLogLimits::default();
         let mut state = None;
         let caller = MaybeLocation::caller();
+        let no_caller = MaybeLocation::new(None);
 
         // initial set gives Nothing variant
-        let variant = limits.set_update_state(&mut state, 0, 0);
+        let variant = limits.set_update_state(&mut state, 0, 0, no_caller);
         assert!(matches!(variant, PreUpdateKind::Nothing));
         assert_eq!(
             state,
@@ -492,7 +497,7 @@ mod test {
         limits.update(2, 0, false).unwrap();
 
         // update at another frame
-        let variant = limits.set_update_state(&mut state, 0, 0);
+        let variant = limits.set_update_state(&mut state, 0, 0, no_caller);
         assert!(matches!(variant, PreUpdateKind::Nothing));
         assert_eq!(
             state,
@@ -524,7 +529,7 @@ mod test {
         limits.update(3, 0, false).unwrap();
 
         // increased log_exits gives DropFuture variant
-        let variant = limits.set_update_state(&mut state, 1, 0);
+        let variant = limits.set_update_state(&mut state, 1, 0, no_caller);
         assert!(matches!(variant, PreUpdateKind::RemoveFuture));
         assert_eq!(
             state,
@@ -556,8 +561,8 @@ mod test {
         limits.update(4, 0, false).unwrap();
 
         // increased log_clears gived DropLog variant and resets everything
-        limits.clear();
-        let variant = limits.set_update_state(&mut state, 1, 1);
+        assert!(limits.clear());
+        let variant = limits.set_update_state(&mut state, 1, 1, no_caller);
         assert!(matches!(variant, PreUpdateKind::RemoveLog));
         assert_eq!(
             state,
@@ -574,7 +579,7 @@ mod test {
         // the same is true if log_exits increased as well in the meantime
         // do not clear counter to demonstrate this issues a new, potentially different id
         // limits.clear();
-        let variant = limits.set_update_state(&mut state, 2, 2);
+        let variant = limits.set_update_state(&mut state, 2, 2, no_caller);
         assert!(matches!(variant, PreUpdateKind::RemoveLog));
         assert_eq!(
             state,
@@ -591,17 +596,18 @@ mod test {
     #[test]
     fn push_and_assert_limits() {
         let mut limits = UpdateLogLimits::default();
+        let no_caller = MaybeLocation::new(None);
 
         // add a past limit of 1
         let mut past_state = None;
         let past_limit = UpdateLogLimit::new_log(1, u64::MAX, MaybeLocation::caller());
-        limits.set_update_state(&mut past_state, 0, 0);
+        limits.set_update_state(&mut past_state, 0, 0, no_caller);
         limits.push_limit(past_state.as_mut().unwrap(), past_limit);
 
         // add a future limit of 1
         let mut future_state = None;
         let future_limit = UpdateLogLimit::new_log(u64::MIN, 1, MaybeLocation::caller());
-        limits.set_update_state(&mut future_state, 0, 0);
+        limits.set_update_state(&mut future_state, 0, 0, no_caller);
         limits.push_limit(future_state.as_mut().unwrap(), future_limit);
 
         // 1 is in both limits

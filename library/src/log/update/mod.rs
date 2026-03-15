@@ -4,8 +4,9 @@ use core::{
     fmt::{Debug, Display},
     num::NonZeroU64,
 };
-use std::collections::TryReserveError;
+use std::{collections::TryReserveError, panic::Location};
 
+use crate::schedule::DEFAULT_LOCATION;
 pub use limit::UpdateLogId;
 use limit::*;
 
@@ -240,17 +241,19 @@ impl UpdateLog {
     /// This is used during [`RevDirection::Forward`](crate::meta::RevDirection::Forward).
     #[track_caller]
     pub fn forward_past_len(&mut self, meta: &RevMeta) -> NonZeroU64 {
-        self.forward_past_len_with_caller(meta, MaybeLocation::caller())
+        let caller = MaybeLocation::caller().map(Some);
+        self.forward_past_len_with_caller(meta, caller)
     }
 
-    fn forward_past_len_with_caller(
+    #[track_caller]
+    pub(crate) fn forward_past_len_with_caller(
         &mut self,
         meta: &RevMeta,
-        caller: MaybeLocation,
+        caller: MaybeLocation<Option<&'static Location>>,
     ) -> NonZeroU64 {
         let past_len;
 
-        if self.not_log_should_clear(meta) {
+        if self.not_log_should_clear(meta, caller) {
             // log is empty or all updates are out of log
             // it is not important what offset is pushed as long log_start + offset = now
             // asusming 1-offset streak are the most common offsets and that during
@@ -271,7 +274,10 @@ impl UpdateLog {
 
         meta.update_log_limits().push_limit(
             self.update_state.as_mut().unwrap(), // set by not_log_should_clear
-            UpdateLogLimit::new_forward(meta.now(), caller),
+            UpdateLogLimit::new_forward(
+                meta.now(),
+                caller.map(|caller| caller.unwrap_or(DEFAULT_LOCATION)),
+            ),
         );
 
         past_len
@@ -280,8 +286,13 @@ impl UpdateLog {
     /// Sets/updates [`Self::update_state`] so it is `Some`.
     ///
     /// If this method returns `true`, call [`Self::clear`] or do comparable operations.
-    fn not_log_should_clear(&mut self, meta: &RevMeta) -> bool {
-        self.pre_update_to_clear(meta) || self.last_update < meta.past_end() || {
+    #[track_caller]
+    fn not_log_should_clear(
+        &mut self,
+        meta: &RevMeta,
+        caller: MaybeLocation<Option<&'static Location>>,
+    ) -> bool {
+        self.pre_update_to_clear(meta, caller) || self.last_update < meta.past_end() || {
             if self.log_start <= meta.past_end() {
                 let mut minus = meta.past_end() - self.log_start;
                 self.past_len -= self.offsets.truncate_past(&mut minus);
@@ -298,11 +309,17 @@ impl UpdateLog {
     /// checking outside its range of logged frames and just returns `false` then as well.
     #[track_caller]
     pub fn backward_log(&mut self, meta: &RevMeta) -> bool {
-        self.backward_log_with_caller(meta, MaybeLocation::caller())
+        let caller = MaybeLocation::caller().map(Some);
+        self.backward_log_with_caller(meta, caller)
     }
 
-    fn backward_log_with_caller(&mut self, meta: &RevMeta, caller: MaybeLocation) -> bool {
-        if self.pre_update_to_clear(meta) {
+    #[track_caller]
+    pub(crate) fn backward_log_with_caller(
+        &mut self,
+        meta: &RevMeta,
+        caller: MaybeLocation<Option<&'static Location>>,
+    ) -> bool {
+        if self.pre_update_to_clear(meta, caller) {
             self.clear();
             return false;
         }
@@ -328,7 +345,11 @@ impl UpdateLog {
 
         meta.update_log_limits().push_limit(
             self.update_state.as_mut().unwrap(), // set by pre_update_to_clear
-            UpdateLogLimit::new_log(backward_limit, meta.now(), caller),
+            UpdateLogLimit::new_log(
+                backward_limit,
+                meta.now(),
+                caller.map(|caller| caller.unwrap_or(DEFAULT_LOCATION)),
+            ),
         );
 
         true
@@ -341,11 +362,16 @@ impl UpdateLog {
     /// checking outside its range of logged frames and just returns `false` then as well.
     #[track_caller]
     pub fn forward_log(&mut self, meta: &RevMeta) -> bool {
-        self.forward_log_with_caller(meta, MaybeLocation::caller())
+        let caller = MaybeLocation::caller().map(Some);
+        self.forward_log_with_caller(meta, caller)
     }
 
-    fn forward_log_with_caller(&mut self, meta: &RevMeta, caller: MaybeLocation) -> bool {
-        if self.pre_update_to_clear(meta) {
+    pub(crate) fn forward_log_with_caller(
+        &mut self,
+        meta: &RevMeta,
+        caller: MaybeLocation<Option<&'static Location>>,
+    ) -> bool {
+        if self.pre_update_to_clear(meta, caller) {
             self.clear();
             return false;
         }
@@ -373,7 +399,11 @@ impl UpdateLog {
 
         meta.update_log_limits().push_limit(
             self.update_state.as_mut().unwrap(), // set by pre_update_to_clear
-            UpdateLogLimit::new_log(meta.now(), forward_limit, caller),
+            UpdateLogLimit::new_log(
+                meta.now(),
+                forward_limit,
+                caller.map(|caller| caller.unwrap_or(DEFAULT_LOCATION)),
+            ),
         );
 
         true
@@ -382,9 +412,12 @@ impl UpdateLog {
     /// Shorten the log when log exits or clears were missed.
     ///
     /// If this method returns `true`, call [`Self::clear`] or do comparable operations.
-    #[track_caller]
-    fn pre_update_to_clear(&mut self, meta: &RevMeta) -> bool {
-        match meta.set_update_state(&mut self.update_state) {
+    fn pre_update_to_clear(
+        &mut self,
+        meta: &RevMeta,
+        caller: MaybeLocation<Option<&'static Location>>,
+    ) -> bool {
+        match meta.set_update_state(&mut self.update_state, caller) {
             PreUpdateKind::RemoveLog => true,
             PreUpdateKind::RemoveFuture => {
                 self.offsets.truncate_future();
@@ -455,7 +488,9 @@ mod test {
             self.meta.update_ref(Ok(true), |meta, _| {
                 for past_len in past_lens {
                     let past_len = NonZeroU64::new(past_len).unwrap();
-                    let actual = self.update_log.forward_past_len_with_caller(meta, caller);
+                    let actual = self
+                        .update_log
+                        .forward_past_len_with_caller(meta, caller.map(Some));
                     assert_eq!(actual, past_len);
                     self.last_update = caller;
                 }
@@ -476,7 +511,11 @@ mod test {
                     self.meta.set_queue(RevQueue::RunForwardLog);
                     self.meta.update_ref(Err(missed), |meta, _| {
                         for _ in 0..insufficient_updates {
-                            assert_eq!(self.update_log.forward_log_with_caller(meta, caller), true);
+                            assert_eq!(
+                                self.update_log
+                                    .forward_log_with_caller(meta, caller.map(Some)),
+                                true
+                            );
                         }
                     });
                     self.revert(insufficient_updates, false);
@@ -487,7 +526,10 @@ mod test {
             self.meta.set_queue(RevQueue::RunForwardLog);
             self.meta.update_ref(Ok(true), |meta, _| {
                 for _ in 0..updates {
-                    assert!(self.update_log.forward_log_with_caller(meta, caller));
+                    assert!(
+                        self.update_log
+                            .forward_log_with_caller(meta, caller.map(Some))
+                    );
                 }
                 // assert no more updates would run
                 assert_eq!(self.update_log.forward_log(meta), false);
@@ -513,7 +555,8 @@ mod test {
                     self.meta.update_ref(Err(missed), |meta, _| {
                         for _ in 0..insufficient_updates {
                             assert_eq!(
-                                self.update_log.backward_log_with_caller(meta, caller),
+                                self.update_log
+                                    .backward_log_with_caller(meta, caller.map(Some)),
                                 true
                             );
                         }
@@ -526,7 +569,10 @@ mod test {
             self.meta.set_queue(RevQueue::RunBackwardLog);
             self.meta.update_ref(Ok(true), |meta, _| {
                 for _ in 0..updates {
-                    assert!(self.update_log.backward_log_with_caller(meta, caller));
+                    assert!(
+                        self.update_log
+                            .backward_log_with_caller(meta, caller.map(Some))
+                    );
                 }
                 // assert no more updates would run
                 assert_eq!(self.update_log.backward_log(meta), false);
@@ -554,7 +600,7 @@ mod test {
                     for _ in 0..updates {
                         assert_eq!(
                             self.update_log
-                                .forward_log_with_caller(meta, self.last_update),
+                                .forward_log_with_caller(meta, self.last_update.map(Some)),
                             true,
                         );
                     }
@@ -562,7 +608,7 @@ mod test {
                     for _ in 0..updates {
                         assert_eq!(
                             self.update_log
-                                .backward_log_with_caller(meta, self.last_update),
+                                .backward_log_with_caller(meta, self.last_update.map(Some)),
                             true,
                         );
                     }

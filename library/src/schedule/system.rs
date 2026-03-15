@@ -23,12 +23,18 @@ use core::{
     fmt::Debug,
     hash::{Hash, Hasher},
 };
-use std::sync::{
-    Arc, Mutex, MutexGuard, TryLockError,
-    atomic::{AtomicU32, Ordering},
+use std::{
+    panic::Location,
+    sync::{
+        Arc, Mutex, MutexGuard, TryLockError,
+        atomic::{AtomicU32, Ordering},
+    },
 };
 
 use super::RevScheduleConfigs;
+
+// todo: doc
+pub(crate) const DEFAULT_LOCATION: &'static Location = Location::caller();
 
 pub(super) fn into_rev_system<T, In, Out, M1, M2>(system: T) -> RevScheduleConfigs<ScheduleSystem>
 where

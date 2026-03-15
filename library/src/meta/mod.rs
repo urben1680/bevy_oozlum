@@ -4,6 +4,7 @@ use crate::{
     undo_redo::{DespawnCleanerErr, UndoRedoBuffer, update_spawn_despawn},
 };
 use bevy_ecs::{
+    change_detection::MaybeLocation,
     resource::Resource,
     system::{RunSystemError, SystemParamValidationError},
     world::World,
@@ -14,7 +15,7 @@ use core::{
     fmt::{Debug, Display},
     num::NonZeroU64,
 };
-use std::borrow::Cow;
+use std::{borrow::Cow, panic::Location};
 
 #[cfg(test)]
 mod test;
@@ -174,11 +175,14 @@ impl RevMeta {
     /// the world from `n+1` back to `n` again.
     ///
     /// Can only be `0` at or after [`RevDirection::BackwardLog`] and is otherwise non-zero.
-    pub(super) const fn now(&self) -> u64 {
+    pub const fn now(&self) -> u64 {
         self.now
     }
-    pub(super) fn past_end(&self) -> u64 {
+    pub fn past_end(&self) -> u64 {
         self.past_end
+    }
+    pub fn future_end(&self) -> u64 {
+        self.future_end
     }
     pub fn past_len(&self) -> u64 {
         self.now - self.past_end
@@ -202,6 +206,15 @@ impl RevMeta {
     pub fn log_clears(&self) -> u64 {
         self.log_clears
     }
+    pub fn contains(&self, frame: u64) -> bool {
+        self.future_end.wrapping_sub(frame) <= (self.future_end - self.past_end)
+    }
+    pub fn past_contains(&self, frame: u64) -> bool {
+        self.now.wrapping_sub(frame).wrapping_sub(1) < self.past_len()
+    }
+    pub fn future_contains(&self, frame: u64) -> bool {
+        self.future_end.wrapping_sub(frame) < self.future_len()
+    }
     pub fn end_of_log_backward(&self) -> bool {
         self.now == self.past_end
     }
@@ -212,13 +225,15 @@ impl RevMeta {
         self.past_end = self.now;
         self.future_end = self.now;
         self.log_clears = self.log_clears.checked_add(1).expect("todo");
-        self.update_log_limits.clear();
         self.log_exits = 0;
-        info!(
-            "`RevQueue::Clear` was applied, `RevMeta::log_clears` is now {},  all `UpdateLog::id` \
-            until now are invalid and will be reinitialized at their next mutation",
-            self.log_clears
-        )
+        if self.update_log_limits.clear() {
+            info!(
+                "`RevQueue::Clear` was applied, `RevMeta::log_clears` is now {},  all `UpdateLog::id` \
+                until now are invalid and will be reinitialized at their next mutation, this message \
+                is only logged if any `UpdateLog` was registered since the last clear",
+                self.log_clears
+            )
+        }
     }
     pub fn try_run_rev_update<'w>(
         world: &'w mut World,
@@ -478,10 +493,13 @@ impl RevMeta {
             }
         }
     }
-    #[track_caller]
-    pub(super) fn set_update_state(&self, state: &mut Option<UpdateLogState>) -> PreUpdateKind {
+    pub(super) fn set_update_state(
+        &self,
+        state: &mut Option<UpdateLogState>,
+        caller: MaybeLocation<Option<&'static Location>>,
+    ) -> PreUpdateKind {
         self.update_log_limits
-            .set_update_state(state, self.log_exits, self.log_clears)
+            .set_update_state(state, self.log_exits, self.log_clears, caller)
     }
     pub(super) fn update_log_limits(&self) -> &UpdateLogLimits {
         &self.update_log_limits
@@ -557,6 +575,7 @@ const SCHEDULE_AND_META_MISSING_MSG: &str = "schedule RevUpdate and resource Rev
 
 impl<M: Debug, B: Debug> Display for TryRunRevUpdateError<M, B> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // todo: write! -> writeln!
         match self {
             Self::ScheduleMissing => write!(f, "{SCHEDULE_MISSING_MSG}"),
             Self::MetaMissing => write!(f, "{META_MISSING_MSG}"),

@@ -413,7 +413,9 @@ impl UndoRedoLog {
                 .try_resource_scope::<UndoRedoBuffer, _>(|world, mut buffer| {
                     if !buffer.0.is_empty() {
                         let meta = world.resource::<RevMeta>();
-                        let meta_past_len = self.update_log.forward_past_len(meta);
+                        let meta_past_len = self
+                            .update_log
+                            .forward_past_len_with_caller(meta, MaybeLocation::new(None));
                         let buffers = buffer.0.drain(..).map(|boxed| DebugHidden(boxed.undo_redo));
                         self.undo_redo_log
                             .forward_extend(meta, meta_past_len, buffers);
@@ -421,7 +423,10 @@ impl UndoRedoLog {
                 })
                 .ok_or(UndoRedoLogError::UndoRedoBufferMissing { now }),
             Some(RevDirection::ForwardLog) => {
-                if self.update_log.forward_log(meta) {
+                if self
+                    .update_log
+                    .forward_log_with_caller(meta, MaybeLocation::new(None))
+                {
                     let iter = self
                         .undo_redo_log
                         .forward_log(meta)
@@ -444,6 +449,7 @@ impl UndoRedoLog {
             }),
         }
     }
+
     pub(crate) fn backward(&mut self, world: &mut World) -> Result<(), UndoRedoLogError> {
         let meta = world
             .get_resource::<RevMeta>()
@@ -459,7 +465,10 @@ impl UndoRedoLog {
             });
         }
 
-        if self.update_log.backward_log(meta) {
+        if self
+            .update_log
+            .backward_log_with_caller(meta, MaybeLocation::new(None))
+        {
             let iter = self
                 .undo_redo_log
                 .backward_log(meta)

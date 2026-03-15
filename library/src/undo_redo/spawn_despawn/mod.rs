@@ -8,7 +8,7 @@ use bevy_ecs::{
     resource::Resource,
     world::{
         EntityMut, EntityMutExcept, EntityRef, EntityRefExcept, EntityWorldMut, FilteredEntityMut,
-        FilteredEntityRef, World, error::EntityMutableFetchError,
+        FilteredEntityRef, FromWorld, World, error::EntityMutableFetchError,
     },
 };
 use bevy_log::{error, error_once};
@@ -118,8 +118,11 @@ pub(crate) fn update_spawn_despawn(world: &mut World) -> Result<(), DespawnClean
 
                     Ok(())
                 }
-                RevDirection::ForwardLog => this.forward_log(meta),
-                RevDirection::BackwardLog => this.backward_log(meta),
+                RevDirection::ForwardLog if this.init_at >= meta.now() => this.forward_log(meta),
+                RevDirection::BackwardLog if this.init_at >= meta.now() + 1 => {
+                    this.backward_log(meta)
+                }
+                _ => Ok(()),
             }
         })
         .unwrap_or(Ok(()))
@@ -297,12 +300,32 @@ impl EntityCollection for Entity {
     }
 }
 
-#[derive(Resource, Default, Debug)]
+#[derive(Resource, Debug)]
 struct DespawnFinalizer {
     spawn: TransitionsLog<Entity>,
     despawn: TransitionsLog<Entity>,
     spawn_queue: Vec<(Entity, MaybeLocation)>,
     despawn_queue: Vec<(Entity, MaybeLocation)>,
+    init_at: u64,
+}
+
+impl FromWorld for DespawnFinalizer {
+    fn from_world(world: &mut World) -> Self {
+        let init_at = world.get_resource::<RevMeta>()
+            .filter(|meta| meta.get_running_direction().is_some_and(RevDirection::is_not_log))
+            .map(|meta| meta.now())
+            .unwrap_or_else(|| {
+                error!("a reversible spawn, despawn or marking an entity as such was attempted outside RevDirection::Forward, this may cause an out-of-log error when attempting to undo this, do not store MetaPastLen to do reversible operations");
+                0
+            });
+        Self {
+            spawn: Default::default(),
+            despawn: Default::default(),
+            spawn_queue: Default::default(),
+            despawn_queue: Default::default(),
+            init_at,
+        }
+    }
 }
 
 impl DespawnFinalizer {

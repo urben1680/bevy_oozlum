@@ -89,6 +89,7 @@ use bevy_ecs::{
 };
 use condition::into_rev_condition;
 use core::{fmt::Debug, hash::Hash};
+pub(crate) use system::DEFAULT_LOCATION;
 use system::into_rev_system;
 use variadics_please::all_tuples;
 
