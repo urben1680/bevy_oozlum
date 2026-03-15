@@ -3,55 +3,112 @@ use bevy_ecs::{lifecycle::HookContext, world::DeferredWorld};
 use bevy_oozlum::prelude::*;
 use std::{num::NonZeroU64, time::Duration};
 
-// todo: mention how the last column cannot be undone
-
-mod control;
-mod render;
-mod rows;
-
 const ROWS: usize = 7;
 const MAX_PAST_LEN: u64 = 70;
 const CURRENT_BEVY_VERSION: u64 = 0_17_0;
 const WINNING_BEVY_VERSION: u64 = 1_00_0;
-const FRAME_DURATION_MAX: Duration = Duration::from_micros(100000);
-const FRAME_DURATION_MIN: Duration = Duration::from_micros(15000);
+const FRAME_DURATION_MAX: Duration = Duration::from_millis(100);
+const FRAME_DURATION_MIN: Duration = Duration::from_millis(15);
+
+// This example is a game in which you have to toss a large amount of trash into the ocean.
+// Since pollution is bad, you have to undo that to leave the ocean clean but keep your score.
+//
+// As the log length is limited, your time to undo is limited too.
+// Leave behind 10 units of waste and it is game over.
+// For every waste tossed, the bevy version number and game speed rises, at 1.0 you win!
+//
+// To be able to pollute even more, you have 7 rows of water to throw into.
+
+// In this example you can see how to write reversible logic:
+mod rows;
+
+// And how to control the world state:
+mod control;
+
+// Everything gets rendered to an ASCII interface, which is not that interesting for the purpose of
+// this example as showcasing the crate:
+mod render;
 
 fn main() {
     App::new()
         .add_plugins((
+            // Add the RevPlugin to your application.
+            //
+            // If you only use bevy_ecs, add the RevMeta resource and the RevMeta::run_rev_update
+            // manually to the world and register RevDespawned as a disabling component.
+            //
+            // The plugin default adds an unpaused RevMeta with a max past length of NonZeroU64::MIN
+            // and the mentioned system to FixedUpdate
+            //
+            // General order:
+            // 1. RevMeta::run_rev_update runs in the specified schedule (here FixedUpdate)
+            // 2. RevUpdate schedule runs unless paused
+            // 3. Reversible systems and sync points, all in the RevSystems set, run in normal or
+            //    reversed order, depending on the current RevDirection
             RevPlugin::add_meta_and_runner(
+                // Specify how many world states can be at most reversed, always at least 1.
                 NonZeroU64::new(MAX_PAST_LEN).unwrap(),
+                // Specify if the app starts paused.
                 false,
+                // Specify in which schedule the RevUpdate schedule should be run, you likely want
+                // it to be a schedule with a fixed framerate.
                 FixedUpdate,
             ),
-            DefaultPlugins.set(render::window_plugin::<ROWS>()),
+            // Add other plugins needed for this example.
+            DefaultPlugins.set(render::window_plugin()),
             rows::plugin,
-            control::plugin::<ROWS>,
-            render::plugin::<ROWS>,
+            control::plugin,
+            render::plugin,
         ))
-        .add_systems(RevUpdate, despawn_not_undoable_waste.after(RevSystems))
+        .add_systems(
+            // You can add regular, non-reversible systems to RevUpdate using the vanilla
+            // add_systems API, though in that case they should be ordered relative to the
+            // RevSystems set
+            RevUpdate,
+            despawn_lost_waste.after(RevSystems),
+        )
         .init_state::<GameState>()
         .init_resource::<Stats>()
         .insert_resource(Time::<Fixed>::from_duration(FRAME_DURATION_MAX))
         .run();
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default, States)]
+enum GameState {
+    // Did not lose or win yet
+    #[default]
+    Running,
+
+    // Reached bevy 1.0
+    Won,
+
+    // Lost 10 units of waste
+    Lost,
+}
+
 #[derive(Resource, Default)]
 struct Stats {
+    // Waste that was lost
     lost: u64,
+
+    // Total waste, including undone
     score: u64,
 }
 
 #[derive(Component, Clone, Copy)]
+#[component(on_add = increase_score)]
 struct Waste {
+    // Which row the waste was tossed in
     row: u64,
+
+    // At which RevMeta::now the waste was tossed
+    tossed_at: u64,
 }
 
-#[derive(Component, Clone, Copy)]
-#[component(on_add = increase_score)]
-struct TossedAt(u64);
-
+// Increase the score and speed during RevDirection::Forward, check for winning condition
 fn increase_score(mut world: DeferredWorld, _: HookContext) {
+    // Hooks sensible to RevDirection must be written as such, here we do not want to react on
+    // undo-redo logic, only the initial insertion
     if world
         .get_running_direction()
         .is_none_or(RevDirection::is_log)
@@ -79,14 +136,17 @@ fn increase_score(mut world: DeferredWorld, _: HookContext) {
     time.set_timestep(Duration::from_micros(micros));
 }
 
-fn despawn_not_undoable_waste(
+// RevMeta::past_end is increased to prevent the past length to exceed the maximum. Then existing
+// Waste could get out-of-log and brings you closer to the losing condition.
+fn despawn_lost_waste(
     meta: Res<RevMeta>,
-    waste_query: Query<(Entity, &TossedAt, Has<Waste>)>,
+    waste_query: Query<(Entity, &Waste)>,
     this_state: Res<State<GameState>>,
     mut counts: ResMut<Stats>,
     mut next_state: ResMut<NextState<GameState>>,
     mut commands: Commands,
 ) {
+    // Only during RevDirection::Forward RevMeta::past_end could have increased, so skip otherwise
     if meta
         .get_running_direction()
         .is_none_or(RevDirection::is_log)
@@ -94,11 +154,11 @@ fn despawn_not_undoable_waste(
         return;
     }
 
-    for (entity, tossed_at, has_waste) in waste_query {
-        if tossed_at.0 < meta.past_end() {
+    for (entity, &Waste { tossed_at, .. }) in waste_query {
+        if tossed_at < meta.past_end() {
             commands.entity(entity).despawn();
 
-            if has_waste && *this_state.get() == GameState::Running {
+            if *this_state.get() == GameState::Running {
                 counts.lost += 1;
 
                 if counts.lost == 10 {
@@ -107,12 +167,4 @@ fn despawn_not_undoable_waste(
             }
         }
     }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default, States)]
-enum GameState {
-    #[default]
-    Running,
-    Won,
-    Lost,
 }

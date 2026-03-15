@@ -64,10 +64,16 @@ impl RevDirection {
     pub fn is_not_log(self) -> bool {
         matches!(self, Self::Forward { .. })
     }
-    pub fn meta_past_len(self) -> MetaPastLen {
+    pub fn past_len(self) -> MetaPastLen {
         match self {
             Self::Forward { meta_past_len } => meta_past_len,
             _ => panic!(),
+        }
+    }
+    pub fn get_past_len(self) -> Option<MetaPastLen> {
+        match self {
+            Self::Forward { meta_past_len } => Some(meta_past_len),
+            _ => None,
         }
     }
 }
@@ -187,12 +193,14 @@ impl RevMeta {
     pub fn past_len(&self) -> u64 {
         self.now - self.past_end
     }
-    #[cfg(test)]
-    pub(crate) fn meta_past_len(&self) -> MetaPastLen {
-        let RunningOrRan::Running(RevDirection::Forward { meta_past_len }) = self.direction else {
-            panic!()
-        };
-        meta_past_len
+    pub fn meta_past_len(&self) -> MetaPastLen {
+        self.get_meta_past_len().unwrap()
+    }
+    pub fn get_meta_past_len(&self) -> Option<MetaPastLen> {
+        match self.direction {
+            RunningOrRan::Running(RevDirection::Forward { meta_past_len }) => Some(meta_past_len),
+            _ => None,
+        }
     }
     pub fn future_len(&self) -> u64 {
         self.future_end - self.now

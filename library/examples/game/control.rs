@@ -3,29 +3,32 @@ use std::num::NonZeroU64;
 use bevy::{input::keyboard::Key, prelude::*};
 use bevy_oozlum::prelude::*;
 
-use crate::{GameState, MAX_PAST_LEN};
+use crate::{GameState, MAX_PAST_LEN, ROWS};
 
-pub fn plugin<const ROWS: usize>(app: &mut App) {
-    app.add_systems(Update, system::<ROWS>.before(RevSystems))
-        .add_systems(
-            RevUpdate,
-            cleanup
-                .run_if(resource_changed::<JustPressed>)
-                .after(RevSystems),
-        )
-        .insert_resource(JustPressed([false; ROWS].into()));
+pub fn plugin(app: &mut App) {
+    app.add_systems(
+        // read and use inputs before RevUpdate
+        PreUpdate, system,
+    )
+    .add_systems(
+        // reset the tracked digit inputs after systems in RevSystems read them
+        RevUpdate,
+        reset.after(RevSystems),
+    )
+    .insert_resource(JustPressed([false; ROWS].into()));
 }
 
+// Store which digit was pressed as ButtonInput may be cleared before FixedUpdate runs
 #[derive(Resource)]
 pub struct JustPressed(Box<[bool]>);
 
 impl JustPressed {
-    pub fn get<const ROW: u64>(&self) -> bool {
-        self.0.get(ROW as usize - 1).copied().unwrap_or(false)
+    pub fn get(&self, row: u64) -> bool {
+        self.0.get(row as usize - 1).copied().unwrap_or(false)
     }
 }
 
-fn system<const ROWS: usize>(
+fn system(
     input: Res<ButtonInput<KeyCode>>,
     digit_input: Res<ButtonInput<Key>>,
     mut exit: MessageWriter<AppExit>,
@@ -39,9 +42,11 @@ fn system<const ROWS: usize>(
     }
 
     if *state.get() != GameState::Running {
+        // only allow Esc when the game is over
         return;
     }
 
+    // RevMeta::set_queue is used to control how RevUpdate is run
     if input.just_pressed(KeyCode::ArrowUp) {
         meta.set_queue(RevQueue::RunForward);
     } else if input.just_pressed(KeyCode::ArrowDown) {
@@ -51,8 +56,14 @@ fn system<const ROWS: usize>(
     } else if input.just_pressed(KeyCode::ArrowRight) {
         meta.set_queue(RevQueue::RunBackwardLog);
     } else if input.just_pressed(KeyCode::Backspace) {
+        // One can also pause after clearing with RevQueue::ClearThenPause.
+        // Beware that this instantly loses all tossed waste that was not undone yet
         meta.set_queue(RevQueue::ClearThenRunForward);
-    } else if input.pressed(KeyCode::Enter) {
+    }
+
+    // The maximum past length can be adjusted at any time and has an effect the next time RevUpdate
+    // is about to be run.
+    if input.pressed(KeyCode::Enter) {
         let max_past_len = meta.past_len().saturating_sub(1).max(1);
         meta.set_max_past_len(NonZeroU64::new(max_past_len).unwrap());
     } else if input.just_released(KeyCode::Enter) {
@@ -66,7 +77,7 @@ fn system<const ROWS: usize>(
     }
 }
 
-fn cleanup(mut digits: ResMut<JustPressed>) {
+fn reset(mut digits: ResMut<JustPressed>) {
     digits
         .bypass_change_detection()
         .0

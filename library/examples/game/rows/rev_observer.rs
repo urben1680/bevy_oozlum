@@ -1,36 +1,43 @@
 use bevy::prelude::*;
 use bevy_oozlum::{meta::MetaPastLen, prelude::*};
 
-use crate::{TossedAt, Waste, control::JustPressed, rows::Row};
+use crate::{Waste, control::JustPressed, rows::Row};
 
 pub fn plugin<const ROW: u64>(app: &mut App) {
-    // the system itself is not really reversible as it has no backward logic, besides being noop,
-    // but needs to be added as such for the queued commands to be reversible
-    app.rev_add_systems(RevUpdate, system::<ROW>.rev_in_set(Row::<ROW>))
-        .add_observer(observer::<ROW>);
+    // Use rev_add_systems for reversible systems.
+    app.rev_add_systems(RevUpdate, system::<ROW>.rev_in_set(Row(ROW)))
+        .add_observer(observer);
 }
 
 #[derive(Event)]
 struct WasteEvent {
     meta_past_len: MetaPastLen,
-    tossed_at: TossedAt,
+    waste: Waste,
 }
 
 fn system<const ROW: u64>(input: Res<JustPressed>, meta: Res<RevMeta>, mut commands: Commands) {
-    if input.get::<ROW>()
-        && let RevDirection::Forward { meta_past_len } = meta.running_direction()
+    if input.get(ROW)
+        && let Some(meta_past_len) = meta.get_meta_past_len()
     {
+        // MetaPastLen is like a token to prove that methods needing it are called during
+        // RevDirection::Forward. Because of this it should not be stored past that.
+
         commands.trigger(WasteEvent {
             meta_past_len,
-            tossed_at: TossedAt(meta.now()),
+            waste: Waste {
+                row: ROW,
+                tossed_at: meta.now(),
+            },
         });
     }
 }
 
-fn observer<const ROW: u64>(event: On<WasteEvent>, mut commands: Commands) {
+fn observer(event: On<WasteEvent>, mut commands: Commands) {
     let WasteEvent {
         meta_past_len,
-        tossed_at,
+        waste,
     } = *event;
-    commands.rev_spawn(meta_past_len, (tossed_at, Waste { row: ROW }));
+
+    // Reversible logic is set here.
+    commands.rev_spawn(meta_past_len, waste);
 }

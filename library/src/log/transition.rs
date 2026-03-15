@@ -5,7 +5,7 @@ use crate::{
 use core::{fmt::Debug, mem::ManuallyDrop, num::NonZeroU64};
 use std::collections::{
     TryReserveError, VecDeque,
-    vec_deque::{Drain, Iter},
+    vec_deque::{Drain, Iter, IterMut},
 };
 
 /// A log that is updated with exactly one transition type `T` that is used to transition a state
@@ -189,6 +189,20 @@ impl<T> TransitionLog<T> {
     /// See [`RevMeta::log_clears`].
     pub fn witnessed_log_clears(&self) -> u64 {
         self.witnessed_log_clears
+    }
+
+    /// Returns an iterator of the stored log entries.
+    ///
+    /// See [`VecDeque::iter`].
+    pub fn iter<'a>(&'a self) -> Iter<'a, T> {
+        self.transitions.iter()
+    }
+
+    /// Returns an iterator of the stored log entries.
+    ///
+    /// See [`VecDeque::iter_mut`].
+    pub fn iter_mut<'a>(&'a mut self) -> IterMut<'a, T> {
+        self.transitions.iter_mut()
     }
 
     /// Updates the log with a new `transition` and returns [`TransitionDrain`] that can be used to

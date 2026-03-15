@@ -182,7 +182,6 @@ impl Plugin for RevPlugin {
         }
 
         // other
-        app.init_resource::<UndoRedoBuffer>()
-            .register_disabling_component::<RevDespawned>();
+        app.register_disabling_component::<RevDespawned>();
     }
 }

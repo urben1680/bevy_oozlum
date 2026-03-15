@@ -11,7 +11,7 @@ use core::{
 use std::{
     collections::{
         TryReserveError, VecDeque,
-        vec_deque::{Drain, IterMut},
+        vec_deque::{Drain, Iter, IterMut},
     },
     num::NonZeroU64,
 };
@@ -281,6 +281,34 @@ impl<T, U> TransitionsLog<T, U> {
     /// See [`RevMeta::log_clears`].
     pub fn witnessed_log_clears(&self) -> u64 {
         self.updates.witnessed_log_clears()
+    }
+
+    /// Returns an iterator of the stored log transitions (`T`).
+    ///
+    /// See [`VecDeque::iter`].
+    pub fn transitions_iter<'a>(&'a self) -> Iter<'a, T> {
+        self.transitions.iter()
+    }
+
+    /// Returns an iterator of the stored log transitions (`U`).
+    ///
+    /// See [`VecDeque::iter`].
+    pub fn updates_iter<'a>(&'a self) -> Iter<'a, TransitionsLogUpdate<U>> {
+        self.updates.iter()
+    }
+
+    /// Returns an iterator of the stored log transitions (`T`).
+    ///
+    /// See [`VecDeque::iter_mut`].
+    pub fn transitions_mut<'a>(&'a mut self) -> IterMut<'a, T> {
+        self.transitions.iter_mut()
+    }
+
+    /// Returns an iterator of the stored log transitions (`U`).
+    ///
+    /// See [`VecDeque::iter_mut`].
+    pub fn updates_mut<'a>(&'a mut self) -> IterMut<'a, TransitionsLogUpdate<U>> {
+        self.updates.iter_mut()
     }
 
     /// Updates the log with new `transitions` and `update` and returns [`TransitionsDrain`] that

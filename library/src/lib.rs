@@ -134,10 +134,6 @@ Docs
 
 ISSUES/DISCUSSIONS:
 - feature track_update_logs to opt-out
-- iter/iter mut for transition logs, ideally separated in past/future
-  disjoint iterators work with as_slices
-   -> split pair into two pairs
-   -> construct iters (not Chain without TrustedLen)
 - RevBundle::rev_insert_inner out of trait
 
 */

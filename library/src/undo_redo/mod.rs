@@ -541,7 +541,7 @@ mod test {
                 assert_eq!(direction, RevDirection::FORWARD_MIN);
                 meta.set_queue(RevQueue::RunBackwardLog);
                 world.insert_resource(meta);
-                state = Some(forward(world, direction.meta_past_len()));
+                state = Some(forward(world, direction.past_len()));
                 update_spawn_despawn(world).unwrap();
                 world.remove_resource()
             })
