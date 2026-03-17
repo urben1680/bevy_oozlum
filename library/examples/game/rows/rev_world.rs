@@ -1,11 +1,11 @@
 use bevy::prelude::*;
 use bevy_oozlum::prelude::*;
 
-use crate::{Waste, control::JustPressed, rows::Row};
+use crate::{Waste, control::JustPressed};
 
 pub fn plugin<const ROW: u64>(app: &mut App) {
     // Use rev_add_systems for reversible systems.
-    app.rev_add_systems(RevUpdate, system::<ROW>.rev_in_set(Row(ROW)));
+    app.rev_add_systems(RevUpdate, system::<ROW>);
 }
 
 fn system<const ROW: u64>(world: &mut World) {
@@ -19,6 +19,8 @@ fn system<const ROW: u64>(world: &mut World) {
 
         // World and EntityWorldMut has mostly all reversible functionality as Commands and
         // EntityCommands.
+        // If this is undone, the entity is at first disabled and later fully despawned if the redo
+        // becomes unreachable.
         world.rev_spawn(
             meta_past_len,
             Waste {

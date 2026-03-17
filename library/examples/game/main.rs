@@ -111,7 +111,7 @@ fn increase_score(mut world: DeferredWorld, _: HookContext) {
     // undo-redo logic, only the initial insertion
     if world
         .get_running_direction()
-        .is_none_or(RevDirection::is_log)
+        .is_some_and(RevDirection::is_not_log)
         && *world.resource::<State<GameState>>().get() != GameState::Running
     {
         return;

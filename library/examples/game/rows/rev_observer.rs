@@ -1,11 +1,11 @@
 use bevy::prelude::*;
 use bevy_oozlum::{meta::MetaPastLen, prelude::*};
 
-use crate::{Waste, control::JustPressed, rows::Row};
+use crate::{Waste, control::JustPressed};
 
 pub fn plugin<const ROW: u64>(app: &mut App) {
     // Use rev_add_systems for reversible systems.
-    app.rev_add_systems(RevUpdate, system::<ROW>.rev_in_set(Row(ROW)))
+    app.rev_add_systems(RevUpdate, system::<ROW>)
         .add_observer(observer);
 }
 
@@ -38,6 +38,8 @@ fn observer(event: On<WasteEvent>, mut commands: Commands) {
         waste,
     } = *event;
 
-    // Reversible logic is set here.
+    // As Commands::spawn, this spawns an entity.
+    // If this is undone, the entity is at first disabled and later fully despawned if the redo
+    // becomes unreachable.
     commands.rev_spawn(meta_past_len, waste);
 }

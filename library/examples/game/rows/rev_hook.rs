@@ -2,11 +2,11 @@ use bevy::prelude::*;
 use bevy_ecs::{lifecycle::HookContext, world::DeferredWorld};
 use bevy_oozlum::prelude::*;
 
-use crate::{Waste, control::JustPressed, rows::Row};
+use crate::{Waste, control::JustPressed};
 
 pub fn plugin<const ROW: u64>(app: &mut App) {
     // Use rev_add_systems for reversible systems.
-    app.rev_add_systems(RevUpdate, system::<ROW>.rev_in_set(Row(ROW)))
+    app.rev_add_systems(RevUpdate, system::<ROW>)
         .world_mut()
         .register_component_hooks::<Waste>()
         .on_insert(on_insert::<ROW>);
@@ -40,7 +40,8 @@ fn on_insert<const ROW: u64>(mut world: DeferredWorld, context: HookContext) {
     // Reversible logic is set here.
     // rev_mark_spawned can be used if the actual spawn is not in your source and you need to make
     // the spawn reversible. The boolean argument defines if children without linked spawn should
-    // also be included in the reversible spawn.
+    // also be included in the reversible spawn. That may be the case if all of them were spawned
+    // along it.
     world
         .commands()
         .rev_mark_spawned(meta_past_len, context.entity, false);
