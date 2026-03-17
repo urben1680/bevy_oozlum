@@ -11,7 +11,7 @@ use bevy_ecs::{
         FilteredEntityRef, FromWorld, World, error::EntityMutableFetchError,
     },
 };
-use bevy_log::{error, error_once};
+use bevy_log::error;
 
 use crate::{
     log::{OutOfLog, TransitionsLog},
@@ -102,28 +102,43 @@ pub(crate) fn update_spawn_despawn(world: &mut World) -> Result<(), DespawnClean
 
             match direction {
                 RevDirection::Forward { meta_past_len } => {
-                    let new_spawn = this.spawn_queue.drain(..).map(|(entity, _)| entity);
-                    let mut drain = this.spawn.forward_extend(meta, meta_past_len, new_spawn);
-                    let old_spawn = drain.future();
+                    let spawn = this.spawn_queue.drain(..).map(|(entity, _)| entity);
+                    let despawn = this.despawn_queue.drain(..).map(|(entity, _)| entity);
+                    let spawn_amount = spawn.len();
+                    let mut drain = this.spawn_despawn.forward_extend_with(
+                        meta,
+                        meta_past_len,
+                        spawn.chain(despawn),
+                        spawn_amount,
+                    );
 
-                    let new_despawn = this.despawn_queue.drain(..).map(|(entity, _)| entity);
-                    let mut drain = this
-                        .despawn
-                        .forward_extend(meta, meta_past_len, new_despawn);
-                    let old_despawn = drain.past();
-
-                    for entity in old_spawn.chain(old_despawn) {
-                        let _ = world.try_despawn(entity);
+                    let mut past_drain = drain.past();
+                    while let Some((entities, spawn_amount)) = past_drain.next_log_entry() {
+                        for entity in entities.skip(spawn_amount) {
+                            let _ = world.try_despawn(entity);
+                        }
                     }
+                    drop(past_drain);
 
-                    Ok(())
+                    let mut future_drain = drain.future();
+                    while let Some((entities, spawn_amount)) = future_drain.next_log_entry() {
+                        for entity in entities.take(spawn_amount) {
+                            let _ = world.try_despawn(entity);
+                        }
+                    }
                 }
-                RevDirection::ForwardLog if this.init_at >= meta.now() => this.forward_log(meta),
-                RevDirection::BackwardLog if this.init_at >= meta.now() + 1 => {
-                    this.backward_log(meta)
+                RevDirection::ForwardLog => {
+                    if this.init_at >= meta.now() {
+                        this.spawn_despawn.forward_log(meta)?;
+                    }
                 }
-                _ => Ok(()),
+                RevDirection::BackwardLog => {
+                    if this.init_at >= meta.now() + 1 {
+                        this.spawn_despawn.backward_log(meta)?;
+                    }
+                }
             }
+            Ok(())
         })
         .unwrap_or(Ok(()))
 }
@@ -302,8 +317,7 @@ impl EntityCollection for Entity {
 
 #[derive(Resource, Debug)]
 struct DespawnFinalizer {
-    spawn: TransitionsLog<Entity>,
-    despawn: TransitionsLog<Entity>,
+    spawn_despawn: TransitionsLog<Entity, usize>,
     spawn_queue: Vec<(Entity, MaybeLocation)>,
     despawn_queue: Vec<(Entity, MaybeLocation)>,
     init_at: u64,
@@ -319,76 +333,11 @@ impl FromWorld for DespawnFinalizer {
                 0
             });
         Self {
-            spawn: Default::default(),
-            despawn: Default::default(),
+            spawn_despawn: Default::default(),
             spawn_queue: Default::default(),
             despawn_queue: Default::default(),
             init_at,
         }
-    }
-}
-
-impl DespawnFinalizer {
-    fn forward_log(&mut self, meta: &RevMeta) -> Result<(), DespawnCleanerErr> {
-        self.spawn.forward_log(meta)?;
-        self.despawn.forward_log(meta).unwrap();
-
-        if size_of::<MaybeLocation>() == 0 {
-            if !self.spawn_queue.is_empty() {
-                error_once!(
-                    "a reversible spawn was queued during the forward log direction instead of the non-log direction"
-                );
-            }
-            if !self.despawn_queue.is_empty() {
-                error_once!(
-                    "a reversible despawn was queued during the forward log direction instead of the non-log direction"
-                );
-            }
-        } else {
-            for (_, caller) in &self.spawn_queue {
-                error!(
-                    "a reversible spawn was queued during the forward log direction instead of the non-log direction at {caller}"
-                );
-            }
-            for (_, caller) in &self.despawn_queue {
-                error!(
-                    "a reversible despawn was queued during the forward log direction instead of the non-log direction at {caller}"
-                );
-            }
-        }
-
-        Ok(())
-    }
-
-    fn backward_log(&mut self, meta: &RevMeta) -> Result<(), DespawnCleanerErr> {
-        self.spawn.backward_log(meta)?;
-        self.despawn.backward_log(meta).unwrap();
-
-        if size_of::<MaybeLocation>() == 0 {
-            if !self.spawn_queue.is_empty() {
-                error_once!(
-                    "a reversible spawn was queued during the backward direction instead of the non-log direction"
-                );
-            }
-            if !self.despawn_queue.is_empty() {
-                error_once!(
-                    "a reversible despawn was queued during the backward direction instead of the non-log direction"
-                );
-            }
-        } else {
-            for (_, caller) in &self.spawn_queue {
-                error!(
-                    "a reversible spawn was queued during the backward direction instead of the non-log direction at {caller}"
-                );
-            }
-            for (_, caller) in &self.despawn_queue {
-                error!(
-                    "a reversible despawn was queued during the backward direction instead of the non-log direction at {caller}"
-                );
-            }
-        }
-
-        Ok(())
     }
 }
 

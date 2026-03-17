@@ -8,7 +8,7 @@ use bevy_oozlum::prelude::*;
 // RevDirection::ForwardLog => the entity is either enabled or respawned
 
 mod rev_command; // utilizes reversible commands in the most simple form
-mod rev_condiiton; // utilizes rev_run_if
+mod rev_condition; // utilizes rev_run_if
 mod rev_hook; // reversible commands from hooks
 mod rev_logs_drain; // reversilbe logic using log types, utilizes drain to clean up
 mod rev_logs_mut; // reversilbe logic using log types, utilizes mutation of log entries
@@ -18,7 +18,7 @@ mod rev_world; // reversible exclusive systems
 pub fn plugin(app: &mut App) {
     app.add_plugins((
         rev_command::plugin::<1>,
-        rev_condiiton::plugin::<2>,
+        rev_condition::plugin::<2>,
         rev_hook::plugin::<3>,
         rev_logs_drain::plugin::<4>,
         rev_logs_mut::plugin::<5>,

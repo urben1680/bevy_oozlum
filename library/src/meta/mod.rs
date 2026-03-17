@@ -243,9 +243,9 @@ impl RevMeta {
             )
         }
     }
-    pub fn try_run_rev_update<'w>(
+    pub fn run_rev_update<'w>(
         world: &'w mut World,
-    ) -> Result<(), TryRunRevUpdateError<&'w Self, impl Debug + 'w>> {
+    ) -> Result<(), RunSystemError> {
         world
             .try_schedule_scope(RevUpdate, |world, schedule| {
                 let Some(meta) = world.remove_resource::<Self>() else {
@@ -344,11 +344,7 @@ impl RevMeta {
                     update_logs_missed,
                     despawn_cleaner_err,
                 },
-            })
-    }
-
-    pub fn run_rev_update(world: &mut World) -> Result<(), RunSystemError> {
-        Self::try_run_rev_update(world).map_err(TryRunRevUpdateError::to_run_system_err)
+            }).map_err(TryRunRevUpdateError::to_run_system_err)
     }
 
     pub fn update(
@@ -527,9 +523,8 @@ pub enum RevMetaUpdateErr {
     },
 }
 
-// todo: pub enum should not be generic
 #[derive(Debug)]
-pub enum TryRunRevUpdateError<M, B> {
+enum TryRunRevUpdateError<M, B> {
     ScheduleMissing,
     MetaMissing,
     ScheduleAndMetaMissing,

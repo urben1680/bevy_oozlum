@@ -559,7 +559,7 @@ where
     ///
     /// Returns `None` if no more log entries are to drain.
     ///
-    /// Works best in a `while` loop.
+    /// Works best in a `while let Some((transitions, update))` loop.
     ///
     /// For an example, see the [`TransitionsLog` type level docs](TransitionsLog).
     pub fn next_log_entry(&mut self) -> Option<(Take<&'_ mut TI>, U)> {
