@@ -243,9 +243,7 @@ impl RevMeta {
             )
         }
     }
-    pub fn run_rev_update<'w>(
-        world: &'w mut World,
-    ) -> Result<(), RunSystemError> {
+    pub fn run_rev_update<'w>(world: &'w mut World) -> Result<(), RunSystemError> {
         world
             .try_schedule_scope(RevUpdate, |world, schedule| {
                 let Some(meta) = world.remove_resource::<Self>() else {
@@ -344,7 +342,8 @@ impl RevMeta {
                     update_logs_missed,
                     despawn_cleaner_err,
                 },
-            }).map_err(TryRunRevUpdateError::to_run_system_err)
+            })
+            .map_err(TryRunRevUpdateError::to_run_system_err)
     }
 
     pub fn update(

@@ -116,9 +116,9 @@ fn increase_score(mut world: DeferredWorld, _: HookContext) {
         return;
     }
 
-    let mut score = world.resource_mut::<Stats>();
-    score.score += 1;
-    let score = score.score;
+    let mut stats = world.resource_mut::<Stats>();
+    let score = (stats.score + 1).min(WINNING_BEVY_VERSION);
+    stats.score = score;
     const SCORE_MAX: u64 = WINNING_BEVY_VERSION - CURRENT_BEVY_VERSION;
 
     if score >= SCORE_MAX {
