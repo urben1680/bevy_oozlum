@@ -471,13 +471,15 @@ impl TransitionsDrain<'_, char, char, Chars<'_>> {
     ) -> &mut Self {
         let drain_sum_len = past.len() + future.len();
         let iter = self.all();
-        let len = past
-            .iter()
-            .chain(future.iter())
-            .map(|(s, _)| s.chars().count())
-            .sum::<usize>();
-        assert_eq!(iter.transitions.len(), len);
+        let past_transitions_len = past.iter().map(|(s, _)| s.chars().count()).sum::<usize>();
+        let future_transitions_len = future.iter().map(|(s, _)| s.chars().count()).sum::<usize>();
+        assert_eq!(
+            iter.transitions.len(),
+            past_transitions_len + future_transitions_len
+        );
         assert_eq!(iter.updates.len(), drain_sum_len);
+        assert_eq!(iter.past_transitions_len(), past_transitions_len);
+        assert_eq!(iter.past_updates_len(), past.len());
         let actual = iter.to_tuples();
         let expected = past
             .iter()
@@ -489,8 +491,10 @@ impl TransitionsDrain<'_, char, char, Chars<'_>> {
         if drain_sum_len != 0 {
             let iter = self.all();
             assert_eq!(iter.transitions.len(), 0);
-            assert_eq!(iter.transitions.count(), 0);
             assert_eq!(iter.updates.len(), 0);
+            assert_eq!(iter.past_transitions_len(), 0);
+            assert_eq!(iter.past_updates_len(), 0);
+            assert_eq!(iter.transitions.count(), 0);
             assert_eq!(iter.updates.count(), 0);
         }
         self

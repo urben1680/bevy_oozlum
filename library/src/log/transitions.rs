@@ -572,6 +572,18 @@ where
     }
 }
 
+impl<T, U> TransitionsDrainIters<DrainAll<'_, T>, DrainAll<'_, TransitionsLogUpdate<U>>, U> {
+    /// Returns the amount of log updates (`U`) that are in the past segment of this iterator.
+    pub fn past_updates_len(&self) -> usize {
+        self.updates.gap_range.start
+    }
+
+    /// Returns the amount of log transitions (`T`) that are in the past segment of this iterator.
+    pub fn past_transitions_len(&self) -> usize {
+        self.transitions.gap_range.start
+    }
+}
+
 impl<TI, UI> Iterator for TransitionsDrainIters<TI, UI, ()>
 where
     TI: Iterator,

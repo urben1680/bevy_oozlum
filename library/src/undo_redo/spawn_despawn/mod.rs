@@ -128,12 +128,12 @@ pub(crate) fn update_spawn_despawn(world: &mut World) -> Result<(), DespawnClean
                     }
                 }
                 RevDirection::ForwardLog => {
-                    if this.init_at >= meta.now() {
+                    if this.init_at <= meta.now() {
                         this.spawn_despawn.forward_log(meta)?;
                     }
                 }
                 RevDirection::BackwardLog => {
-                    if this.init_at >= meta.now() + 1 {
+                    if this.init_at <= meta.now() + 1 {
                         this.spawn_despawn.backward_log(meta)?;
                     }
                 }
