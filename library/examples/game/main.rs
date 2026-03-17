@@ -112,21 +112,15 @@ fn increase_score(mut world: DeferredWorld, _: HookContext) {
     if world
         .get_running_direction()
         .is_none_or(RevDirection::is_log)
+        && *world.resource::<State<GameState>>().get() != GameState::Running
     {
         return;
     }
 
     let mut stats = world.resource_mut::<Stats>();
-    let score = (stats.score + 1).min(WINNING_BEVY_VERSION);
-    stats.score = score;
+    stats.score += 1;
+    let score = stats.score;
     const SCORE_MAX: u64 = WINNING_BEVY_VERSION - CURRENT_BEVY_VERSION;
-
-    if score >= SCORE_MAX {
-        world
-            .resource_mut::<NextState<GameState>>()
-            .set(GameState::Won);
-        return;
-    }
 
     let mut time = world.resource_mut::<Time<Fixed>>();
     let score_normalized = score as f32 / SCORE_MAX as f32;
@@ -134,6 +128,13 @@ fn increase_score(mut world: DeferredWorld, _: HookContext) {
     let score_micros = (micros_delta as f32 * score_normalized) as u64;
     let micros = FRAME_DURATION_MAX.as_micros() as u64 - score_micros;
     time.set_timestep(Duration::from_micros(micros));
+
+    if score == SCORE_MAX {
+        world
+            .resource_mut::<NextState<GameState>>()
+            .set(GameState::Won);
+        return;
+    }
 }
 
 // RevMeta::past_end is increased to prevent the past length to exceed the maximum. Then existing
