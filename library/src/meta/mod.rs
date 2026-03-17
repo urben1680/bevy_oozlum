@@ -234,14 +234,12 @@ impl RevMeta {
         self.future_end = self.now;
         self.log_clears = self.log_clears.checked_add(1).expect("todo");
         self.log_exits = 0;
-        if self.update_log_limits.clear() {
-            info!(
-                "`RevQueue::Clear` was applied, `RevMeta::log_clears` is now {},  all `UpdateLog::id` \
-                until now are invalid and will be reinitialized at their next mutation, this message \
-                is only logged if any `UpdateLog` was registered since the last clear",
-                self.log_clears
-            )
-        }
+        self.update_log_limits.clear();
+        info!(
+            "`RevQueue::Clear` was applied, `RevMeta::log_clears` is now {},  all `UpdateLog::id` \
+            until now are invalid and will be reinitialized at their next mutation",
+            self.log_clears
+        )
     }
     pub fn run_rev_update<'w>(world: &'w mut World) -> Result<(), RunSystemError> {
         world

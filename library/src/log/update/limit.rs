@@ -116,17 +116,15 @@ impl UpdateLogLimits {
 
     /// Forget all limits and any [`UpdateLog`](super::UpdateLog) that did register so far.
     ///
-    /// `UpdateLog`s have to reregister themselves with a new [`UpdateLogState`]. If none registered
-    /// since the last clear or app start, this returns `false`. Returns `true` otherwise.
-    pub(crate) fn clear(&mut self) -> bool {
-        let any_registered = core::mem::take(&mut self.past_len_count).into_inner() > 0;
+    /// `UpdateLog`s have to reregister themselves with a new [`UpdateLogState`].
+    pub(crate) fn clear(&mut self) {
+        self.past_len_count = 0.into();
         self.limits_updates = 0;
         self.update_log_updates
             .iter_mut()
             .flatten()
             .for_each(Vec::clear);
         self.update_log_limits.clear();
-        any_registered
     }
 
     /// Update internal list of [`UpdateLogLimit`] with new updates and check if `now` is breaching
@@ -561,7 +559,7 @@ mod test {
         limits.update(4, 0, false).unwrap();
 
         // increased log_clears gived DropLog variant and resets everything
-        assert!(limits.clear());
+        limits.clear();
         let variant = limits.set_update_state(&mut state, 1, 1, no_caller);
         assert!(matches!(variant, PreUpdateKind::RemoveLog));
         assert_eq!(
