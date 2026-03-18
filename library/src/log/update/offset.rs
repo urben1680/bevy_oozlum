@@ -743,7 +743,7 @@ mod test {
         assert_eq!(actual, OFFSETS_DECODED)
     }
 
-    #[test] // todo: more complex Offsetmeta
+    #[test]
     fn now_to_past_works() {
         let mut log = OffsetLog {
             offsets: OFFSETS_ENCODED.into(),
@@ -753,10 +753,24 @@ mod test {
         // set to future end
         log.meta.index = OFFSETS_ENCODED.len();
 
+        // go to past but not to the end to test another attempt with OffsetMeta tracking a streak
+        let mut iter = log.now_to_past();
+        let actual = iter
+            .by_ref()
+            .take(OFFSETS_DECODED.len() - 1)
+            .collect::<Vec<_>>();
+        let expected = OFFSETS_DECODED
+            .into_iter()
+            .skip(1)
+            .rev()
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected);
+
+        iter.sync();
+        assert!(log.meta.streak_and_step.is_some());
+
         let actual = log.now_to_past().collect::<Vec<_>>();
-        let mut expected = OFFSETS_DECODED;
-        expected.reverse();
-        assert_eq!(actual, expected)
+        assert_eq!(actual, &OFFSETS_DECODED[..1])
     }
 
     #[test]

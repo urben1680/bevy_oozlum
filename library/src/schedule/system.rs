@@ -33,7 +33,8 @@ use std::{
 
 use super::RevScheduleConfigs;
 
-// todo: doc
+// Reversible schedules and conditions should never miss to run at the expected frame.
+// If you followed an error to this line, you may have encountered a bug, please report it.
 pub(crate) const DEFAULT_LOCATION: &'static Location = Location::caller();
 
 pub(super) fn into_rev_system<T, In, Out, M1, M2>(system: T) -> RevScheduleConfigs<ScheduleSystem>
@@ -524,7 +525,7 @@ fn try_lock_validation_err<'a, T>(
 mod test {
     use bevy_app::{App, Update};
     use bevy_ecs::{
-        change_detection::{MaybeLocation, Res, ResMut},
+        change_detection::Res,
         component::Component,
         event::Event,
         lifecycle::HookContext,
@@ -543,8 +544,8 @@ mod test {
 
     fn observer(_: On<Observer>, mut world: DeferredWorld) {
         let past_len = world.resource::<RevMeta>().meta_past_len();
-        world.buffer_undo_redo(past_len, blank_undo_redo);
-        world.commands().queue(|world: &mut World| {
+        world.commands().queue(move |world: &mut World| {
+            world.buffer_undo_redo(past_len, blank_undo_redo);
             world.spawn(EmptyOnAdd);
         });
     }
@@ -553,7 +554,7 @@ mod test {
     struct EmptyObserver;
     fn empty_observer(_: On<Observer>, mut world: DeferredWorld) {
         let past_len = world.resource::<RevMeta>().meta_past_len();
-        world.buffer_undo_redo(past_len, blank_undo_redo);
+        world.commands().buffer_undo_redo(past_len, blank_undo_redo);
     }
 
     #[derive(Component)]
@@ -561,8 +562,8 @@ mod test {
     struct OnAdd;
     fn on_add(mut world: DeferredWorld, _: HookContext) {
         let past_len = world.resource::<RevMeta>().meta_past_len();
-        world.buffer_undo_redo(past_len, blank_undo_redo);
-        world.commands().queue(|world: &mut World| {
+        world.commands().queue(move |world: &mut World| {
+            world.buffer_undo_redo(past_len, blank_undo_redo);
             world.trigger(EmptyObserver);
         });
     }
@@ -572,7 +573,7 @@ mod test {
     struct EmptyOnAdd;
     fn empty_on_add(mut world: DeferredWorld, _: HookContext) {
         let past_len = world.resource::<RevMeta>().meta_past_len();
-        world.buffer_undo_redo(past_len, blank_undo_redo);
+        world.commands().buffer_undo_redo(past_len, blank_undo_redo);
     }
 
     fn assert_system_drains_all_undo_redo<M>(system: impl IntoSystem<(), (), M> + Copy + 'static) {
@@ -595,17 +596,14 @@ mod test {
 
     #[test]
     fn non_exclusive_system_drains_all_undo_redo() {
-        assert_system_drains_all_undo_redo(
-            |mut buffer: ResMut<UndoRedoBuffer>, meta: Res<RevMeta>, mut commands: Commands| {
-                let past_len = meta.meta_past_len();
-                buffer.buffer_undo_redo(past_len, MaybeLocation::caller(), blank_undo_redo);
-                commands.buffer_undo_redo(past_len, blank_undo_redo);
-                commands.queue(|world: &mut World| {
-                    world.trigger(Observer);
-                    world.spawn(OnAdd);
-                });
-            },
-        )
+        assert_system_drains_all_undo_redo(|meta: Res<RevMeta>, mut commands: Commands| {
+            let past_len = meta.meta_past_len();
+            commands.buffer_undo_redo(past_len, blank_undo_redo);
+            commands.queue(|world: &mut World| {
+                world.trigger(Observer);
+                world.spawn(OnAdd);
+            });
+        })
     }
 
     #[test]

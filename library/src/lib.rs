@@ -135,6 +135,7 @@ Docs
 ISSUES/DISCUSSIONS:
 - feature track_update_logs to opt-out
 - RevBundle::rev_insert_inner out of trait
+- schedule::set_base_sets should not need to chain forward/backward configs
 
 */
 // todo: deny
@@ -165,7 +166,6 @@ pub mod prelude {
 }
 
 /// Make `error!` and `error_once!` cause panics.
-// This exists in the reversible_ecs example too, keep that in sync to this.
 #[cfg(test)]
 fn panic_on_error_events() {
     use bevy_log::{

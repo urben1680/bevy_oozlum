@@ -1,7 +1,7 @@
 use crate::{
     meta::RevMeta,
     schedule::{IntoRevScheduleConfigs, RevSchedule},
-    undo_redo::{RevDespawned, UndoRedoBuffer},
+    undo_redo::RevDespawned,
 };
 use bevy_app::{App, FixedUpdate, Plugin};
 use bevy_ecs::{

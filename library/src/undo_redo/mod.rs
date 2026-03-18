@@ -62,7 +62,6 @@ impl Display for EntityRevDespawnedError {
 
 impl Error for EntityRevDespawnedError {}
 
-// todo: split trait for _deferred variant? try to trigger bugs by using trait as-is in wrong contexts
 pub trait BuffersUndoRedo {
     /// Buffers an [`UndoRedo`] implementor in a resource to be collected by the reversible system's state during sync points.
     ///
@@ -137,12 +136,17 @@ impl BuffersUndoRedo for World {
         undo_redo: impl UndoRedo,
         caller: MaybeLocation,
     ) {
-        DeferredWorld::buffer_undo_redo_with_caller(
-            &mut self.into(),
-            meta_past_len,
-            undo_redo,
-            caller,
-        );
+        debug_assert!(self.get_resource::<RevMeta>().is_some_and(|meta| {
+            meta.get_running_direction()
+                .is_some_and(|direction| match direction {
+                    RevDirection::Forward {
+                        meta_past_len: actual,
+                    } => actual == meta_past_len,
+                    _ => false,
+                })
+        }));
+        self.get_resource_or_init::<UndoRedoBuffer>()
+            .buffer_undo_redo(meta_past_len, caller, undo_redo);
     }
 }
 
@@ -156,27 +160,6 @@ impl BuffersUndoRedo for EntityWorldMut<'_> {
         // SAFETY: Only resources are accessed, entity location remains unchanged
         let world = unsafe { self.world_mut() };
         world.buffer_undo_redo_with_caller(meta_past_len, undo_redo, caller);
-    }
-}
-
-impl BuffersUndoRedo for DeferredWorld<'_> {
-    fn buffer_undo_redo_with_caller(
-        &mut self,
-        meta_past_len: MetaPastLen,
-        undo_redo: impl UndoRedo,
-        caller: MaybeLocation,
-    ) {
-        debug_assert!(self.get_resource::<RevMeta>().is_some_and(|meta| {
-            meta.get_running_direction()
-                .is_some_and(|direction| match direction {
-                    RevDirection::Forward {
-                        meta_past_len: actual,
-                    } => actual == meta_past_len,
-                    _ => false,
-                })
-        }));
-        self.resource_mut::<UndoRedoBuffer>()
-            .buffer_undo_redo(meta_past_len, caller, undo_redo);
     }
 }
 
@@ -339,9 +322,6 @@ impl Debug for DebugHidden {
 #[derive(Debug)]
 pub(crate) enum UndoRedoLogError {
     RevMetaMissing,
-    UndoRedoBufferMissing {
-        now: u64,
-    },
     RevDirectionMismatch {
         now: u64,
         expected_forward: bool,
@@ -358,10 +338,6 @@ impl Display for UndoRedoLogError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::RevMetaMissing => write!(f, "RevMeta is missing"),
-            Self::UndoRedoBufferMissing { now } => write!(
-                f,
-                "UndoRedoBuffer was removed at frame {now} but is needed to update the UndoRedo log"
-            ),
             Self::RevDirectionMismatch {
                 now,
                 expected_forward,
@@ -409,8 +385,9 @@ impl UndoRedoLog {
 
         let now = meta.now();
         match meta.get_running_direction() {
-            Some(RevDirection::Forward { .. }) => world
-                .try_resource_scope::<UndoRedoBuffer, _>(|world, mut buffer| {
+            Some(RevDirection::Forward { .. }) => {
+                // UndoRedoBuffer may not exist if no reversible commands were buffered yet
+                world.try_resource_scope::<UndoRedoBuffer, _>(|world, mut buffer| {
                     if !buffer.0.is_empty() {
                         let meta = world.resource::<RevMeta>();
                         let meta_past_len = self
@@ -420,8 +397,9 @@ impl UndoRedoLog {
                         self.undo_redo_log
                             .forward_extend(meta, meta_past_len, buffers);
                     }
-                })
-                .ok_or(UndoRedoLogError::UndoRedoBufferMissing { now }),
+                });
+                Ok(())
+            }
             Some(RevDirection::ForwardLog) => {
                 if self
                     .update_log
@@ -530,7 +508,6 @@ mod test {
         use core::num::NonZeroU64;
 
         crate::panic_on_error_events();
-        world.init_resource::<UndoRedoBuffer>();
         world.register_disabling_component::<RevDespawned>();
         let mut meta = RevMeta::new(NonZeroU64::MIN, false);
         let mut state = None;

@@ -372,7 +372,7 @@ pub trait RevBundle<Marker>: Bundle {
 
     /// This is called within [`RevBundle::rev_insert`] and should not be called elsewhere as this
     /// alone will not make the insertion of required components reversible.
-    // todo: remove by using a private wrapper?
+    // todo: try to remove from public API
     #[doc(hidden)]
     fn rev_insert_inner(
         self,

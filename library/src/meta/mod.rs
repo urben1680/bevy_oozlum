@@ -232,7 +232,10 @@ impl RevMeta {
     fn clear(&mut self) {
         self.past_end = self.now;
         self.future_end = self.now;
-        self.log_clears = self.log_clears.checked_add(1).expect("todo");
+        self.log_clears = self.log_clears.checked_add(1).expect(
+            "cleared RevMeta for u64::MAX times, \
+            the application should not run for that long",
+        );
         self.log_exits = 0;
         self.update_log_limits.clear();
         info!(
@@ -248,13 +251,14 @@ impl RevMeta {
                     return Err(TryRunRevUpdateError::MetaMissing);
                 };
 
-                let buffer = world.get_resource_or_init::<UndoRedoBuffer>();
-                if !buffer.is_empty() {
-                    world.insert_resource(meta);
-                    return Err(TryRunRevUpdateError::UndoRedoBufferNotEmptyBeforeUpdate {
-                        meta: (),
-                        buffer: (),
-                    });
+                if let Some(buffer) = world.get_resource::<UndoRedoBuffer>() {
+                    if !buffer.is_empty() {
+                        world.insert_resource(meta);
+                        return Err(TryRunRevUpdateError::UndoRedoBufferNotEmptyBeforeUpdate {
+                            meta: (),
+                            buffer: (),
+                        });
+                    }
                 }
 
                 // update RevMeta and RevDespawnCleaner
@@ -575,7 +579,6 @@ const SCHEDULE_AND_META_MISSING_MSG: &str = "schedule RevUpdate and resource Rev
 
 impl<M: Debug, B: Debug> Display for TryRunRevUpdateError<M, B> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // todo: write! -> writeln!
         match self {
             Self::ScheduleMissing => write!(f, "{SCHEDULE_MISSING_MSG}"),
             Self::MetaMissing => write!(f, "{META_MISSING_MSG}"),
@@ -596,21 +599,21 @@ impl<M: Debug, B: Debug> Display for TryRunRevUpdateError<M, B> {
                     *despawn_cleaner_err,
                     Some(DespawnCleanerErr::MetaNotRunning)
                 ) {
-                    write!(f, "RevMeta stopped running early\n")?;
+                    writeln!(f, "RevMeta stopped running early")?;
                 }
                 if !update_logs_missed.is_empty() {
-                    write!(
+                    writeln!(
                         f,
-                        "UpdateLog instances did not run when they were expected to:\n{update_logs_missed:?}\n"
+                        "UpdateLog instances did not run when they were expected to:\n{update_logs_missed:?}"
                     )?;
                 }
                 if matches!(
                     *despawn_cleaner_err,
                     Some(DespawnCleanerErr::CleanerOutOfLog)
                 ) {
-                    write!(
+                    writeln!(
                         f,
-                        "the resource that finally despawns entities that were reversibly marked for despawn unexpectedly went out-of-log\n"
+                        "the resource that finally despawns entities that were reversibly marked for despawn unexpectedly went out-of-log"
                     )?;
                 }
                 if meta.is_none() {

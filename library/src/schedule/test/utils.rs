@@ -1,13 +1,9 @@
 use super::*;
 use crate::{
-    meta::RevDirection,
-    panic_on_error_events,
-    schedule::RevUpdate,
-    undo_redo::{BuffersUndoRedo, UndoRedoBuffer},
+    meta::RevDirection, panic_on_error_events, schedule::RevUpdate, undo_redo::BuffersUndoRedo,
 };
 use bevy_app::FixedUpdate;
 use bevy_ecs::{
-    change_detection::{MaybeLocation, ResMut},
     observer::On,
     schedule::{ApplyDeferred, IntoSystemSet, LogLevel, ScheduleBuildSettings},
     system::IntoSystem,
@@ -69,14 +65,6 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
     world.add_observer(|event: On<SysObsv>, mut world: DeferredWorld| {
         let n = event.0;
 
-        world
-            .resource_mut::<TestLog>()
-            .0
-            .push(LogEntry::SysObsv((n, RevDirection::FORWARD_MIN)));
-
-        // trigger observer in observer
-        world.trigger(SysObsvObsv(n));
-
         let past_len = world.resource::<RevMeta>().meta_past_len();
 
         // trigger command in observer
@@ -89,63 +77,13 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
             let test = LogEntry::SysObsvCmd(n);
             world.buffer_undo_redo(past_len, test);
         });
-
-        // buffer reversible observer
-        let test = LogEntry::SysObsv(n);
-        world.buffer_undo_redo(past_len, test);
     });
-    world.add_observer(
-        |event: On<SysHookObsv>,
-         mut log: ResMut<TestLog>,
-         meta: Res<RevMeta>,
-         mut buffer: ResMut<UndoRedoBuffer>| {
-            let n = event.0;
-            log.0
-                .push(LogEntry::SysHookObsv((n, RevDirection::FORWARD_MIN)));
-            let test = LogEntry::SysHookObsv(n);
-            let past_len = meta.meta_past_len();
-            buffer.buffer_undo_redo(past_len, MaybeLocation::caller(), test);
-        },
-    );
-    world.add_observer(
-        |event: On<SysObsvObsv>,
-         mut log: ResMut<TestLog>,
-         meta: Res<RevMeta>,
-         mut buffer: ResMut<UndoRedoBuffer>| {
-            let n = event.0;
-            log.0
-                .push(LogEntry::SysObsvObsv((n, RevDirection::FORWARD_MIN)));
-            let test = LogEntry::SysObsvObsv(n);
-            let past_len = meta.meta_past_len();
-            buffer.buffer_undo_redo(past_len, MaybeLocation::caller(), test);
-        },
-    );
-    world.add_observer(
-        |event: On<SysCmdObsv>,
-         mut log: ResMut<TestLog>,
-         meta: Res<RevMeta>,
-         mut buffer: ResMut<UndoRedoBuffer>| {
-            let n = event.0;
-            log.0
-                .push(LogEntry::SysCmdObsv((n, RevDirection::FORWARD_MIN)));
-            let test = LogEntry::SysCmdObsv(n);
-            let past_len = meta.meta_past_len();
-            buffer.buffer_undo_redo(past_len, MaybeLocation::caller(), test);
-        },
-    );
 
     // set up hooks
     world
         .register_component_hooks::<SysHook>()
         .on_add(|mut world, hook| {
             let n = world.entity(hook.entity).get::<SysHook>().unwrap().0;
-            world
-                .resource_mut::<TestLog>()
-                .0
-                .push(LogEntry::SysHook((n, RevDirection::FORWARD_MIN)));
-
-            // trigger observer in hook
-            world.trigger(SysHookObsv(n));
 
             let past_len = world.resource::<RevMeta>().meta_past_len();
 
@@ -159,28 +97,6 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
                 let test = LogEntry::SysHookCmd(n);
                 world.buffer_undo_redo(past_len, test);
             });
-
-            // buffer reversible hook
-            let test = LogEntry::SysHook(n);
-            world.buffer_undo_redo(past_len, test);
-        });
-    world
-        .register_component_hooks::<SysCmdHook>()
-        .on_add(|mut world, hook| {
-            let n = world
-                .entity(hook.entity)
-                .get::<SysCmdHook>()
-                .expect("todo")
-                .0;
-            world
-                .resource_mut::<TestLog>()
-                .0
-                .push(LogEntry::SysCmdHook((n, RevDirection::FORWARD_MIN)));
-
-            // buffer reversible hook
-            let past_len = world.resource::<RevMeta>().meta_past_len();
-            let test = LogEntry::SysCmdHook(n);
-            world.buffer_undo_redo(past_len, test);
         });
 
     // run tests forward

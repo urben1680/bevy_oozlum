@@ -94,18 +94,9 @@ struct TestLog(Vec<LogEntry<(u8, RevDirection)>>);
 enum LogEntry<T> {
     NonExclusiveSys(T),
     ExclusiveSys(T),
-
-    SysObsv(T),
-    SysObsvObsv(T),
     SysObsvCmd(T),
-
-    SysHook(T),
-    SysHookObsv(T),
     SysHookCmd(T),
-
     SysCmd(T),
-    SysCmdHook(T),
-    SysCmdObsv(T),
 }
 
 impl<T> LogEntry<T> {
@@ -113,18 +104,9 @@ impl<T> LogEntry<T> {
         match self {
             LogEntry::NonExclusiveSys(value) => LogEntry::NonExclusiveSys(map(value)),
             LogEntry::ExclusiveSys(value) => LogEntry::ExclusiveSys(map(value)),
-
-            LogEntry::SysObsv(value) => LogEntry::SysObsv(map(value)),
-            LogEntry::SysObsvObsv(value) => LogEntry::SysObsvObsv(map(value)),
             LogEntry::SysObsvCmd(value) => LogEntry::SysObsvCmd(map(value)),
-
-            LogEntry::SysHook(value) => LogEntry::SysHook(map(value)),
-            LogEntry::SysHookObsv(value) => LogEntry::SysHookObsv(map(value)),
             LogEntry::SysHookCmd(value) => LogEntry::SysHookCmd(map(value)),
-
             LogEntry::SysCmd(value) => LogEntry::SysCmd(map(value)),
-            LogEntry::SysCmdHook(value) => LogEntry::SysCmdHook(map(value)),
-            LogEntry::SysCmdObsv(value) => LogEntry::SysCmdObsv(map(value)),
         }
     }
 }
@@ -152,22 +134,12 @@ impl IntoIterator for Test {
             Self::NonExclusiveSystem(n) => vec![LogEntry::NonExclusiveSys(n)],
             Self::ExclusiveSystem(n) => vec![
                 LogEntry::ExclusiveSys(n),
-                LogEntry::SysObsv(n),
-                LogEntry::SysHook(n),
-                LogEntry::SysObsvObsv(n),
                 LogEntry::SysObsvCmd(n),
-                LogEntry::SysHookObsv(n),
                 LogEntry::SysHookCmd(n),
             ],
             Self::NonExclusiveSyncPoint(n) => vec![
-                LogEntry::SysObsv(n),
-                LogEntry::SysObsvObsv(n),
                 LogEntry::SysObsvCmd(n),
-                LogEntry::SysHook(n),
-                LogEntry::SysHookObsv(n),
                 LogEntry::SysHookCmd(n),
-                LogEntry::SysCmdHook(n),
-                LogEntry::SysCmdObsv(n),
                 LogEntry::SysCmd(n),
             ],
         }
@@ -189,26 +161,15 @@ struct TestSet(u8);
 #[derive(Component)]
 struct SysHook(u8);
 
-#[derive(Component)]
-struct SysCmdHook(u8);
-
 #[derive(Event, Clone)]
 struct SysObsv(u8);
-
-#[derive(Event, Clone)]
-struct SysHookObsv(u8);
-
-#[derive(Event, Clone)]
-struct SysObsvObsv(u8);
-
-#[derive(Event, Clone)]
-struct SysCmdObsv(u8);
 
 fn non_exclusive_system<const N: u8>(
     meta: Res<RevMeta>,
     mut log: ResMut<TestLog>,
     commands: Commands,
 ) {
+    // makes assertion on enum variant easier
     let direction = normalize_direction(meta.running_direction());
 
     log.0.push(LogEntry::NonExclusiveSys((N, direction)));
@@ -251,13 +212,6 @@ fn exclusive_system<const N: u8>(world: &mut World) {
 }
 
 fn system_command<const N: u8>(world: &mut World) {
-    // trigger hook in command
-    world.spawn(SysCmdHook(N));
-
-    // trigger observer in command
-    world.trigger(SysCmdObsv(N));
-
-    // todo: document that stuff like this belongs right before the return
     world
         .resource_mut::<TestLog>()
         .0
@@ -464,7 +418,6 @@ fn run_if() {
 
 #[test]
 fn duplicate_system_chain_builds() {
-    // todo: assert these don't get mixed up by asserting on system states
     let mut schedule = Schedule::new(RevUpdate);
     schedule.rev_add_systems((non_exclusive_system::<1>, non_exclusive_system::<1>).rev_chain());
     schedule.initialize(&mut World::new()).unwrap();
