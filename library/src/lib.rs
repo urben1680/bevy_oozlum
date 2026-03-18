@@ -120,6 +120,7 @@
 TODO:
 
 - update README
+- reflect subtrait derives
 
 Docs
 - no reversible change detection (copy over to new repo)

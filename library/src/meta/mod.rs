@@ -133,6 +133,20 @@ impl Into<NonZeroU64> for MetaPastLen {
 impl RevMeta {
     pub(crate) const DEFAULT_MAX_PAST_LEN: NonZeroU64 = NonZeroU64::MIN;
     pub(crate) const DEFAULT_PAUSED: bool = false;
+
+    /// Construct a new value.
+    ///
+    /// - `max_past_len` defines how many frames can be reverted to via [`set_queue`] with
+    ///   [`RevQueue::RunBackwardLog`]. The amount can be later changed via
+    ///   [`set_max_past_len`].
+    /// - `paused` defines if after inserting this `RevMeta` it will be attempted to run
+    ///   [`RevUpdate`] right away. For this that schedule and the [`run_rev_update`] system
+    ///   must have been added to the app. If it is inserted in the paused state, it can be unpaused
+    ///   via [`set_queue`] with [`RevQueue::RunForward`].
+    ///
+    /// [`set_queue`]: Self::set_queue
+    /// [`set_max_past_len`]: Self::set_max_past_len
+    /// [`run_rev_update`]: Self::run_rev_update
     pub fn new(max_past_len: NonZeroU64, paused: bool) -> Self {
         Self {
             past_end: 0,
@@ -146,46 +160,94 @@ impl RevMeta {
             update_log_limits: UpdateLogLimits::default(),
         }
     }
+
+    /// Change the current [`RevQueue`] that will be applied right before the next time
+    /// [`run_rev_update`] runs. See the `RevQueue` docs for more information.
+    ///
+    /// [`run_rev_update`]: Self::run_rev_update
     pub fn set_queue(&mut self, queue: RevQueue) {
         self.queue = Some(queue);
     }
+
+    /// Remove the current [`RevQueue`] before it could be applied right before the next time
+    /// [`run_rev_update`] runs.
+    ///
+    /// [`run_rev_update`]: Self::run_rev_update
     pub fn unset_queue(&mut self) {
         self.queue = None;
     }
+
+    /// Get the current [`RevQueue`] that will be applied right before the next time
+    /// [`run_rev_update`] runs.
+    ///
+    /// [`run_rev_update`]: Self::run_rev_update
     pub fn get_queue(&self) -> Option<RevQueue> {
         self.queue
     }
+
+    /// Set how many past frames can be reveres to at most.
+    ///
+    /// Note that this is coming into effect right before the next time [`run_rev_update`] runs. If
+    /// at that point one or more frames of the log fall past that limit, the log will be truncated.
+    /// This is final, increasing the limit again will not bring back truncated log entries.
+    ///
+    /// [`run_rev_update`]: Self::run_rev_update
     pub fn set_max_past_len(&mut self, max_past_len: NonZeroU64) {
         self.max_past_len = max_past_len;
     }
+
+    /// Get how many past frames can be reveres to at most.
     pub fn get_max_past_len(&self) -> NonZeroU64 {
         self.max_past_len
     }
+
+    /// Get at which direction [`RevUpdate`] is currently running.
+    ///
+    /// # Panics
+    ///
+    /// This method panics when `RevUpdate` is not currently running. Use [`get_running_direction`]
+    /// for a fallible version.
+    ///
+    /// [`get_running_direction`]: Self::get_running_direction
     pub fn running_direction(&self) -> RevDirection {
         self.get_running_direction().unwrap()
     }
+
+    /// Get at which direction [`RevUpdate`] is currently running.
+    ///
+    /// Returns `None` if `RevUpdate` is not currently running.
     pub fn get_running_direction(&self) -> Option<RevDirection> {
         match self.direction {
             RunningOrRan::Running(direction) => Some(direction),
             _ => None,
         }
     }
+
+    /// Get at which direction [`RevUpdate`] was running the last time.
+    ///
+    /// Returns `None` if `RevUpdate` is currently running or `RevMeta` is currently [paused].
+    ///
+    /// [paused]: Self::paused
     pub fn get_ran_direction(&self) -> Option<RevDirection> {
         match self.direction {
             RunningOrRan::Ran(direction) => Some(direction),
             _ => None,
         }
     }
+
+    /// Returns `true` if `RevMeta` is currently paused. Returns `false` otherwise.
     pub fn paused(&self) -> bool {
         matches!(self.direction, RunningOrRan::Pause { .. })
     }
+
     /// The reversible frame of the [`RevUpdate`] schedule.
     ///
     /// When the schedule is not running, this frame can be understood as the id of the present
-    /// world state.
+    /// world state. This is not increased or decreased multiple times per reversible frame, so it
+    /// is **no** reversible alternative to [`Tick`].
     ///
     /// When the schedule is running, the world state of this id reflects what the systems should
-    /// work towards to. For example when the schedule is running forward, `now` is increased from
+    /// work towards to. For example when the schedule is running [forward], `now` is increased from
     /// `n` to `n+1` and the reversible systems now have to bring the world state to from `n` to
     /// `n+1`.
     ///
@@ -194,54 +256,114 @@ impl RevMeta {
     /// the world from `n+1` back to `n` again.
     ///
     /// Can only be `0` at or after [`RevDirection::BackwardLog`] and is otherwise non-zero.
+    ///
+    /// [`Tick`]: bevy_ecs::change_detection::Tick
+    /// [forward]: RevDirection::is_forward
     pub const fn now(&self) -> u64 {
         self.now
     }
+
+    /// Returns the most past frame that currently can be reversed to.
     pub fn past_end(&self) -> u64 {
         self.past_end
     }
+
+    /// Returns the most future frame that currently can be advanced to.
+    ///
+    /// During [`RevDirection::Forward`], the [current] frame is also the future end.
+    ///
+    /// [current]: Self::now
     pub fn future_end(&self) -> u64 {
         self.future_end
     }
+
+    /// Returns how many frames can be reversed by.
     pub fn past_len(&self) -> u64 {
         self.now - self.past_end
     }
+
+    /// Returns the current [`MetaPastLen`].
+    ///
+    /// # Panics
+    ///
+    /// This method panics when [`RevUpdate`] is not currently running at [`RevDirection::Forward`].
+    /// Use [`get_meta_past_len`] for a fallible version.
+    ///
+    /// [`get_meta_past_len`]: Self::get_meta_past_len
     pub fn meta_past_len(&self) -> MetaPastLen {
         self.get_meta_past_len().unwrap()
     }
+
+    /// Returns the current [`MetaPastLen`].
+    ///
+    /// Returns `None` if [`RevUpdate`] is not currently running at [`RevDirection::Forward`].
     pub fn get_meta_past_len(&self) -> Option<MetaPastLen> {
         match self.direction {
             RunningOrRan::Running(RevDirection::Forward { meta_past_len }) => Some(meta_past_len),
             _ => None,
         }
     }
+
+    /// Returns how many frames can be advanced by.
     pub fn future_len(&self) -> u64 {
         self.future_end - self.now
     }
+
+    /// Returns the total amount of frames in the log. This is the sum of [`past_len`] and
+    /// [`future_len`] plus 1 to account for the current frame.
+    ///
+    /// [`past_len`]: Self::past_len
+    /// [`future_len`]: Self::future_len
     pub fn len(&self) -> u64 {
         self.future_end - self.past_end + 1 // both ends are inclusive
     }
+
+    /// Returns the total amount of times the [`running_direction`] changed from a [log direction]
+    /// to [`RevDirection::Forward`] since this `RevMeta` was constructed.
+    ///
+    /// [`running_direction`]: Self::running_direction
+    /// [log direction]: RevDirection::is_log
     pub fn log_exits(&self) -> u64 {
         self.log_exits
     }
+
+    /// Returns the total amount of times [`RevQueue::ClearThenRunForward`] or
+    /// [`RevQueue::ClearThenPause`] were applied since this `RevMeta` was constructed.
     pub fn log_clears(&self) -> u64 {
         self.log_clears
     }
+
+    /// Returns `true` if `frame` is in `[past_end, future_end]`.
     pub fn contains(&self, frame: u64) -> bool {
         self.future_end.wrapping_sub(frame) <= (self.future_end - self.past_end)
     }
+
+    /// Returns `true` if `frame` is in `[past_end, now[`.
     pub fn past_contains(&self, frame: u64) -> bool {
         self.now.wrapping_sub(frame).wrapping_sub(1) < self.past_len()
     }
+
+    /// Returns `true` if `frame` is in `]now, future_end]`.
     pub fn future_contains(&self, frame: u64) -> bool {
         self.future_end.wrapping_sub(frame) < self.future_len()
     }
+
+    /// Returns `true` if [`now`] is equal to [`past_end`].
+    ///
+    /// [`now`]: Self::now
+    /// [`past_end`]: Self::past_end
     pub fn end_of_log_backward(&self) -> bool {
         self.now == self.past_end
     }
+
+    /// Returns `true` if [`now`] is equal to [`future_end`].
+    ///
+    /// [`now`]: Self::now
+    /// [`future_end`]: Self::future_end
     pub fn end_of_log_forward(&self) -> bool {
         self.now == self.future_end
     }
+
     fn clear(&mut self) {
         self.past_end = self.now;
         self.future_end = self.now;
@@ -257,20 +379,27 @@ impl RevMeta {
             self.log_clears
         )
     }
+
     pub fn run_rev_update(world: &mut World) -> Result<(), RunSystemError> {
         world
             .try_schedule_scope(RevUpdate, |world, schedule| {
                 let Some(meta) = world.remove_resource::<Self>() else {
-                    return Err(RunSystemError::Skipped(SystemParamValidationError::skipped::<RevMeta>(Cow::Borrowed(
-                        "resource RevMeta does not exist, schedule RevUpdate will not be run until it is inserted"
-                    ))));
+                    return Err(RunSystemError::Skipped(
+                        SystemParamValidationError::skipped::<RevMeta>(Cow::Borrowed(
+                            "resource RevMeta does not exist, schedule RevUpdate will not be run \
+                        until it is inserted",
+                        )),
+                    ));
                 };
 
                 if let Some(buffer) = world.get_resource::<UndoRedoBuffer>() {
                     if !buffer.is_empty() {
-                        let err = Err(RunSystemError::Skipped(SystemParamValidationError::invalid::<RevMeta>(format!(
-                            "the resource containing buffered UndoRedo implementors was not empty, it contained the following types:\n{buffer:?}\n{meta:?}"
-                        ))));
+                        let err = Err(RunSystemError::Skipped(
+                            SystemParamValidationError::invalid::<RevMeta>(format!(
+                                "the resource containing buffered UndoRedo implementors was not \
+                            empty, it contained the following types:\n{buffer:?}\n{meta:?}"
+                            )),
+                        ));
                         world.insert_resource(meta);
                         return err;
                     }
@@ -294,31 +423,42 @@ impl RevMeta {
                         };
                         let err = Err(RunSystemError::Failed(match err {
                             DespawnFinalizerErr::OutOfLog => format!(
-                                "the resource that finally despawns entities that were reversibly marked for spawn or despawn went out-of-log\n{meta:?}"
+                                "the resource that finally despawns entities that were reversibly \
+                                marked for spawn or despawn went out-of-log\n{meta:?}"
                             ),
                             DespawnFinalizerErr::MetaNotRunning => format!(
                                 "RevMeta stopped running early, it may have been replaced\n{meta:?}"
                             ),
                             DespawnFinalizerErr::MetaMissing => unreachable!(
-                                "update_spawn_despawn would skip all logic without RevMeta, nothing could return it to be present again here"
+                                "update_spawn_despawn would skip all logic without RevMeta, \
+                                nothing could return it to be present again here"
                             ),
                         }.into()));
                         world.insert_resource(meta);
                         err
                     }
                     Err(RevMetaUpdateErr::AlreadyRunning { meta, direction }) => {
-                        let err = Err(RunSystemError::Skipped(SystemParamValidationError::invalid::<RevMeta>(format!(
-                            "RevMeta is already running at {direction:?}\n{meta:?}"
-                        ))));
+                        let err = Err(RunSystemError::Skipped(
+                            SystemParamValidationError::invalid::<RevMeta>(format!(
+                                "RevMeta is already running at {direction:?}\n{meta:?}"
+                            )),
+                        ));
                         world.insert_resource(meta);
                         err
                     }
                     Err(RevMetaUpdateErr::RevMetaNotReturned) => {
                         Err(RunSystemError::Failed(match despawn_finalizer_result {
-                            Ok(()) => "RevMeta was removed during RevUpdate, possible in hooks or observers related to despawns".into(),
-                            Err(DespawnFinalizerErr::MetaMissing) => "RevMeta was removed during RevUpdate".into(),
-                            Err(DespawnFinalizerErr::OutOfLog) | Err(DespawnFinalizerErr::MetaNotRunning) => unreachable!(
-                                "when update_spawn_despawn returns {despawn_finalizer_result:?}, then only when RevMeta existed at that point, but then nothing is executed that could have removed RevMeta here"
+                            Ok(()) => "RevMeta was removed during RevUpdate, possible in hooks or \
+                                observers related to despawns"
+                                .into(),
+                            Err(DespawnFinalizerErr::MetaMissing) => "RevMeta was removed during \
+                                RevUpdate"
+                                .into(),
+                            Err(DespawnFinalizerErr::OutOfLog)
+                            | Err(DespawnFinalizerErr::MetaNotRunning) => unreachable!(
+                                "when update_spawn_despawn returns {despawn_finalizer_result:?}, \
+                                then only when RevMeta existed at that point, but then nothing is \
+                                executed that could have removed RevMeta here"
                             ),
                         }))
                     }
@@ -326,35 +466,40 @@ impl RevMeta {
                         meta,
                         update_logs_missed,
                     }) => {
-                        let err = core::fmt::from_fn(|f| write!(
-                            f,
-                            "UpdateLog instances did not run when they were expected to:\n{update_logs_missed:?}\n{meta:?}"
-                        ));
+                        // todo: use fmt::from_fn instead of format! when bevy switches to 1.93
+                        let err = format!(
+                            "UpdateLog instances did not run when they were expected \
+                            to:\n{update_logs_missed:?}\n{meta:?}"
+                        );
+
                         Err(RunSystemError::Failed(match despawn_finalizer_result {
                             Ok(()) => format!("{err}"),
                             Err(DespawnFinalizerErr::OutOfLog) => format!(
-                                "the resource that finally despawns entities that were reversibly marked for spawn or despawn went out-of-log, additionally {err:?}"
+                                "the resource that finally despawns entities that were reversibly \
+                                marked for spawn or despawn went out-of-log, additionally {err:?}"
                             ),
                             Err(DespawnFinalizerErr::MetaNotRunning) => format!(
-                                "RevMeta stopped running early, it may have been replaced, additionally {err:?}"
+                                "RevMeta stopped running early, it may have been replaced, \
+                                additionally {err:?}"
                             ),
                             Err(DespawnFinalizerErr::MetaMissing) => unreachable!(
-                                "update_spawn_despawn would skip all logic without RevMeta, nothing could return it to be present again here"
+                                "update_spawn_despawn would skip all logic without RevMeta, \
+                                nothing could return it to be present again here"
                             ),
                         }.into()))
                     }
                 }
             })
             .unwrap_or_else(|_| {
-                if world.contains_resource::<RevMeta>() {
-                    Err(RunSystemError::Skipped(
-                        SystemParamValidationError::skipped::<RevMeta>(Cow::Borrowed("schedule RevUpdate does not exist, it will not be run until it is inserted")),
-                    ))
+                let err = if world.contains_resource::<RevMeta>() {
+                    "schedule RevUpdate does not exist, it will not be run until it is inserted"
                 } else {
-                    Err(RunSystemError::Skipped(SystemParamValidationError::skipped::<RevMeta>(
-                        Cow::Borrowed("schedule RevUpdate and resource RevMeta do not exist, the schedule will not be run until both are inserted"),
-                    )))
-                }
+                    "schedule RevUpdate and resource RevMeta do not exist, the schedule will not \
+                    be run until both are inserted"
+                };
+                Err(RunSystemError::Skipped(
+                    SystemParamValidationError::skipped::<RevMeta>(Cow::Borrowed(err)),
+                ))
             })
     }
 
@@ -466,6 +611,7 @@ impl RevMeta {
             }),
         }
     }
+
     #[cfg(test)]
     pub(crate) fn update_ref(
         &mut self,
@@ -508,6 +654,7 @@ impl RevMeta {
             }
         }
     }
+
     pub(super) fn set_update_state(
         &self,
         state: &mut Option<UpdateLogState>,
@@ -516,6 +663,7 @@ impl RevMeta {
         self.update_log_limits
             .set_update_state(state, self.log_exits, self.log_clears, caller)
     }
+
     pub(super) fn update_log_limits(&self) -> &UpdateLogLimits {
         &self.update_log_limits
     }
