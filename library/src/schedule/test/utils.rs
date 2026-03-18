@@ -1,7 +1,5 @@
-use super::*;
-use crate::{
-    meta::RevDirection, panic_on_error_events, schedule::RevUpdate, undo_redo::BuffersUndoRedo,
-};
+use core::num::NonZeroU64;
+
 use bevy_app::FixedUpdate;
 use bevy_ecs::{
     observer::On,
@@ -9,7 +7,11 @@ use bevy_ecs::{
     system::IntoSystem,
     world::{DeferredWorld, World},
 };
-use core::num::NonZeroU64;
+
+use super::*;
+use crate::{
+    meta::RevDirection, panic_on_error_events, schedule::RevUpdate, undo_redo::BuffersUndoRedo,
+};
 
 pub(super) fn test_run<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
     configs: Vec<C>,

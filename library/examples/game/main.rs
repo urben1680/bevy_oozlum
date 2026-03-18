@@ -1,5 +1,7 @@
-use bevy::prelude::*;
-use bevy_ecs::{lifecycle::HookContext, world::DeferredWorld};
+use bevy::{
+    ecs::{lifecycle::HookContext, world::DeferredWorld},
+    prelude::*,
+};
 use bevy_oozlum::prelude::*;
 use std::{num::NonZeroU64, time::Duration};
 
@@ -75,7 +77,7 @@ fn main() {
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default, States)]
 enum GameState {
-    // Did not lose or win yet
+    // Did not lose nor win yet
     #[default]
     Running,
 

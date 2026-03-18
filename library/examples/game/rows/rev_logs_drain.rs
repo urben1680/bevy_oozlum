@@ -1,5 +1,7 @@
-use bevy::{ecs::error::Result, prelude::*};
-use bevy_ecs::entity_disabling::Disabled;
+use bevy::{
+    ecs::{entity_disabling::Disabled, error::Result},
+    prelude::*,
+};
 use bevy_oozlum::prelude::*;
 
 use crate::{Waste, control::JustPressed};

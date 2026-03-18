@@ -1,12 +1,12 @@
-use crate::{log::update::offset::OffsetLog, meta::RevMeta};
-use bevy_ecs::change_detection::MaybeLocation;
 use core::{
     fmt::{Debug, Display},
     num::NonZeroU64,
 };
 use std::{collections::TryReserveError, panic::Location};
 
-use crate::schedule::DEFAULT_LOCATION;
+use crate::{log::update::offset::OffsetLog, meta::RevMeta, schedule::DEFAULT_LOCATION};
+use bevy_ecs::change_detection::MaybeLocation;
+
 pub use limit::UpdateLogId;
 use limit::*;
 
@@ -53,7 +53,7 @@ mod offset;
 ///     mut message_log: Local<TransitionsLog<MyMessage>>,
 /// ) -> Result {
 ///     match meta.running_direction() {
-///         RevDirection::Forward(_) => {
+///         RevDirection::Forward { .. } => {
 ///             if !messages.is_empty() {
 ///                 let iter = messages.read().cloned().inspect(|my_message| {
 ///                     // use message

@@ -14,20 +14,16 @@
 //! # use bevy_oozlum::prelude::*;
 //! fn reversible_system(meta: Res<RevMeta>) {
 //!     match meta.running_direction() {
-//!         RevDirection::Forward { log } => {
-//!             if !log {
-//!                 // logic specific for changes that happen for the first time
-//!                 // reversible commands are queued only here
-//!             } else {
-//!                 // logic specific for when this is traversing the log
-//!                 // this frame already ran with `RevDirection::Forward { log: true }`
-//!             }
-//!             // forward logic where it does not matter if this is a log traversal
-//!             // does not need to be below the if-else blocks, can also be placed above
+//!         RevDirection::Forward { meta_past_len } => {
+//!             // logic specific for changes that happen for the first time
+//!             // reversible commands are queued only here
+//!             // meta_past_len is needed for reversible commands or reversible logs
+//!         },
+//!         RevDirection::ForwardLog => {
+//!             // logic specific for when this is traversing the log forwards
 //!         },
 //!         RevDirection::BackwardLog => {
-//!             // backward logic
-//!             // this frame already ran with `RevDirection::Forward { log: true }`
+//!             // logic specific for when this is traversing the log backwards
 //!         }
 //!     }
 //!     // logic where it does not matter which direction this runs at
@@ -35,12 +31,12 @@
 //! }
 //! ```
 //!
-//! [`RevSchedule::rev_add_systems`] wraps every passed system `T` in an `Arc<Mutex<T>>` that is
+//! [`RevSchedule::rev_add_systems`] wraps every passed-in system `T` in an `Arc<Mutex<T>>` that is
 //! shared for:
-//! - a new system `F` that runs at [`RevDirection::Forward`]
-//! - a new system `B` that runs at [`RevDirection::BackwardLog`]
+//! - a new system `F` that runs at [`Forward`] and [`ForwardLog`]
+//! - a new system `B` that runs at [`BackwardLog`]
 //!
-//! Additionally, another new system per `T` is added that runs at [`RevDirection::BackwardLog`]
+//! Additionally, another new system per `T` is added that runs at [`BackwardLog`]
 //! but before `B` which undoes deferred actions such as [reversible commands]. With a sync point in
 //! between, `B` will start with the [`World`] state that was present when `F` finished but did not
 //! have its deferred actions applied yet. This third system is otherwise noop.
@@ -52,8 +48,8 @@
 //! # Reversible conditions
 //!
 //! Conditions do not need to be redesigned, they can be used as they are because the internal
-//! wrapper only calls them at [`RevDirection::NOT_LOG`], logs their outputs and and only uses these
-//! log entries during [log directions].
+//! wrapper only calls them at [`Forward`], logs their outputs and and only uses these log entries
+//! during [log directions].
 //!
 //! # Reversible configurations
 //!
@@ -67,9 +63,9 @@
 //! If this is not possible, reversible systems are always part of the [`RevSystems`] set that
 //! can be used for non-reversible ordering.
 //!
-//! [`RevDirection::Forward`]: crate::meta::RevDirection::Forward
-//! [`RevDirection::BackwardLog`]: crate::meta::RevDirection::BackwardLog
-//! [`RevDirection::NOT_LOG`]: crate::meta::RevDirection::NOT_LOG
+//! [`Forward`]: crate::meta::RevDirection::Forward
+//! [`ForwardLog`]: crate::meta::RevDirection::ForwardLog
+//! [`BackwardLog`]: crate::meta::RevDirection::BackwardLog
 //! [log directions]: crate::meta::RevDirection::is_log
 //! [reversible commands]: crate::undo_redo::RevCommands
 //! [`rev_after`]: IntoRevScheduleConfigs::rev_after
@@ -77,7 +73,8 @@
 //! [`World`]: bevy_ecs::world::World
 //! [`Commands`]: bevy_ecs::system::Commands
 
-use crate::meta::RevMeta;
+use core::{fmt::Debug, hash::Hash};
+
 use bevy_ecs::{
     change_detection::Res,
     schedule::{
@@ -87,11 +84,13 @@ use bevy_ecs::{
     },
     system::{IntoSystem, ScheduleSystem},
 };
+use variadics_please::all_tuples;
+
+use crate::meta::RevMeta;
+
 use condition::into_rev_condition;
-use core::{fmt::Debug, hash::Hash};
 pub(crate) use system::DEFAULT_LOCATION;
 use system::into_rev_system;
-use variadics_please::all_tuples;
 
 mod condition;
 mod system;
@@ -265,14 +264,14 @@ pub struct RevScheduleConfigs<T: Schedulable> {
 impl From<ApplyDeferred> for RevScheduleConfigs<ScheduleSystem> {
     fn from(_: ApplyDeferred) -> Self {
         #[derive(SystemSet, Clone, Debug, PartialEq, Eq, Hash)]
-        struct EmptySet;
+        struct NoSystems;
 
         Self {
             forward_systems: ApplyDeferred.into_configs(),
             backward_deferred: ApplyDeferred.into_configs(),
             backward_systems: ApplyDeferred.into_configs(),
-            backward_deferred_and_systems: EmptySet.into_configs(),
-            conditioned: EmptySet.into_configs(),
+            backward_deferred_and_systems: NoSystems.into_configs(),
+            conditioned: NoSystems.into_configs(),
         }
     }
 }

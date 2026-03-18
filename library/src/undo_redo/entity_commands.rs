@@ -1,24 +1,20 @@
-use crate::undo_redo::{
-    EntityRevDespawnedError, RevBundle, RevCommands, RevEntityWorldMutInternal,
-};
-use crate::{meta::MetaPastLen, undo_redo::UndoRedo};
-use bevy_ecs::entity::Entity;
-use bevy_ecs::relationship::{RelatedSpawnerCommands, Relationship, RelationshipTarget};
 use bevy_ecs::{
     bundle::{Bundle, InsertMode},
     change_detection::MaybeLocation,
     component::Component,
+    entity::Entity,
+    relationship::{RelatedSpawnerCommands, Relationship, RelationshipTarget},
     system::{EntityCommand, EntityCommands, EntityEntryCommands},
     world::{EntityWorldMut, FromWorld},
 };
 
+use crate::{
+    meta::MetaPastLen,
+    undo_redo::{EntityRevDespawnedError, RevBundle, RevCommands, RevEntityWorldMutInternal},
+};
+
 /// Extension trait for [`EntityCommands`] with reversible variants of various methods.
 pub trait RevEntityCommands<'w> {
-    /// Shorthand method of [`Commands::buffer_undo_redo`](BuffersUndoRedo::buffer_undo_redo) with
-    /// applying `undo_redo.redo(&mut self)` immediately. Useful when there is no difference between
-    /// doing and redoing.
-    fn redo_and_buffer(&mut self, meta_past_len: MetaPastLen, undo_redo: impl UndoRedo);
-
     /// Helper method to mark an entity as reversibly spawned. Useful when the actual spawn is
     /// hidden and cannot be done with [`Commands::rev_spawn`](super::RevCommands::rev_spawn).
     ///
@@ -213,11 +209,6 @@ pub trait RevEntityCommands<'w> {
 }
 
 impl<'a> RevEntityCommands<'a> for EntityCommands<'a> {
-    fn redo_and_buffer(&mut self, meta_past_len: MetaPastLen, undo_redo: impl UndoRedo) {
-        self.commands_mut()
-            .redo_and_buffer(meta_past_len, undo_redo);
-    }
-
     #[track_caller]
     fn rev_mark_spawned(
         &mut self,

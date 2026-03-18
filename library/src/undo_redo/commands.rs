@@ -1,8 +1,3 @@
-use crate::{
-    meta::MetaPastLen,
-    prelude::UndoRedo,
-    undo_redo::{RevBundle, RevEntityWorldMutInternal, RevWorldInternal, mark_spawn_empty},
-};
 use bevy_ecs::{
     bundle::{Bundle, InsertMode, NoBundleEffect},
     change_detection::MaybeLocation,
@@ -13,13 +8,13 @@ use bevy_ecs::{
     world::{EntityWorldMut, FromWorld, World},
 };
 
+use crate::{
+    meta::MetaPastLen,
+    undo_redo::{RevBundle, RevEntityWorldMutInternal, RevWorldInternal, mark_spawn_empty},
+};
+
 /// Extension trait for [`Commands`] with reversible variants of various methods.
 pub trait RevCommands {
-    /// Shorthand method of [`Commands::buffer_undo_redo`](super::BuffersUndoRedo::buffer_undo_redo)
-    /// with applying `undo_redo.redo(&mut self)` immediately. Useful when there is no difference
-    /// between doing and redoing.
-    fn redo_and_buffer(&mut self, meta_past_len: MetaPastLen, undo_redo: impl UndoRedo);
-
     /// Reversible version of [`Commands::init_resource`].
     fn rev_init_resource<R: Resource + FromWorld>(&mut self, meta_past_len: MetaPastLen);
 
@@ -111,14 +106,6 @@ pub trait RevCommands {
 }
 
 impl RevCommands for Commands<'_, '_> {
-    #[track_caller]
-    fn redo_and_buffer(&mut self, meta_past_len: MetaPastLen, undo_redo: impl UndoRedo) {
-        let caller = MaybeLocation::caller();
-        self.queue(move |world: &mut World| {
-            world.redo_and_buffer_with_caller(meta_past_len, undo_redo, caller)
-        });
-    }
-
     #[track_caller]
     fn rev_init_resource<R: Resource + FromWorld>(&mut self, meta_past_len: MetaPastLen) {
         self.queue(rev_init_resource::<R>(meta_past_len))

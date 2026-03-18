@@ -9,10 +9,10 @@ use bevy_ecs::change_detection::MaybeLocation;
 use bevy_utils::Parallel;
 use core::{
     fmt::{Debug, Display, Formatter, Result as FmtResult},
+    panic::Location,
     sync::atomic::AtomicU32,
 };
 use nonmax::NonMaxU32;
-use std::panic::Location;
 
 /// Part of [`RevMeta`](crate::meta::RevMeta) that keeps track of [`UpdateLog`](super::UpdateLog)
 /// updates and reports when such an update was expected for a present frame but did not happen.
@@ -423,6 +423,7 @@ impl<'a> UpdatesIter<'a> {
 
 impl<'a> Iterator for UpdatesIter<'a> {
     type Item = (usize, UpdateLogLimit);
+    #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         self.pop().or_else(|| {
             // Try to get an update of the next higher updates_this_frame. If this still yields None

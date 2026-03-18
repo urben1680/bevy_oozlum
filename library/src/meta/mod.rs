@@ -1,21 +1,24 @@
-use crate::{
-    log::{PreUpdateKind, UpdateLogLimits, UpdateLogMissed, UpdateLogState},
-    prelude::RevUpdate,
-    undo_redo::{DespawnCleanerErr, UndoRedoBuffer, update_spawn_despawn},
+use core::{
+    fmt::{Debug, Display},
+    num::NonZeroU64,
+    panic::Location,
 };
+use std::borrow::Cow;
+
 use bevy_ecs::{
     change_detection::MaybeLocation,
+    error::Result as BevyResult,
     resource::Resource,
-    system::{RunSystemError, SystemParamValidationError},
+    system::{Command, RunSystemError, SystemParamValidationError},
     world::World,
 };
 use bevy_log::info;
-use core::{
-    error::Error,
-    fmt::{Debug, Display},
-    num::NonZeroU64,
+
+use crate::{
+    log::{PreUpdateKind, UpdateLogLimits, UpdateLogMissed, UpdateLogState},
+    prelude::RevUpdate,
+    undo_redo::{DespawnFinalizerErr, UndoRedoBuffer, finalize_despawns},
 };
-use std::{borrow::Cow, panic::Location};
 
 #[cfg(test)]
 mod test;
@@ -79,7 +82,7 @@ impl RevDirection {
 }
 
 impl Display for RevDirection {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match *self {
             RevDirection::Forward { .. } => write!(f, "Forward"),
             RevDirection::ForwardLog => write!(f, "Forward Log"),
@@ -105,6 +108,16 @@ pub enum RevQueue {
     Pause,
     ClearThenRunForward,
     ClearThenPause,
+}
+
+impl Command<BevyResult> for RevQueue {
+    fn apply(self, world: &mut World) -> BevyResult {
+        world
+            .get_resource_mut::<RevMeta>()
+            .ok_or_else(|| format!("could not queue {self:?}, RevMeta is missing"))?
+            .set_queue(self);
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -244,108 +257,105 @@ impl RevMeta {
             self.log_clears
         )
     }
-    pub fn run_rev_update<'w>(world: &'w mut World) -> Result<(), RunSystemError> {
+    pub fn run_rev_update(world: &mut World) -> Result<(), RunSystemError> {
         world
             .try_schedule_scope(RevUpdate, |world, schedule| {
                 let Some(meta) = world.remove_resource::<Self>() else {
-                    return Err(TryRunRevUpdateError::MetaMissing);
+                    return Err(RunSystemError::Skipped(SystemParamValidationError::skipped::<RevMeta>(Cow::Borrowed(
+                        "resource RevMeta does not exist, schedule RevUpdate will not be run until it is inserted"
+                    ))));
                 };
 
                 if let Some(buffer) = world.get_resource::<UndoRedoBuffer>() {
                     if !buffer.is_empty() {
+                        let err = Err(RunSystemError::Skipped(SystemParamValidationError::invalid::<RevMeta>(format!(
+                            "the resource containing buffered UndoRedo implementors was not empty, it contained the following types:\n{buffer:?}\n{meta:?}"
+                        ))));
                         world.insert_resource(meta);
-                        return Err(TryRunRevUpdateError::UndoRedoBufferNotEmptyBeforeUpdate {
-                            meta: (),
-                            buffer: (),
-                        });
+                        return err;
                     }
                 }
 
-                // update RevMeta and RevDespawnCleaner
-                let mut cleaner_result = Ok(());
+                // update RevMeta and DespawnFinalizer
+                let mut despawn_finalizer_result = Ok(());
                 let meta_result = meta.update(|meta, _| {
                     world.insert_resource(meta);
                     schedule.run(world);
-                    cleaner_result = update_spawn_despawn(world);
+                    despawn_finalizer_result = finalize_despawns(world);
                     world.remove_resource::<RevMeta>()
                 });
 
                 // map errors
                 match meta_result {
                     Ok(meta) => {
+                        let Err(err) = despawn_finalizer_result else {
+                            world.insert_resource(meta);
+                            return Ok(());
+                        };
+                        let err = Err(RunSystemError::Failed(match err {
+                            DespawnFinalizerErr::OutOfLog => format!(
+                                "the resource that finally despawns entities that were reversibly marked for spawn or despawn went out-of-log\n{meta:?}"
+                            ),
+                            DespawnFinalizerErr::MetaNotRunning => format!(
+                                "RevMeta stopped running early, it may have been replaced\n{meta:?}"
+                            ),
+                            DespawnFinalizerErr::MetaMissing => unreachable!(
+                                "update_spawn_despawn would skip all logic without RevMeta, nothing could return it to be present again here"
+                            ),
+                        }.into()));
                         world.insert_resource(meta);
-                        match cleaner_result {
-                            Ok(()) => Ok(()),
-                            Err(err) => Err(TryRunRevUpdateError::AfterRunErrors {
-                                meta: None,
-                                update_logs_missed: Vec::new(),
-                                despawn_cleaner_err: Some(err),
-                            }),
-                        }
+                        err
                     }
                     Err(RevMetaUpdateErr::AlreadyRunning { meta, direction }) => {
+                        let err = Err(RunSystemError::Skipped(SystemParamValidationError::invalid::<RevMeta>(format!(
+                            "RevMeta is already running at {direction:?}\n{meta:?}"
+                        ))));
                         world.insert_resource(meta);
-                        Err(TryRunRevUpdateError::AlreadyRunning {
-                            meta: (),
-                            direction,
-                        })
+                        err
                     }
                     Err(RevMetaUpdateErr::RevMetaNotReturned) => {
-                        Err(TryRunRevUpdateError::AfterRunErrors {
-                            meta: None,
-                            update_logs_missed: Vec::new(),
-                            despawn_cleaner_err: cleaner_result.err(),
-                        })
+                        Err(RunSystemError::Failed(match despawn_finalizer_result {
+                            Ok(()) => "RevMeta was removed during RevUpdate, possible in hooks or observers related to despawns".into(),
+                            Err(DespawnFinalizerErr::MetaMissing) => "RevMeta was removed during RevUpdate".into(),
+                            Err(DespawnFinalizerErr::OutOfLog) | Err(DespawnFinalizerErr::MetaNotRunning) => unreachable!(
+                                "when update_spawn_despawn returns {despawn_finalizer_result:?}, then only when RevMeta existed at that point, but then nothing is executed that could have removed RevMeta here"
+                            ),
+                        }))
                     }
                     Err(RevMetaUpdateErr::UpdateLogsMissed {
                         meta,
                         update_logs_missed,
                     }) => {
-                        world.insert_resource(meta);
-                        Err(TryRunRevUpdateError::AfterRunErrors {
-                            meta: None,
-                            update_logs_missed,
-                            despawn_cleaner_err: cleaner_result.err(),
-                        })
+                        let err = core::fmt::from_fn(|f| write!(
+                            f,
+                            "UpdateLog instances did not run when they were expected to:\n{update_logs_missed:?}\n{meta:?}"
+                        ));
+                        Err(RunSystemError::Failed(match despawn_finalizer_result {
+                            Ok(()) => format!("{err}"),
+                            Err(DespawnFinalizerErr::OutOfLog) => format!(
+                                "the resource that finally despawns entities that were reversibly marked for spawn or despawn went out-of-log, additionally {err:?}"
+                            ),
+                            Err(DespawnFinalizerErr::MetaNotRunning) => format!(
+                                "RevMeta stopped running early, it may have been replaced, additionally {err:?}"
+                            ),
+                            Err(DespawnFinalizerErr::MetaMissing) => unreachable!(
+                                "update_spawn_despawn would skip all logic without RevMeta, nothing could return it to be present again here"
+                            ),
+                        }.into()))
                     }
                 }
             })
             .unwrap_or_else(|_| {
                 if world.contains_resource::<RevMeta>() {
-                    Err(TryRunRevUpdateError::ScheduleMissing)
+                    Err(RunSystemError::Skipped(
+                        SystemParamValidationError::skipped::<RevMeta>(Cow::Borrowed("schedule RevUpdate does not exist, it will not be run until it is inserted")),
+                    ))
                 } else {
-                    Err(TryRunRevUpdateError::ScheduleAndMetaMissing)
+                    Err(RunSystemError::Skipped(SystemParamValidationError::skipped::<RevMeta>(
+                        Cow::Borrowed("schedule RevUpdate and resource RevMeta do not exist, the schedule will not be run until both are inserted"),
+                    )))
                 }
             })
-            .map_err(|err| match err {
-                TryRunRevUpdateError::ScheduleMissing => TryRunRevUpdateError::ScheduleMissing,
-                TryRunRevUpdateError::MetaMissing => TryRunRevUpdateError::MetaMissing,
-                TryRunRevUpdateError::ScheduleAndMetaMissing => {
-                    TryRunRevUpdateError::ScheduleAndMetaMissing
-                }
-                TryRunRevUpdateError::UndoRedoBufferNotEmptyBeforeUpdate { .. } => {
-                    TryRunRevUpdateError::UndoRedoBufferNotEmptyBeforeUpdate {
-                        meta: world.resource(),
-                        buffer: world.resource::<UndoRedoBuffer>(),
-                    }
-                }
-                TryRunRevUpdateError::AlreadyRunning { direction, .. } => {
-                    TryRunRevUpdateError::AlreadyRunning {
-                        meta: world.resource(),
-                        direction,
-                    }
-                }
-                TryRunRevUpdateError::AfterRunErrors {
-                    update_logs_missed,
-                    despawn_cleaner_err,
-                    ..
-                } => TryRunRevUpdateError::AfterRunErrors {
-                    meta: world.get_resource(),
-                    update_logs_missed,
-                    despawn_cleaner_err,
-                },
-            })
-            .map_err(TryRunRevUpdateError::to_run_system_err)
     }
 
     pub fn update(
@@ -523,109 +533,3 @@ pub enum RevMetaUpdateErr {
         update_logs_missed: Vec<UpdateLogMissed>,
     },
 }
-
-#[derive(Debug)]
-enum TryRunRevUpdateError<M, B> {
-    ScheduleMissing,
-    MetaMissing,
-    ScheduleAndMetaMissing,
-    UndoRedoBufferNotEmptyBeforeUpdate {
-        meta: M,
-        buffer: B,
-    },
-    AlreadyRunning {
-        meta: M,
-        direction: RevDirection,
-    },
-    AfterRunErrors {
-        meta: Option<M>,
-        update_logs_missed: Vec<UpdateLogMissed>,
-        despawn_cleaner_err: Option<DespawnCleanerErr>,
-    },
-}
-
-impl<'w, B: Debug + 'w> TryRunRevUpdateError<&'w RevMeta, B> {
-    pub fn to_run_system_err(self) -> RunSystemError {
-        match self {
-            TryRunRevUpdateError::ScheduleMissing => RunSystemError::Skipped(
-                SystemParamValidationError::skipped::<RevMeta>(Cow::Borrowed(SCHEDULE_MISSING_MSG)),
-            ),
-            TryRunRevUpdateError::MetaMissing => RunSystemError::Skipped(
-                SystemParamValidationError::skipped::<RevMeta>(Cow::Borrowed(META_MISSING_MSG)),
-            ),
-            TryRunRevUpdateError::ScheduleAndMetaMissing => {
-                RunSystemError::Skipped(SystemParamValidationError::skipped::<RevMeta>(
-                    Cow::Borrowed(SCHEDULE_AND_META_MISSING_MSG),
-                ))
-            }
-            TryRunRevUpdateError::AlreadyRunning { .. }
-            | TryRunRevUpdateError::UndoRedoBufferNotEmptyBeforeUpdate { .. } => {
-                RunSystemError::Skipped(SystemParamValidationError::invalid::<RevMeta>(format!(
-                    "{self}"
-                )))
-            }
-            TryRunRevUpdateError::AfterRunErrors { .. } => {
-                RunSystemError::Failed(format!("{self}").into())
-            }
-        }
-    }
-}
-
-const SCHEDULE_MISSING_MSG: &str =
-    "schedule RevUpdate does not exist, it will not be run until it is inserted";
-const META_MISSING_MSG: &str =
-    "resource RevMeta does not exist, schedule RevUpdate will not be run until it is inserted";
-const SCHEDULE_AND_META_MISSING_MSG: &str = "schedule RevUpdate and resource RevMeta do not exist, the schedule will not be run until both are inserted";
-
-impl<M: Debug, B: Debug> Display for TryRunRevUpdateError<M, B> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::ScheduleMissing => write!(f, "{SCHEDULE_MISSING_MSG}"),
-            Self::MetaMissing => write!(f, "{META_MISSING_MSG}"),
-            Self::ScheduleAndMetaMissing => write!(f, "{SCHEDULE_AND_META_MISSING_MSG}"),
-            Self::UndoRedoBufferNotEmptyBeforeUpdate { meta, buffer } => write!(
-                f,
-                "the resource containing buffered UndoRedo implementors was not empty, it contained the following types:\n{buffer:?}\n{meta:?}"
-            ),
-            Self::AlreadyRunning { meta, direction } => {
-                write!(f, "RevMeta is already running at {direction:?}\n{meta:?}")
-            }
-            Self::AfterRunErrors {
-                meta,
-                update_logs_missed,
-                despawn_cleaner_err,
-            } => {
-                if matches!(
-                    *despawn_cleaner_err,
-                    Some(DespawnCleanerErr::MetaNotRunning)
-                ) {
-                    writeln!(f, "RevMeta stopped running early")?;
-                }
-                if !update_logs_missed.is_empty() {
-                    writeln!(
-                        f,
-                        "UpdateLog instances did not run when they were expected to:\n{update_logs_missed:?}"
-                    )?;
-                }
-                if matches!(
-                    *despawn_cleaner_err,
-                    Some(DespawnCleanerErr::CleanerOutOfLog)
-                ) {
-                    writeln!(
-                        f,
-                        "the resource that finally despawns entities that were reversibly marked for despawn unexpectedly went out-of-log"
-                    )?;
-                }
-                if meta.is_none() {
-                    write!(f, "RevMeta was removed from the world while running")?;
-                }
-                if let Some(meta) = meta {
-                    write!(f, "{meta:?}")?;
-                }
-                Ok(())
-            }
-        }
-    }
-}
-
-impl<M: Debug, B: Debug> Error for TryRunRevUpdateError<M, B> {}

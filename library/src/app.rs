@@ -1,8 +1,5 @@
-use crate::{
-    meta::RevMeta,
-    schedule::{IntoRevScheduleConfigs, RevSchedule},
-    undo_redo::RevDespawned,
-};
+use core::num::NonZeroU64;
+
 use bevy_app::{App, FixedUpdate, Plugin};
 use bevy_ecs::{
     schedule::{
@@ -11,7 +8,12 @@ use bevy_ecs::{
     },
     system::ScheduleSystem,
 };
-use core::num::NonZeroU64;
+
+use crate::{
+    meta::RevMeta,
+    schedule::{IntoRevScheduleConfigs, RevSchedule},
+    undo_redo::RevDespawned,
+};
 
 pub trait RevApp {
     fn rev_add_systems<Marker>(

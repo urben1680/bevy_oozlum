@@ -22,8 +22,8 @@ use crate::{
     meta::MetaPastLen,
     prelude::UndoRedo,
     undo_redo::{
-        AddRemoveRelated, BuffersUndoRedo, LOCATION_PREFIX, RevEntityWorldMut,
-        RevEntityWorldMutInternal, get_new_related, get_new_related_entities, mark_entities,
+        AddRemoveRelated, BuffersUndoRedo, LOCATION_PREFIX, RevEntityWorldMut, SlimRelationship,
+        get_new_related, get_new_related_entities, mark_entities,
     },
 };
 
@@ -548,6 +548,7 @@ impl<R: Relationship, B: Bundle> RevBundle<[R; 2]> for SpawnOneRelated<R, B> {
         mode: InsertMode,
         caller: MaybeLocation,
     ) {
+        let _ = <R as SlimRelationship>::ASSERT;
         self.rev_insert_inner(meta_past_len, entity, mode, caller);
     }
 
@@ -585,6 +586,7 @@ impl<R: Relationship, L: SpawnableList<R> + Send + Sync + 'static> RevBundle<[R;
         mode: InsertMode,
         caller: MaybeLocation,
     ) {
+        let _ = <R as SlimRelationship>::ASSERT;
         self.rev_insert_inner(meta_past_len, entity, mode, caller);
     }
 

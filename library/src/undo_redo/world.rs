@@ -1,12 +1,11 @@
-use std::{error::Error, fmt::Display};
+use core::{error::Error, fmt::Display};
 
-use super::{BuffersUndoRedo, UndoRedo};
 use crate::{
     meta::{MetaPastLen, RevDirection, RevMeta},
     undo_redo::{
-        EntityRevDespawnedError, RevBundle, RevEntityWorldMutInternal, RevInsertResourceNew,
-        RevInsertResourceOverwrite, RevRemoveResource, mark_entities, mark_entity,
-        mark_spawn_empty,
+        BuffersUndoRedo, EntityRevDespawnedError, RevBundle, RevEntityWorldMutInternal,
+        RevInsertResourceNew, RevInsertResourceOverwrite, RevRemoveResource, mark_entities,
+        mark_entity, mark_spawn_empty,
     },
 };
 use bevy_ecs::{
@@ -21,10 +20,6 @@ use bevy_utils::prelude::DebugName;
 
 /// Extension trait for [`World`] with reversible variants of various methods.
 pub trait RevWorld {
-    /// Shorthand method of [`World::buffer_undo_redo`] with applying `undo_redo.redo(&mut self)`
-    /// immediately. Useful when there is no difference between doing and redoing.
-    fn redo_and_buffer(&mut self, meta_past_len: MetaPastLen, undo_redo: impl UndoRedo);
-
     /// Shorthand method of [`RevMeta::get_running_direction`].
     fn get_running_direction(&self) -> Option<RevDirection>;
 
@@ -182,11 +177,6 @@ pub trait RevWorld {
 }
 
 impl RevWorld for World {
-    #[track_caller]
-    fn redo_and_buffer(&mut self, meta_past_len: MetaPastLen, undo_redo: impl UndoRedo) {
-        self.redo_and_buffer_with_caller(meta_past_len, undo_redo, MaybeLocation::caller());
-    }
-
     fn get_running_direction(&self) -> Option<RevDirection> {
         self.get_resource::<RevMeta>()?.get_running_direction()
     }
@@ -377,13 +367,6 @@ impl RevWorld for World {
 }
 
 pub(super) trait RevWorldInternal {
-    fn redo_and_buffer_with_caller(
-        &mut self,
-        meta_past_len: MetaPastLen,
-        undo_redo: impl UndoRedo,
-        caller: MaybeLocation,
-    );
-
     fn rev_mark_spawned_with_caller(
         &mut self,
         meta_past_len: MetaPastLen,
@@ -495,16 +478,6 @@ pub(super) trait RevWorldInternal {
 }
 
 impl RevWorldInternal for World {
-    fn redo_and_buffer_with_caller(
-        &mut self,
-        meta_past_len: MetaPastLen,
-        mut undo_redo: impl UndoRedo,
-        caller: MaybeLocation,
-    ) {
-        undo_redo.redo(self);
-        self.buffer_undo_redo_with_caller(meta_past_len, undo_redo, caller)
-    }
-
     fn rev_mark_spawned_with_caller(
         &mut self,
         meta_past_len: MetaPastLen,
@@ -751,7 +724,7 @@ pub struct TryRevInsertBatchError {
 }
 
 impl Display for TryRevInsertBatchError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         if self.rev_despawned_entities.is_empty() {
             write!(
                 f,

@@ -1,11 +1,12 @@
-use crate::{
-    log::{DrainAll, GapRange, OutOfLog, prepend},
-    meta::RevMeta,
-};
 use core::{fmt::Debug, mem::ManuallyDrop, num::NonZeroU64};
 use std::collections::{
     TryReserveError, VecDeque,
     vec_deque::{Drain, Iter, IterMut},
+};
+
+use crate::{
+    log::{DrainAll, GapRange, OutOfLog, prepend},
+    meta::RevMeta,
 };
 
 /// A log that is updated with exactly one transition type `T` that is used to transition a state
@@ -71,8 +72,8 @@ pub struct TransitionLog<T> {
     /// The maximum value for [`Self::index`]. Is usually equal to `transitions.len()` but can be
     /// lower when this log is updated during
     /// [`RevDirection::BackwardLog`](crate::meta::RevDirection::BackwardLog) and
-    /// [`Self::meta_log_exits`] is outdated. This way the draining of future transitions that got
-    /// out-of-log can be postponed to the next [`Self::push`] call.
+    /// [`Self::witnessed_log_exits`] is outdated. This way the draining of future transitions that
+    /// got out-of-log can be postponed to the next [`Self::forward_push`] call.
     index_max: usize,
 
     /// Contains the most recent global count of log exits that was witnessed.

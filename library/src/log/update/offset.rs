@@ -382,6 +382,7 @@ struct PastToNow<'a> {
 
 impl<'a> Iterator for PastToNow<'a> {
     type Item = PastToNowItem<'a>;
+    #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         let first_byte = self.iter.next()?;
         let index = self.index;
@@ -446,6 +447,7 @@ impl NowToFuture<'_> {
 
 impl Iterator for NowToFuture<'_> {
     type Item = u64;
+    #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         let first_byte;
 
@@ -545,6 +547,7 @@ impl NowToPast<'_> {
 
 impl Iterator for NowToPast<'_> {
     type Item = u64;
+    #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         self.set_pending_streak();
         if let Some((Streak { one, .. }, ref mut step)) = self.meta.streak_and_step {

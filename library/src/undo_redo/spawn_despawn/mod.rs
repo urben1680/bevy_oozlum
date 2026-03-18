@@ -17,7 +17,7 @@ use crate::{
     log::{OutOfLog, TransitionsLog},
     meta::{MetaPastLen, RevDirection, RevMeta},
     prelude::UndoRedo,
-    undo_redo::{BuffersUndoRedo, LOCATION_PREFIX, RevWorldInternal, add_children, undo_redo_str},
+    undo_redo::{BuffersUndoRedo, LOCATION_PREFIX, add_children, undo_redo_str},
 };
 
 #[cfg(test)]
@@ -76,29 +76,29 @@ mod test;
 pub struct RevDespawned(pub MaybeLocation);
 
 #[derive(Debug)]
-pub(crate) enum DespawnCleanerErr {
+pub enum DespawnFinalizerErr {
     MetaMissing,
     MetaNotRunning,
-    CleanerOutOfLog,
+    OutOfLog,
 }
 
-impl From<OutOfLog> for DespawnCleanerErr {
+impl From<OutOfLog> for DespawnFinalizerErr {
     fn from(_: OutOfLog) -> Self {
-        Self::CleanerOutOfLog
+        Self::OutOfLog
     }
 }
 
 /// Despawn entities that contain [`RevDespawned`] and their relevant operation (spawn, despawn) fell out of log.
-pub(crate) fn update_spawn_despawn(world: &mut World) -> Result<(), DespawnCleanerErr> {
+pub fn finalize_despawns(world: &mut World) -> Result<(), DespawnFinalizerErr> {
     world
         .try_resource_scope::<DespawnFinalizer, _>(|world, this| {
             let this = this.into_inner();
             let meta = world
                 .get_resource::<RevMeta>()
-                .ok_or(DespawnCleanerErr::MetaMissing)?;
+                .ok_or(DespawnFinalizerErr::MetaMissing)?;
             let direction = meta
                 .get_running_direction()
-                .ok_or(DespawnCleanerErr::MetaNotRunning)?;
+                .ok_or(DespawnFinalizerErr::MetaNotRunning)?;
 
             match direction {
                 RevDirection::Forward { meta_past_len } => {

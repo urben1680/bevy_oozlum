@@ -21,12 +21,12 @@
 //! | ------------------------------- | ------------------------------------------- |
 //! | [`MetaPastLen`]                 | the log updates at every frame exactly once |
 //! | [`UpdateLog::forward_past_len`] | the log updates arbitrarily                 |
-//! | `u64::MAX`                      | the log is allowed to have unlimited growth |
+//! | [`NonZeroU64::MAX`]             | the log is allowed to have unlimited growth |
 //!
-//! [`UpdateLog`] is able to manage its length from reading the [global log length] from
-//! [`RevMeta`].
+//! [`UpdateLog`] is able to manage its length by reading the [global log range] from [`RevMeta`].
 //!
-//! Ideally, as few logs and as few updates as possible are required for the application.
+//! Ideally, as few logs and as few updates as possible are required for the application to keep the
+//! memory usage low.
 //!
 //! # Continuity
 //!
@@ -104,11 +104,12 @@
 //! [`forward_push`]: TransitionLog::forward_push
 //! [`forward_extend`]: TransitionsLog::forward_extend
 //! [id of the `UpdateLog` instance]: UpdateLog::id
+//! [`NonZeroU64::MAX`]: core::num::NonZeroU64::MAX
 //! [`RevMeta`]: crate::meta::RevMeta
 //! [`RevMeta::now`]: crate::meta::RevMeta::now
 //! [`MetaPastLen`]: crate::meta::MetaPastLen
 //! [`RevMeta::update`]: crate::meta::RevMeta::update
-//! [global log length]: crate::meta::RevMeta::contains
+//! [global log range]: crate::meta::RevMeta::contains
 //! [`RevDirection`]: crate::meta::RevDirection
 //! [`RevDirection::Forward`]: crate::meta::RevDirection::Forward
 //! [`Forward`]: crate::meta::RevDirection::Forward
@@ -123,14 +124,14 @@
 //! [`UpdateLogsMissed`]: crate::meta::RevMetaUpdateErr::UpdateLogsMissed
 //! [reversible scheduling]: crate::schedule::RevSchedule
 //! [reversible commands]: crate::undo_redo::RevCommands
-
-use bevy_ecs::change_detection::MaybeLocation;
 use core::{
     error::Error,
     fmt::{Debug, Display, Formatter, Result as FmtResult},
     iter::FusedIterator,
 };
 use std::collections::{VecDeque, vec_deque::Drain};
+
+use bevy_ecs::change_detection::MaybeLocation;
 
 pub(crate) use update::{
     PreUpdateKind,
@@ -241,6 +242,8 @@ impl<'a, T> DrainAll<'a, T> {
 
 impl<T> Iterator for DrainAll<'_, T> {
     type Item = T;
+
+    #[inline]
     fn next(&mut self) -> Option<T> {
         if self.gap_range.start > 0 {
             // pre buffering
@@ -254,6 +257,8 @@ impl<T> Iterator for DrainAll<'_, T> {
         }
         self.drain.next()
     }
+
+    #[inline]
     fn size_hint(&self) -> (usize, Option<usize>) {
         let len = self.len();
         (len, Some(len))

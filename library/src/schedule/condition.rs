@@ -1,7 +1,8 @@
-use crate::{
-    log::{TransitionLog, UpdateLog},
-    meta::{RevDirection, RevMeta},
+use core::{
+    any::TypeId,
+    hash::{BuildHasher, Hash, Hasher},
 };
+
 use bevy_ecs::{
     change_detection::{CheckChangeTicks, MaybeLocation, Tick},
     component::ComponentId,
@@ -22,9 +23,10 @@ use bevy_platform::{
     hash::{FixedState, PassHash},
 };
 use bevy_utils::prelude::DebugName;
-use core::{
-    any::TypeId,
-    hash::{BuildHasher, Hash, Hasher},
+
+use crate::{
+    log::{TransitionLog, UpdateLog},
+    meta::{RevDirection, RevMeta},
 };
 
 /// Wrap a `condition` into a reversivle `BoxedCondition` that logs the system output at

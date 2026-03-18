@@ -1,11 +1,9 @@
-use super::*;
-use crate::{
-    app::{RevApp, RevPlugin},
-    meta::{RevDirection, RevQueue},
-    panic_on_error_events,
-    schedule::RevUpdate,
-    undo_redo::{BuffersUndoRedo, RevCommands, UndoRedo},
+use core::num::NonZeroU64;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
 };
+
 use bevy_app::{App, Update};
 use bevy_ecs::{
     change_detection::{Res, ResMut},
@@ -15,11 +13,16 @@ use bevy_ecs::{
     system::{Commands, IntoSystem, Local},
     world::World,
 };
-use core::num::NonZeroU64;
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
+
+use crate::{
+    app::{RevApp, RevPlugin},
+    meta::{RevDirection, RevQueue},
+    panic_on_error_events,
+    schedule::RevUpdate,
+    undo_redo::{BuffersUndoRedo, RevCommands, UndoRedo},
 };
+
+use super::*;
 
 mod utils;
 

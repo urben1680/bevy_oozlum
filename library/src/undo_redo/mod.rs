@@ -1,17 +1,18 @@
-use bevy_ecs::{
-    change_detection::MaybeLocation,
-    entity::Entity,
-    resource::Resource,
-    system::{Commands, EntityCommands},
-    world::{DeferredWorld, EntityWorldMut, World},
-};
-use bevy_platform::cell::SyncCell;
-use bevy_utils::prelude::DebugName;
 use core::{
     any::type_name_of_val,
     error::Error,
     fmt::{Debug, Display},
 };
+
+use bevy_ecs::{
+    change_detection::MaybeLocation,
+    entity::Entity,
+    resource::Resource,
+    system::{Commands, EntityCommands},
+    world::{EntityWorldMut, World},
+};
+use bevy_platform::cell::SyncCell;
+use bevy_utils::prelude::DebugName;
 
 use crate::{
     log::{OutOfLog, TransitionsLog, UpdateLog},
@@ -51,7 +52,7 @@ pub struct EntityRevDespawnedError {
 }
 
 impl Display for EntityRevDespawnedError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(
             f,
             "entity {} is marked as reversibly despawned{LOCATION_PREFIX}{}",
@@ -91,11 +92,27 @@ pub trait BuffersUndoRedo {
         self.buffer_undo_redo_with_caller(meta_past_len, undo_redo, MaybeLocation::caller());
     }
 
+    #[track_caller]
+    fn redo_and_buffer(&mut self, meta_past_len: MetaPastLen, undo_redo: impl UndoRedo) {
+        self.redo_and_buffer_with_caller(meta_past_len, undo_redo, MaybeLocation::caller());
+    }
+
     /// As [`BuffersUndoRedo::buffer_undo_redo`] but with explicit [`MaybeLocation`].
     ///
     /// The location can be helpful for identifying non-reversible systems using reversible API.
     /// [`RevMeta::run_rev_update`] may return the relevant error in that case.
     fn buffer_undo_redo_with_caller(
+        &mut self,
+        meta_past_len: MetaPastLen,
+        undo_redo: impl UndoRedo,
+        caller: MaybeLocation,
+    );
+
+    /// As [`BuffersUndoRedo::buffer_undo_redo`] but with explicit [`MaybeLocation`].
+    ///
+    /// The location can be helpful for identifying non-reversible systems using reversible API.
+    /// [`RevMeta::run_rev_update`] may return the relevant error in that case.
+    fn redo_and_buffer_with_caller(
         &mut self,
         meta_past_len: MetaPastLen,
         undo_redo: impl UndoRedo,
@@ -114,6 +131,17 @@ impl BuffersUndoRedo for Commands<'_, '_> {
             world.buffer_undo_redo_with_caller(meta_past_len, undo_redo, caller);
         });
     }
+
+    fn redo_and_buffer_with_caller(
+        &mut self,
+        meta_past_len: MetaPastLen,
+        undo_redo: impl UndoRedo,
+        caller: MaybeLocation,
+    ) {
+        self.queue(move |world: &mut World| {
+            world.redo_and_buffer_with_caller(meta_past_len, undo_redo, caller);
+        });
+    }
 }
 
 impl BuffersUndoRedo for EntityCommands<'_> {
@@ -125,6 +153,17 @@ impl BuffersUndoRedo for EntityCommands<'_> {
     ) {
         self.queue(move |mut world: EntityWorldMut| {
             world.buffer_undo_redo_with_caller(meta_past_len, undo_redo, caller);
+        });
+    }
+
+    fn redo_and_buffer_with_caller(
+        &mut self,
+        meta_past_len: MetaPastLen,
+        undo_redo: impl UndoRedo,
+        caller: MaybeLocation,
+    ) {
+        self.queue(move |mut world: EntityWorldMut| {
+            world.redo_and_buffer_with_caller(meta_past_len, undo_redo, caller);
         });
     }
 }
@@ -148,6 +187,16 @@ impl BuffersUndoRedo for World {
         self.get_resource_or_init::<UndoRedoBuffer>()
             .buffer_undo_redo(meta_past_len, caller, undo_redo);
     }
+
+    fn redo_and_buffer_with_caller(
+        &mut self,
+        meta_past_len: MetaPastLen,
+        mut undo_redo: impl UndoRedo,
+        caller: MaybeLocation,
+    ) {
+        undo_redo.redo(self);
+        self.buffer_undo_redo_with_caller(meta_past_len, undo_redo, caller);
+    }
 }
 
 impl BuffersUndoRedo for EntityWorldMut<'_> {
@@ -157,9 +206,20 @@ impl BuffersUndoRedo for EntityWorldMut<'_> {
         undo_redo: impl UndoRedo,
         caller: MaybeLocation,
     ) {
-        // SAFETY: Only resources are accessed, entity location remains unchanged
-        let world = unsafe { self.world_mut() };
-        world.buffer_undo_redo_with_caller(meta_past_len, undo_redo, caller);
+        self.world_scope(|world| {
+            world.buffer_undo_redo_with_caller(meta_past_len, undo_redo, caller);
+        })
+    }
+
+    fn redo_and_buffer_with_caller(
+        &mut self,
+        meta_past_len: MetaPastLen,
+        undo_redo: impl UndoRedo,
+        caller: MaybeLocation,
+    ) {
+        self.world_scope(|world| {
+            world.redo_and_buffer_with_caller(meta_past_len, undo_redo, caller);
+        })
     }
 }
 
@@ -168,7 +228,7 @@ impl BuffersUndoRedo for EntityWorldMut<'_> {
 /// Commands and hooks can buffer [`UndoRedo`] implementors via [`&mut World`](World)/[`DeferredWorld`] instead.
 ///
 /// Do not remove or overwrite this resource.
-#[derive(Resource, Default, Debug)]
+#[derive(Resource, Default)]
 pub(crate) struct UndoRedoBuffer(Vec<BoxedUndoRedo>);
 
 impl UndoRedoBuffer {
@@ -207,6 +267,28 @@ impl UndoRedo for UndoRedoBuffer {
     }
 }
 
+impl Debug for UndoRedoBuffer {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match (size_of::<DebugName>(), size_of::<MaybeLocation>()) {
+            (0, 0) => write!(
+                f,
+                "activate bevy's \"debug\" and \"track_location\" features to show more details"
+            ),
+            (0, _) => write!(
+                f,
+                "{:?}, activate bevy's \"debug\" feature to show more details",
+                self.0
+            ),
+            (_, 0) => write!(
+                f,
+                "{:?}, activate bevy's \"track_location\" feature to show more details",
+                self.0
+            ),
+            _ => self.0.fmt(f),
+        }
+    }
+}
+
 struct BoxedUndoRedo {
     undo_redo: SyncCell<Box<dyn UndoRedo>>,
     name: DebugName,
@@ -214,10 +296,17 @@ struct BoxedUndoRedo {
 }
 
 impl Debug for BoxedUndoRedo {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.caller.into_option() {
-            Some(location) => write!(f, "{} from {location}", self.name),
-            None => write!(f, "{}", self.name),
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        if size_of::<DebugName>() == 0 {
+            match self.caller.into_option() {
+                Some(location) => write!(f, "{location}"),
+                None => Ok(()),
+            }
+        } else {
+            match self.caller.into_option() {
+                Some(location) => write!(f, "{} from {location}", self.name),
+                None => write!(f, "{}", self.name),
+            }
         }
     }
 }
@@ -314,7 +403,7 @@ pub(crate) struct UndoRedoLog {
 struct DebugHidden(SyncCell<Box<dyn UndoRedo>>);
 
 impl Debug for DebugHidden {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "_")
     }
 }
@@ -335,7 +424,7 @@ pub(crate) enum UndoRedoLogError {
 }
 
 impl Display for UndoRedoLogError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::RevMetaMissing => write!(f, "RevMeta is missing"),
             Self::RevDirectionMismatch {
@@ -467,7 +556,7 @@ impl UndoRedoLog {
 
 #[cfg(test)]
 mod test {
-    use std::ops::Deref;
+    use core::ops::Deref;
 
     use bevy_ecs::component::Component;
 
@@ -519,7 +608,7 @@ mod test {
                 meta.set_queue(RevQueue::RunBackwardLog);
                 world.insert_resource(meta);
                 state = Some(forward(world, direction.past_len()));
-                update_spawn_despawn(world).unwrap();
+                finalize_despawns(world).unwrap();
                 world.remove_resource()
             })
             .unwrap();
@@ -536,7 +625,7 @@ mod test {
                 meta.set_queue(queue);
                 world.insert_resource(meta);
                 world.resource_scope::<UndoRedoBuffer, _>(|world, mut buffer| buffer.undo(world));
-                update_spawn_despawn(world).unwrap();
+                finalize_despawns(world).unwrap();
                 backward_log(world, state.as_mut().unwrap());
                 world.remove_resource()
             })
@@ -552,7 +641,7 @@ mod test {
                     world.resource_scope::<UndoRedoBuffer, _>(|world, mut buffer| {
                         buffer.redo(world)
                     });
-                    update_spawn_despawn(world).unwrap();
+                    finalize_despawns(world).unwrap();
                     forward_log(world, state.as_mut().unwrap());
                     world.remove_resource()
                 })
@@ -562,7 +651,7 @@ mod test {
         // finalize
         meta.update(|meta, _| {
             world.insert_resource(meta);
-            update_spawn_despawn(world).unwrap();
+            finalize_despawns(world).unwrap();
             finalize(world, state.as_mut().unwrap());
             world.remove_resource()
         })

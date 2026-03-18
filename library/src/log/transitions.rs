@@ -1,19 +1,18 @@
-use crate::{
-    log::{DrainAll, GapRange, OutOfLog, TransitionDrain, TransitionLog, prepend},
-    meta::RevMeta,
-};
 use core::{
     fmt::Debug,
     iter::{FusedIterator, Take},
     marker::PhantomData,
     mem::ManuallyDrop,
-};
-use std::{
-    collections::{
-        TryReserveError, VecDeque,
-        vec_deque::{Drain, Iter, IterMut},
-    },
     num::NonZeroU64,
+};
+use std::collections::{
+    TryReserveError, VecDeque,
+    vec_deque::{Drain, Iter, IterMut},
+};
+
+use crate::{
+    log::{DrainAll, GapRange, OutOfLog, TransitionDrain, TransitionLog, prepend},
+    meta::RevMeta,
 };
 
 /// A log that is updated with with a variable amount of transition type `T` which are used to
@@ -590,10 +589,12 @@ where
 {
     type Item = TI::Item;
 
+    #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         self.transitions.next()
     }
 
+    #[inline]
     fn size_hint(&self) -> (usize, Option<usize>) {
         self.transitions.size_hint()
     }

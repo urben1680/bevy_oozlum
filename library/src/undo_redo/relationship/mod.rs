@@ -1,4 +1,4 @@
-use std::{any::type_name, marker::PhantomData};
+use core::{any::type_name, marker::PhantomData};
 
 use bevy_ecs::{
     change_detection::MaybeLocation,
@@ -65,7 +65,7 @@ mod test;
 ///     world.spawn_empty().rev_detach_all_related::<FatChildOf>(meta_past_len);
 /// }
 /// ```
-trait SlimRelationship: Relationship {
+pub(super) trait SlimRelationship: Relationship {
     // todo: replace constant with actual trait bound when const generic features become available
     const ASSERT: () = {
         if size_of::<Self>() != size_of::<Entity>()
@@ -74,7 +74,9 @@ trait SlimRelationship: Relationship {
         {
             // todo: add type name to panic message when that formatting becomes const
             panic!(
-                "rev_* methods that handle relationships are not supported when extra data in any of the two types is stored. Note that this limitiation is also present for rev_* methods for component insertion/removal even though this cannot be detected."
+                "rev_* methods that handle relationships are not supported when extra data in any \
+                of the two types is stored. Note that this limitiation is also present for rev_* \
+                methods for component insertion/removal even though this cannot always be detected."
             )
         }
     };

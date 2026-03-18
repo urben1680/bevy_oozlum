@@ -1,10 +1,14 @@
-use crate::{
-    schedule::{
-        BackwardDeferredAndSystemSet, BackwardDeferredSet, BackwardSystemSet, BackwardSystems,
-        ForwardSystemSet, ForwardSystems,
-    },
-    undo_redo::UndoRedoLog,
+use core::{
+    any::{TypeId, type_name},
+    fmt::Debug,
+    hash::{Hash, Hasher},
+    panic::Location,
 };
+use std::sync::{
+    Arc, Mutex, MutexGuard, TryLockError,
+    atomic::{AtomicU32, Ordering},
+};
+
 use bevy_ecs::{
     change_detection::{CheckChangeTicks, Tick},
     error::BevyError,
@@ -18,17 +22,13 @@ use bevy_ecs::{
 };
 use bevy_log::error;
 use bevy_utils::prelude::DebugName;
-use core::{
-    any::{TypeId, type_name},
-    fmt::Debug,
-    hash::{Hash, Hasher},
-};
-use std::{
-    panic::Location,
-    sync::{
-        Arc, Mutex, MutexGuard, TryLockError,
-        atomic::{AtomicU32, Ordering},
+
+use crate::{
+    schedule::{
+        BackwardDeferredAndSystemSet, BackwardDeferredSet, BackwardSystemSet, BackwardSystems,
+        ForwardSystemSet, ForwardSystems,
     },
+    undo_redo::UndoRedoLog,
 };
 
 use super::RevScheduleConfigs;

@@ -1,11 +1,5 @@
-use super::{BuffersUndoRedo, UndoRedo};
-use crate::{
-    meta::{MetaPastLen, RevDirection, RevMeta},
-    undo_redo::{
-        AddRemoveRelated, EntityRevDespawnedError, IsRevDespawned, RevBundle, RevDespawned,
-        RevWorldInternal, get_new_related, get_new_related_entities, mark_entity,
-    },
-};
+use core::marker::PhantomData;
+
 use bevy_ecs::{
     bundle::{Bundle, InsertMode},
     change_detection::MaybeLocation,
@@ -17,18 +11,22 @@ use bevy_ecs::{
     },
     world::EntityWorldMut,
 };
-use core::marker::PhantomData;
+
+use crate::{
+    meta::{MetaPastLen, RevDirection, RevMeta},
+    undo_redo::{
+        AddRemoveRelated, EntityRevDespawnedError, IsRevDespawned, RevBundle, RevDespawned,
+        RevWorldInternal, get_new_related, get_new_related_entities, mark_entity,
+    },
+};
+
+use super::BuffersUndoRedo;
 
 #[cfg(test)]
 mod test;
 
 /// Extension trait for [`RevEntityWorldMut`] with reversible variants of various methods.
 pub trait RevEntityWorldMut<'w> {
-    /// Shorthand method of [`EntityWorldMut::buffer_undo_redo`] with applying
-    /// `undo_redo.redo(&mut self)` immediately. Useful when there is no difference between doing
-    /// and redoing.
-    fn redo_and_buffer(&mut self, meta_past_len: MetaPastLen, undo_redo: impl UndoRedo);
-
     /// Shorthand method of [`RevMeta::get_running_direction`].
     fn get_running_direction(&self) -> Option<RevDirection>;
 
@@ -174,11 +172,6 @@ pub trait RevEntityWorldMut<'w> {
 }
 
 impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
-    #[track_caller]
-    fn redo_and_buffer(&mut self, meta_past_len: MetaPastLen, undo_redo: impl UndoRedo) {
-        self.redo_and_buffer_with_caller(meta_past_len, undo_redo, MaybeLocation::caller());
-    }
-
     fn rev_entry<'a, T: Component>(&'a mut self) -> RevComponentEntry<'w, 'a, T> {
         if self.contains::<T>() {
             RevComponentEntry::Occupied(RevOccupiedComponentEntry {
@@ -394,13 +387,6 @@ impl<'w> RevEntityWorldMut<'w> for EntityWorldMut<'w> {
 }
 
 pub(super) trait RevEntityWorldMutInternal<'w> {
-    fn redo_and_buffer_with_caller(
-        &mut self,
-        meta_past_len: MetaPastLen,
-        undo_redo: impl UndoRedo,
-        caller: MaybeLocation,
-    );
-
     fn rev_mark_spawned_with_caller(
         &mut self,
         meta_past_len: MetaPastLen,
@@ -571,17 +557,6 @@ pub(super) trait RevEntityWorldMutInternal<'w> {
 }
 
 impl<'w> RevEntityWorldMutInternal<'w> for EntityWorldMut<'w> {
-    fn redo_and_buffer_with_caller(
-        &mut self,
-        meta_past_len: MetaPastLen,
-        undo_redo: impl UndoRedo,
-        caller: MaybeLocation,
-    ) {
-        self.world_scope(|world| {
-            world.redo_and_buffer_with_caller(meta_past_len, undo_redo, caller)
-        })
-    }
-
     fn rev_insert_with_caller<T: RevBundle<Marker>, Marker>(
         &mut self,
         meta_past_len: MetaPastLen,

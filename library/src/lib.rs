@@ -12,8 +12,9 @@
 //! use bevy_oozlum::prelude::*;
 //!
 //! fn main() {
+//! # return;
 //!     App::new()
-//!         .add_plugins((MinimalPlugins, RevPlugin::default()))
+//!         .add_plugins((DefaultPlugins, RevPlugin::default()))
 //!         .rev_add_systems(RevUpdate, rev_system)
 //!         .add_systems(Update, input_system)
 //!         .init_resource::<Time::<Fixed>>()
@@ -23,14 +24,14 @@
 //! fn rev_system(meta: Res<RevMeta>, mut commands: Commands) {
 //!     match meta.running_direction() {
 //!         RevDirection::Forward { meta_past_len } => {
-//!             println!("rev sys: hello world!")
+//!             println!("rev sys: hello world!");
 //!
 //!             commands.queue(move |world: &mut World| {
 //!                 println!("rev cmd: hello world!");
 //!                 
 //!                 world.buffer_undo_redo(meta_past_len, |_: &mut World, direction| {
 //!                     match direction {
-//!                         UndoRedoDirection::Redo => println!("rev cmd: hello world! (log)")
+//!                         UndoRedoDirection::Redo => println!("rev cmd: hello world! (log)"),
 //!                         UndoRedoDirection::Undo => println!("rev cmd: !dlrow olleh (log)")
 //!                     }
 //!                 })
@@ -43,7 +44,7 @@
 //!
 //! fn input_system(
 //!     keyboard_input: Res<ButtonInput<KeyCode>>,
-//!     meta: ResMut<RevMeta>
+//!     mut meta: ResMut<RevMeta>
 //! ) {
 //!     if keyboard_input.pressed(KeyCode::ArrowUp) {
 //!         meta.set_queue(RevQueue::RunForward);
@@ -120,10 +121,6 @@ TODO:
 
 - update README
 
-Enhancements:
-- reduce todo!() and //todo
-- #[inline]s
-
 Docs
 - no reversible change detection (copy over to new repo)
 - no manual sync point configuration
@@ -134,12 +131,13 @@ Docs
 
 ISSUES/DISCUSSIONS:
 - feature track_update_logs to opt-out
+- no_std
 - RevBundle::rev_insert_inner out of trait
 - schedule::set_base_sets should not need to chain forward/backward configs
 
 */
 // todo: deny
-#![deny(broken_intra_doc_links)] // works only in cargo doc --no-deps
+#![deny(rustdoc::broken_intra_doc_links)] // works only in cargo doc --no-deps
 #![warn(missing_docs)]
 
 #[cfg(feature = "bevy_app")]

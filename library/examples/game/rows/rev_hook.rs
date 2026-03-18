@@ -1,5 +1,7 @@
-use bevy::prelude::*;
-use bevy_ecs::{lifecycle::HookContext, world::DeferredWorld};
+use bevy::{
+    ecs::{lifecycle::HookContext, world::DeferredWorld},
+    prelude::*,
+};
 use bevy_oozlum::prelude::*;
 
 use crate::{Waste, control::JustPressed};
