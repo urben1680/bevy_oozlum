@@ -23,6 +23,11 @@ use crate::{
 #[cfg(test)]
 mod test;
 
+/// The central resource that runs [`RevUpdate`] with a controlled [`RevDirection`] via the
+/// [`run_rev_update`] system. It also tracks the global log which contains the world states that
+/// can be reversed/advanced to.
+///
+/// [`run_rev_update`]: Self::run_rev_update
 #[derive(Resource, Debug)]
 #[cfg_attr(feature = "bevy_reflect", derive(bevy_reflect::Reflect))]
 pub struct RevMeta {
@@ -40,93 +45,6 @@ pub struct RevMeta {
 impl Default for RevMeta {
     fn default() -> Self {
         Self::new(Self::DEFAULT_MAX_PAST_LEN, Self::DEFAULT_PAUSED)
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "bevy_reflect", derive(bevy_reflect::Reflect))]
-pub enum RevDirection {
-    Forward { meta_past_len: MetaPastLen },
-    ForwardLog,
-    BackwardLog,
-}
-
-impl RevDirection {
-    pub(crate) const FORWARD_MIN: Self = Self::Forward {
-        meta_past_len: MetaPastLen(NonZeroU64::MIN),
-    };
-    pub fn is_forward(self) -> bool {
-        !self.is_backward()
-    }
-    pub fn is_backward(self) -> bool {
-        matches!(self, Self::BackwardLog)
-    }
-    pub fn is_log(self) -> bool {
-        !self.is_not_log()
-    }
-    pub fn is_not_log(self) -> bool {
-        matches!(self, Self::Forward { .. })
-    }
-    pub fn past_len(self) -> MetaPastLen {
-        match self {
-            Self::Forward { meta_past_len } => meta_past_len,
-            _ => panic!(),
-        }
-    }
-    pub fn get_past_len(self) -> Option<MetaPastLen> {
-        match self {
-            Self::Forward { meta_past_len } => Some(meta_past_len),
-            _ => None,
-        }
-    }
-}
-
-impl Display for RevDirection {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match *self {
-            RevDirection::Forward { .. } => write!(f, "Forward"),
-            RevDirection::ForwardLog => write!(f, "Forward Log"),
-            RevDirection::BackwardLog => write!(f, "Backward Log"),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "bevy_reflect", derive(bevy_reflect::Reflect))]
-enum RunningOrRan {
-    Running(RevDirection),
-    Ran(RevDirection),
-    Pause { after_log: bool },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "bevy_reflect", derive(bevy_reflect::Reflect))]
-pub enum RevQueue {
-    RunForward,
-    RunForwardLog,
-    RunBackwardLog,
-    Pause,
-    ClearThenRunForward,
-    ClearThenPause,
-}
-
-impl Command<BevyResult> for RevQueue {
-    fn apply(self, world: &mut World) -> BevyResult {
-        world
-            .get_resource_mut::<RevMeta>()
-            .ok_or_else(|| format!("could not queue {self:?}, RevMeta is missing"))?
-            .set_queue(self);
-        Ok(())
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "bevy_reflect", derive(bevy_reflect::Reflect))]
-pub struct MetaPastLen(NonZeroU64);
-
-impl Into<NonZeroU64> for MetaPastLen {
-    fn into(self) -> NonZeroU64 {
-        self.0
     }
 }
 
@@ -364,25 +282,17 @@ impl RevMeta {
         self.now == self.future_end
     }
 
-    fn clear(&mut self) {
-        self.past_end = self.now;
-        self.future_end = self.now;
-        self.log_clears = self.log_clears.checked_add(1).expect(
-            "cleared RevMeta for u64::MAX times, \
-            the application should not run for that long",
-        );
-        self.log_exits = 0;
-        self.update_log_limits.clear();
-        info!(
-            "`RevQueue::Clear` was applied, `RevMeta::log_clears` is now {},  all `UpdateLog::id` \
-            until now are invalid and will be reinitialized at their next mutation",
-            self.log_clears
-        )
-    }
-
+    /// Update `RevMeta` and run [`RevUpdate`] once unless paused.
+    ///
+    /// This can fail if `RevMeta` or internal resources are removed or replaced. Otherwise, the
+    /// only common source of error is doing mistakes at updating [`UpdateLog`]s at the expected
+    /// frames in the expected amounts.
+    ///
+    /// [`UpdateLog`]: crate::log::UpdateLog
     pub fn run_rev_update(world: &mut World) -> Result<(), RunSystemError> {
         world
             .try_schedule_scope(RevUpdate, |world, schedule| {
+                // check for skipping conditions
                 let Some(meta) = world.remove_resource::<Self>() else {
                     return Err(RunSystemError::Skipped(
                         SystemParamValidationError::skipped::<RevMeta>(Cow::Borrowed(
@@ -437,10 +347,10 @@ impl RevMeta {
                         world.insert_resource(meta);
                         err
                     }
-                    Err(RevMetaUpdateErr::AlreadyRunning { meta, direction }) => {
+                    Err(RevMetaUpdateErr::AlreadyRunning { meta }) => {
                         let err = Err(RunSystemError::Skipped(
                             SystemParamValidationError::invalid::<RevMeta>(format!(
-                                "RevMeta is already running at {direction:?}\n{meta:?}"
+                                "RevMeta is already running\n{meta:?}"
                             )),
                         ));
                         world.insert_resource(meta);
@@ -462,6 +372,13 @@ impl RevMeta {
                             ),
                         }))
                     }
+                    Err(RevMetaUpdateErr::RevMetaReplaced { meta }) => {
+                        let err = Err(RunSystemError::Failed(
+                            format!("RevMeta was replaced with a different value\n{meta:?}").into(),
+                        ));
+                        world.insert_resource(meta);
+                        err
+                    }
                     Err(RevMetaUpdateErr::UpdateLogsMissed {
                         meta,
                         update_logs_missed,
@@ -471,6 +388,8 @@ impl RevMeta {
                             "UpdateLog instances did not run when they were expected \
                             to:\n{update_logs_missed:?}\n{meta:?}"
                         );
+
+                        world.insert_resource(meta);
 
                         Err(RunSystemError::Failed(match despawn_finalizer_result {
                             Ok(()) => format!("{err}"),
@@ -503,6 +422,31 @@ impl RevMeta {
             })
     }
 
+    /// Update `RevMeta` and run `c` once unless paused. `c` should return it's `RevMeta` argument
+    /// without replacing it at some point. It may be mutated however with any method **except**
+    /// this one.
+    ///
+    /// This is used in [`run_rev_update`] and should not be called manually unless the mentioned
+    /// system is replaced with something custom. In that case [`finalize_despawns`] should be used
+    /// in the closure while `RevMeta` was inserted into the world.
+    ///
+    /// # Errors
+    ///
+    /// - If this method is called recursively or `RevMeta` was removed while this ran and is still
+    ///   [in a running state] while this method is called again, this will return
+    ///   [`RevMetaUpdateErr::AlreadyRunning`].
+    /// - If `c` does not return `RevMeta`, this will return
+    ///   [`RevMetaUpdateErr::RevMetaNotReturned`].
+    /// - If `RevMeta` was replaced in `c` with a value that is not running in the same direction,
+    ///   this will return [`RevMetaUpdateErr::DirectionChanged`].
+    /// - If any [`UpdateLog`] did not update when it was expected to, in the amount it was expected
+    ///   to, this will return [`RevMetaUpdateErr::UpdateLogsMissed`]. This may only happen during
+    ///   [log directions].
+    ///
+    /// [`run_rev_update`]: Self::run_rev_update
+    /// [in a running state]: Self::running_direction
+    /// [`UpdateLog`]: crate::log::UpdateLog
+    /// [log directions]: RevDirection::is_log
     pub fn update(
         mut self,
         c: impl FnOnce(Self, RevDirection) -> Option<Self>,
@@ -522,11 +466,8 @@ impl RevMeta {
                 true,
             ),
             RunningOrRan::Pause { after_log } => (None, after_log),
-            RunningOrRan::Running(direction) => {
-                return Err(RevMetaUpdateErr::AlreadyRunning {
-                    meta: self,
-                    direction,
-                });
+            RunningOrRan::Running(_) => {
+                return Err(RevMetaUpdateErr::AlreadyRunning { meta: self });
             }
         };
 
@@ -593,9 +534,13 @@ impl RevMeta {
 
         // set running direction, call closure, set ran direction
         self.direction = RunningOrRan::Running(direction);
+        let immutable_running_state = self.immutable_running_state();
         let Some(mut meta) = c(self, direction) else {
             return Err(RevMetaUpdateErr::RevMetaNotReturned);
         };
+        if meta.immutable_running_state() != immutable_running_state {
+            return Err(RevMetaUpdateErr::RevMetaReplaced { meta });
+        }
         meta.direction = RunningOrRan::Ran(direction);
 
         // check for `UpdateLog` instances that were missed being updated
@@ -610,6 +555,34 @@ impl RevMeta {
                 update_logs_missed,
             }),
         }
+    }
+
+    /// Clears the global log.
+    fn clear(&mut self) {
+        self.past_end = self.now;
+        self.future_end = self.now;
+        self.log_clears = self.log_clears.checked_add(1).unwrap(); // overflow not supported
+        self.log_exits = 0;
+        self.update_log_limits.clear();
+        info!(
+            "`RevQueue::Clear` was applied, `RevMeta::log_clears` is now {}, all `UpdateLog::id` \
+            until now are invalid and will be reinitialized at their next mutation",
+            self.log_clears
+        )
+    }
+
+    /// Values that should not change while [running].
+    ///
+    /// [running]: RevMeta::running_direction
+    fn immutable_running_state(&self) -> impl PartialEq + 'static {
+        (
+            self.past_end,
+            self.now,
+            self.future_end,
+            self.direction,
+            self.log_exits,
+            self.log_clears,
+        )
     }
 
     #[cfg(test)]
@@ -655,6 +628,7 @@ impl RevMeta {
         }
     }
 
+    /// See [`UpdateLogLimits::set_update_state`].
     pub(super) fn set_update_state(
         &self,
         state: &mut Option<UpdateLogState>,
@@ -664,20 +638,229 @@ impl RevMeta {
             .set_update_state(state, self.log_exits, self.log_clears, caller)
     }
 
+    /// Gets [`UpdateLogLimits`].
     pub(super) fn update_log_limits(&self) -> &UpdateLogLimits {
         &self.update_log_limits
     }
 }
 
+/// The direction [`RevUpdate`] is currently running at. Reversible systems should mind this value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "bevy_reflect", derive(bevy_reflect::Reflect))]
+pub enum RevDirection {
+    /// The world is updated for a new reversible frame. If [this particular frame] or
+    /// [any future frame] existed in the log, they will be truncated and replaced from now on.
+    ///
+    /// [this particular frame]: RevMeta::now
+    /// [any future frame]: RevMeta::future_len
+    Forward {
+        /// A newtyped [`RevMeta::past_len`] that only exists during `Forward`. See its
+        /// documentation for its purpose and more information.
+        meta_past_len: MetaPastLen,
+    },
+
+    /// The world is advanced in the log.
+    ForwardLog,
+
+    /// The world is reversed in the log.
+    BackwardLog,
+}
+
+impl RevDirection {
+    pub(crate) const FORWARD_MIN: Self = Self::Forward {
+        meta_past_len: MetaPastLen(NonZeroU64::MIN),
+    };
+
+    /// Is [`Forward`] or [`ForwardLog`].
+    ///
+    /// [`Forward`]: Self::Forward
+    /// [`ForwardLog`]: Self::ForwardLog
+    pub fn is_forward(self) -> bool {
+        !self.is_backward()
+    }
+
+    /// Is [`BackwardLog`].
+    ///
+    /// [`BackwardLog`]: Self::BackwardLog
+    pub fn is_backward(self) -> bool {
+        matches!(self, Self::BackwardLog)
+    }
+
+    /// Is [`ForwardLog`] or [`BackwardLog`].
+    ///
+    /// [`ForwardLog`]: Self::ForwardLog
+    /// [`BackwardLog`]: Self::BackwardLog
+    pub fn is_log(self) -> bool {
+        !self.is_not_log()
+    }
+
+    /// Is [`Forward`].
+    ///
+    /// [`Forward`]: Self::Forward
+    pub fn is_not_log(self) -> bool {
+        matches!(self, Self::Forward { .. })
+    }
+
+    /// Returns `MetaPastLen` in [`Forward`].
+    ///
+    /// # Panics
+    ///
+    /// This method panics for different directions.
+    ///
+    /// [`Forward`]: Self::Forward
+    pub fn past_len(self) -> MetaPastLen {
+        self.get_past_len().unwrap()
+    }
+
+    /// Returns `MetaPastLen` in [`Forward`].
+    ///
+    /// Returns `None` for different directions.
+    ///
+    /// [`Forward`]: Self::Forward
+    pub fn get_past_len(self) -> Option<MetaPastLen> {
+        match self {
+            Self::Forward { meta_past_len } => Some(meta_past_len),
+            _ => None,
+        }
+    }
+}
+
+impl Display for RevDirection {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match *self {
+            RevDirection::Forward { .. } => write!(f, "RevDirection::Forward"),
+            RevDirection::ForwardLog => write!(f, "RevDirection::ForwardLog"),
+            RevDirection::BackwardLog => write!(f, "RevDirection::BackwardLog"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "bevy_reflect", derive(bevy_reflect::Reflect))]
+enum RunningOrRan {
+    Running(RevDirection),
+    Ran(RevDirection),
+    Pause { after_log: bool },
+}
+
+/// The next state [`RevMeta`] should be in via [`RevMeta::set_queue`], will be applied when
+/// [`RevMeta::run_rev_update`] runs. Before that, a different queue can be set, which will
+/// overwrite a different pending value. Can also be [unset] before that.
+///
+/// [unset]: RevMeta::unset_queue
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "bevy_reflect", derive(bevy_reflect::Reflect))]
+pub enum RevQueue {
+    /// Run in [`RevDirection::Forward`] next.
+    ///
+    /// If there is a [future segment], it will be truncated globally.
+    ///
+    /// If the [past segment] is longer than [the maximum], the excessive past end will be truncated
+    /// globally.
+    ///
+    /// [future segment]: RevMeta::future_len
+    /// [past segment]: RevMeta::past_len
+    /// [the maximum]: RevMeta::get_max_past_len
+    RunForward,
+
+    /// Run in [`RevDirection::ForwardLog`] next until the [future end] is reached, then `RevMeta`
+    /// will be paused. If it is already at that, this will pause directly.
+    ///
+    /// [future end]: RevMeta::future_end
+    RunForwardLog,
+
+    /// Run in [`RevDirection::BackwardLog`] next until the [past end] is reached, then `RevMeta`
+    /// will be paused. If it is already at that, this will pause directly.
+    ///
+    /// [past end]: RevMeta::past_end
+    RunBackwardLog,
+
+    /// Pause `RevMeta` until a different queue will be set.
+    Pause,
+
+    /// Globally truncate the full [log], then run [`RevDirection::Forward`] next.
+    ///
+    /// [log]: RevMeta::len
+    ClearThenRunForward,
+
+    /// Globally truncate the full [log], then pause `RevMeta`.
+    ///
+    /// [log]: RevMeta::len
+    ClearThenPause,
+}
+
+impl Command<BevyResult> for RevQueue {
+    fn apply(self, world: &mut World) -> BevyResult {
+        world
+            .get_resource_mut::<RevMeta>()
+            .ok_or_else(|| format!("could not queue {self:?}, RevMeta is missing"))?
+            .set_queue(self);
+        Ok(())
+    }
+}
+
+/// A newtyped value of [`RevMeta::past_len`] that only exists during [`RevDirection::Forward`].
+/// At that it can never be zero. It is used as a token to "prove" that particular direction is
+/// running. Because of this, it should not be stored beyond that.
+///
+/// The [`RevWorld`]/[`RevEntityWorldMut`] and [`RevCommands`]/[`RevEntityCommands`] including
+/// [`BuffersUndoRedo`] APIs need this as they also should only be used during that direction.
+///
+/// [`TransitionLog::forward_push`]/[`TransitionsLog::forward_extend`] also need this if they are
+/// updated exactly once per reversible frame. If not, they should use the value returned by
+/// [`UpdateLog::forward_past_len`] instead.
+///
+/// [`RevWorld`]: crate::undo_redo::RevWorld
+/// [`RevEntityWorldMut`]: crate::undo_redo::RevEntityWorldMut
+/// [`RevCommands`]: crate::undo_redo::RevCommands
+/// [`RevEntityCommands`]: crate::undo_redo::RevEntityCommands
+/// [`BuffersUndoRedo`]: crate::undo_redo::BuffersUndoRedo
+/// [`TransitionLog::forward_push`]: crate::log::TransitionLog::forward_push
+/// [`TransitionsLog::forward_extend`]: crate::log::TransitionsLog::forward_extend
+/// [`UpdateLog::forward_past_len`]: crate::log::UpdateLog::forward_past_len`
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "bevy_reflect", derive(bevy_reflect::Reflect))]
+pub struct MetaPastLen(NonZeroU64);
+
+impl Into<NonZeroU64> for MetaPastLen {
+    fn into(self) -> NonZeroU64 {
+        self.0
+    }
+}
+
+/// Error type that [`RevMeta::update`] may return.
 #[derive(Debug)]
 pub enum RevMetaUpdateErr {
+    /// [`RevMeta::update`] was called recursively or `RevMeta` was removed while this ran and is
+    /// still [in a running state] while the `update` method is called again.
+    ///
+    /// [in a running state]: RevMeta::running_direction
     AlreadyRunning {
+        /// `RevMeta` in the state it was attempted to be updated with.
         meta: RevMeta,
-        direction: RevDirection,
     },
+
+    /// The closure of [`RevMeta::update`] did not return `RevMeta`.
     RevMetaNotReturned,
-    UpdateLogsMissed {
+
+    /// `RevMeta` was replaced with a different value during [`RevMeta::update`].
+    RevMetaReplaced {
+        /// `RevMeta` in the state as it was returned from the closure of [`RevMeta::update`].
         meta: RevMeta,
+    },
+
+    /// Any [`UpdateLog`] did not update when it was expected to, in the amount it was expected
+    /// to. This may only happen during [log directions].
+    ///
+    /// [`UpdateLog`]: crate::log::UpdateLog
+    /// [log directions]: RevDirection::is_log
+    UpdateLogsMissed {
+        /// `RevMeta` in the state after it was updated regardless of this error.
+        meta: RevMeta,
+
+        /// Information about which [`UpdateLog`]s did not update as they should have.
+        ///
+        /// [`UpdateLog`]: crate::log::UpdateLog
         update_logs_missed: Vec<UpdateLogMissed>,
     },
 }
