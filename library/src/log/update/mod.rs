@@ -26,7 +26,8 @@ mod offset;
 ///
 /// If an update is missed, for example when the scope of the log is behind complicated and
 /// error-prone scheduling and is just not reached when it should, [`RevMeta::update`] and from that
-/// [`RevMeta::run_rev_update`] will detect this at the end of the schedule and return an error.
+/// [`run_rev_update`](crate::meta::run_rev_update) will detect this at the end of the schedule and
+/// return an error.
 ///
 /// # Example
 ///
@@ -231,7 +232,8 @@ impl UpdateLog {
     /// The [`Display`] implemention of `UpdateLog` solely contains this id.
     ///
     /// This id is useful to identify missed updates from [`RevMeta::update`]. If
-    /// [`RevMeta::run_rev_update`] is used, such errors are handled by the default error handler.
+    /// [`run_rev_update`](crate::meta::run_rev_update) is used, such errors are handled by the
+    /// default error handler.
     pub fn id(&self) -> Option<UpdateLogId> {
         self.update_state.map(|update_state| update_state.id())
     }

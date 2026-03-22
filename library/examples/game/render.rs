@@ -3,7 +3,7 @@ use bevy::{
     prelude::*,
     window::{EnabledButtons, WindowResolution},
 };
-use bevy_oozlum::prelude::*;
+use bevy_oozlum::{meta::run_rev_update, prelude::*};
 
 use std::{fmt::Write, iter::repeat_n};
 
@@ -29,7 +29,7 @@ pub fn window_plugin() -> WindowPlugin {
 
 pub fn plugin(app: &mut App) {
     app.add_systems(Startup, setup)
-        .add_systems(FixedUpdate, render::<ROWS>.after(RevMeta::run_rev_update));
+        .add_systems(FixedUpdate, render::<ROWS>.after(run_rev_update));
 }
 
 fn setup(mut commands: Commands) {

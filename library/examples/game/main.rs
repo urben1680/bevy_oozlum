@@ -40,11 +40,11 @@ fn main() {
             // component before initializing RevUpdate and custom schedules ran from it.
             //
             // The plugin adds an unpaused RevMeta with a max past length of NonZeroU64::MIN
-            // and the RevMeta::run_rev_update system to FixedUpdate. We modify the max past len
+            // and the run_rev_update system to FixedUpdate. We modify the max past len
             // here.
             //
             // General order of systems:
-            // 1. RevMeta::run_rev_update runs in the specified schedule (here FixedUpdate)
+            // 1. run_rev_update runs in the specified schedule (here FixedUpdate)
             // 2. RevUpdate schedule runs unless paused
             // 3. Reversible systems and sync points, all in the RevSystems set, run in normal or
             //    reversed order, depending on the current RevDirection

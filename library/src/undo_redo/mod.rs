@@ -74,43 +74,45 @@ pub trait BuffersUndoRedo {
     /// Buffers an [`UndoRedo`] implementor in a resource to be collected by the reversible system's
     /// state.
     #[track_caller]
-    fn buffer_undo_redo(&mut self, not_log: NotLog, undo_redo: impl UndoRedo) {
-        self.buffer_undo_redo_with_caller(not_log, undo_redo, MaybeLocation::caller());
+    fn buffer_undo_redo(&mut self, not_log: NotLog, undo_redo: impl UndoRedo) -> &mut Self {
+        self.buffer_undo_redo_with_caller(not_log, undo_redo, MaybeLocation::caller())
     }
 
-    /// Applies [`undo_redo::redo`] and then buffers it implementor in a resource to be collected by
-    /// the reversible system's state.
+    /// Buffers an [`UndoRedo`] implementor in a resource to be collected by the reversible system's
+    /// state.
+    ///
+    /// This will also trigger the [redo logic] at the sync point.
     ///
     /// This shorthand method is useful for when applying the reversible operation is doing the
     /// exact same as it's redo logic.
     ///
-    /// [`undo_redo::redo`]: UndoRedo::redo
+    /// [redo logic]: UndoRedo::redo
     #[track_caller]
-    fn redo_and_buffer(&mut self, not_log: NotLog, undo_redo: impl UndoRedo) {
-        self.redo_and_buffer_with_caller(not_log, undo_redo, MaybeLocation::caller());
+    fn redo_and_buffer(&mut self, not_log: NotLog, undo_redo: impl UndoRedo) -> &mut Self {
+        self.redo_and_buffer_with_caller(not_log, undo_redo, MaybeLocation::caller())
     }
 
     /// As [`BuffersUndoRedo::buffer_undo_redo`] but with explicit [`MaybeLocation`].
     ///
     /// The location can be helpful for identifying non-reversible systems using reversible API.
-    /// [`RevMeta::run_rev_update`] may return the relevant error in that case.
+    /// [`run_rev_update`](crate::meta::run_rev_update) may return the relevant error in that case.
     fn buffer_undo_redo_with_caller(
         &mut self,
         not_log: NotLog,
         undo_redo: impl UndoRedo,
         caller: MaybeLocation,
-    );
+    ) -> &mut Self;
 
     /// As [`BuffersUndoRedo::redo_and_buffer`] but with explicit [`MaybeLocation`].
     ///
     /// The location can be helpful for identifying non-reversible systems using reversible API.
-    /// [`RevMeta::run_rev_update`] may return the relevant error in that case.
+    /// [`run_rev_update`](crate::meta::run_rev_update) may return the relevant error in that case.
     fn redo_and_buffer_with_caller(
         &mut self,
         not_log: NotLog,
         undo_redo: impl UndoRedo,
         caller: MaybeLocation,
-    );
+    ) -> &mut Self;
 }
 
 impl BuffersUndoRedo for Commands<'_, '_> {
@@ -119,10 +121,11 @@ impl BuffersUndoRedo for Commands<'_, '_> {
         not_log: NotLog,
         undo_redo: impl UndoRedo,
         caller: MaybeLocation,
-    ) {
+    ) -> &mut Self {
         self.queue(move |world: &mut World| {
-            world.buffer_undo_redo_with_caller(not_log, undo_redo, caller);
+            world.buffer_undo_redo(not_log, undo_redo, caller);
         });
+        self
     }
 
     fn redo_and_buffer_with_caller(
@@ -130,10 +133,11 @@ impl BuffersUndoRedo for Commands<'_, '_> {
         not_log: NotLog,
         undo_redo: impl UndoRedo,
         caller: MaybeLocation,
-    ) {
+    ) -> &mut Self {
         self.queue(move |world: &mut World| {
-            world.redo_and_buffer_with_caller(not_log, undo_redo, caller);
+            world.redo_and_buffer(not_log, undo_redo, caller);
         });
+        self
     }
 }
 
@@ -143,10 +147,11 @@ impl BuffersUndoRedo for EntityCommands<'_> {
         not_log: NotLog,
         undo_redo: impl UndoRedo,
         caller: MaybeLocation,
-    ) {
+    ) -> &mut Self {
         self.queue(move |mut world: EntityWorldMut| {
-            world.buffer_undo_redo_with_caller(not_log, undo_redo, caller);
+            world.buffer_undo_redo(not_log, undo_redo, caller);
         });
+        self
     }
 
     fn redo_and_buffer_with_caller(
@@ -154,63 +159,11 @@ impl BuffersUndoRedo for EntityCommands<'_> {
         not_log: NotLog,
         undo_redo: impl UndoRedo,
         caller: MaybeLocation,
-    ) {
+    ) -> &mut Self {
         self.queue(move |mut world: EntityWorldMut| {
-            world.redo_and_buffer_with_caller(not_log, undo_redo, caller);
+            world.redo_and_buffer(not_log, undo_redo, caller);
         });
-    }
-}
-
-impl BuffersUndoRedo for World {
-    fn buffer_undo_redo_with_caller(
-        &mut self,
-        not_log: NotLog,
-        undo_redo: impl UndoRedo,
-        caller: MaybeLocation,
-    ) {
-        debug_assert!(self.get_resource::<RevMeta>().is_some_and(|meta| {
-            meta.get_running_direction()
-                .is_some_and(|direction| match direction {
-                    RevDirection::Forward { not_log: actual } => actual == not_log,
-                    _ => false,
-                })
-        }));
-        self.get_resource_or_init::<UndoRedoBuffer>()
-            .buffer_undo_redo(not_log, caller, undo_redo);
-    }
-
-    fn redo_and_buffer_with_caller(
-        &mut self,
-        not_log: NotLog,
-        mut undo_redo: impl UndoRedo,
-        caller: MaybeLocation,
-    ) {
-        undo_redo.redo(self);
-        self.buffer_undo_redo_with_caller(not_log, undo_redo, caller);
-    }
-}
-
-impl BuffersUndoRedo for EntityWorldMut<'_> {
-    fn buffer_undo_redo_with_caller(
-        &mut self,
-        not_log: NotLog,
-        undo_redo: impl UndoRedo,
-        caller: MaybeLocation,
-    ) {
-        self.world_scope(|world| {
-            world.buffer_undo_redo_with_caller(not_log, undo_redo, caller);
-        })
-    }
-
-    fn redo_and_buffer_with_caller(
-        &mut self,
-        not_log: NotLog,
-        undo_redo: impl UndoRedo,
-        caller: MaybeLocation,
-    ) {
-        self.world_scope(|world| {
-            world.redo_and_buffer_with_caller(not_log, undo_redo, caller);
-        })
+        self
     }
 }
 
@@ -332,7 +285,7 @@ pub trait UndoRedo: Send + 'static {
 ///             // redo logic
 ///         }
 ///     }
-/// })
+/// });
 /// ```
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum UndoRedoDirection {

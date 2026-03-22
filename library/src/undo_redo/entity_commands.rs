@@ -207,7 +207,7 @@ impl<'a> RevEntityCommands<'a> for EntityCommands<'a> {
         let caller = MaybeLocation::caller();
         self.queue(move |mut entity_world_mut: EntityWorldMut| {
             entity_world_mut
-                .rev_mark_spawned_with_caller(not_log, include_unlinked_related, caller)
+                .rev_mark_spawned(not_log, include_unlinked_related, caller)
                 .map(|_| ())
         })
     }
@@ -216,9 +216,7 @@ impl<'a> RevEntityCommands<'a> for EntityCommands<'a> {
     fn rev_despawn(&mut self, not_log: NotLog) {
         let caller = MaybeLocation::caller();
         self.queue(move |entity_world_mut: EntityWorldMut| {
-            entity_world_mut
-                .rev_despawn_with_caller(not_log, caller)
-                .map(|_| ())
+            entity_world_mut.rev_despawn(not_log, caller).map(|_| ())
         });
     }
 
@@ -231,7 +229,7 @@ impl<'a> RevEntityCommands<'a> for EntityCommands<'a> {
         let caller = MaybeLocation::caller();
         self.queue(move |mut entity_world_mut: EntityWorldMut| {
             entity_world_mut
-                .rev_with_related_with_caller::<R>(not_log, bundle, caller)
+                .rev_with_related::<R>(not_log, bundle, caller)
                 .map(|_| ())
         })
     }
@@ -250,7 +248,7 @@ impl<'a> RevEntityCommands<'a> for EntityCommands<'a> {
         let caller = MaybeLocation::caller();
         self.queue(move |mut entity_world_mut: EntityWorldMut| {
             entity_world_mut
-                .rev_add_related_with_caller::<R>(not_log, related, caller)
+                .rev_add_related::<R>(not_log, related, caller)
                 .map(|_| ())
         })
     }
@@ -273,7 +271,7 @@ impl<'a> RevEntityCommands<'a> for EntityCommands<'a> {
         let caller = MaybeLocation::caller();
         self.queue(move |mut entity_world_mut: EntityWorldMut| {
             entity_world_mut
-                .rev_add_one_related_with_caller::<R>(not_log, entity, caller)
+                .rev_add_one_related::<R>(not_log, entity, caller)
                 .map(|_| ())
         })
     }
@@ -289,7 +287,7 @@ impl<'a> RevEntityCommands<'a> for EntityCommands<'a> {
         let caller = MaybeLocation::caller();
         self.queue(move |mut entity_world_mut: EntityWorldMut| {
             entity_world_mut
-                .rev_detach_all_related_with_caller::<R>(not_log, caller)
+                .rev_detach_all_related::<R>(not_log, caller)
                 .map(|_| ())
         })
     }
@@ -309,7 +307,7 @@ impl<'a> RevEntityCommands<'a> for EntityCommands<'a> {
         let caller = MaybeLocation::caller();
         self.queue(move |mut entity_world_mut: EntityWorldMut| {
             entity_world_mut
-                .rev_remove_related_with_caller::<R>(not_log, related, caller)
+                .rev_remove_related::<R>(not_log, related, caller)
                 .map(|_| ())
         })
     }
@@ -338,7 +336,7 @@ impl<'a> RevEntityCommands<'a> for EntityCommands<'a> {
         let caller = MaybeLocation::caller();
         self.queue(move |mut entity_world_mut: EntityWorldMut| {
             entity_world_mut
-                .rev_replace_related_with_caller::<R>(not_log, related, caller)
+                .rev_replace_related::<R>(not_log, related, caller)
                 .map(|_| ())
         })
     }
@@ -357,7 +355,7 @@ impl<'a> RevEntityCommands<'a> for EntityCommands<'a> {
         let caller = MaybeLocation::caller();
         self.queue(move |mut entity_world_mut: EntityWorldMut| {
             entity_world_mut
-                .rev_despawn_related_with_caller::<S>(not_log, caller)
+                .rev_despawn_related::<S>(not_log, caller)
                 .map(|_| ())
         })
     }
@@ -621,9 +619,7 @@ pub fn rev_insert_from_world<T: Component + FromWorld>(
     move |mut entity_mut: EntityWorldMut| {
         if !(mode == InsertMode::Keep && entity_mut.contains::<T>()) {
             let value = entity_mut.world_scope(|world| T::from_world(world));
-            entity_mut
-                .rev_insert_with_caller(not_log, value, caller)
-                .map(|_| ())
+            entity_mut.rev_insert(not_log, value, caller).map(|_| ())
         } else {
             Ok(())
         }
@@ -644,9 +640,7 @@ where
     move |mut entity_mut: EntityWorldMut| {
         if !(mode == InsertMode::Keep && entity_mut.contains::<T>()) {
             let value = component_fn();
-            entity_mut
-                .rev_insert_with_caller(not_log, value, caller)
-                .map(|_| ())
+            entity_mut.rev_insert(not_log, value, caller).map(|_| ())
         } else {
             Ok(())
         }
@@ -659,7 +653,7 @@ pub fn rev_remove<T: RevBundle<Marker>, Marker>(not_log: NotLog) -> impl EntityC
     let caller = MaybeLocation::caller();
     move |mut entity_mut: EntityWorldMut| {
         entity_mut
-            .rev_remove_with_caller::<T, Marker>(not_log, caller)
+            .rev_remove::<T, Marker>(not_log, caller)
             .map(|_| ())
     }
 }
@@ -671,5 +665,5 @@ pub fn rev_remove<T: RevBundle<Marker>, Marker>(not_log: NotLog) -> impl EntityC
 #[track_caller]
 pub fn rev_despawn(not_log: NotLog) -> impl EntityCommand<CmdOut> {
     let caller = MaybeLocation::caller();
-    move |entity_mut: EntityWorldMut| entity_mut.rev_despawn_with_caller(not_log, caller)
+    move |entity_mut: EntityWorldMut| entity_mut.rev_despawn(not_log, caller)
 }

@@ -129,9 +129,7 @@ impl RevCommands for Commands<'_, '_> {
         let caller = MaybeLocation::caller();
         let mut entity_cmds = self.spawn(bundle);
         entity_cmds.queue(move |mut entity_mut: EntityWorldMut| {
-            entity_mut
-                .rev_mark_spawned_with_caller(not_log, true, caller)
-                .unwrap();
+            entity_mut.rev_mark_spawned(not_log, true, caller).unwrap();
         });
         entity_cmds
     }
@@ -145,7 +143,7 @@ impl RevCommands for Commands<'_, '_> {
     ) {
         let caller = MaybeLocation::caller();
         self.queue(move |world: &mut World| {
-            world.rev_mark_spawned_with_caller(not_log, entity, include_unlinked_related, caller);
+            world.rev_mark_spawned(not_log, entity, include_unlinked_related, caller);
         });
     }
 
@@ -158,7 +156,7 @@ impl RevCommands for Commands<'_, '_> {
     ) {
         let caller = MaybeLocation::caller();
         self.queue(move |world: &mut World| {
-            world.rev_mark_spawned_batch_with_caller(
+            world.rev_mark_spawned_batch(
                 not_log,
                 entities.as_ref(),
                 include_unlinked_related,
@@ -171,7 +169,7 @@ impl RevCommands for Commands<'_, '_> {
     fn rev_despawn(&mut self, not_log: NotLog, entity: Entity) {
         let caller = MaybeLocation::caller();
         self.queue(move |world: &mut World| {
-            world.rev_despawn_with_caller(not_log, entity, caller);
+            world.rev_despawn(not_log, entity, caller);
         });
     }
 
@@ -183,7 +181,7 @@ impl RevCommands for Commands<'_, '_> {
     ) {
         let caller = MaybeLocation::caller();
         self.queue(move |world: &mut World| {
-            world.rev_despawn_batch_with_caller(not_log, entities.as_ref(), caller);
+            world.rev_despawn_batch(not_log, entities.as_ref(), caller);
         });
     }
 
@@ -247,7 +245,7 @@ impl RevCommands for Commands<'_, '_> {
 pub fn rev_run_schedule(not_log: NotLog, label: impl ScheduleLabel) -> impl Command<Result> {
     let caller = MaybeLocation::caller();
     move |world: &mut World| -> Result {
-        world.rev_try_run_schedule_with_caller(not_log, label, caller)?;
+        world.rev_try_run_schedule(not_log, label, caller)?;
         Ok(())
     }
 }
@@ -260,7 +258,7 @@ where
 {
     let caller = MaybeLocation::caller();
     move |world: &mut World| {
-        world.rev_spawn_batch_with_caller(not_log, bundles_iter, caller);
+        world.rev_spawn_batch(not_log, bundles_iter, caller);
     }
 }
 
@@ -286,12 +284,8 @@ where
         world
             .rev_try_insert_batch_inner(iter, |mut entity_mut, bundle| {
                 match insert_mode {
-                    InsertMode::Replace => {
-                        entity_mut.rev_insert_with_caller(not_log, bundle, caller)
-                    }
-                    InsertMode::Keep => {
-                        entity_mut.rev_insert_if_new_with_caller(not_log, bundle, caller)
-                    }
+                    InsertMode::Replace => entity_mut.rev_insert(not_log, bundle, caller),
+                    InsertMode::Keep => entity_mut.rev_insert_if_new(not_log, bundle, caller),
                 }
                 .map(|_| ())
             })
@@ -304,7 +298,7 @@ where
 pub fn rev_init_resource<R: Resource + FromWorld>(not_log: NotLog) -> impl Command {
     let caller = MaybeLocation::caller();
     move |world: &mut World| {
-        world.rev_init_resource_with_caller::<R>(not_log, caller);
+        world.rev_init_resource::<R>(not_log, caller);
     }
 }
 
@@ -313,7 +307,7 @@ pub fn rev_init_resource<R: Resource + FromWorld>(not_log: NotLog) -> impl Comma
 pub fn rev_insert_resource<R: Resource>(not_log: NotLog, resource: R) -> impl Command {
     let caller = MaybeLocation::caller();
     move |world: &mut World| {
-        world.rev_insert_resource_with_caller(not_log, resource, caller);
+        world.rev_insert_resource(not_log, resource, caller);
     }
 }
 
@@ -321,6 +315,6 @@ pub fn rev_insert_resource<R: Resource>(not_log: NotLog, resource: R) -> impl Co
 pub fn rev_remove_resource<R: Resource>(not_log: NotLog) -> impl Command {
     let caller = MaybeLocation::caller();
     move |world: &mut World| {
-        world.rev_remove_resource_with_caller::<R, _>(not_log, |_| (), caller);
+        world.rev_remove_resource::<R, _>(not_log, |_| (), caller);
     }
 }

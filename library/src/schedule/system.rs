@@ -477,44 +477,44 @@ mod test {
     struct Observer;
 
     fn observer(_: On<Observer>, mut world: DeferredWorld) {
-        let past_len = world.resource::<RevMeta>().not_log();
-        world.commands().queue(move |world: &mut World| {
-            world.buffer_undo_redo(past_len, blank_undo_redo);
-            world.spawn(EmptyOnAdd);
-        });
+        let not_log = world.resource::<RevMeta>().not_log();
+        world
+            .commands()
+            .buffer_undo_redo(not_log, blank_undo_redo)
+            .spawn(EmptyOnAdd);
     }
 
     #[derive(Event)]
     struct EmptyObserver;
     fn empty_observer(_: On<Observer>, mut world: DeferredWorld) {
-        let past_len = world.resource::<RevMeta>().not_log();
-        world.commands().buffer_undo_redo(past_len, blank_undo_redo);
+        let not_log = world.resource::<RevMeta>().not_log();
+        world.commands().buffer_undo_redo(not_log, blank_undo_redo);
     }
 
     #[derive(Component)]
     #[component(on_add = on_add)]
     struct OnAdd;
     fn on_add(mut world: DeferredWorld, _: HookContext) {
-        let past_len = world.resource::<RevMeta>().not_log();
-        world.commands().queue(move |world: &mut World| {
-            world.buffer_undo_redo(past_len, blank_undo_redo);
-            world.trigger(EmptyObserver);
-        });
+        let not_log = world.resource::<RevMeta>().not_log();
+        world
+            .commands()
+            .buffer_undo_redo(not_log, blank_undo_redo)
+            .trigger(EmptyObserver);
     }
 
     #[derive(Component)]
     #[component(on_add = empty_on_add)]
     struct EmptyOnAdd;
     fn empty_on_add(mut world: DeferredWorld, _: HookContext) {
-        let past_len = world.resource::<RevMeta>().not_log();
-        world.commands().buffer_undo_redo(past_len, blank_undo_redo);
+        let not_log = world.resource::<RevMeta>().not_log();
+        world.commands().buffer_undo_redo(not_log, blank_undo_redo);
     }
 
     #[test]
     fn non_exclusive_system_drains_all_undo_redo() {
         fn system(meta: Res<RevMeta>, mut commands: Commands) {
-            let past_len = meta.not_log();
-            commands.buffer_undo_redo(past_len, blank_undo_redo);
+            let not_log = meta.not_log();
+            commands.buffer_undo_redo(not_log, blank_undo_redo);
             commands.queue(|world: &mut World| {
                 world.trigger(Observer);
                 world.spawn(OnAdd);

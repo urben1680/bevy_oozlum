@@ -1,7 +1,8 @@
-//! This module contains extension traits and accompanying types to add regular systems, conditions
-//! and sets to make their effect reversible.
+//! This module contains extension traits and accompanying types to add reversible systems, regular
+//! conditions and system set configurations to schedule to make their effect reversible.
 //!
-//! The main reversible schedule that is run by [`RevMeta::run_rev_update`] is [`RevUpdate`].
+//! The main reversible schedule that is run by [`run_rev_update`](crate::meta::run_rev_update) is
+//! [`RevUpdate`].
 //!
 //! # Reversible systems
 //!
@@ -97,8 +98,8 @@ mod system;
 #[cfg(test)]
 mod test;
 
-/// The schedule that is run by [`RevMeta::run_rev_update`]. All reversible systems go in here,
-/// directly or indirectly in schedules that are run within this.
+/// The schedule that is run by [`run_rev_update`](crate::meta::run_rev_update). All reversible
+/// systems go in here, directly or indirectly in schedules that are run within this.
 ///
 /// Reversible systems in a schedule are automatically added to the [`RevSystems`] set so other,
 /// non-reversible systems can be ordered to them while ignoring the reversed order of

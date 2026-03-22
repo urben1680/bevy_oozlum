@@ -15,22 +15,31 @@ use bevy_ecs::{
 use bevy_utils::prelude::DebugName;
 
 use crate::{
-    meta::NotLog,
+    meta::{NotLog, RevDirection, RevMeta},
     undo_redo::{
-        BuffersUndoRedo, EntityRevDespawnedError, RevBundle, RevInsertResourceNew,
-        RevInsertResourceOverwrite, RevRemoveResource, UndoRedo, mark_entities, mark_entity,
+        EntityRevDespawnedError, RevBundle, RevInsertResourceNew, RevInsertResourceOverwrite,
+        RevRemoveResource, UndoRedo, UndoRedoBuffer, mark_entities, mark_entity,
     },
 };
 
 pub(super) trait RevWorld {
-    fn rev_try_run_schedule_with_caller(
+    fn buffer_undo_redo(
+        &mut self,
+        not_log: NotLog,
+        undo_redo: impl UndoRedo,
+        caller: MaybeLocation,
+    );
+
+    fn redo_and_buffer(&mut self, not_log: NotLog, undo_redo: impl UndoRedo, caller: MaybeLocation);
+
+    fn rev_try_run_schedule(
         &mut self,
         not_log: NotLog,
         label: impl ScheduleLabel,
         caller: MaybeLocation,
     ) -> Result<(), TryRunScheduleError>;
 
-    fn rev_mark_spawned_with_caller(
+    fn rev_mark_spawned(
         &mut self,
         not_log: NotLog,
         entity: Entity,
@@ -38,7 +47,7 @@ pub(super) trait RevWorld {
         caller: MaybeLocation,
     ) -> bool;
 
-    fn rev_mark_spawned_batch_with_caller(
+    fn rev_mark_spawned_batch(
         &mut self,
         not_log: NotLog,
         entities: &[Entity],
@@ -46,21 +55,11 @@ pub(super) trait RevWorld {
         caller: MaybeLocation,
     );
 
-    fn rev_despawn_with_caller(
-        &mut self,
-        not_log: NotLog,
-        entity: Entity,
-        caller: MaybeLocation,
-    ) -> bool;
+    fn rev_despawn(&mut self, not_log: NotLog, entity: Entity, caller: MaybeLocation) -> bool;
 
-    fn rev_despawn_batch_with_caller(
-        &mut self,
-        not_log: NotLog,
-        entities: &[Entity],
-        caller: MaybeLocation,
-    );
+    fn rev_despawn_batch(&mut self, not_log: NotLog, entities: &[Entity], caller: MaybeLocation);
 
-    fn rev_spawn_batch_with_caller<I>(
+    fn rev_spawn_batch<I>(
         &mut self,
         not_log: NotLog,
         iter: I,
@@ -78,20 +77,20 @@ pub(super) trait RevWorld {
         I: IntoIterator<IntoIter: Iterator<Item = (Entity, B)>>,
         B: RevBundle<Marker>;
 
-    fn rev_init_resource_with_caller<R: Resource + FromWorld>(
+    fn rev_init_resource<R: Resource + FromWorld>(
         &mut self,
         not_log: NotLog,
         caller: MaybeLocation,
     ) -> ComponentId;
 
-    fn rev_insert_resource_with_caller<R: Resource>(
+    fn rev_insert_resource<R: Resource>(
         &mut self,
         not_log: NotLog,
         resource: R,
         caller: MaybeLocation,
     );
 
-    fn rev_remove_resource_with_caller<R: Resource, Out>(
+    fn rev_remove_resource<R: Resource, Out>(
         &mut self,
         not_log: NotLog,
         c: impl FnOnce(&R) -> Out,
@@ -100,7 +99,34 @@ pub(super) trait RevWorld {
 }
 
 impl RevWorld for World {
-    fn rev_try_run_schedule_with_caller(
+    fn buffer_undo_redo(
+        &mut self,
+        not_log: NotLog,
+        undo_redo: impl UndoRedo,
+        caller: MaybeLocation,
+    ) {
+        debug_assert!(self.get_resource::<RevMeta>().is_some_and(|meta| {
+            meta.get_running_direction()
+                .is_some_and(|direction| match direction {
+                    RevDirection::Forward { not_log: actual } => actual == not_log,
+                    _ => false,
+                })
+        }));
+        self.get_resource_or_init::<UndoRedoBuffer>()
+            .buffer_undo_redo(not_log, caller, undo_redo);
+    }
+
+    fn redo_and_buffer(
+        &mut self,
+        not_log: NotLog,
+        mut undo_redo: impl UndoRedo,
+        caller: MaybeLocation,
+    ) {
+        undo_redo.redo(self);
+        self.buffer_undo_redo(not_log, undo_redo, caller);
+    }
+
+    fn rev_try_run_schedule(
         &mut self,
         not_log: NotLog,
         label: impl ScheduleLabel,
@@ -108,11 +134,11 @@ impl RevWorld for World {
     ) -> Result<(), TryRunScheduleError> {
         let label = label.intern();
         self.try_run_schedule(label).inspect(move |()| {
-            self.buffer_undo_redo_with_caller(not_log, RevRunSchedule(label), caller);
+            self.buffer_undo_redo(not_log, RevRunSchedule(label), caller);
         })
     }
 
-    fn rev_mark_spawned_with_caller(
+    fn rev_mark_spawned(
         &mut self,
         not_log: NotLog,
         entity: Entity,
@@ -125,7 +151,7 @@ impl RevWorld for World {
         mark_entity::<true>(not_log, &mut entity, include_unlinked_related, caller)
     }
 
-    fn rev_mark_spawned_batch_with_caller(
+    fn rev_mark_spawned_batch(
         &mut self,
         not_log: NotLog,
         entities: &[Entity],
@@ -135,64 +161,46 @@ impl RevWorld for World {
         mark_entities::<true>(not_log, self, entities, include_unlinked_related, caller);
     }
 
-    fn rev_despawn_with_caller(
-        &mut self,
-        not_log: NotLog,
-        entity: Entity,
-        caller: MaybeLocation,
-    ) -> bool {
+    fn rev_despawn(&mut self, not_log: NotLog, entity: Entity, caller: MaybeLocation) -> bool {
         let Ok(mut entity) = self.get_entity_mut(entity) else {
             return false;
         };
         mark_entity::<false>(not_log, &mut entity, false, caller)
     }
 
-    fn rev_despawn_batch_with_caller(
-        &mut self,
-        not_log: NotLog,
-        entities: &[Entity],
-        caller: MaybeLocation,
-    ) {
+    fn rev_despawn_batch(&mut self, not_log: NotLog, entities: &[Entity], caller: MaybeLocation) {
         mark_entities::<false>(not_log, self, entities, false, caller);
     }
 
-    fn rev_init_resource_with_caller<R: Resource + FromWorld>(
+    fn rev_init_resource<R: Resource + FromWorld>(
         &mut self,
         not_log: NotLog,
         caller: MaybeLocation,
     ) -> ComponentId {
         if !self.contains_resource::<R>() {
-            self.buffer_undo_redo_with_caller(
-                not_log,
-                RevInsertResourceNew::<R>::new(caller),
-                caller,
-            );
+            self.buffer_undo_redo(not_log, RevInsertResourceNew::<R>::new(caller), caller);
         }
         self.init_resource::<R>()
     }
 
-    fn rev_insert_resource_with_caller<R: Resource>(
+    fn rev_insert_resource<R: Resource>(
         &mut self,
         not_log: NotLog,
         resource: R,
         caller: MaybeLocation,
     ) {
         match self.remove_resource::<R>() {
-            Some(resource) => self.buffer_undo_redo_with_caller(
+            Some(resource) => self.buffer_undo_redo(
                 not_log,
                 RevInsertResourceOverwrite::new(resource, caller),
                 caller,
             ),
-            None => self.buffer_undo_redo_with_caller(
-                not_log,
-                RevInsertResourceNew::<R>::new(caller),
-                caller,
-            ),
+            None => self.buffer_undo_redo(not_log, RevInsertResourceNew::<R>::new(caller), caller),
         }
         self.insert_resource(resource);
     }
 
-    fn rev_remove_resource_with_caller<R: Resource, Out>(
+    fn rev_remove_resource<R: Resource, Out>(
         &mut self,
         not_log: NotLog,
         c: impl FnOnce(&R) -> Out,
@@ -200,21 +208,12 @@ impl RevWorld for World {
     ) -> Option<Out> {
         self.remove_resource::<R>().map(|resource| {
             let out = c(&resource);
-            self.buffer_undo_redo_with_caller(
-                not_log,
-                RevRemoveResource::new(resource, caller),
-                caller,
-            );
+            self.buffer_undo_redo(not_log, RevRemoveResource::new(resource, caller), caller);
             out
         })
     }
 
-    fn rev_spawn_batch_with_caller<I>(
-        &mut self,
-        not_log: NotLog,
-        iter: I,
-        caller: MaybeLocation,
-    ) -> Vec<Entity>
+    fn rev_spawn_batch<I>(&mut self, not_log: NotLog, iter: I, caller: MaybeLocation) -> Vec<Entity>
     where
         I: IntoIterator<Item: Bundle<Effect: NoBundleEffect>>,
     {

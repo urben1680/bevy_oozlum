@@ -1,3 +1,6 @@
+//! This module contains [`RevPlugin`] and an extension trait to add reversible systems and
+//! configure system sets at the app level.
+
 use bevy_app::{App, FixedUpdate, Plugin};
 use bevy_ecs::{
     schedule::{
@@ -9,7 +12,7 @@ use bevy_ecs::{
 use bevy_log::warn;
 
 use crate::{
-    meta::RevMeta,
+    meta::{RevMeta, run_rev_update},
     schedule::{IntoRevScheduleConfigs, RevSchedule},
     undo_redo::RevDespawned,
 };
@@ -63,8 +66,8 @@ impl RevApp for App {
 /// Always registers [`RevDespawned`] as a disabling component.
 ///
 /// If left unchanged, this plugin
-/// - inserts the [`RevMeta`] resource, unpaused with a max past len of `1`
-/// - adds [`RevMeta::run_rev_update`] to [`FixedUpdate`]
+/// - inserts the [`RevMeta`] resource, unpaused with a maximum past len of `1` frame
+/// - adds [`run_rev_update`] to [`FixedUpdate`]
 pub struct RevPlugin;
 
 impl RevPlugin {
@@ -90,12 +93,12 @@ impl RevPlugin {
         ModifiedRevPlugin::default().set_paused()
     }
 
-    /// Unsets [`RevMeta::run_rev_update`] addition to an schedule.
+    /// Unsets [`run_rev_update`] addition to an schedule.
     pub fn unset_runner(self) -> ModifiedRevPlugin {
         ModifiedRevPlugin::default().unset_runner()
     }
 
-    /// Sets in which schedule [`RevMeta::run_rev_update`] will be added to. Using [`unset_runner`]
+    /// Sets in which schedule [`run_rev_update`] will be added to. Using [`unset_runner`]
     /// will ignore prior calls of this.
     ///
     /// [`unset_runner`]: Self::unset_runner
@@ -103,7 +106,7 @@ impl RevPlugin {
         ModifiedRevPlugin::default().set_runner_in_schedule(schedule)
     }
 
-    /// Sets in which system set [`RevMeta::run_rev_update`] will be added to. Using
+    /// Sets in which system set [`run_rev_update`] will be added to. Using
     /// [`unset_runner`] will ignore prior calls of this.
     ///
     /// [`unset_runner`]: Self::unset_runner
@@ -170,7 +173,11 @@ impl ModifiedRevPlugin {
         self
     }
 
-    /// Unsets [`RevMeta::run_rev_update`] addition to an schedule.
+    /// Unsets [`run_rev_update`] addition to an schedule. Using [`set_runner_in_schedule`]
+    /// pr [`set_runner_in_set`] will ignore prior calls of this.
+    ///
+    /// [`set_runner_in_schedule`]: Self::set_runner_in_schedule
+    /// [`set_runner_in_set`]: Self::set_runner_in_set
     pub fn unset_runner(mut self) -> ModifiedRevPlugin {
         if let Some((schedule, set)) = self.runner {
             if schedule != FixedUpdate.intern() || set.is_some() {
@@ -181,7 +188,7 @@ impl ModifiedRevPlugin {
         self
     }
 
-    /// Sets in which schedule [`RevMeta::run_rev_update`] will be added to. Using [`unset_runner`]
+    /// Sets in which schedule [`run_rev_update`] will be added to. Using [`unset_runner`]
     /// will ignore prior calls of this.
     ///
     /// [`unset_runner`]: Self::unset_runner
@@ -201,7 +208,7 @@ impl ModifiedRevPlugin {
         self
     }
 
-    /// Sets in which system set [`RevMeta::run_rev_update`] will be added to. Using
+    /// Sets in which system set [`run_rev_update`] will be added to. Using
     /// [`unset_runner`] will ignore prior calls of this.
     ///
     /// [`unset_runner`]: Self::unset_runner
@@ -236,7 +243,7 @@ impl Plugin for RevPlugin {
     fn build(&self, app: &mut App) {
         app.register_disabling_component::<RevDespawned>();
         app.init_resource::<RevMeta>();
-        app.add_systems(FixedUpdate, RevMeta::run_rev_update);
+        app.add_systems(FixedUpdate, run_rev_update);
     }
 }
 
@@ -248,10 +255,10 @@ impl Plugin for ModifiedRevPlugin {
         }
         match self.runner {
             Some((schedule, None)) => {
-                app.add_systems(schedule, RevMeta::run_rev_update);
+                app.add_systems(schedule, run_rev_update);
             }
             Some((schedule, Some(set))) => {
-                app.add_systems(schedule, RevMeta::run_rev_update.in_set(set));
+                app.add_systems(schedule, run_rev_update.in_set(set));
             }
             None => {}
         }

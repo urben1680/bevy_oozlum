@@ -440,7 +440,7 @@ impl<'a> Iterator for UpdatesIter<'a> {
 /// [frame](crate::meta::RevMeta::now) but did not.
 ///
 /// This error can be manually received from [`RevMeta::update`](crate::meta::RevMeta::update). If
-/// [`RevMeta::run_rev_update`](crate::meta::RevMeta::run_rev_update) is used, this error, if it
+/// [`run_rev_update`](crate::meta::run_rev_update) is used, this error, if it
 /// occurs, is given to the default error handler.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub struct UpdateLogMissed {

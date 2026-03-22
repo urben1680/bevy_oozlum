@@ -163,9 +163,9 @@ fn non_exclusive_system<const N: u8>(
 }
 
 fn non_exclusive_system_commands_only<const N: u8>(meta: Res<RevMeta>, mut commands: Commands) {
-    if meta.running_direction().is_log() {
+    let Some(not_log) = meta.get_not_log() else {
         return;
-    }
+    };
 
     // trigger observer in system
     commands.trigger(SysObsv(N));
@@ -174,17 +174,13 @@ fn non_exclusive_system_commands_only<const N: u8>(meta: Res<RevMeta>, mut comma
     commands.spawn(SysHook(N));
 
     // trigger command in system
-    commands.queue(system_command::<N>);
-}
-
-fn system_command<const N: u8>(world: &mut World) {
-    world
-        .resource_mut::<TestLog>()
-        .0
-        .push(LogEntry::SysCmd((N, RevDirection::FORWARD_MIN)));
-
-    let past_len = world.resource::<RevMeta>().not_log();
-    world.buffer_undo_redo(past_len, LogEntry::SysCmd(N));
+    commands.queue(|world: &mut World| {
+        world
+            .resource_mut::<TestLog>()
+            .0
+            .push(LogEntry::SysCmd((N, RevDirection::FORWARD_MIN)))
+    });
+    commands.buffer_undo_redo(not_log, LogEntry::SysCmd(N));
 }
 
 #[test]

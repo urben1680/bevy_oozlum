@@ -17,7 +17,7 @@ use crate::{
     log::{OutOfLog, TransitionsLog},
     meta::{NotLog, RevDirection, RevMeta},
     prelude::UndoRedo,
-    undo_redo::{BuffersUndoRedo, LOCATION_PREFIX, add_children, undo_redo_str},
+    undo_redo::{LOCATION_PREFIX, RevWorld, add_children, undo_redo_str},
 };
 
 #[cfg(test)]
@@ -240,7 +240,7 @@ pub(super) fn mark_spawn_empty(
             .get_resource_or_init::<DespawnFinalizer>()
             .spawn_queue
             .push((id, caller));
-        world.buffer_undo_redo_with_caller(not_log, spawn_despawn, caller);
+        world.buffer_undo_redo(not_log, spawn_despawn, caller);
     })
 }
 
@@ -262,10 +262,10 @@ fn mark_inner<const SPAWN: bool>(
 
     if SPAWN {
         resource.spawn_queue.extend(iter);
-        world.buffer_undo_redo_with_caller(not_log, spawn_despawn, caller);
+        world.buffer_undo_redo(not_log, spawn_despawn, caller);
     } else {
         resource.despawn_queue.extend(iter);
-        world.redo_and_buffer_with_caller(not_log, spawn_despawn, caller);
+        world.redo_and_buffer(not_log, spawn_despawn, caller);
     }
 }
 

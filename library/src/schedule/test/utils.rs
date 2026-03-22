@@ -8,7 +8,10 @@ use bevy_ecs::{
 
 use super::*;
 use crate::{
-    meta::RevDirection, panic_on_error_events, schedule::RevUpdate, undo_redo::BuffersUndoRedo,
+    meta::{RevDirection, run_rev_update},
+    panic_on_error_events,
+    schedule::RevUpdate,
+    undo_redo::BuffersUndoRedo,
 };
 
 pub(super) fn test_run<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
@@ -36,7 +39,7 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
 
     // set up schedules
     let mut schedule = Schedule::new(FixedUpdate);
-    schedule.add_systems(RevMeta::run_rev_update);
+    schedule.add_systems(run_rev_update);
     let err = schedule.initialize(&mut world).err();
     assert!(
         err.is_none(),
@@ -65,7 +68,7 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
     world.add_observer(|event: On<SysObsv>, mut world: DeferredWorld| {
         let n = event.0;
 
-        let past_len = world.resource::<RevMeta>().not_log();
+        let not_log = world.resource::<RevMeta>().not_log();
 
         // trigger command in observer
         world.commands().queue(move |world: &mut World| {
@@ -73,10 +76,9 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
                 .resource_mut::<TestLog>()
                 .0
                 .push(LogEntry::SysObsvCmd((n, RevDirection::FORWARD_MIN)));
-
-            let test = LogEntry::SysObsvCmd(n);
-            world.buffer_undo_redo(past_len, test);
         });
+        let test = LogEntry::SysObsvCmd(n);
+        world.commands().buffer_undo_redo(not_log, test);
     });
 
     // set up hooks
@@ -85,7 +87,7 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
         .on_add(|mut world, hook| {
             let n = world.entity(hook.entity).get::<SysHook>().unwrap().0;
 
-            let past_len = world.resource::<RevMeta>().not_log();
+            let not_log = world.resource::<RevMeta>().not_log();
 
             // trigger command in hook
             world.commands().queue(move |world: &mut World| {
@@ -93,10 +95,9 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
                     .resource_mut::<TestLog>()
                     .0
                     .push(LogEntry::SysHookCmd((n, RevDirection::FORWARD_MIN)));
-
-                let test = LogEntry::SysHookCmd(n);
-                world.buffer_undo_redo(past_len, test);
             });
+            let test = LogEntry::SysHookCmd(n);
+            world.commands().buffer_undo_redo(not_log, test);
         });
 
     // run tests forward

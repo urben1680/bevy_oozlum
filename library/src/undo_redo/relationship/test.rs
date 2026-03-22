@@ -1,7 +1,7 @@
 use bevy_ecs::hierarchy::ChildOf;
 
 use crate::undo_redo::{
-    BuffersUndoRedo,
+    RevWorld,
     test::{UnlinkedChildOf, assert_undo_redo},
 };
 
@@ -41,6 +41,7 @@ fn test_add_remove_related<const ADD: bool>() {
             world.buffer_undo_redo(
                 not_log,
                 AddRemoveRelated::<ChildOf, _, ADD>::new(parent, [child], MaybeLocation::caller()),
+                MaybeLocation::caller(),
             );
         },
         |world, _| {
