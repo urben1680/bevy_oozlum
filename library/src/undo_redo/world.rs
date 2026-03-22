@@ -15,7 +15,7 @@ use bevy_ecs::{
 use bevy_utils::prelude::DebugName;
 
 use crate::{
-    meta::MetaPastLen,
+    meta::NotLog,
     undo_redo::{
         BuffersUndoRedo, EntityRevDespawnedError, RevBundle, RevInsertResourceNew,
         RevInsertResourceOverwrite, RevRemoveResource, UndoRedo, mark_entities, mark_entity,
@@ -25,14 +25,14 @@ use crate::{
 pub(super) trait RevWorld {
     fn rev_try_run_schedule_with_caller(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         label: impl ScheduleLabel,
         caller: MaybeLocation,
     ) -> Result<(), TryRunScheduleError>;
 
     fn rev_mark_spawned_with_caller(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         entity: Entity,
         include_unlinked_related: bool,
         caller: MaybeLocation,
@@ -40,7 +40,7 @@ pub(super) trait RevWorld {
 
     fn rev_mark_spawned_batch_with_caller(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         entities: &[Entity],
         include_unlinked_related: bool,
         caller: MaybeLocation,
@@ -48,21 +48,21 @@ pub(super) trait RevWorld {
 
     fn rev_despawn_with_caller(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         entity: Entity,
         caller: MaybeLocation,
     ) -> bool;
 
     fn rev_despawn_batch_with_caller(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         entities: &[Entity],
         caller: MaybeLocation,
     );
 
     fn rev_spawn_batch_with_caller<I>(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         iter: I,
         caller: MaybeLocation,
     ) -> Vec<Entity>
@@ -80,20 +80,20 @@ pub(super) trait RevWorld {
 
     fn rev_init_resource_with_caller<R: Resource + FromWorld>(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         caller: MaybeLocation,
     ) -> ComponentId;
 
     fn rev_insert_resource_with_caller<R: Resource>(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         resource: R,
         caller: MaybeLocation,
     );
 
     fn rev_remove_resource_with_caller<R: Resource, Out>(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         c: impl FnOnce(&R) -> Out,
         caller: MaybeLocation,
     ) -> Option<Out>;
@@ -102,19 +102,19 @@ pub(super) trait RevWorld {
 impl RevWorld for World {
     fn rev_try_run_schedule_with_caller(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         label: impl ScheduleLabel,
         caller: MaybeLocation,
     ) -> Result<(), TryRunScheduleError> {
         let label = label.intern();
         self.try_run_schedule(label).inspect(move |()| {
-            self.buffer_undo_redo_with_caller(meta_past_len, RevRunSchedule(label), caller);
+            self.buffer_undo_redo_with_caller(not_log, RevRunSchedule(label), caller);
         })
     }
 
     fn rev_mark_spawned_with_caller(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         entity: Entity,
         include_unlinked_related: bool,
         caller: MaybeLocation,
@@ -122,54 +122,48 @@ impl RevWorld for World {
         let Ok(mut entity) = self.get_entity_mut(entity) else {
             return false;
         };
-        mark_entity::<true>(meta_past_len, &mut entity, include_unlinked_related, caller)
+        mark_entity::<true>(not_log, &mut entity, include_unlinked_related, caller)
     }
 
     fn rev_mark_spawned_batch_with_caller(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         entities: &[Entity],
         include_unlinked_related: bool,
         caller: MaybeLocation,
     ) {
-        mark_entities::<true>(
-            meta_past_len,
-            self,
-            entities,
-            include_unlinked_related,
-            caller,
-        );
+        mark_entities::<true>(not_log, self, entities, include_unlinked_related, caller);
     }
 
     fn rev_despawn_with_caller(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         entity: Entity,
         caller: MaybeLocation,
     ) -> bool {
         let Ok(mut entity) = self.get_entity_mut(entity) else {
             return false;
         };
-        mark_entity::<false>(meta_past_len, &mut entity, false, caller)
+        mark_entity::<false>(not_log, &mut entity, false, caller)
     }
 
     fn rev_despawn_batch_with_caller(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         entities: &[Entity],
         caller: MaybeLocation,
     ) {
-        mark_entities::<false>(meta_past_len, self, entities, false, caller);
+        mark_entities::<false>(not_log, self, entities, false, caller);
     }
 
     fn rev_init_resource_with_caller<R: Resource + FromWorld>(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         caller: MaybeLocation,
     ) -> ComponentId {
         if !self.contains_resource::<R>() {
             self.buffer_undo_redo_with_caller(
-                meta_past_len,
+                not_log,
                 RevInsertResourceNew::<R>::new(caller),
                 caller,
             );
@@ -179,18 +173,18 @@ impl RevWorld for World {
 
     fn rev_insert_resource_with_caller<R: Resource>(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         resource: R,
         caller: MaybeLocation,
     ) {
         match self.remove_resource::<R>() {
             Some(resource) => self.buffer_undo_redo_with_caller(
-                meta_past_len,
+                not_log,
                 RevInsertResourceOverwrite::new(resource, caller),
                 caller,
             ),
             None => self.buffer_undo_redo_with_caller(
-                meta_past_len,
+                not_log,
                 RevInsertResourceNew::<R>::new(caller),
                 caller,
             ),
@@ -200,14 +194,14 @@ impl RevWorld for World {
 
     fn rev_remove_resource_with_caller<R: Resource, Out>(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         c: impl FnOnce(&R) -> Out,
         caller: MaybeLocation,
     ) -> Option<Out> {
         self.remove_resource::<R>().map(|resource| {
             let out = c(&resource);
             self.buffer_undo_redo_with_caller(
-                meta_past_len,
+                not_log,
                 RevRemoveResource::new(resource, caller),
                 caller,
             );
@@ -217,7 +211,7 @@ impl RevWorld for World {
 
     fn rev_spawn_batch_with_caller<I>(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         iter: I,
         caller: MaybeLocation,
     ) -> Vec<Entity>
@@ -225,7 +219,7 @@ impl RevWorld for World {
         I: IntoIterator<Item: Bundle<Effect: NoBundleEffect>>,
     {
         let entities = self.spawn_batch(iter).collect::<Vec<_>>();
-        mark_entities::<true>(meta_past_len, self, &*entities, true, caller);
+        mark_entities::<true>(not_log, self, &*entities, true, caller);
         entities
     }
 

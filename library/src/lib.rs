@@ -21,25 +21,17 @@
 //!         .run();
 //! }
 //!
-//! fn rev_system(meta: Res<RevMeta>, mut commands: Commands) {
-//!     match meta.running_direction() {
-//!         RevDirection::Forward { meta_past_len } => {
-//!             println!("rev sys: hello world!");
-//!
-//!             commands.queue(move |world: &mut World| {
-//!                 println!("rev cmd: hello world!");
-//!                 
-//!                 world.buffer_undo_redo(meta_past_len, |_: &mut World, direction| {
-//!                     match direction {
-//!                         UndoRedoDirection::Redo => println!("rev cmd: hello world! (log)"),
-//!                         UndoRedoDirection::Undo => println!("rev cmd: !dlrow olleh (log)")
-//!                     }
-//!                 })
-//!             })
-//!         },
-//!         RevDirection::ForwardLog => println!("rev sys: hello world! (log)"),
-//!         RevDirection::BackwardLog => println!("rev sys: !dlrow olleh (log)")
-//!     }
+//! fn rev_system(not_log: NotLog, mut commands: Commands) {
+//!     println!("hello world!")
+//!     commands.buffer_undo_redo(
+//!         not_log,
+//!         |_: &mut World, direction| {
+//!             match direction {
+//!                 UndoRedoDirection::Redo => println!("hello world! (log)"),
+//!                 UndoRedoDirection::Undo => println!("!dlrow olleh (log)")
+//!             }
+//!         }
+//!     )
 //! }
 //!
 //! fn input_system(
@@ -125,7 +117,7 @@ TODO:
   RevDirection::Forward and only after all other logic
 - rev_* api must come last of Forward, not first or the middle
 -- force exclusive systems to only run at Forward?
---- make MetaPastLen an exclusive system param? require In<MetaPastLen>?
+--- make NotLog an exclusive system param? require In<NotLog>?
 -- forbid exclusive systems, require DeferredWorld systems at most?
 -- forbid reversible buffers in exclusive systems?
 - make RevWorld methods return impl RevWorld to lock-out of other mutation means?
@@ -171,7 +163,7 @@ pub mod prelude {
     #[cfg(feature = "bevy_app")]
     pub use crate::app::{RevApp as _, RevPlugin};
     pub use crate::log::{TransitionLog, TransitionsLog, UpdateLog};
-    pub use crate::meta::{RevDirection, RevMeta, RevQueue};
+    pub use crate::meta::{NotLog, RevDirection, RevMeta, RevQueue};
     pub use crate::schedule::{
         IntoRevScheduleConfigs as _, RevSchedule as _, RevSystems, RevUpdate,
     };

@@ -61,7 +61,9 @@ fn system1(meta: Res<RevMeta>, signal: Option<Res<Signal>>, mut commands: Comman
 
 fn system2<const ROW: u64>(meta: Res<RevMeta>, mut signal: ResMut<Signal>, mut commands: Commands) {
     match meta.running_direction() {
-        RevDirection::Forward { meta_past_len } => {
+        RevDirection::Forward {
+            not_log: meta_past_len,
+        } => {
             assert_eq!(*signal, Signal::DoSpawn { at: meta.now() });
 
             // MetaPastLen is like a token to prove that methods needing it are called during

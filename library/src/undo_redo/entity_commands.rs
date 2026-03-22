@@ -10,7 +10,7 @@ use bevy_ecs::{
 };
 
 use crate::{
-    meta::MetaPastLen,
+    meta::NotLog,
     undo_redo::{
         EntityRevDespawnedError, RevBundle, RevCommands, RevEntityWorld,
         relationship::SlimRelationship,
@@ -26,24 +26,20 @@ pub trait RevEntityCommands<'w> {
     ///
     /// See the [`RevDespawned`](super::RevDespawned) documentation to understand the mechanics of
     /// reversible spawn/despawn.
-    fn rev_mark_spawned(
-        &mut self,
-        meta_past_len: MetaPastLen,
-        include_unlinked_related: bool,
-    ) -> &mut Self;
+    fn rev_mark_spawned(&mut self, not_log: NotLog, include_unlinked_related: bool) -> &mut Self;
 
     /// Reversible version of [`EntityCommands::despawn`].
-    fn rev_despawn(&mut self, meta_past_len: MetaPastLen);
+    fn rev_despawn(&mut self, not_log: NotLog);
 
     /// Reversible version of [`EntityCommands::with_related`].
     fn rev_with_related<R: Relationship>(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         bundle: impl Bundle,
     ) -> &mut Self;
 
     /// Reversible version of [`EntityCommands::with_child`].
-    fn rev_with_child(&mut self, meta_past_len: MetaPastLen, bundle: impl Bundle) -> &mut Self;
+    fn rev_with_child(&mut self, not_log: NotLog, bundle: impl Bundle) -> &mut Self;
 
     // fn rev_with_related_entities not needed: use RevRelatedSpawnerCommands
 
@@ -52,61 +48,61 @@ pub trait RevEntityCommands<'w> {
     /// Reversible version of [`EntityCommands::add_related`].
     fn rev_add_related<R: Relationship>(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         related: impl AsRef<[Entity]> + Send + 'static,
     ) -> &mut Self;
 
     /// Reversible version of [`EntityCommands::add_children`].
     fn rev_add_children(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         children: impl AsRef<[Entity]> + Send + 'static,
     ) -> &mut Self;
 
     /// Reversible version of [`EntityCommands::add_one_related`].
     fn rev_add_one_related<R: Relationship>(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         entity: Entity,
     ) -> &mut Self;
 
     /// Reversible version of [`EntityCommands::add_child`].
-    fn rev_add_child(&mut self, meta_past_len: MetaPastLen, child: Entity) -> &mut Self;
+    fn rev_add_child(&mut self, not_log: NotLog, child: Entity) -> &mut Self;
 
     /// Reversible version of [`EntityCommands::detach_all_related`].
-    fn rev_detach_all_related<R: Relationship>(&mut self, meta_past_len: MetaPastLen) -> &mut Self;
+    fn rev_detach_all_related<R: Relationship>(&mut self, not_log: NotLog) -> &mut Self;
 
     /// Reversible version of [`EntityCommands::detach_all_children`].
-    fn rev_detach_all_children(&mut self, meta_past_len: MetaPastLen) -> &mut Self;
+    fn rev_detach_all_children(&mut self, not_log: NotLog) -> &mut Self;
 
     /// Reversible version of [`EntityCommands::remove_related`].
     fn rev_remove_related<R: Relationship>(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         related: impl AsRef<[Entity]> + Send + 'static,
     ) -> &mut Self;
 
     /// Reversible version of [`EntityCommands::detach_children`].
     fn rev_detach_children(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         children: impl AsRef<[Entity]> + Send + 'static,
     ) -> &mut Self;
 
     /// Reversible version of [`EntityCommands::detach_child`].
-    fn rev_detach_child(&mut self, meta_past_len: MetaPastLen, child: Entity) -> &mut Self;
+    fn rev_detach_child(&mut self, not_log: NotLog, child: Entity) -> &mut Self;
 
     /// Reversible version of [`EntityCommands::replace_related`].
     fn rev_replace_related<R: Relationship>(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         related: impl AsRef<[Entity]> + Send + 'static,
     ) -> &mut Self;
 
     /// Reversible version of [`EntityCommands::replace_children`].
     fn rev_replace_children(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         children: impl AsRef<[Entity]> + Send + 'static,
     ) -> &mut Self;
 
@@ -114,28 +110,21 @@ pub trait RevEntityCommands<'w> {
     ///
     /// See the [`RevDespawned`](super::RevDespawned) documentation to understand the mechanics of
     /// reversible spawn/despawn.
-    fn rev_despawn_related<S: RelationshipTarget>(
-        &mut self,
-        meta_past_len: MetaPastLen,
-    ) -> &mut Self;
+    fn rev_despawn_related<S: RelationshipTarget>(&mut self, not_log: NotLog) -> &mut Self;
 
     /// Reversible version of [`EntityCommands::despawn_children`].
     ///
     /// See the [`RevDespawned`](super::RevDespawned) documentation to understand the mechanics of
     /// reversible spawn/despawn.
-    fn rev_despawn_children(&mut self, meta_past_len: MetaPastLen) -> &mut Self;
+    fn rev_despawn_children(&mut self, not_log: NotLog) -> &mut Self;
 
     /// Reversible version of [`EntityCommands::insert`].
-    fn rev_insert<Marker>(
-        &mut self,
-        meta_past_len: MetaPastLen,
-        bundle: impl RevBundle<Marker>,
-    ) -> &mut Self;
+    fn rev_insert<Marker>(&mut self, not_log: NotLog, bundle: impl RevBundle<Marker>) -> &mut Self;
 
     /// Reversible version of [`EntityCommands::insert_if`].
     fn rev_insert_if<Marker>(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         bundle: impl RevBundle<Marker>,
         condition: impl FnOnce() -> bool,
     ) -> &mut Self;
@@ -143,44 +132,43 @@ pub trait RevEntityCommands<'w> {
     /// Reversible version of [`EntityCommands::insert_if_new`].
     fn rev_insert_if_new<Marker>(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         bundle: impl RevBundle<Marker>,
     ) -> &mut Self;
 
     /// Reversible version of [`EntityCommands::insert_if_new_and`].
     fn rev_insert_if_new_and<Marker>(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         bundle: impl RevBundle<Marker>,
         condition: impl FnOnce() -> bool,
     ) -> &mut Self;
 
     /// Reversible version of [`EntityCommands::remove`]. Let the second generic be inferred as `_`.
-    fn rev_remove<B: RevBundle<Marker>, Marker>(&mut self, meta_past_len: MetaPastLen)
-    -> &mut Self;
+    fn rev_remove<B: RevBundle<Marker>, Marker>(&mut self, not_log: NotLog) -> &mut Self;
 
     /// Reversible version of [`EntityCommands::remove_if`]. Let the second generic be inferred as
     /// `_`.
     fn rev_remove_if<B: RevBundle<Marker>, Marker>(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         condition: impl FnOnce() -> bool,
     ) -> &mut Self;
 
     /// Reversible version of [`EntityCommands::try_despawn`].
-    fn rev_try_despawn(&mut self, meta_past_len: MetaPastLen);
+    fn rev_try_despawn(&mut self, not_log: NotLog);
 
     /// Reversible version of [`EntityCommands::try_insert`].
     fn rev_try_insert<Marker>(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         bundle: impl RevBundle<Marker>,
     ) -> &mut Self;
 
     /// Reversible version of [`EntityCommands::try_insert_if`].
     fn rev_try_insert_if<Marker>(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         bundle: impl RevBundle<Marker>,
         condition: impl FnOnce() -> bool,
     ) -> &mut Self;
@@ -188,55 +176,48 @@ pub trait RevEntityCommands<'w> {
     /// Reversible version of [`EntityCommands::try_insert_if_new`].
     fn rev_try_insert_if_new<Marker>(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         bundle: impl RevBundle<Marker>,
     ) -> &mut Self;
 
     /// Reversible version of [`EntityCommands::try_insert_if_new_and`].
     fn rev_try_insert_if_new_and<Marker>(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         bundle: impl RevBundle<Marker>,
         condition: impl FnOnce() -> bool,
     ) -> &mut Self;
 
     /// Reversible version of [`EntityCommands::try_remove`]. Let the second generic be inferred as
     /// `_`.
-    fn rev_try_remove<B: RevBundle<Marker>, Marker>(
-        &mut self,
-        meta_past_len: MetaPastLen,
-    ) -> &mut Self;
+    fn rev_try_remove<B: RevBundle<Marker>, Marker>(&mut self, not_log: NotLog) -> &mut Self;
 
     /// Reversible version of [`EntityCommands::try_remove_if`]..Let the second generic be inferred
     /// as `_`.
     fn rev_try_remove_if<B: RevBundle<Marker>, Marker>(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         condition: impl FnOnce() -> bool,
     ) -> &mut Self;
 }
 
 impl<'a> RevEntityCommands<'a> for EntityCommands<'a> {
     #[track_caller]
-    fn rev_mark_spawned(
-        &mut self,
-        meta_past_len: MetaPastLen,
-        include_unlinked_related: bool,
-    ) -> &mut Self {
+    fn rev_mark_spawned(&mut self, not_log: NotLog, include_unlinked_related: bool) -> &mut Self {
         let caller = MaybeLocation::caller();
         self.queue(move |mut entity_world_mut: EntityWorldMut| {
             entity_world_mut
-                .rev_mark_spawned_with_caller(meta_past_len, include_unlinked_related, caller)
+                .rev_mark_spawned_with_caller(not_log, include_unlinked_related, caller)
                 .map(|_| ())
         })
     }
 
     #[track_caller]
-    fn rev_despawn(&mut self, meta_past_len: MetaPastLen) {
+    fn rev_despawn(&mut self, not_log: NotLog) {
         let caller = MaybeLocation::caller();
         self.queue(move |entity_world_mut: EntityWorldMut| {
             entity_world_mut
-                .rev_despawn_with_caller(meta_past_len, caller)
+                .rev_despawn_with_caller(not_log, caller)
                 .map(|_| ())
         });
     }
@@ -244,32 +225,32 @@ impl<'a> RevEntityCommands<'a> for EntityCommands<'a> {
     #[track_caller]
     fn rev_with_related<R: Relationship>(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         bundle: impl Bundle,
     ) -> &mut Self {
         let caller = MaybeLocation::caller();
         self.queue(move |mut entity_world_mut: EntityWorldMut| {
             entity_world_mut
-                .rev_with_related_with_caller::<R>(meta_past_len, bundle, caller)
+                .rev_with_related_with_caller::<R>(not_log, bundle, caller)
                 .map(|_| ())
         })
     }
 
     #[track_caller]
-    fn rev_with_child(&mut self, meta_past_len: MetaPastLen, bundle: impl Bundle) -> &mut Self {
-        self.rev_with_related::<ChildOf>(meta_past_len, bundle)
+    fn rev_with_child(&mut self, not_log: NotLog, bundle: impl Bundle) -> &mut Self {
+        self.rev_with_related::<ChildOf>(not_log, bundle)
     }
 
     #[track_caller]
     fn rev_add_related<R: Relationship>(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         related: impl AsRef<[Entity]> + Send + 'static,
     ) -> &mut Self {
         let caller = MaybeLocation::caller();
         self.queue(move |mut entity_world_mut: EntityWorldMut| {
             entity_world_mut
-                .rev_add_related_with_caller::<R>(meta_past_len, related, caller)
+                .rev_add_related_with_caller::<R>(not_log, related, caller)
                 .map(|_| ())
         })
     }
@@ -277,58 +258,58 @@ impl<'a> RevEntityCommands<'a> for EntityCommands<'a> {
     #[track_caller]
     fn rev_add_children(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         children: impl AsRef<[Entity]> + Send + 'static,
     ) -> &mut Self {
-        self.rev_add_related::<ChildOf>(meta_past_len, children)
+        self.rev_add_related::<ChildOf>(not_log, children)
     }
 
     #[track_caller]
     fn rev_add_one_related<R: Relationship>(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         entity: Entity,
     ) -> &mut Self {
         let caller = MaybeLocation::caller();
         self.queue(move |mut entity_world_mut: EntityWorldMut| {
             entity_world_mut
-                .rev_add_one_related_with_caller::<R>(meta_past_len, entity, caller)
+                .rev_add_one_related_with_caller::<R>(not_log, entity, caller)
                 .map(|_| ())
         })
     }
 
     #[track_caller]
-    fn rev_add_child(&mut self, meta_past_len: MetaPastLen, child: Entity) -> &mut Self {
-        self.rev_add_one_related::<ChildOf>(meta_past_len, child)
+    fn rev_add_child(&mut self, not_log: NotLog, child: Entity) -> &mut Self {
+        self.rev_add_one_related::<ChildOf>(not_log, child)
     }
 
     #[track_caller]
-    fn rev_detach_all_related<R: Relationship>(&mut self, meta_past_len: MetaPastLen) -> &mut Self {
+    fn rev_detach_all_related<R: Relationship>(&mut self, not_log: NotLog) -> &mut Self {
         let _ = R::ASSERT; // may contain non-default extra data
         let caller = MaybeLocation::caller();
         self.queue(move |mut entity_world_mut: EntityWorldMut| {
             entity_world_mut
-                .rev_detach_all_related_with_caller::<R>(meta_past_len, caller)
+                .rev_detach_all_related_with_caller::<R>(not_log, caller)
                 .map(|_| ())
         })
     }
 
     #[track_caller]
-    fn rev_detach_all_children(&mut self, meta_past_len: MetaPastLen) -> &mut Self {
-        self.rev_detach_all_related::<ChildOf>(meta_past_len)
+    fn rev_detach_all_children(&mut self, not_log: NotLog) -> &mut Self {
+        self.rev_detach_all_related::<ChildOf>(not_log)
     }
 
     #[track_caller]
     fn rev_remove_related<R: Relationship>(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         related: impl AsRef<[Entity]> + Send + 'static,
     ) -> &mut Self {
         let _ = R::ASSERT; // may contain non-default extra data
         let caller = MaybeLocation::caller();
         self.queue(move |mut entity_world_mut: EntityWorldMut| {
             entity_world_mut
-                .rev_remove_related_with_caller::<R>(meta_past_len, related, caller)
+                .rev_remove_related_with_caller::<R>(not_log, related, caller)
                 .map(|_| ())
         })
     }
@@ -336,28 +317,28 @@ impl<'a> RevEntityCommands<'a> for EntityCommands<'a> {
     #[track_caller]
     fn rev_detach_children(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         children: impl AsRef<[Entity]> + Send + 'static,
     ) -> &mut Self {
-        self.rev_remove_related::<ChildOf>(meta_past_len, children)
+        self.rev_remove_related::<ChildOf>(not_log, children)
     }
 
     #[track_caller]
-    fn rev_detach_child(&mut self, meta_past_len: MetaPastLen, child: Entity) -> &mut Self {
-        self.rev_remove_related::<ChildOf>(meta_past_len, [child])
+    fn rev_detach_child(&mut self, not_log: NotLog, child: Entity) -> &mut Self {
+        self.rev_remove_related::<ChildOf>(not_log, [child])
     }
 
     #[track_caller]
     fn rev_replace_related<R: Relationship>(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         related: impl AsRef<[Entity]> + Send + 'static,
     ) -> &mut Self {
         let _ = R::ASSERT; // may contain non-default extra data
         let caller = MaybeLocation::caller();
         self.queue(move |mut entity_world_mut: EntityWorldMut| {
             entity_world_mut
-                .rev_replace_related_with_caller::<R>(meta_past_len, related, caller)
+                .rev_replace_related_with_caller::<R>(not_log, related, caller)
                 .map(|_| ())
         })
     }
@@ -365,48 +346,41 @@ impl<'a> RevEntityCommands<'a> for EntityCommands<'a> {
     #[track_caller]
     fn rev_replace_children(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         children: impl AsRef<[Entity]> + Send + 'static,
     ) -> &mut Self {
-        self.rev_replace_related::<ChildOf>(meta_past_len, children)
+        self.rev_replace_related::<ChildOf>(not_log, children)
     }
 
     #[track_caller]
-    fn rev_despawn_related<S: RelationshipTarget>(
-        &mut self,
-        meta_past_len: MetaPastLen,
-    ) -> &mut Self {
+    fn rev_despawn_related<S: RelationshipTarget>(&mut self, not_log: NotLog) -> &mut Self {
         let caller = MaybeLocation::caller();
         self.queue(move |mut entity_world_mut: EntityWorldMut| {
             entity_world_mut
-                .rev_despawn_related_with_caller::<S>(meta_past_len, caller)
+                .rev_despawn_related_with_caller::<S>(not_log, caller)
                 .map(|_| ())
         })
     }
 
     #[track_caller]
-    fn rev_despawn_children(&mut self, meta_past_len: MetaPastLen) -> &mut Self {
-        self.rev_despawn_related::<Children>(meta_past_len)
+    fn rev_despawn_children(&mut self, not_log: NotLog) -> &mut Self {
+        self.rev_despawn_related::<Children>(not_log)
     }
 
     #[track_caller]
-    fn rev_insert<Marker>(
-        &mut self,
-        meta_past_len: MetaPastLen,
-        bundle: impl RevBundle<Marker>,
-    ) -> &mut Self {
-        self.queue(rev_insert(meta_past_len, bundle, InsertMode::Replace))
+    fn rev_insert<Marker>(&mut self, not_log: NotLog, bundle: impl RevBundle<Marker>) -> &mut Self {
+        self.queue(rev_insert(not_log, bundle, InsertMode::Replace))
     }
 
     #[track_caller]
     fn rev_insert_if<Marker>(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         bundle: impl RevBundle<Marker>,
         condition: impl FnOnce() -> bool,
     ) -> &mut Self {
         if condition() {
-            self.rev_insert(meta_past_len, bundle)
+            self.rev_insert(not_log, bundle)
         } else {
             self
         }
@@ -415,70 +389,67 @@ impl<'a> RevEntityCommands<'a> for EntityCommands<'a> {
     #[track_caller]
     fn rev_insert_if_new<Marker>(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         bundle: impl RevBundle<Marker>,
     ) -> &mut Self {
-        self.queue(rev_insert(meta_past_len, bundle, InsertMode::Keep))
+        self.queue(rev_insert(not_log, bundle, InsertMode::Keep))
     }
 
     #[track_caller]
     fn rev_insert_if_new_and<Marker>(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         bundle: impl RevBundle<Marker>,
         condition: impl FnOnce() -> bool,
     ) -> &mut Self {
         if condition() {
-            self.rev_insert_if_new(meta_past_len, bundle)
+            self.rev_insert_if_new(not_log, bundle)
         } else {
             self
         }
     }
 
     #[track_caller]
-    fn rev_remove<B: RevBundle<Marker>, Marker>(
-        &mut self,
-        meta_past_len: MetaPastLen,
-    ) -> &mut Self {
-        self.queue(rev_remove::<B, _>(meta_past_len))
+    fn rev_remove<B: RevBundle<Marker>, Marker>(&mut self, not_log: NotLog) -> &mut Self {
+        self.queue(rev_remove::<B, _>(not_log))
     }
 
     #[track_caller]
     fn rev_remove_if<B: RevBundle<Marker>, Marker>(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         condition: impl FnOnce() -> bool,
     ) -> &mut Self {
         if condition() {
-            self.rev_remove::<B, _>(meta_past_len)
+            self.rev_remove::<B, _>(not_log)
         } else {
             self
         }
     }
 
     #[track_caller]
-    fn rev_try_despawn(&mut self, meta_past_len: MetaPastLen) {
-        self.queue_silenced(rev_despawn(meta_past_len));
+    fn rev_try_despawn(&mut self, not_log: NotLog) {
+        self.queue_silenced(rev_despawn(not_log));
     }
 
     #[track_caller]
     fn rev_try_insert<Marker>(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         bundle: impl RevBundle<Marker>,
     ) -> &mut Self {
-        self.queue_silenced(rev_insert(meta_past_len, bundle, InsertMode::Replace))
+        self.queue_silenced(rev_insert(not_log, bundle, InsertMode::Replace))
     }
 
     #[track_caller]
     fn rev_try_insert_if<Marker>(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         bundle: impl RevBundle<Marker>,
         condition: impl FnOnce() -> bool,
     ) -> &mut Self {
         if condition() {
-            self.rev_try_insert(meta_past_len, bundle)
+            self.rev_try_insert(not_log, bundle)
         } else {
             self
         }
@@ -487,42 +458,39 @@ impl<'a> RevEntityCommands<'a> for EntityCommands<'a> {
     #[track_caller]
     fn rev_try_insert_if_new<Marker>(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         bundle: impl RevBundle<Marker>,
     ) -> &mut Self {
-        self.queue_silenced(rev_insert(meta_past_len, bundle, InsertMode::Keep))
+        self.queue_silenced(rev_insert(not_log, bundle, InsertMode::Keep))
     }
 
     #[track_caller]
     fn rev_try_insert_if_new_and<Marker>(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         bundle: impl RevBundle<Marker>,
         condition: impl FnOnce() -> bool,
     ) -> &mut Self {
         if condition() {
-            self.rev_try_insert_if_new(meta_past_len, bundle)
+            self.rev_try_insert_if_new(not_log, bundle)
         } else {
             self
         }
     }
 
     #[track_caller]
-    fn rev_try_remove<B: RevBundle<Marker>, Marker>(
-        &mut self,
-        meta_past_len: MetaPastLen,
-    ) -> &mut Self {
-        self.queue_silenced(rev_remove::<B, _>(meta_past_len))
+    fn rev_try_remove<B: RevBundle<Marker>, Marker>(&mut self, not_log: NotLog) -> &mut Self {
+        self.queue_silenced(rev_remove::<B, _>(not_log))
     }
 
     #[track_caller]
     fn rev_try_remove_if<B: RevBundle<Marker>, Marker>(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         condition: impl FnOnce() -> bool,
     ) -> &mut Self {
         if condition() {
-            self.rev_try_remove::<B, _>(meta_past_len)
+            self.rev_try_remove::<B, _>(not_log)
         } else {
             self
         }
@@ -532,83 +500,67 @@ impl<'a> RevEntityCommands<'a> for EntityCommands<'a> {
 /// Extension trait for [`EntityEntryCommands`] with reversible variants of various methods.
 pub trait RevEntityEntryCommands<T: Component> {
     /// Reversible version of [`EntityEntryCommands::or_default`].
-    fn rev_or_default(&mut self, meta_past_len: MetaPastLen) -> &mut Self
+    fn rev_or_default(&mut self, not_log: NotLog) -> &mut Self
     where
         T: Default;
 
     /// Reversible version of [`EntityEntryCommands::or_from_world`].
-    fn rev_or_from_world(&mut self, meta_past_len: MetaPastLen) -> &mut Self
+    fn rev_or_from_world(&mut self, not_log: NotLog) -> &mut Self
     where
         T: FromWorld;
 
     /// Reversible version of [`EntityEntryCommands::or_insert`].
-    fn rev_or_insert(&mut self, meta_past_len: MetaPastLen, default: T) -> &mut Self;
+    fn rev_or_insert(&mut self, not_log: NotLog, default: T) -> &mut Self;
 
     /// Reversible version of [`EntityEntryCommands::or_insert_with`].
-    fn rev_or_insert_with(
-        &mut self,
-        meta_past_len: MetaPastLen,
-        default: impl Fn() -> T,
-    ) -> &mut Self;
+    fn rev_or_insert_with(&mut self, not_log: NotLog, default: impl Fn() -> T) -> &mut Self;
 
     /// Reversible version of [`EntityEntryCommands::or_try_insert`].
-    fn rev_or_try_insert(&mut self, meta_past_len: MetaPastLen, default: T) -> &mut Self;
+    fn rev_or_try_insert(&mut self, not_log: NotLog, default: T) -> &mut Self;
 
     /// Reversible version of [`EntityEntryCommands::or_try_insert_with`].
-    fn rev_or_try_insert_with(
-        &mut self,
-        meta_past_len: MetaPastLen,
-        default: impl Fn() -> T,
-    ) -> &mut Self;
+    fn rev_or_try_insert_with(&mut self, not_log: NotLog, default: impl Fn() -> T) -> &mut Self;
 }
 
 impl<T: Component> RevEntityEntryCommands<T> for EntityEntryCommands<'_, T> {
     #[track_caller]
-    fn rev_or_default(&mut self, meta_past_len: MetaPastLen) -> &mut Self
+    fn rev_or_default(&mut self, not_log: NotLog) -> &mut Self
     where
         T: Default,
     {
-        self.rev_or_insert(meta_past_len, T::default())
+        self.rev_or_insert(not_log, T::default())
     }
 
     #[track_caller]
-    fn rev_or_from_world(&mut self, meta_past_len: MetaPastLen) -> &mut Self
+    fn rev_or_from_world(&mut self, not_log: NotLog) -> &mut Self
     where
         T: FromWorld,
     {
         self.entity()
-            .queue(rev_insert_from_world::<T>(meta_past_len, InsertMode::Keep));
+            .queue(rev_insert_from_world::<T>(not_log, InsertMode::Keep));
         self
     }
 
     #[track_caller]
-    fn rev_or_insert(&mut self, meta_past_len: MetaPastLen, default: T) -> &mut Self {
-        self.entity().rev_insert_if_new(meta_past_len, default);
+    fn rev_or_insert(&mut self, not_log: NotLog, default: T) -> &mut Self {
+        self.entity().rev_insert_if_new(not_log, default);
         self
     }
 
     #[track_caller]
-    fn rev_or_insert_with(
-        &mut self,
-        meta_past_len: MetaPastLen,
-        default: impl Fn() -> T,
-    ) -> &mut Self {
-        self.rev_or_insert(meta_past_len, default())
+    fn rev_or_insert_with(&mut self, not_log: NotLog, default: impl Fn() -> T) -> &mut Self {
+        self.rev_or_insert(not_log, default())
     }
 
     #[track_caller]
-    fn rev_or_try_insert(&mut self, meta_past_len: MetaPastLen, default: T) -> &mut Self {
-        self.entity().rev_try_insert_if_new(meta_past_len, default);
+    fn rev_or_try_insert(&mut self, not_log: NotLog, default: T) -> &mut Self {
+        self.entity().rev_try_insert_if_new(not_log, default);
         self
     }
 
     #[track_caller]
-    fn rev_or_try_insert_with(
-        &mut self,
-        meta_past_len: MetaPastLen,
-        default: impl Fn() -> T,
-    ) -> &mut Self {
-        self.rev_or_try_insert(meta_past_len, default())
+    fn rev_or_try_insert_with(&mut self, not_log: NotLog, default: impl Fn() -> T) -> &mut Self {
+        self.rev_or_try_insert(not_log, default())
     }
 }
 
@@ -618,28 +570,27 @@ pub trait RevRelatedSpawnerCommands {
     ///
     /// See the [`RevDespawned`](super::RevDespawned) documentation to understand the mechanics of
     /// reversible spawn/despawn.
-    fn rev_spawn(&mut self, meta_past_len: MetaPastLen, bundle: impl Bundle) -> EntityCommands<'_>;
+    fn rev_spawn(&mut self, not_log: NotLog, bundle: impl Bundle) -> EntityCommands<'_>;
 
     /// Reversible version of [`RelatedSpawnerCommands::spawn_empty`].
     ///
     /// See the [`RevDespawned`](super::RevDespawned) documentation to understand the mechanics of
     /// reversible spawn/despawn.
-    fn rev_spawn_empty(&mut self, meta_past_len: MetaPastLen) -> EntityCommands<'_>;
+    fn rev_spawn_empty(&mut self, not_log: NotLog) -> EntityCommands<'_>;
 }
 
 impl<R: Relationship> RevRelatedSpawnerCommands for RelatedSpawnerCommands<'_, R> {
     #[track_caller]
-    fn rev_spawn(&mut self, meta_past_len: MetaPastLen, bundle: impl Bundle) -> EntityCommands<'_> {
+    fn rev_spawn(&mut self, not_log: NotLog, bundle: impl Bundle) -> EntityCommands<'_> {
         let target = self.target_entity();
         self.commands_mut()
-            .rev_spawn(meta_past_len, (R::from(target), bundle))
+            .rev_spawn(not_log, (R::from(target), bundle))
     }
 
     #[track_caller]
-    fn rev_spawn_empty(&mut self, meta_past_len: MetaPastLen) -> EntityCommands<'_> {
+    fn rev_spawn_empty(&mut self, not_log: NotLog) -> EntityCommands<'_> {
         let target = self.target_entity();
-        self.commands_mut()
-            .rev_spawn(meta_past_len, R::from(target))
+        self.commands_mut().rev_spawn(not_log, R::from(target))
     }
 }
 
@@ -648,14 +599,14 @@ type CmdOut = Result<(), EntityRevDespawnedError>;
 /// Reversible version of [`insert`](bevy_ecs::system::entity_command::insert).
 #[track_caller]
 pub fn rev_insert<Marker>(
-    meta_past_len: MetaPastLen,
+    not_log: NotLog,
     bundle: impl RevBundle<Marker>,
     mode: InsertMode,
 ) -> impl EntityCommand<CmdOut> {
     let caller = MaybeLocation::caller();
     move |mut entity_mut: EntityWorldMut| {
         entity_mut.assert_not_rev_despawned()?;
-        bundle.rev_insert(meta_past_len, &mut entity_mut, mode, caller);
+        bundle.rev_insert(not_log, &mut entity_mut, mode, caller);
         Ok(())
     }
 }
@@ -663,7 +614,7 @@ pub fn rev_insert<Marker>(
 /// Reversible version of [`insert_from_world`](bevy_ecs::system::entity_command::insert_from_world).
 #[track_caller]
 pub fn rev_insert_from_world<T: Component + FromWorld>(
-    meta_past_len: MetaPastLen,
+    not_log: NotLog,
     mode: InsertMode,
 ) -> impl EntityCommand<CmdOut> {
     let caller = MaybeLocation::caller();
@@ -671,7 +622,7 @@ pub fn rev_insert_from_world<T: Component + FromWorld>(
         if !(mode == InsertMode::Keep && entity_mut.contains::<T>()) {
             let value = entity_mut.world_scope(|world| T::from_world(world));
             entity_mut
-                .rev_insert_with_caller(meta_past_len, value, caller)
+                .rev_insert_with_caller(not_log, value, caller)
                 .map(|_| ())
         } else {
             Ok(())
@@ -682,7 +633,7 @@ pub fn rev_insert_from_world<T: Component + FromWorld>(
 /// Reversible version of [`insert_with`](bevy_ecs::system::entity_command::insert_with).
 #[track_caller]
 pub fn rev_insert_with<T: Component, F>(
-    meta_past_len: MetaPastLen,
+    not_log: NotLog,
     component_fn: F,
     mode: InsertMode,
 ) -> impl EntityCommand<CmdOut>
@@ -694,7 +645,7 @@ where
         if !(mode == InsertMode::Keep && entity_mut.contains::<T>()) {
             let value = component_fn();
             entity_mut
-                .rev_insert_with_caller(meta_past_len, value, caller)
+                .rev_insert_with_caller(not_log, value, caller)
                 .map(|_| ())
         } else {
             Ok(())
@@ -704,13 +655,11 @@ where
 
 /// Reversible version of [`remove`](bevy_ecs::system::entity_command::remove).
 #[track_caller]
-pub fn rev_remove<T: RevBundle<Marker>, Marker>(
-    meta_past_len: MetaPastLen,
-) -> impl EntityCommand<CmdOut> {
+pub fn rev_remove<T: RevBundle<Marker>, Marker>(not_log: NotLog) -> impl EntityCommand<CmdOut> {
     let caller = MaybeLocation::caller();
     move |mut entity_mut: EntityWorldMut| {
         entity_mut
-            .rev_remove_with_caller::<T, Marker>(meta_past_len, caller)
+            .rev_remove_with_caller::<T, Marker>(not_log, caller)
             .map(|_| ())
     }
 }
@@ -720,7 +669,7 @@ pub fn rev_remove<T: RevBundle<Marker>, Marker>(
 /// See the [`RevDespawned`](super::RevDespawned) documentation to understand the mechanics of
 /// reversible spawn/despawn.
 #[track_caller]
-pub fn rev_despawn(meta_past_len: MetaPastLen) -> impl EntityCommand<CmdOut> {
+pub fn rev_despawn(not_log: NotLog) -> impl EntityCommand<CmdOut> {
     let caller = MaybeLocation::caller();
-    move |entity_mut: EntityWorldMut| entity_mut.rev_despawn_with_caller(meta_past_len, caller)
+    move |entity_mut: EntityWorldMut| entity_mut.rev_despawn_with_caller(not_log, caller)
 }

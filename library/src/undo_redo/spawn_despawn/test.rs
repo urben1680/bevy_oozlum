@@ -172,20 +172,16 @@ fn test<const SPAWN: bool>(
     let hierarchy = Hierarchy::new_nested(&mut world);
     assert_undo_redo_finalize(
         &mut world,
-        |world, meta_past_len| {
+        |world, not_log| {
             let caller = MaybeLocation::caller();
             if as_entity_world_mut {
                 let mut root = world.entity_mut(hierarchy.root);
-                let success = mark_entity::<SPAWN>(
-                    meta_past_len,
-                    &mut root,
-                    include_unlinked_related,
-                    caller,
-                );
+                let success =
+                    mark_entity::<SPAWN>(not_log, &mut root, include_unlinked_related, caller);
                 assert!(success);
             } else {
                 mark_entities::<SPAWN>(
-                    meta_past_len,
+                    not_log,
                     world,
                     &[hierarchy.root],
                     include_unlinked_related,

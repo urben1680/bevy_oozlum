@@ -25,11 +25,11 @@ fn rev_with_child_or_children(forward_finalize: bool) {
 
     assert_undo_redo_finalize(
         &mut world,
-        |world, meta_past_len| {
+        |world, not_log| {
             let mut parent_mut = world.entity_mut(parent);
             parent_mut
                 .rev_with_related_with_caller::<ChildOf>(
-                    meta_past_len,
+                    not_log,
                     related!(UnlinkedChildren[()]),
                     MaybeLocation::caller(),
                 )
@@ -76,13 +76,13 @@ fn rev_add_child_or_children(one: bool) {
 
     assert_undo_redo(
         &mut world,
-        |world, meta_past_len| {
+        |world, not_log| {
             let new_child = world.spawn_empty().id();
             let mut parent_mut = world.entity_mut(parent);
             if one {
                 parent_mut
                     .rev_add_one_related_with_caller::<ChildOf>(
-                        meta_past_len,
+                        not_log,
                         new_child,
                         MaybeLocation::caller(),
                     )
@@ -90,7 +90,7 @@ fn rev_add_child_or_children(one: bool) {
             } else {
                 parent_mut
                     .rev_add_related_with_caller::<ChildOf>(
-                        meta_past_len,
+                        not_log,
                         [new_child],
                         MaybeLocation::caller(),
                     )
@@ -127,13 +127,10 @@ fn rev_detach_all_children() {
 
     assert_undo_redo(
         &mut world,
-        |world, meta_past_len| {
+        |world, not_log| {
             let mut parent_mut = world.entity_mut(parent);
             parent_mut
-                .rev_detach_all_related_with_caller::<ChildOf>(
-                    meta_past_len,
-                    MaybeLocation::caller(),
-                )
+                .rev_detach_all_related_with_caller::<ChildOf>(not_log, MaybeLocation::caller())
                 .unwrap();
         },
         |world, _| {
@@ -159,11 +156,11 @@ fn rev_detach_child() {
 
     assert_undo_redo(
         &mut world,
-        |world, meta_past_len| {
+        |world, not_log| {
             let mut parent_mut = world.entity_mut(parent);
             parent_mut
                 .rev_remove_related_with_caller::<ChildOf>(
-                    meta_past_len,
+                    not_log,
                     [child2],
                     MaybeLocation::caller(),
                 )
@@ -191,10 +188,10 @@ fn rev_despawn_children(forward_finalize: bool) {
 
     assert_undo_redo_finalize(
         &mut world,
-        |world, meta_past_len| {
+        |world, not_log| {
             world
                 .entity_mut(parent)
-                .rev_despawn_related_with_caller::<Children>(meta_past_len, MaybeLocation::caller())
+                .rev_despawn_related_with_caller::<Children>(not_log, MaybeLocation::caller())
                 .unwrap();
         },
         backward_assert,

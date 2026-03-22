@@ -37,9 +37,9 @@ fn test_add_remove_related<const ADD: bool>() {
 
     assert_undo_redo(
         &mut world,
-        |world, meta_past_len| {
+        |world, not_log| {
             world.buffer_undo_redo(
-                meta_past_len,
+                not_log,
                 AddRemoveRelated::<ChildOf, _, ADD>::new(parent, [child], MaybeLocation::caller()),
             );
         },

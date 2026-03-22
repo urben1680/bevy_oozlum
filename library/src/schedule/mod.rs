@@ -14,10 +14,10 @@
 //! # use bevy_oozlum::prelude::*;
 //! fn reversible_system(meta: Res<RevMeta>) {
 //!     match meta.running_direction() {
-//!         RevDirection::Forward { meta_past_len } => {
+//!         RevDirection::Forward { not_log } => {
 //!             // logic specific for changes that happen for the first time
 //!             // reversible commands are queued only here
-//!             // meta_past_len is needed for reversible commands or reversible logs
+//!             // not_log is needed for reversible commands or reversible logs
 //!         },
 //!         RevDirection::ForwardLog => {
 //!             // logic specific for when this is traversing the log forwards

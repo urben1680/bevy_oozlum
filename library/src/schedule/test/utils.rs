@@ -65,7 +65,7 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
     world.add_observer(|event: On<SysObsv>, mut world: DeferredWorld| {
         let n = event.0;
 
-        let past_len = world.resource::<RevMeta>().meta_past_len();
+        let past_len = world.resource::<RevMeta>().not_log();
 
         // trigger command in observer
         world.commands().queue(move |world: &mut World| {
@@ -85,7 +85,7 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
         .on_add(|mut world, hook| {
             let n = world.entity(hook.entity).get::<SysHook>().unwrap().0;
 
-            let past_len = world.resource::<RevMeta>().meta_past_len();
+            let past_len = world.resource::<RevMeta>().not_log();
 
             // trigger command in hook
             world.commands().queue(move |world: &mut World| {

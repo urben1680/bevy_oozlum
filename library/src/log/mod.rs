@@ -19,7 +19,7 @@
 //!
 //! | source                          | situation                                   |
 //! | ------------------------------- | ------------------------------------------- |
-//! | [`MetaPastLen`]                 | the log updates at every frame exactly once |
+//! | [`NotLog`]                 | the log updates at every frame exactly once |
 //! | [`UpdateLog::forward_past_len`] | the log updates arbitrarily                 |
 //! | [`NonZeroU64::MAX`]             | the log is allowed to have unlimited growth |
 //!
@@ -107,7 +107,7 @@
 //! [`NonZeroU64::MAX`]: core::num::NonZeroU64::MAX
 //! [`RevMeta`]: crate::meta::RevMeta
 //! [`RevMeta::now`]: crate::meta::RevMeta::now
-//! [`MetaPastLen`]: crate::meta::MetaPastLen
+//! [`NotLog`]: crate::meta::NotLog
 //! [`RevMeta::update`]: crate::meta::RevMeta::update
 //! [global log range]: crate::meta::RevMeta::contains
 //! [`RevDirection`]: crate::meta::RevDirection

@@ -13,7 +13,7 @@ pub fn plugin<const ROW: u64>(app: &mut App) {
 struct RevUpdateInner;
 
 fn system1(meta: Res<RevMeta>, mut commands: Commands) {
-    if let Some(meta_past_len) = meta.get_meta_past_len() {
+    if let Some(meta_past_len) = meta.get_not_log() {
         // MetaPastLen is like a token to prove that methods needing it are called during
         // RevDirection::Forward. Because of this it should not be stored past that.
 
@@ -23,7 +23,7 @@ fn system1(meta: Res<RevMeta>, mut commands: Commands) {
 
 fn system2<const ROW: u64>(input: Res<JustPressed>, meta: Res<RevMeta>, mut commands: Commands) {
     if input.get(ROW)
-        && let Some(meta_past_len) = meta.get_meta_past_len()
+        && let Some(meta_past_len) = meta.get_not_log()
     {
         // As Commands::spawn, this spawns an entity.
         // If this is undone, the entity is at first disabled and later fully despawned if the redo

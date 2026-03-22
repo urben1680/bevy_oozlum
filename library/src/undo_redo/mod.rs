@@ -16,7 +16,7 @@ use bevy_utils::prelude::DebugName;
 
 use crate::{
     log::{OutOfLog, TransitionsLog, UpdateLog},
-    meta::{MetaPastLen, RevDirection, RevMeta},
+    meta::{NotLog, RevDirection, RevMeta},
 };
 
 mod commands;
@@ -74,8 +74,8 @@ pub trait BuffersUndoRedo {
     /// Buffers an [`UndoRedo`] implementor in a resource to be collected by the reversible system's
     /// state.
     #[track_caller]
-    fn buffer_undo_redo(&mut self, meta_past_len: MetaPastLen, undo_redo: impl UndoRedo) {
-        self.buffer_undo_redo_with_caller(meta_past_len, undo_redo, MaybeLocation::caller());
+    fn buffer_undo_redo(&mut self, not_log: NotLog, undo_redo: impl UndoRedo) {
+        self.buffer_undo_redo_with_caller(not_log, undo_redo, MaybeLocation::caller());
     }
 
     /// Applies [`undo_redo::redo`] and then buffers it implementor in a resource to be collected by
@@ -86,8 +86,8 @@ pub trait BuffersUndoRedo {
     ///
     /// [`undo_redo::redo`]: UndoRedo::redo
     #[track_caller]
-    fn redo_and_buffer(&mut self, meta_past_len: MetaPastLen, undo_redo: impl UndoRedo) {
-        self.redo_and_buffer_with_caller(meta_past_len, undo_redo, MaybeLocation::caller());
+    fn redo_and_buffer(&mut self, not_log: NotLog, undo_redo: impl UndoRedo) {
+        self.redo_and_buffer_with_caller(not_log, undo_redo, MaybeLocation::caller());
     }
 
     /// As [`BuffersUndoRedo::buffer_undo_redo`] but with explicit [`MaybeLocation`].
@@ -96,7 +96,7 @@ pub trait BuffersUndoRedo {
     /// [`RevMeta::run_rev_update`] may return the relevant error in that case.
     fn buffer_undo_redo_with_caller(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         undo_redo: impl UndoRedo,
         caller: MaybeLocation,
     );
@@ -107,7 +107,7 @@ pub trait BuffersUndoRedo {
     /// [`RevMeta::run_rev_update`] may return the relevant error in that case.
     fn redo_and_buffer_with_caller(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         undo_redo: impl UndoRedo,
         caller: MaybeLocation,
     );
@@ -116,23 +116,23 @@ pub trait BuffersUndoRedo {
 impl BuffersUndoRedo for Commands<'_, '_> {
     fn buffer_undo_redo_with_caller(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         undo_redo: impl UndoRedo,
         caller: MaybeLocation,
     ) {
         self.queue(move |world: &mut World| {
-            world.buffer_undo_redo_with_caller(meta_past_len, undo_redo, caller);
+            world.buffer_undo_redo_with_caller(not_log, undo_redo, caller);
         });
     }
 
     fn redo_and_buffer_with_caller(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         undo_redo: impl UndoRedo,
         caller: MaybeLocation,
     ) {
         self.queue(move |world: &mut World| {
-            world.redo_and_buffer_with_caller(meta_past_len, undo_redo, caller);
+            world.redo_and_buffer_with_caller(not_log, undo_redo, caller);
         });
     }
 }
@@ -140,23 +140,23 @@ impl BuffersUndoRedo for Commands<'_, '_> {
 impl BuffersUndoRedo for EntityCommands<'_> {
     fn buffer_undo_redo_with_caller(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         undo_redo: impl UndoRedo,
         caller: MaybeLocation,
     ) {
         self.queue(move |mut world: EntityWorldMut| {
-            world.buffer_undo_redo_with_caller(meta_past_len, undo_redo, caller);
+            world.buffer_undo_redo_with_caller(not_log, undo_redo, caller);
         });
     }
 
     fn redo_and_buffer_with_caller(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         undo_redo: impl UndoRedo,
         caller: MaybeLocation,
     ) {
         self.queue(move |mut world: EntityWorldMut| {
-            world.redo_and_buffer_with_caller(meta_past_len, undo_redo, caller);
+            world.redo_and_buffer_with_caller(not_log, undo_redo, caller);
         });
     }
 }
@@ -164,54 +164,52 @@ impl BuffersUndoRedo for EntityCommands<'_> {
 impl BuffersUndoRedo for World {
     fn buffer_undo_redo_with_caller(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         undo_redo: impl UndoRedo,
         caller: MaybeLocation,
     ) {
         debug_assert!(self.get_resource::<RevMeta>().is_some_and(|meta| {
             meta.get_running_direction()
                 .is_some_and(|direction| match direction {
-                    RevDirection::Forward {
-                        meta_past_len: actual,
-                    } => actual == meta_past_len,
+                    RevDirection::Forward { not_log: actual } => actual == not_log,
                     _ => false,
                 })
         }));
         self.get_resource_or_init::<UndoRedoBuffer>()
-            .buffer_undo_redo(meta_past_len, caller, undo_redo);
+            .buffer_undo_redo(not_log, caller, undo_redo);
     }
 
     fn redo_and_buffer_with_caller(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         mut undo_redo: impl UndoRedo,
         caller: MaybeLocation,
     ) {
         undo_redo.redo(self);
-        self.buffer_undo_redo_with_caller(meta_past_len, undo_redo, caller);
+        self.buffer_undo_redo_with_caller(not_log, undo_redo, caller);
     }
 }
 
 impl BuffersUndoRedo for EntityWorldMut<'_> {
     fn buffer_undo_redo_with_caller(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         undo_redo: impl UndoRedo,
         caller: MaybeLocation,
     ) {
         self.world_scope(|world| {
-            world.buffer_undo_redo_with_caller(meta_past_len, undo_redo, caller);
+            world.buffer_undo_redo_with_caller(not_log, undo_redo, caller);
         })
     }
 
     fn redo_and_buffer_with_caller(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         undo_redo: impl UndoRedo,
         caller: MaybeLocation,
     ) {
         self.world_scope(|world| {
-            world.redo_and_buffer_with_caller(meta_past_len, undo_redo, caller);
+            world.redo_and_buffer_with_caller(not_log, undo_redo, caller);
         })
     }
 }
@@ -229,7 +227,7 @@ impl UndoRedoBuffer {
     #[track_caller]
     pub(crate) fn buffer_undo_redo<T: UndoRedo>(
         &mut self,
-        _: MetaPastLen,
+        _: NotLog,
         caller: MaybeLocation,
         undo_redo: T,
     ) {
@@ -320,12 +318,12 @@ pub trait UndoRedo: Send + 'static {
 /// ```
 /// # use bevy_ecs::world::World;
 /// # use bevy_oozlum::prelude::*;
-/// # let RevDirection::Forward { meta_past_len } = RevDirection::BackwardLog else {
+/// # let RevDirection::Forward { not_log } = RevDirection::BackwardLog else {
 /// #     return;
 /// # };
 /// # let mut world = World::new();
 /// # let mut commands = world.commands();
-/// commands.buffer_undo_redo(meta_past_len, |world: &mut World, direction| {
+/// commands.buffer_undo_redo(not_log, |world: &mut World, direction| {
 ///     match direction {
 ///         UndoRedoDirection::Undo => {
 ///             // undo logic
@@ -483,12 +481,11 @@ impl UndoRedoLog {
                 world.try_resource_scope::<UndoRedoBuffer, _>(|world, mut buffer| {
                     if !buffer.0.is_empty() {
                         let meta = world.resource::<RevMeta>();
-                        let meta_past_len = self
+                        let not_log = self
                             .update_log
                             .forward_past_len_with_caller(meta, MaybeLocation::new(None));
                         let buffers = buffer.0.drain(..).map(|boxed| DebugHidden(boxed.undo_redo));
-                        self.undo_redo_log
-                            .forward_extend(meta, meta_past_len, buffers);
+                        self.undo_redo_log.forward_extend(meta, not_log, buffers);
                     }
                 });
                 Ok(())
@@ -584,7 +581,7 @@ mod test {
 
     pub(super) fn assert_undo_redo<T>(
         world: &mut World,
-        forward: impl FnOnce(&mut World, MetaPastLen) -> T,
+        forward: impl FnOnce(&mut World, NotLog) -> T,
         backward_log: impl FnOnce(&mut World, &mut T),
         forward_log: impl FnOnce(&mut World, &mut T),
     ) {
@@ -593,7 +590,7 @@ mod test {
 
     pub(super) fn assert_undo_redo_finalize<T>(
         world: &mut World,
-        forward: impl FnOnce(&mut World, MetaPastLen) -> T,
+        forward: impl FnOnce(&mut World, NotLog) -> T,
         backward_log: impl FnOnce(&mut World, &mut T),
         forward_log: Option<impl FnOnce(&mut World, &mut T)>,
         finalize: impl FnOnce(&mut World, &mut T),

@@ -10,7 +10,7 @@ pub fn plugin<const ROW: u64>(app: &mut App) {
 
 fn system<const ROW: u64>(input: Res<JustPressed>, meta: Res<RevMeta>, mut commands: Commands) {
     if input.get(ROW)
-        && let Some(meta_past_len) = meta.get_meta_past_len()
+        && let Some(meta_past_len) = meta.get_not_log()
     {
         // MetaPastLen is like a token to prove that methods needing it are called during
         // RevDirection::Forward. Because of this it should not be stored past that.

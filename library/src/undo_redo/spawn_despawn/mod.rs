@@ -15,7 +15,7 @@ use bevy_log::error;
 
 use crate::{
     log::{OutOfLog, TransitionsLog},
-    meta::{MetaPastLen, RevDirection, RevMeta},
+    meta::{NotLog, RevDirection, RevMeta},
     prelude::UndoRedo,
     undo_redo::{BuffersUndoRedo, LOCATION_PREFIX, add_children, undo_redo_str},
 };
@@ -98,13 +98,13 @@ pub fn finalize_despawns(world: &mut World) -> Result<(), DespawnFinalizerErr> {
                 .ok_or(DespawnFinalizerErr::MetaNotRunning)?;
 
             match direction {
-                RevDirection::Forward { meta_past_len } => {
+                RevDirection::Forward { not_log } => {
                     let spawn = this.spawn_queue.drain(..).map(|(entity, _)| entity);
                     let despawn = this.despawn_queue.drain(..).map(|(entity, _)| entity);
                     let spawn_amount = spawn.len();
                     let mut drain = this.spawn_despawn.forward_extend_with(
                         meta,
-                        meta_past_len,
+                        not_log,
                         spawn.chain(despawn),
                         spawn_amount,
                     );
@@ -166,7 +166,7 @@ impl From<OutOfLog> for DespawnFinalizerErr {
 
 /// Mark multiple entities and their children as spawned/despawned.
 pub(super) fn mark_entities<const SPAWN: bool>(
-    meta_past_len: MetaPastLen,
+    not_log: NotLog,
     world: &mut World,
     entities: &[Entity],
     include_unlinked_related: bool,
@@ -194,13 +194,13 @@ pub(super) fn mark_entities<const SPAWN: bool>(
     }
 
     if !entities_set.is_empty() {
-        mark_inner::<SPAWN>(meta_past_len, world, entities_set, caller);
+        mark_inner::<SPAWN>(not_log, world, entities_set, caller);
     }
 }
 
 /// Mark a single entity and its children as spawned/despawned.
 pub(super) fn mark_entity<const SPAWN: bool>(
-    meta_past_len: MetaPastLen,
+    not_log: NotLog,
     entity: &mut EntityWorldMut,
     include_unlinked_related: bool,
     caller: MaybeLocation,
@@ -218,14 +218,14 @@ pub(super) fn mark_entity<const SPAWN: bool>(
         include_unlinked_related,
     );
 
-    entity.world_scope(|world| mark_inner::<SPAWN>(meta_past_len, world, entities_set, caller));
+    entity.world_scope(|world| mark_inner::<SPAWN>(not_log, world, entities_set, caller));
 
     true
 }
 
 /// Mark a single empty entity as spawned.
 pub(super) fn mark_spawn_empty(
-    meta_past_len: MetaPastLen,
+    not_log: NotLog,
     entity: &mut EntityWorldMut,
     caller: MaybeLocation,
 ) {
@@ -240,13 +240,13 @@ pub(super) fn mark_spawn_empty(
             .get_resource_or_init::<DespawnFinalizer>()
             .spawn_queue
             .push((id, caller));
-        world.buffer_undo_redo_with_caller(meta_past_len, spawn_despawn, caller);
+        world.buffer_undo_redo_with_caller(not_log, spawn_despawn, caller);
     })
 }
 
 /// Mark multiple entities as spawned/despawned.
 fn mark_inner<const SPAWN: bool>(
-    meta_past_len: MetaPastLen,
+    not_log: NotLog,
     world: &mut World,
     entities: EntityHashSet,
     caller: MaybeLocation,
@@ -262,10 +262,10 @@ fn mark_inner<const SPAWN: bool>(
 
     if SPAWN {
         resource.spawn_queue.extend(iter);
-        world.buffer_undo_redo_with_caller(meta_past_len, spawn_despawn, caller);
+        world.buffer_undo_redo_with_caller(not_log, spawn_despawn, caller);
     } else {
         resource.despawn_queue.extend(iter);
-        world.redo_and_buffer_with_caller(meta_past_len, spawn_despawn, caller);
+        world.redo_and_buffer_with_caller(not_log, spawn_despawn, caller);
     }
 }
 
@@ -362,7 +362,7 @@ impl FromWorld for DespawnFinalizer {
                 error!(
                     "a reversible spawn, despawn or marking an entity as such was attempted \
                     outside RevDirection::Forward, this may cause an out-of-log error when \
-                    attempting to undo this, do not store MetaPastLen to do reversible operations"
+                    attempting to undo this, do not store NotLog to do reversible operations"
                 );
                 1 // 0 would be an invalid value for RevDirection::Forward regardless of this error
             });

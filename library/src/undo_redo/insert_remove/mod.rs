@@ -19,7 +19,7 @@ use bevy_log::{error, info, warn};
 use variadics_please::all_tuples;
 
 use crate::{
-    meta::MetaPastLen,
+    meta::NotLog,
     prelude::UndoRedo,
     undo_redo::{
         AddRemoveRelated, BuffersUndoRedo, LOCATION_PREFIX, SlimRelationship, get_new_related,
@@ -370,7 +370,7 @@ pub trait RevBundle<Marker>: Bundle {
     /// again.
     fn rev_insert(
         self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         entity: &mut EntityWorldMut,
         mode: InsertMode,
         caller: MaybeLocation,
@@ -382,7 +382,7 @@ pub trait RevBundle<Marker>: Bundle {
     #[doc(hidden)]
     fn rev_insert_inner(
         self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         entity: &mut EntityWorldMut,
         mode: InsertMode,
         caller: MaybeLocation,
@@ -392,11 +392,11 @@ pub trait RevBundle<Marker>: Bundle {
     ///
     /// When undone, the removed components are returned to `entity`. When redone, they are removed
     /// from `entity` again.
-    fn rev_remove(meta_past_len: MetaPastLen, entity: &mut EntityWorldMut, caller: MaybeLocation);
+    fn rev_remove(not_log: NotLog, entity: &mut EntityWorldMut, caller: MaybeLocation);
 }
 
 fn required_of_component<C: Component>(
-    meta_past_len: MetaPastLen,
+    not_log: NotLog,
     entity: &mut EntityWorldMut,
     caller: MaybeLocation,
 ) {
@@ -411,11 +411,11 @@ fn required_of_component<C: Component>(
         .iter_ids()
         .filter(|&component_id| !entity.contains_id(component_id))
         .collect();
-    required_inner::<C>(meta_past_len, entity, caller, new_required)
+    required_inner::<C>(not_log, entity, caller, new_required)
 }
 
 fn required_of_bundle<B: Bundle>(
-    meta_past_len: MetaPastLen,
+    not_log: NotLog,
     entity: &mut EntityWorldMut,
     caller: MaybeLocation,
 ) {
@@ -434,18 +434,18 @@ fn required_of_bundle<B: Bundle>(
         .copied()
         .filter(|&component_id| !entity.contains_id(component_id))
         .collect();
-    required_inner::<B>(meta_past_len, entity, caller, new_required)
+    required_inner::<B>(not_log, entity, caller, new_required)
 }
 
 fn required_inner<T: Send + 'static>(
-    meta_past_len: MetaPastLen,
+    not_log: NotLog,
     entity: &mut EntityWorldMut,
     caller: MaybeLocation,
     new_required: Vec<ComponentId>,
 ) {
     if !new_required.is_empty() {
         entity.buffer_undo_redo_with_caller(
-            meta_past_len,
+            not_log,
             RevNewRequired::<T> {
                 entity: entity.id(),
                 new_required,
@@ -458,35 +458,28 @@ fn required_inner<T: Send + 'static>(
 }
 
 impl RevBundle<()> for () {
-    fn rev_insert(self, _: MetaPastLen, _: &mut EntityWorldMut, _: InsertMode, _: MaybeLocation) {}
+    fn rev_insert(self, _: NotLog, _: &mut EntityWorldMut, _: InsertMode, _: MaybeLocation) {}
 
-    fn rev_insert_inner(
-        self,
-        _: MetaPastLen,
-        _: &mut EntityWorldMut,
-        _: InsertMode,
-        _: MaybeLocation,
-    ) {
-    }
+    fn rev_insert_inner(self, _: NotLog, _: &mut EntityWorldMut, _: InsertMode, _: MaybeLocation) {}
 
-    fn rev_remove(_: MetaPastLen, _: &mut EntityWorldMut, _: MaybeLocation) {}
+    fn rev_remove(_: NotLog, _: &mut EntityWorldMut, _: MaybeLocation) {}
 }
 
 impl<C: Component> RevBundle<[C; 1]> for C {
     fn rev_insert(
         self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         entity: &mut EntityWorldMut,
         mode: InsertMode,
         caller: MaybeLocation,
     ) {
-        required_of_component::<C>(meta_past_len, entity, caller);
-        self.rev_insert_inner(meta_past_len, entity, mode, caller);
+        required_of_component::<C>(not_log, entity, caller);
+        self.rev_insert_inner(not_log, entity, mode, caller);
     }
 
     fn rev_insert_inner(
         mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         entity: &mut EntityWorldMut,
         mode: InsertMode,
         caller: MaybeLocation,
@@ -495,7 +488,7 @@ impl<C: Component> RevBundle<[C; 1]> for C {
             InsertMode::Keep => {
                 if !entity.contains::<C>() {
                     entity.redo_and_buffer_with_caller(
-                        meta_past_len,
+                        not_log,
                         RevInsertComponentNew::<_>(InnerComponentBuffer {
                             entity: entity.id(),
                             buffer: Some(self),
@@ -516,13 +509,13 @@ impl<C: Component> RevBundle<[C; 1]> for C {
                 };
                 if swapped {
                     entity.buffer_undo_redo_with_caller(
-                        meta_past_len,
+                        not_log,
                         RevInsertComponentOverwrite(inner),
                         caller,
                     );
                 } else {
                     entity.redo_and_buffer_with_caller(
-                        meta_past_len,
+                        not_log,
                         RevInsertComponentNew(inner),
                         caller,
                     )
@@ -531,10 +524,10 @@ impl<C: Component> RevBundle<[C; 1]> for C {
         }
     }
 
-    fn rev_remove(meta_past_len: MetaPastLen, entity: &mut EntityWorldMut, caller: MaybeLocation) {
+    fn rev_remove(not_log: NotLog, entity: &mut EntityWorldMut, caller: MaybeLocation) {
         if let Some(component) = entity.take::<C>() {
             entity.buffer_undo_redo_with_caller(
-                meta_past_len,
+                not_log,
                 RevRemoveComponent(InnerComponentBuffer {
                     entity: entity.id(),
                     buffer: Some(component),
@@ -549,18 +542,18 @@ impl<C: Component> RevBundle<[C; 1]> for C {
 impl<R: Relationship, B: Bundle> RevBundle<[R; 2]> for SpawnOneRelated<R, B> {
     fn rev_insert(
         self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         entity: &mut EntityWorldMut,
         mode: InsertMode,
         caller: MaybeLocation,
     ) {
         let _ = <R as SlimRelationship>::ASSERT;
-        self.rev_insert_inner(meta_past_len, entity, mode, caller);
+        self.rev_insert_inner(not_log, entity, mode, caller);
     }
 
     fn rev_insert_inner(
         self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         entity: &mut EntityWorldMut,
         _mode: InsertMode,
         caller: MaybeLocation,
@@ -568,18 +561,18 @@ impl<R: Relationship, B: Bundle> RevBundle<[R; 2]> for SpawnOneRelated<R, B> {
         let new_related = get_new_related::<R>(entity, |entity| entity.insert(self));
         entity.world_scope(|world| {
             if let Ok(mut new_related) = world.get_entity_mut(new_related) {
-                mark_entity::<true>(meta_past_len, &mut new_related, true, caller);
+                mark_entity::<true>(not_log, &mut new_related, true, caller);
             }
         });
         let id = entity.id();
         entity.buffer_undo_redo_with_caller(
-            meta_past_len,
+            not_log,
             AddRemoveRelated::<R, _, true>::new(id, [new_related], caller),
             caller,
         );
     }
 
-    fn rev_remove(_: MetaPastLen, _: &mut EntityWorldMut, _: MaybeLocation) {}
+    fn rev_remove(_: NotLog, _: &mut EntityWorldMut, _: MaybeLocation) {}
 }
 
 impl<R: Relationship, L: SpawnableList<R> + Send + Sync + 'static> RevBundle<[R; 3]>
@@ -587,41 +580,35 @@ impl<R: Relationship, L: SpawnableList<R> + Send + Sync + 'static> RevBundle<[R;
 {
     fn rev_insert(
         self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         entity: &mut EntityWorldMut,
         mode: InsertMode,
         caller: MaybeLocation,
     ) {
         let _ = <R as SlimRelationship>::ASSERT;
-        self.rev_insert_inner(meta_past_len, entity, mode, caller);
+        self.rev_insert_inner(not_log, entity, mode, caller);
     }
 
     fn rev_insert_inner(
         self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         entity: &mut EntityWorldMut,
         _mode: InsertMode,
         caller: MaybeLocation,
     ) {
         let new_related = get_new_related_entities::<R>(entity, |entity| entity.insert(self));
         entity.world_scope(|world| {
-            mark_entities::<true>(
-                meta_past_len,
-                world,
-                &*new_related,
-                true,
-                MaybeLocation::caller(),
-            )
+            mark_entities::<true>(not_log, world, &*new_related, true, MaybeLocation::caller())
         });
         let id = entity.id();
         entity.buffer_undo_redo_with_caller(
-            meta_past_len,
+            not_log,
             AddRemoveRelated::<R, _, true>::new(id, new_related, caller),
             caller,
         );
     }
 
-    fn rev_remove(_: MetaPastLen, _: &mut EntityWorldMut, _: MaybeLocation) {}
+    fn rev_remove(_: NotLog, _: &mut EntityWorldMut, _: MaybeLocation) {}
 }
 
 macro_rules! impl_buffer_bundle {
@@ -632,32 +619,32 @@ macro_rules! impl_buffer_bundle {
         {
             fn rev_insert(
                 self,
-                meta_past_len: MetaPastLen,
+                not_log: NotLog,
                 entity: &mut EntityWorldMut,
                 mode: InsertMode,
                 caller: MaybeLocation,
             ) {
-                required_of_bundle::<Self>(meta_past_len, entity, caller);
-                self.rev_insert_inner(meta_past_len, entity, mode, caller);
+                required_of_bundle::<Self>(not_log, entity, caller);
+                self.rev_insert_inner(not_log, entity, mode, caller);
             }
 
             fn rev_insert_inner(
                 self,
-                meta_past_len: MetaPastLen,
+                not_log: NotLog,
                 entity: &mut EntityWorldMut,
                 mode: InsertMode,
                 caller: MaybeLocation,
             ) {
                 let ($($var,)*) = self;
-                ($($var.rev_insert_inner(meta_past_len, entity, mode, caller),)*);
+                ($($var.rev_insert_inner(not_log, entity, mode, caller),)*);
             }
 
             fn rev_remove(
-                meta_past_len: MetaPastLen,
+                not_log: NotLog,
                 entity: &mut EntityWorldMut,
                 caller: MaybeLocation
             ) {
-                ($(<$T as RevBundle::<$M>>::rev_remove(meta_past_len, entity, caller),)*);
+                ($(<$T as RevBundle::<$M>>::rev_remove(not_log, entity, caller),)*);
             }
         }
     };

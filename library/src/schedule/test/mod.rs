@@ -183,7 +183,7 @@ fn system_command<const N: u8>(world: &mut World) {
         .0
         .push(LogEntry::SysCmd((N, RevDirection::FORWARD_MIN)));
 
-    let past_len = world.resource::<RevMeta>().meta_past_len();
+    let past_len = world.resource::<RevMeta>().not_log();
     world.buffer_undo_redo(past_len, LogEntry::SysCmd(N));
 }
 
@@ -280,10 +280,10 @@ fn duplicate_system_chain_builds() {
 fn truncates_future_command_log() {
     fn system(meta: Res<RevMeta>, mut commands: Commands, mut command_queued: Local<bool>) {
         if !*command_queued
-            && let Some(RevDirection::Forward { meta_past_len }) = meta.get_running_direction()
+            && let Some(RevDirection::Forward { not_log }) = meta.get_running_direction()
         {
             if meta.now() == 2 {
-                commands.rev_spawn_empty(meta_past_len);
+                commands.rev_spawn_empty(not_log);
                 *command_queued = true;
             }
         }

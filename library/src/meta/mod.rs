@@ -6,11 +6,16 @@ use core::{
 use std::borrow::Cow;
 
 use bevy_ecs::{
-    change_detection::MaybeLocation,
+    change_detection::{MaybeLocation, Tick},
+    component::ComponentId,
     error::Result as BevyResult,
+    query::FilteredAccessSet,
     resource::Resource,
-    system::{Command, RunSystemError, SystemParamValidationError},
-    world::World,
+    system::{
+        Command, ReadOnlySystemParam, RunSystemError, SystemMeta, SystemParam,
+        SystemParamValidationError,
+    },
+    world::{World, unsafe_world_cell::UnsafeWorldCell},
 };
 use bevy_log::info;
 
@@ -201,24 +206,24 @@ impl RevMeta {
         self.now - self.past_end
     }
 
-    /// Returns the current [`MetaPastLen`].
+    /// Returns the current [`NotLog`].
     ///
     /// # Panics
     ///
     /// This method panics when [`RevUpdate`] is not currently running at [`RevDirection::Forward`].
-    /// Use [`get_meta_past_len`] for a fallible version.
+    /// Use [`get_not_log`] for a fallible version.
     ///
-    /// [`get_meta_past_len`]: Self::get_meta_past_len
-    pub fn meta_past_len(&self) -> MetaPastLen {
-        self.get_meta_past_len().unwrap()
+    /// [`get_not_log`]: Self::get_not_log
+    pub fn not_log(&self) -> NotLog {
+        self.get_not_log().unwrap()
     }
 
-    /// Returns the current [`MetaPastLen`].
+    /// Returns the current [`NotLog`].
     ///
     /// Returns `None` if [`RevUpdate`] is not currently running at [`RevDirection::Forward`].
-    pub fn get_meta_past_len(&self) -> Option<MetaPastLen> {
+    pub fn get_not_log(&self) -> Option<NotLog> {
         match self.direction {
-            RunningOrRan::Running(RevDirection::Forward { meta_past_len }) => Some(meta_past_len),
+            RunningOrRan::Running(RevDirection::Forward { not_log }) => Some(not_log),
             _ => None,
         }
     }
@@ -520,7 +525,7 @@ impl RevMeta {
                 let past_len = NonZeroU64::new(self.now - self.past_end)
                     .expect("now is increased here and larger than past_end");
                 RevDirection::Forward {
-                    meta_past_len: MetaPastLen(past_len),
+                    not_log: NotLog(past_len),
                 }
             }
             RevDirection::ForwardLog => {
@@ -658,7 +663,7 @@ pub enum RevDirection {
     Forward {
         /// A newtyped [`RevMeta::past_len`] that only exists during `Forward`. See its
         /// documentation for its purpose and more information.
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
     },
 
     /// The world is advanced in the log.
@@ -670,7 +675,7 @@ pub enum RevDirection {
 
 impl RevDirection {
     pub(crate) const FORWARD_MIN: Self = Self::Forward {
-        meta_past_len: MetaPastLen(NonZeroU64::MIN),
+        not_log: NotLog(NonZeroU64::MIN),
     };
 
     /// Is [`Forward`] or [`ForwardLog`].
@@ -703,25 +708,25 @@ impl RevDirection {
         matches!(self, Self::Forward { .. })
     }
 
-    /// Returns `MetaPastLen` in [`Forward`].
+    /// Returns `NotLog` in [`Forward`].
     ///
     /// # Panics
     ///
     /// This method panics for different directions.
     ///
     /// [`Forward`]: Self::Forward
-    pub fn past_len(self) -> MetaPastLen {
+    pub fn past_len(self) -> NotLog {
         self.get_past_len().unwrap()
     }
 
-    /// Returns `MetaPastLen` in [`Forward`].
+    /// Returns `NotLog` in [`Forward`].
     ///
     /// Returns `None` for different directions.
     ///
     /// [`Forward`]: Self::Forward
-    pub fn get_past_len(self) -> Option<MetaPastLen> {
+    pub fn get_past_len(self) -> Option<NotLog> {
         match self {
-            Self::Forward { meta_past_len } => Some(meta_past_len),
+            Self::Forward { not_log } => Some(not_log),
             _ => None,
         }
     }
@@ -805,15 +810,13 @@ impl Command<BevyResult> for RevQueue {
 /// At that it can never be zero. It is used as a token to "prove" that particular direction is
 /// running. Because of this, it should not be stored beyond that.
 ///
-/// The [`RevWorld`]/[`RevEntityWorldMut`] and [`RevCommands`]/[`RevEntityCommands`] including
-/// [`BuffersUndoRedo`] APIs need this as they also should only be used during that direction.
+/// The [`RevCommands`]/[`RevEntityCommands`] including [`BuffersUndoRedo`] APIs need this as they
+/// also should only be used during that direction.
 ///
 /// [`TransitionLog::forward_push`]/[`TransitionsLog::forward_extend`] also need this if they are
 /// updated exactly once per reversible frame. If not, they should use the value returned by
 /// [`UpdateLog::forward_past_len`] instead.
 ///
-/// [`RevWorld`]: crate::undo_redo::RevWorld
-/// [`RevEntityWorldMut`]: crate::undo_redo::RevEntityWorldMut
 /// [`RevCommands`]: crate::undo_redo::RevCommands
 /// [`RevEntityCommands`]: crate::undo_redo::RevEntityCommands
 /// [`BuffersUndoRedo`]: crate::undo_redo::BuffersUndoRedo
@@ -822,13 +825,85 @@ impl Command<BevyResult> for RevQueue {
 /// [`UpdateLog::forward_past_len`]: crate::log::UpdateLog::forward_past_len`
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "bevy_reflect", derive(bevy_reflect::Reflect))]
-pub struct MetaPastLen(NonZeroU64);
+pub struct NotLog(NonZeroU64);
 
-impl Into<NonZeroU64> for MetaPastLen {
+impl Into<NonZeroU64> for NotLog {
     fn into(self) -> NonZeroU64 {
         self.0
     }
 }
+
+unsafe impl SystemParam for NotLog {
+    type State = ComponentId;
+    type Item<'w, 's> = NotLog;
+
+    fn init_state(world: &mut World) -> Self::State {
+        world
+            .components_registrator()
+            .register_resource::<RevMeta>()
+    }
+
+    fn init_access(
+        &component_id: &Self::State,
+        system_meta: &mut SystemMeta,
+        component_access_set: &mut FilteredAccessSet,
+        _world: &mut World,
+    ) {
+        let combined_access = component_access_set.combined_access();
+        assert!(
+            !combined_access.has_resource_write(component_id),
+            "error[B0002]: NotLog in system {} conflicts with a previous ResMut<RevMeta> access. Consider removing the duplicate access. See: https://bevy.org/learn/errors/b0002",
+            system_meta.name(),
+        );
+
+        component_access_set.add_unfiltered_resource_read(component_id);
+    }
+
+    #[inline]
+    unsafe fn validate_param(
+        &mut component_id: &mut Self::State,
+        _system_meta: &SystemMeta,
+        world: UnsafeWorldCell,
+    ) -> Result<(), SystemParamValidationError> {
+        // SAFETY: Read-only access to resource metadata.
+        let meta = unsafe {
+            world
+                .get_resource_by_id(component_id)
+                .map(|ptr| ptr.deref())
+        };
+        if meta.and_then(RevMeta::get_not_log).is_some() {
+            Ok(())
+        } else {
+            Err(SystemParamValidationError::skipped::<Self>(
+                "RevMeta does not exist or RevUpdate is not running or running in log",
+            ))
+        }
+    }
+
+    #[inline]
+    unsafe fn get_param<'w, 's>(
+        &mut component_id: &'s mut Self::State,
+        system_meta: &SystemMeta,
+        world: UnsafeWorldCell<'w>,
+        _change_tick: Tick,
+    ) -> NotLog {
+        // SAFETY: Read-only access to resource metadata.
+        let meta = unsafe {
+            world
+                .get_resource_by_id(component_id)
+                .map(|ptr| ptr.deref())
+        };
+        meta.and_then(RevMeta::get_not_log).unwrap_or_else(|| {
+            panic!(
+                "Resource requested by {} does not exist: RevMeta",
+                system_meta.name()
+            );
+        })
+    }
+}
+
+// SAFETY: NotLog only reads RevMeta resource
+unsafe impl ReadOnlySystemParam for NotLog {}
 
 /// Error type that [`RevMeta::update`] may return.
 #[derive(Debug)]

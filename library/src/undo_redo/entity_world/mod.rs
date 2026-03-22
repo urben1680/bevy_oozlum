@@ -10,7 +10,7 @@ use bevy_ecs::{
 };
 
 use crate::{
-    meta::MetaPastLen,
+    meta::NotLog,
     undo_redo::{
         AddRemoveRelated, EntityRevDespawnedError, IsRevDespawned, RevBundle, RevDespawned,
         RevWorld, get_new_related, mark_entity,
@@ -25,81 +25,81 @@ mod test;
 pub(super) trait RevEntityWorld {
     fn rev_mark_spawned_with_caller(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         include_unlinked_related: bool,
         caller: MaybeLocation,
     ) -> Result<&mut Self, EntityRevDespawnedError>;
 
     fn rev_despawn_with_caller(
         self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         caller: MaybeLocation,
     ) -> Result<(), EntityRevDespawnedError>;
 
     fn rev_with_related_with_caller<R: Relationship>(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         bundle: impl Bundle,
         caller: MaybeLocation,
     ) -> Result<&mut Self, EntityRevDespawnedError>;
 
     fn rev_add_related_with_caller<R: Relationship>(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         related: impl AsRef<[Entity]> + Send + 'static,
         caller: MaybeLocation,
     ) -> Result<&mut Self, EntityRevDespawnedError>;
 
     fn rev_add_one_related_with_caller<R: Relationship>(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         entity: Entity,
         caller: MaybeLocation,
     ) -> Result<&mut Self, EntityRevDespawnedError>;
 
     fn rev_detach_all_related_with_caller<R: Relationship>(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         caller: MaybeLocation,
     ) -> Result<&mut Self, EntityRevDespawnedError>;
 
     fn rev_remove_related_with_caller<R: Relationship>(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         related: impl AsRef<[Entity]> + Send + 'static,
         caller: MaybeLocation,
     ) -> Result<&mut Self, EntityRevDespawnedError>;
 
     fn rev_replace_related_with_caller<R: Relationship>(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         related: impl AsRef<[Entity]> + Send + 'static,
         caller: MaybeLocation,
     ) -> Result<&mut Self, EntityRevDespawnedError>;
 
     fn rev_despawn_related_with_caller<S: RelationshipTarget>(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         caller: MaybeLocation,
     ) -> Result<&mut Self, EntityRevDespawnedError>;
 
     fn rev_insert_with_caller<T: RevBundle<Marker>, Marker>(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         bundle: T,
         caller: MaybeLocation,
     ) -> Result<&mut Self, EntityRevDespawnedError>;
 
     fn rev_insert_if_new_with_caller<T: RevBundle<Marker>, Marker>(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         bundle: T,
         caller: MaybeLocation,
     ) -> Result<&mut Self, EntityRevDespawnedError>;
 
     fn rev_remove_with_caller<T: RevBundle<Marker>, Marker>(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         caller: MaybeLocation,
     ) -> Result<&mut Self, EntityRevDespawnedError>;
 
@@ -109,60 +109,60 @@ pub(super) trait RevEntityWorld {
 impl<'w> RevEntityWorld for EntityWorldMut<'w> {
     fn rev_insert_with_caller<T: RevBundle<Marker>, Marker>(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         bundle: T,
         caller: MaybeLocation,
     ) -> Result<&mut Self, EntityRevDespawnedError> {
         self.assert_not_rev_despawned()?;
-        bundle.rev_insert(meta_past_len, self, InsertMode::Replace, caller);
+        bundle.rev_insert(not_log, self, InsertMode::Replace, caller);
         Ok(self)
     }
 
     fn rev_insert_if_new_with_caller<T: RevBundle<Marker>, Marker>(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         bundle: T,
         caller: MaybeLocation,
     ) -> Result<&mut Self, EntityRevDespawnedError> {
         self.assert_not_rev_despawned()?;
-        bundle.rev_insert(meta_past_len, self, InsertMode::Keep, caller);
+        bundle.rev_insert(not_log, self, InsertMode::Keep, caller);
         Ok(self)
     }
 
     fn rev_remove_with_caller<T: RevBundle<Marker>, Marker>(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         caller: MaybeLocation,
     ) -> Result<&mut Self, EntityRevDespawnedError> {
         self.assert_not_rev_despawned()?;
-        T::rev_remove(meta_past_len, self, caller);
+        T::rev_remove(not_log, self, caller);
         Ok(self)
     }
 
     fn rev_mark_spawned_with_caller(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         include_unlinked_related: bool,
         caller: MaybeLocation,
     ) -> Result<&mut Self, EntityRevDespawnedError> {
         self.assert_not_rev_despawned()?;
-        mark_entity::<true>(meta_past_len, self, include_unlinked_related, caller);
+        mark_entity::<true>(not_log, self, include_unlinked_related, caller);
         Ok(self)
     }
 
     fn rev_despawn_with_caller(
         mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         caller: MaybeLocation,
     ) -> Result<(), EntityRevDespawnedError> {
         self.assert_not_rev_despawned()?;
-        mark_entity::<false>(meta_past_len, &mut self, false, caller);
+        mark_entity::<false>(not_log, &mut self, false, caller);
         Ok(())
     }
 
     fn rev_with_related_with_caller<R: Relationship>(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         bundle: impl Bundle,
         caller: MaybeLocation,
     ) -> Result<&mut Self, EntityRevDespawnedError> {
@@ -170,9 +170,9 @@ impl<'w> RevEntityWorld for EntityWorldMut<'w> {
         let new_related = get_new_related::<R>(self, |entity| entity.with_related::<R>(bundle));
         let id = self.id();
         self.world_scope(|world| {
-            if world.rev_mark_spawned_with_caller(meta_past_len, new_related, true, caller) {
+            if world.rev_mark_spawned_with_caller(not_log, new_related, true, caller) {
                 world.buffer_undo_redo_with_caller(
-                    meta_past_len,
+                    not_log,
                     AddRemoveRelated::<R, _, true>::new(id, [new_related], caller),
                     caller,
                 );
@@ -183,7 +183,7 @@ impl<'w> RevEntityWorld for EntityWorldMut<'w> {
 
     fn rev_add_related_with_caller<R: Relationship>(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         related: impl AsRef<[Entity]> + Send + 'static,
         caller: MaybeLocation,
     ) -> Result<&mut Self, EntityRevDespawnedError> {
@@ -191,7 +191,7 @@ impl<'w> RevEntityWorld for EntityWorldMut<'w> {
         let id = self.id();
         self.add_related::<R>(related.as_ref())
             .buffer_undo_redo_with_caller(
-                meta_past_len,
+                not_log,
                 AddRemoveRelated::<R, _, true>::new(id, related, caller),
                 caller,
             );
@@ -200,7 +200,7 @@ impl<'w> RevEntityWorld for EntityWorldMut<'w> {
 
     fn rev_add_one_related_with_caller<R: Relationship>(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         entity: Entity,
         caller: MaybeLocation,
     ) -> Result<&mut Self, EntityRevDespawnedError> {
@@ -208,7 +208,7 @@ impl<'w> RevEntityWorld for EntityWorldMut<'w> {
         let id = self.id();
         self.add_one_related::<R>(entity)
             .buffer_undo_redo_with_caller(
-                meta_past_len,
+                not_log,
                 AddRemoveRelated::<R, _, true>::new(id, [entity], caller),
                 caller,
             );
@@ -217,7 +217,7 @@ impl<'w> RevEntityWorld for EntityWorldMut<'w> {
 
     fn rev_detach_all_related_with_caller<R: Relationship>(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         caller: MaybeLocation,
     ) -> Result<&mut Self, EntityRevDespawnedError> {
         self.assert_not_rev_despawned()?;
@@ -226,7 +226,7 @@ impl<'w> RevEntityWorld for EntityWorldMut<'w> {
             .map(|related| {
                 let id = self.id();
                 self.detach_all_related::<R>().buffer_undo_redo_with_caller(
-                    meta_past_len,
+                    not_log,
                     AddRemoveRelated::<R, _, false>::new(id, related, caller),
                     caller,
                 )
@@ -236,7 +236,7 @@ impl<'w> RevEntityWorld for EntityWorldMut<'w> {
 
     fn rev_remove_related_with_caller<R: Relationship>(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         related: impl AsRef<[Entity]> + Send + 'static,
         caller: MaybeLocation,
     ) -> Result<&mut Self, EntityRevDespawnedError> {
@@ -245,7 +245,7 @@ impl<'w> RevEntityWorld for EntityWorldMut<'w> {
             let id = self.id();
             self.remove_related::<R>(related.as_ref())
                 .buffer_undo_redo_with_caller(
-                    meta_past_len,
+                    not_log,
                     AddRemoveRelated::<R, _, false>::new(id, related, caller),
                     caller,
                 )
@@ -255,17 +255,17 @@ impl<'w> RevEntityWorld for EntityWorldMut<'w> {
 
     fn rev_replace_related_with_caller<R: Relationship>(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         related: impl AsRef<[Entity]> + Send + 'static,
         caller: MaybeLocation,
     ) -> Result<&mut Self, EntityRevDespawnedError> {
-        self.rev_detach_all_related_with_caller::<R>(meta_past_len, caller)?
-            .rev_add_related_with_caller::<R>(meta_past_len, related, caller)
+        self.rev_detach_all_related_with_caller::<R>(not_log, caller)?
+            .rev_add_related_with_caller::<R>(not_log, related, caller)
     }
 
     fn rev_despawn_related_with_caller<S: RelationshipTarget>(
         &mut self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         caller: MaybeLocation,
     ) -> Result<&mut Self, EntityRevDespawnedError> {
         self.assert_not_rev_despawned()?;
@@ -274,11 +274,9 @@ impl<'w> RevEntityWorld for EntityWorldMut<'w> {
         };
         let related: Vec<Entity> = target.collection().iter().collect();
         let id = self.id();
-        self.world_scope(|world| {
-            world.rev_despawn_batch_with_caller(meta_past_len, &*related, caller)
-        });
+        self.world_scope(|world| world.rev_despawn_batch_with_caller(not_log, &*related, caller));
         self.redo_and_buffer_with_caller(
-            meta_past_len,
+            not_log,
             AddRemoveRelated::<S::Relationship, _, false>::new(id, related, caller),
             caller,
         );
@@ -343,15 +341,15 @@ impl<'w, 'a, T: Component> RevComponentEntry<'w, 'a, T> {
     #[track_caller]
     pub fn rev_insert_entry(
         self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         component: T,
     ) -> RevOccupiedComponentEntry<'w, 'a, T> {
         match self {
             RevComponentEntry::Occupied(mut entry) => {
-                entry.rev_insert(meta_past_len, component);
+                entry.rev_insert(not_log, component);
                 entry
             }
-            RevComponentEntry::Vacant(entry) => entry.rev_insert(meta_past_len, component),
+            RevComponentEntry::Vacant(entry) => entry.rev_insert(not_log, component),
         }
     }
 
@@ -368,12 +366,12 @@ impl<'w, 'a, T: Component> RevComponentEntry<'w, 'a, T> {
     #[track_caller]
     pub fn rev_or_insert(
         self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         default: T,
     ) -> RevOccupiedComponentEntry<'w, 'a, T> {
         match self {
             RevComponentEntry::Occupied(entry) => entry,
-            RevComponentEntry::Vacant(entry) => entry.rev_insert(meta_past_len, default),
+            RevComponentEntry::Vacant(entry) => entry.rev_insert(not_log, default),
         }
     }
 
@@ -394,12 +392,12 @@ impl<'w, 'a, T: Component> RevComponentEntry<'w, 'a, T> {
     #[track_caller]
     pub fn rev_or_insert_with<F: FnOnce() -> T>(
         self,
-        meta_past_len: MetaPastLen,
+        not_log: NotLog,
         default: F,
     ) -> RevOccupiedComponentEntry<'w, 'a, T> {
         match self {
             RevComponentEntry::Occupied(entry) => entry,
-            RevComponentEntry::Vacant(entry) => entry.rev_insert(meta_past_len, default()),
+            RevComponentEntry::Vacant(entry) => entry.rev_insert(not_log, default()),
         }
     }
 }
@@ -417,13 +415,10 @@ impl<'w, 'a, T: Component + Default> RevComponentEntry<'w, 'a, T> {
     /// Reversible version of
     /// [`ComponentEntry::or_insert_with`](bevy_ecs::world::ComponentEntry::or_default).
     #[track_caller]
-    pub fn rev_or_default(
-        self,
-        meta_past_len: MetaPastLen,
-    ) -> RevOccupiedComponentEntry<'w, 'a, T> {
+    pub fn rev_or_default(self, not_log: NotLog) -> RevOccupiedComponentEntry<'w, 'a, T> {
         match self {
             RevComponentEntry::Occupied(entry) => entry,
-            RevComponentEntry::Vacant(entry) => entry.rev_insert(meta_past_len, Default::default()),
+            RevComponentEntry::Vacant(entry) => entry.rev_insert(not_log, Default::default()),
         }
     }
 }
@@ -439,9 +434,9 @@ impl<'w, 'a, T: Component> RevOccupiedComponentEntry<'w, 'a, T> {
     /// Reversible version of
     /// [`OccupiedComponentEntry::or_insert_with`](bevy_ecs::world::OccupiedComponentEntry::insert).
     #[track_caller]
-    pub fn rev_insert(&mut self, meta_past_len: MetaPastLen, component: T) {
+    pub fn rev_insert(&mut self, not_log: NotLog, component: T) {
         self.entity_world_mut
-            .rev_insert_with_caller(meta_past_len, component, MaybeLocation::caller())
+            .rev_insert_with_caller(not_log, component, MaybeLocation::caller())
             .unwrap();
     }
 
@@ -467,13 +462,9 @@ impl<'w, 'a, T: Component> RevVacantComponentEntry<'w, 'a, T> {
     /// Reversible version of
     /// [`VacantComponentEntry::insert`](bevy_ecs::world::VacantComponentEntry::insert).
     #[track_caller]
-    pub fn rev_insert(
-        self,
-        meta_past_len: MetaPastLen,
-        component: T,
-    ) -> RevOccupiedComponentEntry<'w, 'a, T> {
+    pub fn rev_insert(self, not_log: NotLog, component: T) -> RevOccupiedComponentEntry<'w, 'a, T> {
         self.entity_world_mut
-            .rev_insert_with_caller(meta_past_len, component, MaybeLocation::caller())
+            .rev_insert_with_caller(not_log, component, MaybeLocation::caller())
             .unwrap();
         RevOccupiedComponentEntry {
             entity_world_mut: self.entity_world_mut,

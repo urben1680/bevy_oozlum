@@ -26,7 +26,7 @@ fn system<const ROW: u64>(input: Res<JustPressed>, meta: Res<RevMeta>, mut comma
 
 fn on_insert<const ROW: u64>(mut world: DeferredWorld, context: HookContext) {
     let meta = world.resource::<RevMeta>();
-    let Some(meta_past_len) = meta.get_meta_past_len() else {
+    let Some(meta_past_len) = meta.get_not_log() else {
         return;
     };
 

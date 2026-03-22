@@ -40,8 +40,8 @@ mod test;
 /// # App::new().add_systems(Update, system).init_resource::<RevMeta>().update();
 ///
 /// fn system(meta: Res<RevMeta>, mut commands: Commands) {
-///     if let Some(meta_past_len) = meta.get_meta_past_len() {
-///         commands.spawn_empty().rev_detach_all_related::<SlimChildOf>(meta_past_len);
+///     if let Some(not_log) = meta.get_not_log() {
+///         commands.spawn_empty().rev_detach_all_related::<SlimChildOf>(not_log);
 ///     }
 /// }
 /// ```
@@ -64,8 +64,8 @@ mod test;
 /// # App::new().add_systems(Update, system).init_resource::<RevMeta>().update();
 ///
 /// fn system(meta: Res<RevMeta>, mut commands: Commands) {
-///     if let Some(meta_past_len) = meta.get_meta_past_len() {
-///         commands.spawn_empty().rev_detach_all_related::<FatChildOf>(meta_past_len);
+///     if let Some(not_log) = meta.get_not_log() {
+///         commands.spawn_empty().rev_detach_all_related::<FatChildOf>(not_log);
 ///     }
 /// }
 /// ```

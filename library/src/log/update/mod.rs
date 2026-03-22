@@ -15,7 +15,7 @@ pub(super) mod limit;
 mod offset;
 
 /// A log that keeps track when it was updated and provides an alternative value to
-/// [`MetaPastLen`](crate::meta::MetaPastLen) for when these updates do not happen exactly once per
+/// [`NotLog`](crate::meta::NotLog) for when these updates do not happen exactly once per
 /// [`RevUpdate`](crate::schedule::RevUpdate).
 ///
 /// This type is usually accompied by another log that would grow too large if
