@@ -2,19 +2,23 @@ use bevy_ecs::{
     bundle::{Bundle, InsertMode, NoBundleEffect},
     change_detection::MaybeLocation,
     entity::Entity,
-    error::{Result, warn},
+    error::{HandleError, Result, warn},
     resource::Resource,
+    schedule::ScheduleLabel,
     system::{Command, Commands, EntityCommands},
     world::{EntityWorldMut, FromWorld, World},
 };
 
 use crate::{
     meta::MetaPastLen,
-    undo_redo::{RevBundle, RevEntityWorldMutInternal, RevWorldInternal, mark_spawn_empty},
+    undo_redo::{RevBundle, RevEntityWorld, RevWorld, mark_spawn_empty},
 };
 
 /// Extension trait for [`Commands`] with reversible variants of various methods.
 pub trait RevCommands {
+    /// Reversible version of [`Commands::run_schedule`].
+    fn rev_run_schedule(&mut self, meta_past_len: MetaPastLen, label: impl ScheduleLabel);
+
     /// Reversible version of [`Commands::init_resource`].
     fn rev_init_resource<R: Resource + FromWorld>(&mut self, meta_past_len: MetaPastLen);
 
@@ -106,6 +110,11 @@ pub trait RevCommands {
 }
 
 impl RevCommands for Commands<'_, '_> {
+    #[track_caller]
+    fn rev_run_schedule(&mut self, meta_past_len: MetaPastLen, label: impl ScheduleLabel) {
+        self.queue(rev_run_schedule(meta_past_len, label).handle_error_with(warn));
+    }
+
     #[track_caller]
     fn rev_init_resource<R: Resource + FromWorld>(&mut self, meta_past_len: MetaPastLen) {
         self.queue(rev_init_resource::<R>(meta_past_len))
@@ -251,6 +260,19 @@ impl RevCommands for Commands<'_, '_> {
             rev_insert_batch(meta_past_len, iter, InsertMode::Keep),
             warn,
         );
+    }
+}
+
+/// Reversible version of [`run_schedule`](bevy_ecs::system::command::run_schedule).
+#[track_caller]
+pub fn rev_run_schedule(
+    meta_past_len: MetaPastLen,
+    label: impl ScheduleLabel,
+) -> impl Command<Result> {
+    let caller = MaybeLocation::caller();
+    move |world: &mut World| -> Result {
+        world.rev_try_run_schedule_with_caller(meta_past_len, label, caller)?;
+        Ok(())
     }
 }
 

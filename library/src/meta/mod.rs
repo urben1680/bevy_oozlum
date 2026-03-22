@@ -523,11 +523,12 @@ impl RevMeta {
                 }
             }
             RevDirection::ForwardLog => {
-                self.now = self.now + 1;
+                self.now += 1;
                 RevDirection::ForwardLog
             }
             RevDirection::BackwardLog => {
-                self.now = self.now - 1;
+                // todo: consider to do this after `c` ran
+                self.now -= 1;
                 RevDirection::BackwardLog
             }
         };

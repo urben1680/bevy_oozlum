@@ -30,17 +30,19 @@ mod test;
 ///
 /// ```
 /// # use bevy_oozlum::prelude::*;
-/// # use bevy_ecs::prelude::*;
+/// # use bevy::prelude::*;
 /// #[derive(Component)]
 /// #[relationship(relationship_target = SlimChildren)]
 /// pub struct SlimChildOf(pub Entity);
 /// # #[derive(Component)]
 /// # #[relationship_target(relationship = SlimChildOf)]
 /// # pub struct SlimChildren(Vec<Entity>);
+/// # App::new().add_systems(Update, system).init_resource::<RevMeta>().update();
 ///
-/// let mut world = World::new();
-/// if let Some(RevDirection::Forward { meta_past_len }) = world.get_running_direction() {
-///     world.spawn_empty().rev_detach_all_related::<SlimChildOf>(meta_past_len);
+/// fn system(meta: Res<RevMeta>, mut commands: Commands) {
+///     if let Some(meta_past_len) = meta.get_meta_past_len() {
+///         commands.spawn_empty().rev_detach_all_related::<SlimChildOf>(meta_past_len);
+///     }
 /// }
 /// ```
 ///
@@ -48,21 +50,23 @@ mod test;
 ///
 /// ```compile_fail
 /// # use bevy_oozlum::prelude::*;
-/// # use bevy_ecs::prelude::*;
+/// # use bevy::prelude::*;
 /// #[derive(Component)]
 /// #[relationship(relationship_target = FatChildren)]
 /// pub struct FatChildOf {
 ///     #[relationship]
 ///     pub parent: Entity,
-///     internal: f32, // non-ZST extra field
+///     internal: u8, // non-ZST extra field
 /// }
 /// # #[derive(Component)]
 /// # #[relationship_target(relationship = FatChildOf)]
 /// # pub struct FatChildren(Vec<Entity>);
+/// # App::new().add_systems(Update, system).init_resource::<RevMeta>().update();
 ///
-/// let mut world = World::new();
-/// if let Some(RevDirection::Forward { meta_past_len }) = world.get_running_direction() {
-///     world.spawn_empty().rev_detach_all_related::<FatChildOf>(meta_past_len);
+/// fn system(meta: Res<RevMeta>, mut commands: Commands) {
+///     if let Some(meta_past_len) = meta.get_meta_past_len() {
+///         commands.spawn_empty().rev_detach_all_related::<FatChildOf>(meta_past_len);
+///     }
 /// }
 /// ```
 pub(super) trait SlimRelationship: Relationship {
@@ -84,6 +88,7 @@ pub(super) trait SlimRelationship: Relationship {
 
 impl<R: Relationship> SlimRelationship for R {}
 
+/// Adds children of `parent` to `entities_set`.
 pub(super) fn add_children(
     world: &World,
     parent: EntityRef,
@@ -192,6 +197,7 @@ impl<R: Relationship, E: AsRef<[Entity]> + Send + 'static, const ADD: bool> Undo
     }
 }
 
+/// Calls `c` and returns new children of `entity` from that.
 pub(super) fn get_new_related_entities<R: Relationship>(
     entity: &mut EntityWorldMut,
     c: impl for<'a, 'w> FnOnce(&'a mut EntityWorldMut<'w>) -> &'a mut EntityWorldMut<'w>,
@@ -216,6 +222,7 @@ pub(super) fn get_new_related_entities<R: Relationship>(
     }
 }
 
+/// Calls `c` and returns the new child of `entity` from that.
 pub(super) fn get_new_related<R: Relationship>(
     entity: &mut EntityWorldMut,
     c: impl for<'a, 'w> FnOnce(&'a mut EntityWorldMut<'w>) -> &'a mut EntityWorldMut<'w>,

@@ -22,8 +22,8 @@ use crate::{
     meta::MetaPastLen,
     prelude::UndoRedo,
     undo_redo::{
-        AddRemoveRelated, BuffersUndoRedo, LOCATION_PREFIX, RevEntityWorldMut, SlimRelationship,
-        get_new_related, get_new_related_entities, mark_entities,
+        AddRemoveRelated, BuffersUndoRedo, LOCATION_PREFIX, SlimRelationship, get_new_related,
+        get_new_related_entities, mark_entities, mark_entity,
     },
 };
 
@@ -354,7 +354,13 @@ impl<T: Send + 'static> UndoRedo for RevNewRequired<T> {
 }
 
 /// Adapter trait for [`Bundle`] implementors to enable reversible insert/remove of the contained
-/// components and common bundle effects like [`children!`](bevy_ecs::children) returns.
+/// components and common bundle effects like [`children!`] returns.
+///
+/// This trait is usually not directly used but is a bound of some
+/// [`RevEntityWorldMut`]/[`RevEntityCommands`] methods.
+///
+/// [`children!`]: bevy_ecs::children
+/// [`RevEntityCommands`]: crate::undo_redo::RevEntityCommands
 pub trait RevBundle<Marker>: Bundle {
     /// Inserts `self` into `entity` depending on `mode`.
     ///
@@ -562,7 +568,7 @@ impl<R: Relationship, B: Bundle> RevBundle<[R; 2]> for SpawnOneRelated<R, B> {
         let new_related = get_new_related::<R>(entity, |entity| entity.insert(self));
         entity.world_scope(|world| {
             if let Ok(mut new_related) = world.get_entity_mut(new_related) {
-                new_related.rev_mark_spawned(meta_past_len, true);
+                mark_entity::<true>(meta_past_len, &mut new_related, true, caller);
             }
         });
         let id = entity.id();

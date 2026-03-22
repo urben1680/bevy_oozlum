@@ -179,21 +179,8 @@ fn test_step(
 
 type ConfigsVec = Vec<Box<dyn for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>>;
 
-pub(super) fn a_then_b(a_exclusive: bool, b_exclusive: bool, ignore_deferred: bool) -> ConfigsVec {
+pub(super) fn a_then_b(ignore_deferred: bool) -> ConfigsVec {
     fn noop<const N: u8>() {}
-
-    let sys_a: fn() -> RevScheduleConfigs<ScheduleSystem>;
-    let sys_a_pipe_noop: fn() -> RevScheduleConfigs<ScheduleSystem>;
-    let noop_pipe_sys_a: fn() -> RevScheduleConfigs<ScheduleSystem>;
-
-    let sys_b: fn() -> RevScheduleConfigs<ScheduleSystem>;
-    let sys_b_pipe_noop: fn() -> RevScheduleConfigs<ScheduleSystem>;
-    let noop_pipe_sys_b: fn() -> RevScheduleConfigs<ScheduleSystem>;
-
-    let set_sys_a: InternedSystemSet;
-    let set_noop_a = noop::<3>.into_system_set().intern();
-    let set_sys_b: InternedSystemSet;
-    let set_noop_b = noop::<4>.into_system_set().intern();
 
     let sys_after: fn(
         RevScheduleConfigs<ScheduleSystem>,
@@ -217,29 +204,17 @@ pub(super) fn a_then_b(a_exclusive: bool, b_exclusive: bool, ignore_deferred: bo
         RevScheduleConfigs<InternedSystemSet>,
     ) -> RevScheduleConfigs<InternedSystemSet>;
 
-    if a_exclusive {
-        sys_a = || exclusive_system::<1>.into_rev_configs();
-        sys_a_pipe_noop = || exclusive_system::<1>.pipe(noop::<3>).into_rev_configs();
-        noop_pipe_sys_a = || noop::<3>.pipe(exclusive_system::<1>).into_rev_configs();
-        set_sys_a = exclusive_system::<1>.into_system_set().intern();
-    } else {
-        sys_a = || non_exclusive_system::<1>.into_rev_configs();
-        sys_a_pipe_noop = || non_exclusive_system::<1>.pipe(noop::<3>).into_rev_configs();
-        noop_pipe_sys_a = || noop::<3>.pipe(non_exclusive_system::<1>).into_rev_configs();
-        set_sys_a = non_exclusive_system::<1>.into_system_set().intern();
-    };
+    let sys_a = || non_exclusive_system::<1>.into_rev_configs();
+    let sys_a_pipe_noop = || non_exclusive_system::<1>.pipe(noop::<3>).into_rev_configs();
+    let noop_pipe_sys_a = || noop::<3>.pipe(non_exclusive_system::<1>).into_rev_configs();
+    let set_sys_a = non_exclusive_system::<1>.into_system_set().intern();
+    let set_noop_a = noop::<3>.into_system_set().intern();
 
-    if b_exclusive {
-        sys_b = || exclusive_system::<2>.into_rev_configs();
-        sys_b_pipe_noop = || exclusive_system::<2>.pipe(noop::<4>).into_rev_configs();
-        noop_pipe_sys_b = || noop::<4>.pipe(exclusive_system::<2>).into_rev_configs();
-        set_sys_b = exclusive_system::<2>.into_system_set().intern();
-    } else {
-        sys_b = || non_exclusive_system::<2>.into_rev_configs();
-        sys_b_pipe_noop = || non_exclusive_system::<2>.pipe(noop::<4>).into_rev_configs();
-        noop_pipe_sys_b = || noop::<4>.pipe(non_exclusive_system::<2>).into_rev_configs();
-        set_sys_b = non_exclusive_system::<2>.into_system_set().intern();
-    };
+    let sys_b = || non_exclusive_system::<2>.into_rev_configs();
+    let sys_b_pipe_noop = || non_exclusive_system::<2>.pipe(noop::<4>).into_rev_configs();
+    let noop_pipe_sys_b = || noop::<4>.pipe(non_exclusive_system::<2>).into_rev_configs();
+    let set_sys_b = non_exclusive_system::<2>.into_system_set().intern();
+    let set_noop_b = noop::<4>.into_system_set().intern();
 
     if ignore_deferred {
         sys_after = |sys, set| sys.rev_after_ignore_deferred(set);

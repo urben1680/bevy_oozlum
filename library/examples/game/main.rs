@@ -5,7 +5,7 @@ use bevy::{
 use bevy_oozlum::prelude::*;
 use std::{num::NonZeroU64, time::Duration};
 
-const ROWS: usize = 7;
+const ROWS: usize = 8;
 const MAX_PAST_LEN: u64 = 70;
 const CURRENT_BEVY_VERSION: u64 = 0_17_0;
 const WINNING_BEVY_VERSION: u64 = 1_00_0;
@@ -19,7 +19,7 @@ const FRAME_DURATION_MIN: Duration = Duration::from_millis(15);
 // Leave behind 10 units of waste and it is game over.
 // For every waste tossed, the bevy version number and game speed rises, at 1.0 you win!
 //
-// To be able to pollute even more, you have 7 rows of water to throw into.
+// To be able to pollute even more, you have 8 rows of water to throw into.
 
 // In this example you can see how to write reversible logic:
 mod rows;
@@ -112,7 +112,8 @@ fn increase_score(mut world: DeferredWorld, _: HookContext) {
     // Hooks sensible to RevDirection must be written as such, here we do not want to react on
     // undo-redo logic, only the initial insertion
     if world
-        .get_running_direction()
+        .get_resource::<RevMeta>()
+        .and_then(RevMeta::get_running_direction)
         .is_some_and(RevDirection::is_not_log)
         && *world.resource::<State<GameState>>().get() != GameState::Running
     {

@@ -34,9 +34,8 @@ mod test;
 ///
 /// # Reversible spawn
 ///
-/// Entities that are spawned with [`World::rev_spawn`] or marked with
-/// [`EntityWorldMut::rev_mark_spawned`](crate::undo_redo::RevEntityWorldMut::rev_mark_spawned)
-/// (or variants of them) will ...
+/// Entities that are spawned with [`RevWorld::rev_spawn`] or marked with
+/// [`RevEntityWorldMut::rev_mark_spawned`] (or variants) will ...
 ///
 /// - ... receive this component when the above actions are **undone** and should be treated as
 /// despawned.
@@ -47,10 +46,8 @@ mod test;
 ///
 /// # Reversible despawn
 ///
-/// Entities that are despawned with
-/// [`EntityWorldMut::rev_spawn`](crate::undo_redo::RevEntityWorldMut::rev_despawn) or marked with
-/// [`World::rev_mark_despawned`](crate::undo_redo::World::rev_mark_despawned)
-/// (or variants of them) will ...
+/// Entities that are despawned with [`RevWorld::rev_despawn`] or [`RevEntityWorldMut::rev_despawn`]
+/// (or variants) will ...
 ///
 /// - ... receive this component **immediately** and should be treated as despawned.
 /// - ... have this component removed when the above actions are **undone** and should be treated as
@@ -63,32 +60,32 @@ mod test;
 ///
 /// # Notes
 ///
-/// - The APIs mind linked entities based on
-/// [`RelationshipTarget::LINKED_SPAWN`](bevy_ecs::relationship::RelationshipTarget::LINKED_SPAWN).
+/// - The APIs mind linked entities based on [`RelationshipTarget::LINKED_SPAWN`].
 /// - Manually inserting or removing this component is discouraged because no finalized despawn will
 /// take place in these cases.
-/// - Attempting to mark entities as despawned multiple times will, depending on the API used,
-/// fail or be ignored. The insertion/removal/despawn behavior is still determined by the first
-/// action that added this component. Still it is possible to have multiple actions affect an
-/// entity, for example when an entity is reversibly spawned and later reversibly despawned.
+///
+/// [`RevWorld::rev_spawn`]: crate::undo_redo::RevWorld::rev_spawn
+/// [`RevEntityWorldMut::rev_mark_spawned`]: crate::undo_redo::RevEntityWorldMut::rev_mark_spawned
+/// [`RevWorld::rev_despawn`]: crate::undo_redo::RevWorld::rev_despawn
+/// [`RevEntityWorldMut::rev_despawn`]: crate::undo_redo::RevEntityWorldMut::rev_despawn
+/// [`RelationshipTarget::LINKED_SPAWN`]: bevy_ecs::relationship::RelationshipTarget::LINKED_SPAWN
 
-// todo: store MaybeLocation in component change meta instead of value, https://github.com/bevyengine/bevy/issues/20494
+// todo: store MaybeLocation in component change meta instead of here, https://github.com/bevyengine/bevy/issues/20494
 pub struct RevDespawned(pub MaybeLocation);
 
-#[derive(Debug)]
-pub enum DespawnFinalizerErr {
-    MetaMissing,
-    MetaNotRunning,
-    OutOfLog,
-}
-
-impl From<OutOfLog> for DespawnFinalizerErr {
-    fn from(_: OutOfLog) -> Self {
-        Self::OutOfLog
-    }
-}
-
-/// Despawn entities that contain [`RevDespawned`] and their relevant operation (spawn, despawn) fell out of log.
+/// Despawn entities that are currently considered reversibly despawned and their relevant operation
+/// to revert that fell out of log.
+///
+/// # Errors
+///
+/// - If [`RevMeta`] is not in the `world`, this will return [`DespawnFinalizerErr::MetaMissing`].
+/// - If `RevMeta` is not currently [running], this will return
+///   [`DespawnFinalizerErr::MetaNotRunning`].
+/// - If the internal log went out of log, this will return [`DespawnFinalizerErr::OutOfLog`]. This
+///   can happen if this is called more than once while [`RevUpdate`] ran.
+///
+/// [running]: RevMeta::running_direction
+/// [`RevUpdate`]: crate::schedule::RevUpdate
 pub fn finalize_despawns(world: &mut World) -> Result<(), DespawnFinalizerErr> {
     world
         .try_resource_scope::<DespawnFinalizer, _>(|world, this| {
@@ -143,6 +140,31 @@ pub fn finalize_despawns(world: &mut World) -> Result<(), DespawnFinalizerErr> {
         .unwrap_or(Ok(()))
 }
 
+/// Error type that [`finalize_despawns`] may return.
+#[derive(Debug)]
+pub enum DespawnFinalizerErr {
+    /// [`RevMeta`] is not in the world.
+    MetaMissing,
+
+    /// [`RevMeta`] is not currently [running]
+    ///
+    /// [running]: RevMeta::running_direction
+    MetaNotRunning,
+
+    /// The internal log went out of log. This can happen if `finalize_despawns` is called more than
+    /// once while [`RevUpdate`] ran.
+    ///
+    /// [`RevUpdate`]: crate::schedule::RevUpdate
+    OutOfLog,
+}
+
+impl From<OutOfLog> for DespawnFinalizerErr {
+    fn from(_: OutOfLog) -> Self {
+        Self::OutOfLog
+    }
+}
+
+/// Mark multiple entities and their children as spawned/despawned.
 pub(super) fn mark_entities<const SPAWN: bool>(
     meta_past_len: MetaPastLen,
     world: &mut World,
@@ -176,6 +198,7 @@ pub(super) fn mark_entities<const SPAWN: bool>(
     }
 }
 
+/// Mark a single entity and its children as spawned/despawned.
 pub(super) fn mark_entity<const SPAWN: bool>(
     meta_past_len: MetaPastLen,
     entity: &mut EntityWorldMut,
@@ -200,6 +223,7 @@ pub(super) fn mark_entity<const SPAWN: bool>(
     true
 }
 
+/// Mark a single empty entity as spawned.
 pub(super) fn mark_spawn_empty(
     meta_past_len: MetaPastLen,
     entity: &mut EntityWorldMut,
@@ -220,6 +244,7 @@ pub(super) fn mark_spawn_empty(
     })
 }
 
+/// Mark multiple entities as spawned/despawned.
 fn mark_inner<const SPAWN: bool>(
     meta_past_len: MetaPastLen,
     world: &mut World,
@@ -315,6 +340,7 @@ impl EntityCollection for Entity {
     }
 }
 
+/// Tracks which entities got reversibly spawned or despawned to finalize the despawn if applicable.
 #[derive(Resource, Debug)]
 struct DespawnFinalizer {
     spawn_despawn: TransitionsLog<Entity, usize>,
@@ -325,12 +351,20 @@ struct DespawnFinalizer {
 
 impl FromWorld for DespawnFinalizer {
     fn from_world(world: &mut World) -> Self {
-        let init_at = world.get_resource::<RevMeta>()
-            .filter(|meta| meta.get_running_direction().is_some_and(RevDirection::is_not_log))
+        let init_at = world
+            .get_resource::<RevMeta>()
+            .filter(|meta| {
+                meta.get_running_direction()
+                    .is_some_and(RevDirection::is_not_log)
+            })
             .map(|meta| meta.now())
             .unwrap_or_else(|| {
-                error!("a reversible spawn, despawn or marking an entity as such was attempted outside RevDirection::Forward, this may cause an out-of-log error when attempting to undo this, do not store MetaPastLen to do reversible operations");
-                0
+                error!(
+                    "a reversible spawn, despawn or marking an entity as such was attempted \
+                    outside RevDirection::Forward, this may cause an out-of-log error when \
+                    attempting to undo this, do not store MetaPastLen to do reversible operations"
+                );
+                1 // 0 would be an invalid value for RevDirection::Forward regardless of this error
             });
         Self {
             spawn_despawn: Default::default(),

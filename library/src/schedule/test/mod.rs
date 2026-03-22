@@ -1,8 +1,4 @@
 use core::num::NonZeroU64;
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-};
 
 use bevy_app::{App, Update};
 use bevy_ecs::{
@@ -31,7 +27,6 @@ use utils::*;
 #[derive(Clone, Copy, Debug)]
 enum Test {
     NonExclusiveSystem(u8),
-    ExclusiveSystem(u8),
     NonExclusiveSyncPoint(u8),
 }
 
@@ -40,12 +35,9 @@ impl Test {
         tests: &[LogEntry<(u8, RevDirection)>],
         direction: RevDirection,
     ) -> Vec<Result<Self, LogEntry<(u8, RevDirection)>>> {
-        let mut variants: [(_, Vec<_>); 3] = [
-            Test::NonExclusiveSystem(0),
-            Test::ExclusiveSystem(0),
-            Test::NonExclusiveSyncPoint(0),
-        ]
-        .map(|bundle| (bundle, bundle.into_iter().collect()));
+        let mut variants: [(_, Vec<_>); 2] =
+            [Test::NonExclusiveSystem(0), Test::NonExclusiveSyncPoint(0)]
+                .map(|bundle| (bundle, bundle.into_iter().collect()));
 
         if !direction.is_forward() {
             for expected in variants.iter_mut() {
@@ -75,7 +67,6 @@ impl Test {
                 i += expected.len();
                 let ok = match bundle {
                     Test::NonExclusiveSystem(_) => Test::NonExclusiveSystem(n.unwrap()),
-                    Test::ExclusiveSystem(_) => Test::ExclusiveSystem(n.unwrap()),
                     Test::NonExclusiveSyncPoint(_) => Test::NonExclusiveSyncPoint(n.unwrap()),
                 };
                 results.push(Ok(ok));
@@ -96,7 +87,6 @@ struct TestLog(Vec<LogEntry<(u8, RevDirection)>>);
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum LogEntry<T> {
     NonExclusiveSys(T),
-    ExclusiveSys(T),
     SysObsvCmd(T),
     SysHookCmd(T),
     SysCmd(T),
@@ -106,7 +96,6 @@ impl<T> LogEntry<T> {
     fn map<U>(self, map: impl FnOnce(T) -> U) -> LogEntry<U> {
         match self {
             LogEntry::NonExclusiveSys(value) => LogEntry::NonExclusiveSys(map(value)),
-            LogEntry::ExclusiveSys(value) => LogEntry::ExclusiveSys(map(value)),
             LogEntry::SysObsvCmd(value) => LogEntry::SysObsvCmd(map(value)),
             LogEntry::SysHookCmd(value) => LogEntry::SysHookCmd(map(value)),
             LogEntry::SysCmd(value) => LogEntry::SysCmd(map(value)),
@@ -135,11 +124,6 @@ impl IntoIterator for Test {
     fn into_iter(self) -> Self::IntoIter {
         match self {
             Self::NonExclusiveSystem(n) => vec![LogEntry::NonExclusiveSys(n)],
-            Self::ExclusiveSystem(n) => vec![
-                LogEntry::ExclusiveSys(n),
-                LogEntry::SysObsvCmd(n),
-                LogEntry::SysHookCmd(n),
-            ],
             Self::NonExclusiveSyncPoint(n) => vec![
                 LogEntry::SysObsvCmd(n),
                 LogEntry::SysHookCmd(n),
@@ -195,25 +179,6 @@ fn non_exclusive_system_commands_only<const N: u8>(meta: Res<RevMeta>, mut comma
     commands.queue(system_command::<N>);
 }
 
-/// Will not add sync point
-fn exclusive_system<const N: u8>(world: &mut World) {
-    let direction = normalize_direction(world.resource::<RevMeta>().running_direction());
-    world
-        .resource_mut::<TestLog>()
-        .0
-        .push(LogEntry::ExclusiveSys((N, direction)));
-
-    if direction.is_log() {
-        return;
-    }
-
-    // trigger observer in system
-    world.trigger(SysObsv(N));
-
-    // trigger hook in system
-    world.spawn(SysHook(N));
-}
-
 fn system_command<const N: u8>(world: &mut World) {
     world
         .resource_mut::<TestLog>()
@@ -239,100 +204,28 @@ fn single_non_exclusive_system() {
 }
 
 #[test]
-fn single_exclusive_system() {
-    fn configs(schedule: &mut Schedule) -> &mut Schedule {
-        schedule.rev_add_systems(exclusive_system::<1>)
-    }
-    test_run(vec![configs], vec![vec![Test::ExclusiveSystem(1)]]);
-}
-
-#[test]
 fn non_exclusive_then_non_exclusive() {
     test_run(
-        a_then_b(false, false, false),
+        a_then_b(false),
         vec![vec![
             Test::NonExclusiveSystem(1),
             Test::NonExclusiveSyncPoint(1),
             Test::NonExclusiveSystem(2),
             Test::NonExclusiveSyncPoint(2),
         ]],
-    )
-}
-
-#[test]
-fn exclusive_then_non_exclusive() {
-    test_run(
-        a_then_b(true, false, false),
-        vec![vec![
-            Test::ExclusiveSystem(1),
-            Test::NonExclusiveSystem(2),
-            Test::NonExclusiveSyncPoint(2),
-        ]],
-    )
-}
-
-#[test]
-fn non_exclusive_then_exclusive() {
-    test_run(
-        a_then_b(false, true, false),
-        vec![vec![
-            Test::NonExclusiveSystem(1),
-            Test::NonExclusiveSyncPoint(1),
-            Test::ExclusiveSystem(2),
-        ]],
-    )
-}
-
-#[test]
-fn exclusive_then_exclusive() {
-    test_run(
-        a_then_b(true, true, false),
-        vec![vec![Test::ExclusiveSystem(1), Test::ExclusiveSystem(2)]],
     )
 }
 
 #[test]
 fn non_exclusive_then_non_exclusive_ignore_deferred() {
     test_run(
-        a_then_b(false, false, true),
+        a_then_b(true),
         vec![vec![
             Test::NonExclusiveSystem(1),
             Test::NonExclusiveSystem(2),
             Test::NonExclusiveSyncPoint(1),
             Test::NonExclusiveSyncPoint(2),
         ]],
-    )
-}
-
-#[test]
-fn exclusive_then_non_exclusive_ignore_deferred() {
-    test_run(
-        a_then_b(true, false, true),
-        vec![vec![
-            Test::ExclusiveSystem(1),
-            Test::NonExclusiveSystem(2),
-            Test::NonExclusiveSyncPoint(2),
-        ]],
-    )
-}
-
-#[test]
-fn non_exclusive_then_exclusive_ignore_deferred() {
-    test_run(
-        a_then_b(false, true, true),
-        vec![vec![
-            Test::NonExclusiveSystem(1),
-            Test::NonExclusiveSyncPoint(1),
-            Test::ExclusiveSystem(2),
-        ]],
-    )
-}
-
-#[test]
-fn exclusive_then_exclusive_ignore_deferred() {
-    test_run(
-        a_then_b(true, true, true),
-        vec![vec![Test::ExclusiveSystem(1), Test::ExclusiveSystem(2)]],
     )
 }
 
@@ -357,18 +250,6 @@ fn run_if() {
     fn at_2(meta: Res<RevMeta>) -> bool {
         meta.now() == 2
     }
-    /// do not make the exclusive system in the latter configs run to test rev_distributive_run
-    fn at_2_once() -> impl Fn(Res<RevMeta>) -> bool + Clone {
-        let was_2 = Arc::new(AtomicBool::new(false));
-        move |meta| {
-            if was_2.load(Ordering::Relaxed) {
-                return false;
-            }
-            let at_2 = at_2(meta);
-            was_2.store(at_2, Ordering::Relaxed);
-            at_2
-        }
-    }
     fn config0(schedule: &mut Schedule) -> &mut Schedule {
         schedule.rev_add_systems(non_exclusive_system::<1>.rev_run_if(at_2))
     }
@@ -380,37 +261,8 @@ fn run_if() {
             .rev_add_systems(non_exclusive_system::<1>.rev_in_set(TestSet(1)))
             .rev_configure_sets(TestSet(1).rev_run_if(at_2))
     }
-    fn config3(schedule: &mut Schedule) -> &mut Schedule {
-        schedule.rev_add_systems(
-            (non_exclusive_system::<1>, exclusive_system::<2>)
-                .rev_chain()
-                .rev_distributive_run_if(at_2_once()),
-        )
-    }
-    fn config4(schedule: &mut Schedule) -> &mut Schedule {
-        schedule.rev_add_systems(
-            (non_exclusive_system::<1>, exclusive_system::<2>)
-                .rev_distributive_run_if(at_2_once())
-                .rev_chain(),
-        )
-    }
-    fn config5(schedule: &mut Schedule) -> &mut Schedule {
-        schedule
-            .rev_add_systems(
-                (
-                    non_exclusive_system::<1>.rev_in_set(TestSet(1)),
-                    exclusive_system::<2>.rev_in_set(TestSet(2)),
-                )
-                    .rev_chain(),
-            )
-            .rev_configure_sets(
-                (TestSet(1), TestSet(2))
-                    .rev_chain()
-                    .rev_distributive_run_if(at_2_once()),
-            )
-    }
     test_run(
-        vec![config0, config1, config2, config3, config4, config5],
+        vec![config0, config1, config2],
         vec![
             vec![], // does not run at 1
             vec![Test::NonExclusiveSystem(1), Test::NonExclusiveSyncPoint(1)],

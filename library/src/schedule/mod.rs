@@ -89,7 +89,6 @@ use variadics_please::all_tuples;
 use crate::meta::RevMeta;
 
 use condition::into_rev_condition;
-pub(crate) use system::DEFAULT_LOCATION;
 use system::into_rev_system;
 
 mod condition;
@@ -173,6 +172,8 @@ struct BackwardDeferredAndSystemSet(InternedSystemSet);
 /// Extension trait for [`Schedule`] for adding reversible systems and configurations.
 pub trait RevSchedule {
     /// Reversible version of [`Schedule::add_systems`].
+    ///
+    /// Does not support exclusive systems.
     fn rev_add_systems<Marker>(
         &mut self,
         systems: impl IntoRevScheduleConfigs<ScheduleSystem, Marker>,

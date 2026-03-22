@@ -1,8 +1,7 @@
 use core::{
-    any::{TypeId, type_name},
+    any::TypeId,
     fmt::Debug,
     hash::{Hash, Hasher},
-    panic::Location,
 };
 use std::sync::{
     Arc, Mutex, MutexGuard, TryLockError,
@@ -33,10 +32,6 @@ use crate::{
 
 use super::RevScheduleConfigs;
 
-// Reversible schedules and conditions should never miss to run at the expected frame.
-// If you followed an error to this line, you may have encountered a bug, please report it.
-pub(crate) const DEFAULT_LOCATION: &'static Location = Location::caller();
-
 pub(super) fn into_rev_system<T, In, Out, M1, M2>(system: T) -> RevScheduleConfigs<ScheduleSystem>
 where
     T: IntoSystem<In, Out, M1>,
@@ -45,13 +40,28 @@ where
     RevSystem<T::System, false>: IntoScheduleConfigs<ScheduleSystem, M2>,
 {
     let system = IntoSystem::into_system(system);
-    let name = system.name();
 
     if system.type_id() == TypeId::of::<ApplyDeferred>() {
         // ApplyDeferred has special handling at the scheduler so this is not wrapped in RevSystems
         return RevScheduleConfigs::from(ApplyDeferred);
     }
 
+    if system.is_exclusive() {
+        // Exclusive systems return true here as they do not need to be initialized first.
+        // Allowing exclusive systems has the problem that using rev_* API before other,
+        // non-buffering reversible system logic "foo" would make it impossible to ensure this order
+        // is reversed when going backward. That can lead to bugs.
+        // Instead, rev_* API should always come last. To enforce that, it makes more sense to use
+        // DeferredWorld systems that explicitly use commands which make it obvious they are not
+        // applied in the middle of the exclusive system.
+        // This limitation also makes the System impl for RevSystem more simple as reversible
+        // exclusive systems are implemented differently and that does not need to be accounted for.
+        unimplemented!(
+            "exclusive systems are not supported to be reversible, use reversible commands instead"
+        );
+    }
+
+    let name = system.name();
     // This set contains BackwardDeferred and both RevSystems of only this system instance. It is
     // the base for the other wrapping sets and for conditions to be used on.
     let unified = RevSystemTypeSet::new(name.clone()).intern();
@@ -165,13 +175,6 @@ impl<T, const FORWARD: bool> RevSystem<T, FORWARD> {
             flags: SystemStateFlags::empty(),
         }
     }
-    fn postfix() -> &'static str {
-        if FORWARD {
-            FORWARD_POSTFIX
-        } else {
-            BACKWARD_POSTFIX
-        }
-    }
 }
 
 struct Shared<T> {
@@ -180,18 +183,9 @@ struct Shared<T> {
 }
 
 impl<T> Shared<T> {
-    fn get_inner<'a>(
-        &'a self,
-        name: &DebugName,
-        postfix: &'static str,
-    ) -> MutexGuard<'a, Inner<T>> {
+    fn get_inner<'a>(&'a self, name: &DebugName) -> MutexGuard<'a, Inner<T>> {
         self.inner.try_lock().unwrap_or_else(|err| {
-            if size_of::<DebugName>() == 0 {
-                let name = type_name::<T>();
-                panic!("reversible system {name}{postfix} could not be accessed: {err}")
-            } else {
-                panic!("reversible system {name} could not be accessed: {err}");
-            };
+            panic!("reversible system {name} could not be accessed: {err}");
         })
     }
 }
@@ -229,15 +223,11 @@ impl<T: System, const FORWARD: bool> System for RevSystem<T, FORWARD> {
         &mut self,
         world: UnsafeWorldCell,
     ) -> Result<(), SystemParamValidationError> {
-        if self.is_exclusive() {
-            // all exclusive system params are always available
-            return Ok(());
-        }
         let system = &mut self
             .shared
             .inner
             .try_lock()
-            .map_err(try_lock_validation_err(&self.name, Self::postfix()))?
+            .map_err(try_lock_validation_err(&self.name))?
             .system;
         unsafe {
             // SAFETY: Self::initialize called T::initialize to register all access of T
@@ -245,14 +235,10 @@ impl<T: System, const FORWARD: bool> System for RevSystem<T, FORWARD> {
         }
     }
     fn validate_param(&mut self, world: &World) -> Result<(), SystemParamValidationError> {
-        if self.is_exclusive() {
-            // all exclusive system params are always available
-            return Ok(());
-        }
         self.shared
             .inner
             .try_lock()
-            .map_err(try_lock_validation_err(&self.name, Self::postfix()))?
+            .map_err(try_lock_validation_err(&self.name))?
             .system
             .validate_param(world)
     }
@@ -262,35 +248,9 @@ impl<T: System, const FORWARD: bool> System for RevSystem<T, FORWARD> {
         world: UnsafeWorldCell,
     ) -> Result<Self::Out, RunSystemError> {
         let mut shared = self.shared.inner.try_lock().map_err(try_lock_system_err)?;
-
-        if !self.is_exclusive() {
-            unsafe {
-                // SAFETY: Self::initialize called T::initialize to register all access of T
-                shared.system.run_unsafe(input, world)
-            }
-        } else if FORWARD {
-            let out = unsafe {
-                // SAFETY: exclusive system has full unique access to the world
-                shared.system.run_unsafe(input, world)
-            };
-            let world = unsafe {
-                // SAFETY: exclusive system has full unique access to the world
-                world.world_mut()
-            };
-            shared.deferred_log.forward(world)?;
-            out
-        } else {
-            {
-                let world = unsafe {
-                    // SAFETY: exclusive system has full unique access to the world
-                    world.world_mut()
-                };
-                shared.deferred_log.backward(world)?;
-            }
-            unsafe {
-                // SAFETY: exclusive system has full unique access to the world
-                shared.system.run_unsafe(input, world)
-            }
+        unsafe {
+            // SAFETY: Self::initialize called T::initialize to register all access of T
+            shared.system.run_unsafe(input, world)
         }
     }
     fn apply_deferred(&mut self, world: &mut World) {
@@ -312,47 +272,36 @@ impl<T: System, const FORWARD: bool> System for RevSystem<T, FORWARD> {
             shared.deferred_log.forward(world).map_err(Into::into)
         };
 
-        // ExclusiveSystemFunction::apply_deferred is noop
-        if !self.is_exclusive()
-            && let Err(err) = result()
-        {
-            if size_of::<DebugName>() == 0 {
-                let name = type_name::<T>();
-                error!(
-                    "apply_deferred of reversible system {name}{} failed: {err}",
-                    Self::postfix()
-                )
-            } else {
-                error!(
-                    "apply_deferred of reversible system {} failed: {err}",
-                    self.name
-                );
-            };
+        if let Err(err) = result() {
+            error!(
+                "apply_deferred of reversible system {} failed: {err}",
+                self.name
+            );
         }
     }
     fn queue_deferred(&mut self, _world: DeferredWorld) {
         unreachable!("reversible systems are not used as observers")
     }
     fn initialize(&mut self, world: &mut World) -> FilteredAccessSet {
-        let mut inner = self.shared.get_inner(&self.name, Self::postfix());
+        let mut inner = self.shared.get_inner(&self.name);
         let access = inner.system.initialize(world);
         inner.initialized = true;
         self.flags = inner.system.flags();
         access
     }
     fn check_change_tick(&mut self, check: CheckChangeTicks) {
-        let mut inner = self.shared.get_inner(&self.name, Self::postfix());
+        let mut inner = self.shared.get_inner(&self.name);
         inner.system.check_change_tick(check);
     }
     fn default_system_sets(&self) -> Vec<InternedSystemSet> {
         self.shared.default_system_sets.clone()
     }
     fn get_last_run(&self) -> Tick {
-        let inner = self.shared.get_inner(&self.name, Self::postfix());
+        let inner = self.shared.get_inner(&self.name);
         inner.system.get_last_run()
     }
     fn set_last_run(&mut self, last_run: Tick) {
-        let mut inner = self.shared.get_inner(&self.name, Self::postfix());
+        let mut inner = self.shared.get_inner(&self.name);
         inner.system.set_last_run(last_run);
     }
 }
@@ -453,24 +402,17 @@ impl<T: System> System for BackwardDeferred<T> {
         };
 
         if let Err(err) = result() {
-            if size_of::<DebugName>() == 0 {
-                let name = type_name::<T>();
-                error!(
-                    "deferred actions of reversible system {name}{DEFERRED_POSTFIX} could not be undone: {err}"
-                )
-            } else {
-                error!(
-                    "deferred actions of reversible system {} could not be undone: {err}",
-                    self.name
-                );
-            };
+            error!(
+                "deferred actions of reversible system {} could not be undone: {err}",
+                self.name
+            );
         }
     }
     fn queue_deferred(&mut self, _world: DeferredWorld) {
         unreachable!("reversible systems are not used as observers")
     }
     fn initialize(&mut self, world: &mut World) -> FilteredAccessSet {
-        let mut inner = self.shared.get_inner(&self.name, DEFERRED_POSTFIX);
+        let mut inner = self.shared.get_inner(&self.name);
         if !inner.initialized {
             inner.system.initialize(world);
         }
@@ -504,20 +446,12 @@ fn try_lock_system_err<T>(err: TryLockError<T>) -> RunSystemError {
 
 fn try_lock_validation_err<'a, T>(
     name: &'a DebugName,
-    postfix: &'static str,
 ) -> impl for<'b> FnOnce(TryLockError<MutexGuard<'b, Inner<T>>>) -> SystemParamValidationError + 'a
 {
     move |err| {
-        if size_of::<DebugName>() == 0 {
-            let name = type_name::<T>();
-            SystemParamValidationError::invalid::<T>(format!(
-                "param validation  of reversible system {name}{postfix} failed: {err}"
-            ))
-        } else {
-            SystemParamValidationError::invalid::<T>(format!(
-                "param validation of reversible system {name} failed: {err}"
-            ))
-        }
+        SystemParamValidationError::invalid::<T>(format!(
+            "param validation of reversible system {name} failed: {err}"
+        ))
     }
 }
 
@@ -531,7 +465,7 @@ mod test {
         lifecycle::HookContext,
         observer::On,
         schedule::IntoScheduleConfigs,
-        system::{Commands, IntoSystem},
+        system::Commands,
         world::{DeferredWorld, World},
     };
 
@@ -576,7 +510,17 @@ mod test {
         world.commands().buffer_undo_redo(past_len, blank_undo_redo);
     }
 
-    fn assert_system_drains_all_undo_redo<M>(system: impl IntoSystem<(), (), M> + Copy + 'static) {
+    #[test]
+    fn non_exclusive_system_drains_all_undo_redo() {
+        fn system(meta: Res<RevMeta>, mut commands: Commands) {
+            let past_len = meta.meta_past_len();
+            commands.buffer_undo_redo(past_len, blank_undo_redo);
+            commands.queue(|world: &mut World| {
+                world.trigger(Observer);
+                world.spawn(OnAdd);
+            });
+        }
+
         panic_on_error_events();
         let mut app = App::new();
         app.add_plugins(RevPlugin::add_meta_and_runner(
@@ -592,27 +536,5 @@ mod test {
         .update();
         let buffer = app.world().resource::<UndoRedoBuffer>();
         assert!(buffer.is_empty(), "{buffer:?}");
-    }
-
-    #[test]
-    fn non_exclusive_system_drains_all_undo_redo() {
-        assert_system_drains_all_undo_redo(|meta: Res<RevMeta>, mut commands: Commands| {
-            let past_len = meta.meta_past_len();
-            commands.buffer_undo_redo(past_len, blank_undo_redo);
-            commands.queue(|world: &mut World| {
-                world.trigger(Observer);
-                world.spawn(OnAdd);
-            });
-        })
-    }
-
-    #[test]
-    fn exclusive_system_drains_all_undo_redo() {
-        assert_system_drains_all_undo_redo(|world: &mut World| {
-            let past_len = world.resource::<RevMeta>().meta_past_len();
-            world.buffer_undo_redo(past_len, blank_undo_redo);
-            world.trigger(Observer);
-            world.spawn(OnAdd);
-        })
     }
 }

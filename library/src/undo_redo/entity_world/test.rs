@@ -1,4 +1,5 @@
 use bevy_ecs::{
+    change_detection::MaybeLocation,
     entity::Entity,
     hierarchy::{ChildOf, Children},
     related,
@@ -7,11 +8,11 @@ use bevy_ecs::{
 };
 
 use crate::undo_redo::{
-    IsRevDespawned, RevEntityWorldMut,
+    IsRevDespawned, RevEntityWorld,
     test::{UnlinkedChildren, assert_undo_redo, assert_undo_redo_finalize},
 };
 
-fn rev_with_child_or_children(forward_finalize: bool, one: bool) {
+fn rev_with_child_or_children(forward_finalize: bool) {
     let mut world = World::new();
     let parent = world.spawn_empty().id();
 
@@ -25,20 +26,17 @@ fn rev_with_child_or_children(forward_finalize: bool, one: bool) {
     assert_undo_redo_finalize(
         &mut world,
         |world, meta_past_len| {
-            let [mut child, mut grandchild] = [Entity::PLACEHOLDER; 2];
             let mut parent_mut = world.entity_mut(parent);
-            if one {
-                parent_mut.rev_with_child(meta_past_len, related!(UnlinkedChildren[()]));
-                child = parent_mut.get::<Children>().unwrap().iter().next().unwrap();
-                let child_ref = parent_mut.world().entity(child);
-                grandchild = child_ref.get::<UnlinkedChildren>().unwrap()[0];
-            } else {
-                parent_mut.rev_with_children(meta_past_len, |spawner| {
-                    let child_ref = spawner.spawn(related!(UnlinkedChildren[()]));
-                    child = child_ref.id();
-                    grandchild = child_ref.get::<UnlinkedChildren>().unwrap()[0];
-                });
-            }
+            parent_mut
+                .rev_with_related_with_caller::<ChildOf>(
+                    meta_past_len,
+                    related!(UnlinkedChildren[()]),
+                    MaybeLocation::caller(),
+                )
+                .unwrap();
+            let child = parent_mut.get::<Children>().unwrap().iter().next().unwrap();
+            let child_ref = parent_mut.world().entity(child);
+            let grandchild = child_ref.get::<UnlinkedChildren>().unwrap()[0];
             [child, grandchild]
         },
         |world, children| {
@@ -63,22 +61,12 @@ fn rev_with_child_or_children(forward_finalize: bool, one: bool) {
 
 #[test]
 fn rev_with_child_finalize_forward() {
-    rev_with_child_or_children(true, true);
+    rev_with_child_or_children(true);
 }
 
 #[test]
 fn rev_with_child_finalize_backward() {
-    rev_with_child_or_children(false, true);
-}
-
-#[test]
-fn rev_with_children_finalize_forward() {
-    rev_with_child_or_children(true, false);
-}
-
-#[test]
-fn rev_with_children_finalize_backward() {
-    rev_with_child_or_children(false, false);
+    rev_with_child_or_children(false);
 }
 
 fn rev_add_child_or_children(one: bool) {
@@ -92,9 +80,21 @@ fn rev_add_child_or_children(one: bool) {
             let new_child = world.spawn_empty().id();
             let mut parent_mut = world.entity_mut(parent);
             if one {
-                parent_mut.rev_add_child(meta_past_len, new_child);
+                parent_mut
+                    .rev_add_one_related_with_caller::<ChildOf>(
+                        meta_past_len,
+                        new_child,
+                        MaybeLocation::caller(),
+                    )
+                    .unwrap();
             } else {
-                parent_mut.rev_add_children(meta_past_len, [new_child]);
+                parent_mut
+                    .rev_add_related_with_caller::<ChildOf>(
+                        meta_past_len,
+                        [new_child],
+                        MaybeLocation::caller(),
+                    )
+                    .unwrap();
             }
             new_child
         },
@@ -129,7 +129,12 @@ fn rev_detach_all_children() {
         &mut world,
         |world, meta_past_len| {
             let mut parent_mut = world.entity_mut(parent);
-            parent_mut.rev_detach_all_children(meta_past_len);
+            parent_mut
+                .rev_detach_all_related_with_caller::<ChildOf>(
+                    meta_past_len,
+                    MaybeLocation::caller(),
+                )
+                .unwrap();
         },
         |world, _| {
             assert_eq!(world.get::<ChildOf>(child), Some(&ChildOf(parent)));
@@ -156,7 +161,13 @@ fn rev_detach_child() {
         &mut world,
         |world, meta_past_len| {
             let mut parent_mut = world.entity_mut(parent);
-            parent_mut.rev_detach_child(meta_past_len, child2);
+            parent_mut
+                .rev_remove_related_with_caller::<ChildOf>(
+                    meta_past_len,
+                    [child2],
+                    MaybeLocation::caller(),
+                )
+                .unwrap();
         },
         |world, _| {
             assert_eq!(world.get::<ChildOf>(child1), Some(&ChildOf(parent)));
@@ -181,7 +192,10 @@ fn rev_despawn_children(forward_finalize: bool) {
     assert_undo_redo_finalize(
         &mut world,
         |world, meta_past_len| {
-            world.entity_mut(parent).rev_despawn_children(meta_past_len);
+            world
+                .entity_mut(parent)
+                .rev_despawn_related_with_caller::<Children>(meta_past_len, MaybeLocation::caller())
+                .unwrap();
         },
         backward_assert,
         forward_finalize.then_some(|world: &mut World, _: &mut ()| {

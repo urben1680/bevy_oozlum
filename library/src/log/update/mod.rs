@@ -4,8 +4,9 @@ use core::{
 };
 use std::{collections::TryReserveError, panic::Location};
 
-use crate::{log::update::offset::OffsetLog, meta::RevMeta, schedule::DEFAULT_LOCATION};
 use bevy_ecs::change_detection::MaybeLocation;
+
+use crate::{log::update::offset::OffsetLog, meta::RevMeta};
 
 pub use limit::UpdateLogId;
 use limit::*;
@@ -441,6 +442,10 @@ impl UpdateLog {
         self.past_len = 0;
     }
 }
+
+// Reversible systems should never miss to run at the expected frame.
+// If you followed an error to this line, you may have encountered a bug, please report it.
+const DEFAULT_LOCATION: &'static Location = Location::caller();
 
 /// Defines in which way a log has to be adjusted to reflect new changes to
 /// [`RevMeta`](crate::meta::RevMeta) since the last time the log was updated.

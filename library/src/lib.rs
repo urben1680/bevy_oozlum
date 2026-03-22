@@ -119,6 +119,22 @@
 /*
 TODO:
 
+- rev_with_related_entities
+
+- reversible exclusive systems are harder to do since reversible APIs must be used only at
+  RevDirection::Forward and only after all other logic
+- rev_* api must come last of Forward, not first or the middle
+-- force exclusive systems to only run at Forward?
+--- make MetaPastLen an exclusive system param? require In<MetaPastLen>?
+-- forbid exclusive systems, require DeferredWorld systems at most?
+-- forbid reversible buffers in exclusive systems?
+- make RevWorld methods return impl RevWorld to lock-out of other mutation means?
+- RevWorld becomes a struct with From<&mut World>
+-- wont work, dropping it will make &mut World available again
+decided: drop support of reversible systems
+- cut down RevWorld/RevEntityWorldMut
+
+
 - update README
 - reflect subtrait derives
 
@@ -126,7 +142,8 @@ Docs
 - no reversible change detection (copy over to new repo)
 - no manual sync point configuration
 -- ScheduleBuildSettings::auto_insert_apply_deferred
-- subset of EntityWorld/EntityCommands as scope limit
+- subset of EntityCommands as scope limit
+- no exclusive reversible systems
 - make fake variadics docs work
 - docs for private UndoRedo types
 
@@ -135,6 +152,7 @@ ISSUES/DISCUSSIONS:
 - no_std
 - RevBundle::rev_insert_inner out of trait
 - schedule::set_base_sets should not need to chain forward/backward configs
+- exclusive reversible system sharp edges: ordering of ops
 
 */
 // todo: deny
@@ -159,8 +177,7 @@ pub mod prelude {
     };
     pub use crate::undo_redo::{
         BuffersUndoRedo as _, IsRevDespawned as _, RevCommands as _, RevEntityCommands as _,
-        RevEntityEntryCommands as _, RevEntityWorldMut as _, RevRelatedSpawnerCommands as _,
-        RevWorld as _, UndoRedo, UndoRedoDirection,
+        RevEntityEntryCommands as _, RevRelatedSpawnerCommands as _, UndoRedo, UndoRedoDirection,
     };
 }
 

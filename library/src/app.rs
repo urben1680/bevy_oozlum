@@ -15,12 +15,18 @@ use crate::{
     undo_redo::RevDespawned,
 };
 
+/// Extension trait for [`App`] with reversible variants of various methods.
 pub trait RevApp {
+    /// Reversible version of [`App::add_systems`].
+    ///
+    /// Does not support exclusive systems.
     fn rev_add_systems<Marker>(
         &mut self,
         schedule: impl ScheduleLabel,
         systems: impl IntoRevScheduleConfigs<ScheduleSystem, Marker>,
     ) -> &mut Self;
+
+    /// Reversible version of [`App::configure_sets`].
     fn rev_configure_sets<Marker>(
         &mut self,
         schedule: impl ScheduleLabel,

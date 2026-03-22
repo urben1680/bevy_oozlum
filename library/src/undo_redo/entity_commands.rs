@@ -3,6 +3,7 @@ use bevy_ecs::{
     change_detection::MaybeLocation,
     component::Component,
     entity::Entity,
+    hierarchy::{ChildOf, Children},
     relationship::{RelatedSpawnerCommands, Relationship, RelationshipTarget},
     system::{EntityCommand, EntityCommands, EntityEntryCommands},
     world::{EntityWorldMut, FromWorld},
@@ -10,7 +11,10 @@ use bevy_ecs::{
 
 use crate::{
     meta::MetaPastLen,
-    undo_redo::{EntityRevDespawnedError, RevBundle, RevCommands, RevEntityWorldMutInternal},
+    undo_redo::{
+        EntityRevDespawnedError, RevBundle, RevCommands, RevEntityWorld,
+        relationship::SlimRelationship,
+    },
 };
 
 /// Extension trait for [`EntityCommands`] with reversible variants of various methods.
@@ -40,6 +44,10 @@ pub trait RevEntityCommands<'w> {
 
     /// Reversible version of [`EntityCommands::with_child`].
     fn rev_with_child(&mut self, meta_past_len: MetaPastLen, bundle: impl Bundle) -> &mut Self;
+
+    // fn rev_with_related_entities not needed: use RevRelatedSpawnerCommands
+
+    // fn rev_with_children not needed: use RevRelatedSpawnerCommands
 
     /// Reversible version of [`EntityCommands::add_related`].
     fn rev_add_related<R: Relationship>(
@@ -249,12 +257,7 @@ impl<'a> RevEntityCommands<'a> for EntityCommands<'a> {
 
     #[track_caller]
     fn rev_with_child(&mut self, meta_past_len: MetaPastLen, bundle: impl Bundle) -> &mut Self {
-        let caller = MaybeLocation::caller();
-        self.queue(move |mut entity_world_mut: EntityWorldMut| {
-            entity_world_mut
-                .rev_with_child_with_caller(meta_past_len, bundle, caller)
-                .map(|_| ())
-        })
+        self.rev_with_related::<ChildOf>(meta_past_len, bundle)
     }
 
     #[track_caller]
@@ -277,12 +280,7 @@ impl<'a> RevEntityCommands<'a> for EntityCommands<'a> {
         meta_past_len: MetaPastLen,
         children: impl AsRef<[Entity]> + Send + 'static,
     ) -> &mut Self {
-        let caller = MaybeLocation::caller();
-        self.queue(move |mut entity_world_mut: EntityWorldMut| {
-            entity_world_mut
-                .rev_add_children_with_caller(meta_past_len, children, caller)
-                .map(|_| ())
-        })
+        self.rev_add_related::<ChildOf>(meta_past_len, children)
     }
 
     #[track_caller]
@@ -301,16 +299,12 @@ impl<'a> RevEntityCommands<'a> for EntityCommands<'a> {
 
     #[track_caller]
     fn rev_add_child(&mut self, meta_past_len: MetaPastLen, child: Entity) -> &mut Self {
-        let caller = MaybeLocation::caller();
-        self.queue(move |mut entity_world_mut: EntityWorldMut| {
-            entity_world_mut
-                .rev_add_child_with_caller(meta_past_len, child, caller)
-                .map(|_| ())
-        })
+        self.rev_add_one_related::<ChildOf>(meta_past_len, child)
     }
 
     #[track_caller]
     fn rev_detach_all_related<R: Relationship>(&mut self, meta_past_len: MetaPastLen) -> &mut Self {
+        let _ = R::ASSERT; // may contain non-default extra data
         let caller = MaybeLocation::caller();
         self.queue(move |mut entity_world_mut: EntityWorldMut| {
             entity_world_mut
@@ -321,12 +315,7 @@ impl<'a> RevEntityCommands<'a> for EntityCommands<'a> {
 
     #[track_caller]
     fn rev_detach_all_children(&mut self, meta_past_len: MetaPastLen) -> &mut Self {
-        let caller = MaybeLocation::caller();
-        self.queue(move |mut entity_world_mut: EntityWorldMut| {
-            entity_world_mut
-                .rev_detach_all_children_with_caller(meta_past_len, caller)
-                .map(|_| ())
-        })
+        self.rev_detach_all_related::<ChildOf>(meta_past_len)
     }
 
     #[track_caller]
@@ -335,6 +324,7 @@ impl<'a> RevEntityCommands<'a> for EntityCommands<'a> {
         meta_past_len: MetaPastLen,
         related: impl AsRef<[Entity]> + Send + 'static,
     ) -> &mut Self {
+        let _ = R::ASSERT; // may contain non-default extra data
         let caller = MaybeLocation::caller();
         self.queue(move |mut entity_world_mut: EntityWorldMut| {
             entity_world_mut
@@ -349,22 +339,12 @@ impl<'a> RevEntityCommands<'a> for EntityCommands<'a> {
         meta_past_len: MetaPastLen,
         children: impl AsRef<[Entity]> + Send + 'static,
     ) -> &mut Self {
-        let caller = MaybeLocation::caller();
-        self.queue(move |mut entity_world_mut: EntityWorldMut| {
-            entity_world_mut
-                .rev_detach_children_with_caller(meta_past_len, children, caller)
-                .map(|_| ())
-        })
+        self.rev_remove_related::<ChildOf>(meta_past_len, children)
     }
 
     #[track_caller]
     fn rev_detach_child(&mut self, meta_past_len: MetaPastLen, child: Entity) -> &mut Self {
-        let caller = MaybeLocation::caller();
-        self.queue(move |mut entity_world_mut: EntityWorldMut| {
-            entity_world_mut
-                .rev_detach_child_with_caller(meta_past_len, child, caller)
-                .map(|_| ())
-        })
+        self.rev_remove_related::<ChildOf>(meta_past_len, [child])
     }
 
     #[track_caller]
@@ -373,6 +353,7 @@ impl<'a> RevEntityCommands<'a> for EntityCommands<'a> {
         meta_past_len: MetaPastLen,
         related: impl AsRef<[Entity]> + Send + 'static,
     ) -> &mut Self {
+        let _ = R::ASSERT; // may contain non-default extra data
         let caller = MaybeLocation::caller();
         self.queue(move |mut entity_world_mut: EntityWorldMut| {
             entity_world_mut
@@ -387,12 +368,7 @@ impl<'a> RevEntityCommands<'a> for EntityCommands<'a> {
         meta_past_len: MetaPastLen,
         children: impl AsRef<[Entity]> + Send + 'static,
     ) -> &mut Self {
-        let caller = MaybeLocation::caller();
-        self.queue(move |mut entity_world_mut: EntityWorldMut| {
-            entity_world_mut
-                .rev_replace_children_witch_caller(meta_past_len, children, caller)
-                .map(|_| ())
-        })
+        self.rev_replace_related::<ChildOf>(meta_past_len, children)
     }
 
     #[track_caller]
@@ -410,12 +386,7 @@ impl<'a> RevEntityCommands<'a> for EntityCommands<'a> {
 
     #[track_caller]
     fn rev_despawn_children(&mut self, meta_past_len: MetaPastLen) -> &mut Self {
-        let caller = MaybeLocation::caller();
-        self.queue(move |mut entity_world_mut: EntityWorldMut| {
-            entity_world_mut
-                .rev_despawn_children_with_caller(meta_past_len, caller)
-                .map(|_| ())
-        })
+        self.rev_despawn_related::<Children>(meta_past_len)
     }
 
     #[track_caller]
