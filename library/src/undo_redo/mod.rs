@@ -599,11 +599,10 @@ mod test {
         finalize: impl FnOnce(&mut World, &mut T),
     ) {
         use crate::meta::RevQueue;
-        use core::num::NonZeroU64;
 
         crate::panic_on_error_events();
         world.register_disabling_component::<RevDespawned>();
-        let mut meta = RevMeta::new(NonZeroU64::MIN, false);
+        let mut meta = RevMeta::default();
         let mut state = None;
 
         // forward

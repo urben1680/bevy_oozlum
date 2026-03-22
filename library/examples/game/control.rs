@@ -1,5 +1,3 @@
-use std::num::NonZeroU64;
-
 use bevy::{input::keyboard::Key, prelude::*};
 use bevy_oozlum::prelude::*;
 
@@ -64,10 +62,10 @@ fn system(
     // The maximum past length can be adjusted at any time and has an effect the next time RevUpdate
     // is about to be run.
     if input.pressed(KeyCode::Enter) {
-        let max_past_len = meta.past_len().saturating_sub(1).max(1);
-        meta.set_max_past_len(NonZeroU64::new(max_past_len).unwrap());
+        let max_past_len = meta.past_len().saturating_sub(1);
+        meta.set_max_past_len(max_past_len);
     } else if input.just_released(KeyCode::Enter) {
-        meta.set_max_past_len(NonZeroU64::new(MAX_PAST_LEN).unwrap());
+        meta.set_max_past_len(MAX_PAST_LEN);
     }
 
     for row in 1..=ROWS {

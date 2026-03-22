@@ -550,7 +550,7 @@ fn entries<const N: usize, const M: usize>(
 impl MetaAndLogs {
     fn new(max_past_len: u64) -> Self {
         Self {
-            meta: RevMeta::new(NonZeroU64::new(max_past_len).unwrap(), false),
+            meta: RevMeta::new(max_past_len, false),
             updates: UpdateLog::new(),
             transition_logs: Logs::default(),
             transitions_logs: Logs::default(),

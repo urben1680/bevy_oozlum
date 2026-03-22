@@ -49,14 +49,14 @@ impl Default for RevMeta {
 }
 
 impl RevMeta {
-    pub(crate) const DEFAULT_MAX_PAST_LEN: NonZeroU64 = NonZeroU64::MIN;
+    pub(crate) const DEFAULT_MAX_PAST_LEN: u64 = 1;
     pub(crate) const DEFAULT_PAUSED: bool = false;
 
     /// Construct a new value.
     ///
     /// - `max_past_len` defines how many frames can be reverted to via [`set_queue`] with
     ///   [`RevQueue::RunBackwardLog`]. The amount can be later changed via
-    ///   [`set_max_past_len`].
+    ///   [`set_max_past_len`]. If `0` is used, the value is replaced with `1`.
     /// - `paused` defines if after inserting this `RevMeta` it will be attempted to run
     ///   [`RevUpdate`] right away. For this that schedule and the [`run_rev_update`] system
     ///   must have been added to the app. If it is inserted in the paused state, it can be unpaused
@@ -65,12 +65,12 @@ impl RevMeta {
     /// [`set_queue`]: Self::set_queue
     /// [`set_max_past_len`]: Self::set_max_past_len
     /// [`run_rev_update`]: Self::run_rev_update
-    pub fn new(max_past_len: NonZeroU64, paused: bool) -> Self {
+    pub fn new(max_past_len: u64, paused: bool) -> Self {
         Self {
             past_end: 0,
             now: 0,
             future_end: 0,
-            max_past_len,
+            max_past_len: NonZeroU64::new(max_past_len).unwrap_or(NonZeroU64::MIN),
             direction: RunningOrRan::Pause { after_log: false },
             queue: (!paused).then_some(RevQueue::RunForward),
             log_exits: 0,
@@ -103,15 +103,16 @@ impl RevMeta {
         self.queue
     }
 
-    /// Set how many past frames can be reveres to at most.
+    /// Set how many past frames can be reveres to at most. If `0` is used, the value is replaced
+    /// with `1`.
     ///
     /// Note that this is coming into effect right before the next time [`run_rev_update`] runs. If
     /// at that point one or more frames of the log fall past that limit, the log will be truncated.
     /// This is final, increasing the limit again will not bring back truncated log entries.
     ///
     /// [`run_rev_update`]: Self::run_rev_update
-    pub fn set_max_past_len(&mut self, max_past_len: NonZeroU64) {
-        self.max_past_len = max_past_len;
+    pub fn set_max_past_len(&mut self, max_past_len: u64) {
+        self.max_past_len = NonZeroU64::new(max_past_len).unwrap_or(NonZeroU64::MIN);
     }
 
     /// Get how many past frames can be reveres to at most.
@@ -592,7 +593,7 @@ impl RevMeta {
         should_run: Result<bool, UpdateLogMissed>,
         c: impl FnOnce(&mut Self, RevDirection),
     ) {
-        let meta = core::mem::replace(self, RevMeta::new(NonZeroU64::MAX, true));
+        let meta = core::mem::replace(self, RevMeta::new(u64::MAX, true));
         match should_run {
             Ok(should_run) => {
                 let mut ran = false;

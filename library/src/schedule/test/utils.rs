@@ -1,5 +1,3 @@
-use core::num::NonZeroU64;
-
 use bevy_app::FixedUpdate;
 use bevy_ecs::{
     observer::On,
@@ -34,7 +32,7 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
     // set up world
     let mut world = World::new();
     world.init_resource::<TestLog>();
-    world.insert_resource(RevMeta::new(NonZeroU64::MAX, false));
+    world.insert_resource(RevMeta::new(u64::MAX, false));
 
     // set up schedules
     let mut schedule = Schedule::new(FixedUpdate);

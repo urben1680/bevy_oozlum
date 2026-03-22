@@ -523,17 +523,13 @@ mod test {
 
         panic_on_error_events();
         let mut app = App::new();
-        app.add_plugins(RevPlugin::add_meta_and_runner(
-            RevMeta::DEFAULT_MAX_PAST_LEN,
-            RevMeta::DEFAULT_PAUSED,
-            Update,
-        ))
-        // non-reversible systems should leak undo_redo into the next reversible system
-        .add_systems(RevUpdate, system.before(RevSystems))
-        .rev_add_systems(RevUpdate, system)
-        .add_observer(observer)
-        .add_observer(empty_observer)
-        .update();
+        app.add_plugins(RevPlugin.set_runner_in_schedule(Update))
+            // non-reversible systems should leak undo_redo into the next reversible system
+            .add_systems(RevUpdate, system.before(RevSystems))
+            .rev_add_systems(RevUpdate, system)
+            .add_observer(observer)
+            .add_observer(empty_observer)
+            .update();
         let buffer = app.world().resource::<UndoRedoBuffer>();
         assert!(buffer.is_empty(), "{buffer:?}");
     }

@@ -3,9 +3,9 @@ use bevy::{
     prelude::*,
 };
 use bevy_oozlum::prelude::*;
-use std::{num::NonZeroU64, time::Duration};
+use std::time::Duration;
 
-const ROWS: usize = 8;
+const ROWS: usize = 7;
 const MAX_PAST_LEN: u64 = 70;
 const CURRENT_BEVY_VERSION: u64 = 0_17_0;
 const WINNING_BEVY_VERSION: u64 = 1_00_0;
@@ -19,7 +19,7 @@ const FRAME_DURATION_MIN: Duration = Duration::from_millis(15);
 // Leave behind 10 units of waste and it is game over.
 // For every waste tossed, the bevy version number and game speed rises, at 1.0 you win!
 //
-// To be able to pollute even more, you have 8 rows of water to throw into.
+// To be able to pollute even more, you have 7 rows of water to throw into.
 
 // In this example you can see how to write reversible logic:
 mod rows;
@@ -36,26 +36,19 @@ fn main() {
         .add_plugins((
             // Add the RevPlugin to your application.
             //
-            // If you only use bevy_ecs, add the RevMeta resource and the RevMeta::run_rev_update
-            // manually to the world and register RevDespawned as a disabling component.
+            // If you only use bevy_ecs, always at least register RevDespawned as a disabling
+            // component before initializing RevUpdate and custom schedules ran from it.
             //
-            // The plugin default adds an unpaused RevMeta with a max past length of NonZeroU64::MIN
-            // and the mentioned system to FixedUpdate
+            // The plugin adds an unpaused RevMeta with a max past length of NonZeroU64::MIN
+            // and the RevMeta::run_rev_update system to FixedUpdate. We modify the max past len
+            // here.
             //
-            // General order:
+            // General order of systems:
             // 1. RevMeta::run_rev_update runs in the specified schedule (here FixedUpdate)
             // 2. RevUpdate schedule runs unless paused
             // 3. Reversible systems and sync points, all in the RevSystems set, run in normal or
             //    reversed order, depending on the current RevDirection
-            RevPlugin::add_meta_and_runner(
-                // Specify how many world states can be at most reversed, always at least 1.
-                NonZeroU64::new(MAX_PAST_LEN).unwrap(),
-                // Specify if the app starts paused.
-                false,
-                // Specify in which schedule the RevUpdate schedule should be run, you likely want
-                // it to be a schedule with a fixed framerate.
-                FixedUpdate,
-            ),
+            RevPlugin.set_max_past_len(MAX_PAST_LEN),
             // Add other plugins needed for this example.
             DefaultPlugins.set(render::window_plugin()),
             rows::plugin,

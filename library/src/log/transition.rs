@@ -389,8 +389,6 @@ impl<T> Drop for TransitionDrain<'_, T> {
 
 #[cfg(test)]
 mod test {
-    use core::num::NonZeroU64;
-
     use crate::{
         log::test::Logs,
         meta::{RevDirection, RevQueue},
@@ -407,7 +405,7 @@ mod test {
     impl MetaAndLogs {
         fn new(max_past_len: u64) -> Self {
             Self {
-                meta: RevMeta::new(NonZeroU64::new(max_past_len).unwrap(), false),
+                meta: RevMeta::new(max_past_len, false),
                 logs: Logs::default(),
             }
         }
@@ -550,9 +548,7 @@ mod test {
 
         meta_and_logs.backward_log(Ok('l'));
 
-        meta_and_logs
-            .meta
-            .set_max_past_len(NonZeroU64::new(1).unwrap());
+        meta_and_logs.meta.set_max_past_len(1);
         meta_and_logs.forward(['j', 'k'], ['l'], 'm', false);
     }
 }

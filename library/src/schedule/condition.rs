@@ -294,8 +294,6 @@ struct Failed {
 
 #[cfg(test)]
 mod test {
-    use core::num::NonZeroU64;
-
     use crate::meta::RevQueue;
 
     use super::*;
@@ -308,7 +306,7 @@ mod test {
     impl MetaAndLogs {
         fn new() -> Self {
             Self {
-                meta: RevMeta::new(NonZeroU64::MAX, false),
+                meta: RevMeta::new(u64::MAX, false),
                 logs: Default::default(),
             }
         }

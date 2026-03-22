@@ -1,5 +1,3 @@
-use core::num::NonZeroU64;
-
 use bevy_app::{App, Update};
 use bevy_ecs::{
     change_detection::{Res, ResMut},
@@ -294,11 +292,11 @@ fn truncates_future_command_log() {
     panic_on_error_events();
 
     let mut app = App::new();
-    app.add_plugins(RevPlugin::add_meta_and_runner(
-        NonZeroU64::MAX,
-        false,
-        Update,
-    ))
+    app.add_plugins(
+        RevPlugin
+            .set_max_past_len(u64::MAX)
+            .set_runner_in_schedule(Update),
+    )
     .rev_add_systems(RevUpdate, system);
 
     app.update(); // do 1

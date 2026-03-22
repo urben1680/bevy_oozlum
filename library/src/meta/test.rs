@@ -39,7 +39,7 @@ impl RevMeta {
 
 #[test]
 fn traverses_log() {
-    let mut meta = RevMeta::new(NonZeroU64::new(4).unwrap(), false);
+    let mut meta = RevMeta::new(4, false);
     meta.update_assert(
         None,
         Some(RunValues {
@@ -314,7 +314,7 @@ fn traverses_log() {
 
 #[test]
 fn contains_returns_expected() {
-    let mut meta = RevMeta::new(NonZeroU64::MAX, true);
+    let mut meta = RevMeta::new(u64::MAX, true);
     meta.past_end = 1;
     meta.now = 3;
     meta.future_end = 5;
