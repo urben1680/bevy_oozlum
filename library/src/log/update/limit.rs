@@ -2,7 +2,7 @@
 //!
 //! [`UpdateLog`](super::UpdateLog) sends [`UpdateLogLimit`] to that struct so `RevMeta` can report
 //! errors if it did not update at the current frame as it did during
-//! [`RevDirection::Forward`](crate::meta::RevDirection::Forward).
+//! [`RevDirection::NotLog`](crate::meta::RevDirection::NotLog).
 
 use super::PreUpdateKind;
 use bevy_ecs::change_detection::MaybeLocation;
@@ -351,7 +351,7 @@ pub(crate) struct UpdateLogLimit {
     ///
     /// Is [`u64::MAX`] if `UpdateLog` has no further updates in its future.
     ///
-    /// Will be set to `u64::MAX` at [`RevDirection::Forward`](crate::meta::RevDirection::Forward).
+    /// Will be set to `u64::MAX` at [`RevDirection::NotLog`](crate::meta::RevDirection::NotLog).
     future: u64,
 
     /// The last location where [`UpdateLog`](super::UpdateLog) was updated. Is empty if bevy's
@@ -360,7 +360,7 @@ pub(crate) struct UpdateLogLimit {
 }
 
 impl UpdateLogLimit {
-    /// A new limit during an [`RevDirection::Forward`](crate::meta::RevDirection::Forward) update.
+    /// A new limit during an [`RevDirection::NotLog`](crate::meta::RevDirection::NotLog) update.
     ///
     /// Restricts [`RevMeta::now`](crate::meta::RevMeta::now) to not go below `now`.
     pub(crate) fn new_forward(now: u64, caller: MaybeLocation) -> Self {
@@ -375,7 +375,7 @@ impl UpdateLogLimit {
     /// [`RevDirection::BackwardLog`](crate::meta::RevDirection::BackwardLog) update.
     ///
     /// Restricts [`RevMeta::now`](crate::meta::RevMeta::now) to not go below `past` or above
-    /// `future`, except during [`RevDirection::Forward`](crate::meta::RevDirection::Forward).
+    /// `future`, except during [`RevDirection::NotLog`](crate::meta::RevDirection::NotLog).
     pub(crate) fn new_log(past: u64, future: u64, caller: MaybeLocation) -> Self {
         Self {
             past,

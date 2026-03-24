@@ -194,7 +194,7 @@ impl RevMeta {
 
     /// Returns the most future frame that currently can be advanced to.
     ///
-    /// During [`RevDirection::Forward`], the [current] frame is also the future end.
+    /// During [`RevDirection::NotLog`], the [current] frame is also the future end.
     ///
     /// [current]: Self::now
     pub fn future_end(&self) -> u64 {
@@ -210,7 +210,7 @@ impl RevMeta {
     ///
     /// # Panics
     ///
-    /// This method panics when [`RevUpdate`] is not currently running at [`RevDirection::Forward`].
+    /// This method panics when [`RevUpdate`] is not currently running at [`RevDirection::NotLog`].
     /// Use [`get_not_log`] for a fallible version.
     ///
     /// [`get_not_log`]: Self::get_not_log
@@ -220,10 +220,10 @@ impl RevMeta {
 
     /// Returns the current [`NotLog`].
     ///
-    /// Returns `None` if [`RevUpdate`] is not currently running at [`RevDirection::Forward`].
+    /// Returns `None` if [`RevUpdate`] is not currently running at [`RevDirection::NotLog`].
     pub fn get_not_log(&self) -> Option<NotLog> {
         match self.direction {
-            RunningOrRan::Running(RevDirection::Forward { not_log }) => Some(not_log),
+            RunningOrRan::Running(RevDirection::NotLog(not_log)) => Some(not_log),
             _ => None,
         }
     }
@@ -243,7 +243,7 @@ impl RevMeta {
     }
 
     /// Returns the total amount of times the [`running_direction`] changed from a [log direction]
-    /// to [`RevDirection::Forward`] since this `RevMeta` was constructed.
+    /// to [`RevDirection::NotLog`] since this `RevMeta` was constructed.
     ///
     /// [`running_direction`]: Self::running_direction
     /// [log direction]: RevDirection::is_log
@@ -319,8 +319,8 @@ impl RevMeta {
     ) -> Result<Self, RevMetaUpdateErr> {
         // get direction that ran previously
         let (ran, after_log) = match self.direction {
-            RunningOrRan::Ran(RevDirection::Forward { .. }) => (
-                Some(RevDirection::FORWARD_MIN), // gets updated below
+            RunningOrRan::Ran(RevDirection::NotLog(_)) => (
+                Some(RevDirection::NOT_LOG_MIN), // gets updated below
                 false,
             ),
             RunningOrRan::Ran(RevDirection::ForwardLog) => (
@@ -344,7 +344,7 @@ impl RevMeta {
                 if after_log {
                     self.log_exits += 1;
                 }
-                Some(RevDirection::FORWARD_MIN) // gets updated below
+                Some(RevDirection::NOT_LOG_MIN) // gets updated below
             }
             Some(RevQueue::RunForwardLog) if !self.end_of_log_forward() => {
                 Some(RevDirection::ForwardLog)
@@ -354,7 +354,7 @@ impl RevMeta {
             }
             Some(RevQueue::ClearThenRunForward) => {
                 self.clear();
-                Some(RevDirection::FORWARD_MIN) // gets updated below
+                Some(RevDirection::NOT_LOG_MIN) // gets updated below
             }
             Some(RevQueue::ClearThenPause) => {
                 self.clear();
@@ -375,7 +375,7 @@ impl RevMeta {
         };
 
         let direction = match queue_or_ran {
-            RevDirection::Forward { .. } => {
+            RevDirection::NotLog(_) => {
                 self.now += 1;
                 self.future_end = self.now;
                 let max_past_len = self.max_past_len.get();
@@ -384,9 +384,7 @@ impl RevMeta {
                 }
                 let past_len = NonZeroU64::new(self.now - self.past_end)
                     .expect("now is increased here and larger than past_end");
-                RevDirection::Forward {
-                    not_log: NotLog(past_len),
-                }
+                RevDirection::NotLog(NotLog(past_len))
             }
             RevDirection::ForwardLog => {
                 self.now += 1;
@@ -666,11 +664,7 @@ pub enum RevDirection {
     ///
     /// [this particular frame]: RevMeta::now
     /// [any future frame]: RevMeta::future_len
-    Forward {
-        /// A newtyped [`RevMeta::past_len`] that only exists during `Forward`. See its
-        /// documentation for its purpose and more information.
-        not_log: NotLog,
-    },
+    NotLog(NotLog),
 
     /// The world is advanced in the log.
     ForwardLog,
@@ -680,13 +674,11 @@ pub enum RevDirection {
 }
 
 impl RevDirection {
-    pub(crate) const FORWARD_MIN: Self = Self::Forward {
-        not_log: NotLog(NonZeroU64::MIN),
-    };
+    pub(crate) const NOT_LOG_MIN: Self = Self::NotLog(NotLog(NonZeroU64::MIN));
 
-    /// Is [`Forward`] or [`ForwardLog`].
+    /// Is [NotLog] or [`ForwardLog`].
     ///
-    /// [`Forward`]: Self::Forward
+    /// [NotLog]: Self::NotLog
     /// [`ForwardLog`]: Self::ForwardLog
     pub fn is_forward(self) -> bool {
         !self.is_backward()
@@ -707,32 +699,32 @@ impl RevDirection {
         !self.is_not_log()
     }
 
-    /// Is [`Forward`].
+    /// Is [NotLog].
     ///
-    /// [`Forward`]: Self::Forward
+    /// [NotLog]: Self::NotLog
     pub fn is_not_log(self) -> bool {
-        matches!(self, Self::Forward { .. })
+        matches!(self, Self::NotLog(_))
     }
 
-    /// Returns `NotLog` in [`Forward`].
+    /// Returns `NotLog` in [NotLog].
     ///
     /// # Panics
     ///
     /// This method panics for different directions.
     ///
-    /// [`Forward`]: Self::Forward
+    /// [NotLog]: Self::NotLog
     pub fn past_len(self) -> NotLog {
         self.get_past_len().unwrap()
     }
 
-    /// Returns `NotLog` in [`Forward`].
+    /// Returns `NotLog` in [NotLog].
     ///
     /// Returns `None` for different directions.
     ///
-    /// [`Forward`]: Self::Forward
+    /// [NotLog]: Self::NotLog
     pub fn get_past_len(self) -> Option<NotLog> {
         match self {
-            Self::Forward { not_log } => Some(not_log),
+            Self::NotLog(not_log) => Some(not_log),
             _ => None,
         }
     }
@@ -741,7 +733,7 @@ impl RevDirection {
 impl Display for RevDirection {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match *self {
-            RevDirection::Forward { .. } => write!(f, "RevDirection::Forward"),
+            RevDirection::NotLog(_) => write!(f, "RevDirection::NotLog"),
             RevDirection::ForwardLog => write!(f, "RevDirection::ForwardLog"),
             RevDirection::BackwardLog => write!(f, "RevDirection::BackwardLog"),
         }
@@ -764,7 +756,7 @@ enum RunningOrRan {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "bevy_reflect", derive(bevy_reflect::Reflect))]
 pub enum RevQueue {
-    /// Run in [`RevDirection::Forward`] next.
+    /// Run in [`RevDirection::NotLog`] next.
     ///
     /// If there is a [future segment], it will be truncated globally.
     ///
@@ -791,7 +783,7 @@ pub enum RevQueue {
     /// Pause `RevMeta` until a different queue will be set.
     Pause,
 
-    /// Globally truncate the full [log], then run [`RevDirection::Forward`] next.
+    /// Globally truncate the full [log], then run [`RevDirection::NotLog`] next.
     ///
     /// [log]: RevMeta::len
     ClearThenRunForward,
@@ -812,7 +804,7 @@ impl Command<BevyResult> for RevQueue {
     }
 }
 
-/// A newtyped value of [`RevMeta::past_len`] that only exists during [`RevDirection::Forward`].
+/// A newtyped value of [`RevMeta::past_len`] that only exists during [`RevDirection::NotLog`].
 /// At that it can never be zero. It is used as a token to "prove" that particular direction is
 /// running. Because of this, it should not be stored beyond a frame.
 ///

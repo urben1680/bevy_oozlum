@@ -271,7 +271,7 @@ pub trait UndoRedo: Send + 'static {
 /// ```
 /// # use bevy_ecs::world::World;
 /// # use bevy_oozlum::prelude::*;
-/// # let RevDirection::Forward { not_log } = RevDirection::BackwardLog else {
+/// # let RevDirection::NotLog(not_log) = RevDirection::BackwardLog else {
 /// #     return;
 /// # };
 /// # let mut world = World::new();
@@ -418,7 +418,7 @@ impl Display for UndoRedoLogError {
 impl Error for UndoRedoLogError {}
 
 impl UndoRedoLog {
-    /// At [`RevDirection::Forward`], load applied reversible operations from [`UndoRedoBuffer`],
+    /// At [`RevDirection::NotLog`], load applied reversible operations from [`UndoRedoBuffer`],
     /// if any.
     ///
     /// At [`RevDirection::ForwardLog`], redo reversible operations, if any.
@@ -429,7 +429,7 @@ impl UndoRedoLog {
 
         let now = meta.now();
         match meta.get_running_direction() {
-            Some(RevDirection::Forward { .. }) => {
+            Some(RevDirection::NotLog(_)) => {
                 // UndoRedoBuffer may not exist if no reversible commands were buffered yet
                 world.try_resource_scope::<UndoRedoBuffer, _>(|world, mut buffer| {
                     if !buffer.0.is_empty() {
@@ -558,7 +558,7 @@ mod test {
         // forward
         meta = meta
             .update(|mut meta, direction| {
-                assert_eq!(direction, RevDirection::FORWARD_MIN);
+                assert_eq!(direction, RevDirection::NOT_LOG_MIN);
                 meta.set_queue(RevQueue::RunBackwardLog);
                 world.insert_resource(meta);
                 state = Some(forward(world, direction.past_len()));

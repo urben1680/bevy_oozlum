@@ -43,7 +43,7 @@ enum Signal {
 
 fn system1(meta: Res<RevMeta>, signal: Option<Res<Signal>>, mut commands: Commands) {
     match meta.running_direction() {
-        RevDirection::Forward { .. } => {
+        RevDirection::NotLog(_) => {
             commands.insert_resource(Signal::DoSpawn { at: meta.now() });
         }
         RevDirection::BackwardLog => {
@@ -61,19 +61,17 @@ fn system1(meta: Res<RevMeta>, signal: Option<Res<Signal>>, mut commands: Comman
 
 fn system2<const ROW: u64>(meta: Res<RevMeta>, mut signal: ResMut<Signal>, mut commands: Commands) {
     match meta.running_direction() {
-        RevDirection::Forward {
-            not_log: meta_past_len,
-        } => {
+        RevDirection::NotLog(not_log) => {
             assert_eq!(*signal, Signal::DoSpawn { at: meta.now() });
 
-            // MetaPastLen is like a token to prove that methods needing it are called during
+            // NotLog is like a token to prove that methods needing it are called during
             // RevDirection::Forward. Because of this it should not be stored past that.
 
             // As Commands::spawn, this spawns an entity.
             // If this is undone, the entity is at first disabled and later fully despawned if the redo
             // becomes unreachable.
             commands.rev_spawn(
-                meta_past_len,
+                not_log,
                 Waste {
                     row: ROW,
                     tossed_at: meta.now(),

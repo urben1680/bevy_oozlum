@@ -134,7 +134,7 @@ impl IntoIterator for Test {
 
 fn normalize_direction(direction: RevDirection) -> RevDirection {
     match direction {
-        RevDirection::Forward { .. } => RevDirection::FORWARD_MIN,
+        RevDirection::NotLog(_) => RevDirection::NOT_LOG_MIN,
         RevDirection::ForwardLog => RevDirection::ForwardLog,
         RevDirection::BackwardLog => RevDirection::BackwardLog,
     }
@@ -178,7 +178,7 @@ fn non_exclusive_system_commands_only<const N: u8>(meta: Res<RevMeta>, mut comma
         world
             .resource_mut::<TestLog>()
             .0
-            .push(LogEntry::SysCmd((N, RevDirection::FORWARD_MIN)))
+            .push(LogEntry::SysCmd((N, RevDirection::NOT_LOG_MIN)))
     });
     commands.buffer_undo_redo(not_log, LogEntry::SysCmd(N));
 }
@@ -276,7 +276,7 @@ fn duplicate_system_chain_builds() {
 fn truncates_future_command_log() {
     fn system(meta: Res<RevMeta>, mut commands: Commands, mut command_queued: Local<bool>) {
         if !*command_queued
-            && let Some(RevDirection::Forward { not_log }) = meta.get_running_direction()
+            && let Some(RevDirection::NotLog(not_log)) = meta.get_running_direction()
         {
             if meta.now() == 2 {
                 commands.rev_spawn_empty(not_log);

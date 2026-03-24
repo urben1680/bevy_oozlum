@@ -15,7 +15,7 @@
 //! # use bevy_oozlum::prelude::*;
 //! fn reversible_system(meta: Res<RevMeta>) {
 //!     match meta.running_direction() {
-//!         RevDirection::Forward { not_log } => {
+//!         RevDirection::NotLog(not_log) => {
 //!             // logic specific for changes that happen for the first time
 //!             // reversible commands are queued only here
 //!             // not_log is needed for reversible commands or reversible logs
@@ -34,7 +34,7 @@
 //!
 //! [`RevSchedule::rev_add_systems`] wraps every passed-in system `T` in an `Arc<Mutex<T>>` that is
 //! shared for:
-//! - a new system `F` that runs at [`Forward`] and [`ForwardLog`]
+//! - a new system `F` that runs at [`NotLog`] and [`ForwardLog`]
 //! - a new system `B` that runs at [`BackwardLog`]
 //!
 //! Additionally, another new system per `T` is added that runs at [`BackwardLog`]
@@ -49,7 +49,7 @@
 //! # Reversible conditions
 //!
 //! Conditions do not need to be redesigned, they can be used as they are because the internal
-//! wrapper only calls them at [`Forward`], logs their outputs and and only uses these log entries
+//! wrapper only calls them at [`NotLog`], logs their outputs and and only uses these log entries
 //! during [log directions].
 //!
 //! # Reversible configurations
@@ -64,7 +64,7 @@
 //! If this is not possible, reversible systems are always part of the [`RevSystems`] set that
 //! can be used for non-reversible ordering.
 //!
-//! [`Forward`]: crate::meta::RevDirection::Forward
+//! [`NotLog`]: crate::meta::RevDirection::NotLog
 //! [`ForwardLog`]: crate::meta::RevDirection::ForwardLog
 //! [`BackwardLog`]: crate::meta::RevDirection::BackwardLog
 //! [log directions]: crate::meta::RevDirection::is_log

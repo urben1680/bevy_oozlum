@@ -13,23 +13,23 @@ pub fn plugin<const ROW: u64>(app: &mut App) {
 struct RevUpdateInner;
 
 fn system1(meta: Res<RevMeta>, mut commands: Commands) {
-    if let Some(meta_past_len) = meta.get_not_log() {
-        // MetaPastLen is like a token to prove that methods needing it are called during
+    if let Some(not_log) = meta.get_not_log() {
+        // NotLog is like a token to prove that methods needing it are called during
         // RevDirection::Forward. Because of this it should not be stored past that.
 
-        commands.rev_run_schedule(meta_past_len, RevUpdateInner);
+        commands.rev_run_schedule(not_log, RevUpdateInner);
     }
 }
 
 fn system2<const ROW: u64>(input: Res<JustPressed>, meta: Res<RevMeta>, mut commands: Commands) {
     if input.get(ROW)
-        && let Some(meta_past_len) = meta.get_not_log()
+        && let Some(not_log) = meta.get_not_log()
     {
         // As Commands::spawn, this spawns an entity.
         // If this is undone, the entity is at first disabled and later fully despawned if the redo
         // becomes unreachable.
         commands.rev_spawn(
-            meta_past_len,
+            not_log,
             Waste {
                 row: ROW,
                 tossed_at: meta.now(),

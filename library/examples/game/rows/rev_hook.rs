@@ -26,11 +26,11 @@ fn system<const ROW: u64>(input: Res<JustPressed>, meta: Res<RevMeta>, mut comma
 
 fn on_insert<const ROW: u64>(mut world: DeferredWorld, context: HookContext) {
     let meta = world.resource::<RevMeta>();
-    let Some(meta_past_len) = meta.get_not_log() else {
+    let Some(not_log) = meta.get_not_log() else {
         return;
     };
 
-    // MetaPastLen is like a token to prove that methods needing it are called during
+    // NotLog is like a token to prove that methods needing it are called during
     // RevDirection::Forward. Because of this it should not be stored past that.
 
     let waste = *world.get::<Waste>(context.entity).unwrap();
@@ -46,5 +46,5 @@ fn on_insert<const ROW: u64>(mut world: DeferredWorld, context: HookContext) {
     // along it.
     world
         .commands()
-        .rev_mark_spawned(meta_past_len, context.entity, false);
+        .rev_mark_spawned(not_log, context.entity, false);
 }

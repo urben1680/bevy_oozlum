@@ -40,7 +40,7 @@ use crate::{
 ///     mut log: Local<TransitionsLog<MyTransition, MyUpdate>>
 /// ) -> Result<(), BevyError> {
 ///     match meta.running_direction() {
-///         RevDirection::Forward { not_log } => {
+///         RevDirection::NotLog(not_log) => {
 ///             let new_transitions: Vec<MyTransition> = todo!();
 ///             let new_update: MyUpdate = todo!();
 ///
@@ -313,7 +313,7 @@ impl<T, U> TransitionsLog<T, U> {
     /// Updates the log with new `transitions` and `update` and returns [`TransitionsDrain`] that
     /// can be used to iterate log entries that got out-of-log with this push.
     ///
-    /// This is used during [`RevDirection::Forward`](crate::meta::RevDirection::Forward). Its
+    /// This is used during [`RevDirection::NotLog`](crate::meta::RevDirection::NotLog). Its
     /// field, [`NotLog`](crate::meta::NotLog), can be used for the `past_len` parameter
     /// here if this log is updated exactly once per frame. Otherwise, use
     /// [`UpdateLog`](super::UpdateLog::forward_past_len) instead.
@@ -732,7 +732,7 @@ mod test {
             };
             self.meta.set_queue(queue);
             self.meta.update_ref(Ok(true), |meta, direction| {
-                let RevDirection::Forward { not_log } = direction else {
+                let RevDirection::NotLog(not_log) = direction else {
                     unreachable!()
                 };
                 self.logs.assert_forward_transitions(

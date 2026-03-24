@@ -19,13 +19,13 @@ fn system<const ROW: u64>(
     mut commands: Commands,
 ) -> Result {
     match meta.running_direction() {
-        RevDirection::Forward { .. } => {
+        RevDirection::NotLog(_) => {
             if !input.get(ROW) {
                 return Ok(());
             }
 
             // TransitionLog and TransitionsLog need the past length to shorten the log if needed.
-            // This can either be MetaPastLen from RevDirection (if it is updated exactly once every
+            // This can either be NotLog from RevDirection (if it is updated exactly once every
             // time RevUpdate) or the value returned by UpdateLog::forward_past_len.
             // UpdateLog keeps track how long the past needs to be to keep it as small as possible
             // without running out-of-log when fully going backwards.

@@ -75,7 +75,7 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
             world
                 .resource_mut::<TestLog>()
                 .0
-                .push(LogEntry::SysObsvCmd((n, RevDirection::FORWARD_MIN)));
+                .push(LogEntry::SysObsvCmd((n, RevDirection::NOT_LOG_MIN)));
         });
         let test = LogEntry::SysObsvCmd(n);
         world.commands().buffer_undo_redo(not_log, test);
@@ -94,7 +94,7 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
                 world
                     .resource_mut::<TestLog>()
                     .0
-                    .push(LogEntry::SysHookCmd((n, RevDirection::FORWARD_MIN)));
+                    .push(LogEntry::SysHookCmd((n, RevDirection::NOT_LOG_MIN)));
             });
             let test = LogEntry::SysHookCmd(n);
             world.commands().buffer_undo_redo(not_log, test);
@@ -108,7 +108,7 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
             apply_final_deferred,
             step,
             expected,
-            RevDirection::FORWARD_MIN,
+            RevDirection::NOT_LOG_MIN,
         );
     }
 

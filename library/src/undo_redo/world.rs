@@ -108,7 +108,7 @@ impl RevWorld for World {
         debug_assert!(self.get_resource::<RevMeta>().is_some_and(|meta| {
             meta.get_running_direction()
                 .is_some_and(|direction| match direction {
-                    RevDirection::Forward { not_log: actual } => actual == not_log,
+                    RevDirection::NotLog(actual) => actual == not_log,
                     _ => false,
                 })
         }));

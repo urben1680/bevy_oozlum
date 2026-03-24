@@ -42,7 +42,7 @@ mod test;
 /// - ... have this component removed when the above actions are **redone** and should be treated as
 /// spawned.
 /// - ... will be despawned if the above actions are not **redone** before the next update with
-/// [`RevDirection::Forward`] runs.
+/// [`RevDirection::NotLog`] runs.
 ///
 /// # Reversible despawn
 ///
@@ -55,7 +55,7 @@ mod test;
 /// - ... receive this component when the above actions are **redone** and should be treated as
 /// despawned.
 /// - ... will be despawned if the above actions are not **undone** before the next update with
-/// [`RevDirection::Forward`] runs and the frame the reversible despawn happened falls behind
+/// [`RevDirection::NotLog`] runs and the frame the reversible despawn happened falls behind
 /// [`RevMeta::past_end`].
 ///
 /// # Notes
@@ -98,7 +98,7 @@ pub fn finalize_despawns(world: &mut World) -> Result<(), DespawnFinalizerErr> {
                 .ok_or(DespawnFinalizerErr::MetaNotRunning)?;
 
             match direction {
-                RevDirection::Forward { not_log } => {
+                RevDirection::NotLog(not_log) => {
                     let spawn = this.spawn_queue.drain(..).map(|(entity, _)| entity);
                     let despawn = this.despawn_queue.drain(..).map(|(entity, _)| entity);
                     let spawn_amount = spawn.len();
@@ -361,10 +361,10 @@ impl FromWorld for DespawnFinalizer {
             .unwrap_or_else(|| {
                 error!(
                     "a reversible spawn, despawn or marking an entity as such was attempted \
-                    outside RevDirection::Forward, this may cause an out-of-log error when \
+                    outside RevDirection::NotLog, this may cause an out-of-log error when \
                     attempting to undo this, do not store NotLog to do reversible operations"
                 );
-                1 // 0 would be an invalid value for RevDirection::Forward regardless of this error
+                1 // 0 would be an invalid value for RevDirection::NotLog regardless of this error
             });
         Self {
             spawn_despawn: Default::default(),

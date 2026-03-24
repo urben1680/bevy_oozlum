@@ -20,7 +20,7 @@ mod offset;
 ///
 /// This type is usually accompied by another log that would grow too large if
 /// [`PastLen`](crate::meta::PastLen) from
-/// [`RevDirection::Forward`](crate::meta::RevDirection::Forward) was used when it actually updates
+/// [`RevDirection::NotLog`](crate::meta::RevDirection::NotLog) was used when it actually updates
 /// much more rarely. Another use case can be when it runs arbitrarily often per frame and there is
 /// no other way to determine to which length a log should be at most when updating.
 ///
@@ -241,7 +241,7 @@ impl UpdateLog {
     /// Update the log and return the updated length of the log as an alternative to
     /// [`RevMeta::past_len`].
     ///
-    /// This is used during [`RevDirection::Forward`](crate::meta::RevDirection::Forward).
+    /// This is used during [`RevDirection::NotLog`](crate::meta::RevDirection::NotLog).
     #[track_caller]
     pub fn forward_past_len(&mut self, meta: &RevMeta) -> NonZeroU64 {
         let caller = MaybeLocation::caller().map(Some);
@@ -260,10 +260,10 @@ impl UpdateLog {
             // log is empty or all updates are out of log
             // it is not important what offset is pushed as long log_start + offset = now
             // asusming 1-offset streak are the most common offsets and that during
-            // RevDirection::Forward the value of now is non-zero, start such a 1-offset streak here
+            // RevDirection::NotLog the value of now is non-zero, start such a 1-offset streak here
             self.offsets.clear();
             self.offsets.push(1);
-            self.log_start = meta.now() - 1; // now() is never 0 during RevDirection::Forward
+            self.log_start = meta.now() - 1; // now() is never 0 during RevDirection::NotLog
             self.last_update = meta.now();
             self.past_len = 1;
             past_len = NonZeroU64::MIN;

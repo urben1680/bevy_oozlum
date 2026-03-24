@@ -35,7 +35,7 @@
 //!
 //! | [`RevDirection`] | method                          | [`RevMeta::now`] |
 //! | ---------------- | ------------------------------- | ---------------- |
-//! | [`Forward`]      | `forward_push`/`forward_extend` | `n`              |
+//! | [NotLog]      | `forward_push`/`forward_extend` | `n`              |
 //! | [`BackwardLog`]  | `backward_log`                  | `n-1`            |
 //! | [`ForwardLog`]   | `forward_log`                   | `n`              |
 //!
@@ -88,7 +88,7 @@
 //! ### Example
 //!
 //! A [`UpdateLog::forward_past_len`] runs at [frame `42`](crate::meta::RevMeta::now) during
-//! [`RevDirection::Forward`]. This is the first time this log updated. `UpdateLog` will then inform
+//! [`RevDirection::NotLog`]. This is the first time this log updated. `UpdateLog` will then inform
 //! [`RevMeta`] that there is no future frame it expects to run at during
 //! [`RevDirection::ForwardLog`] but expects to run at frame `41` when going backward.
 //!
@@ -111,8 +111,8 @@
 //! [`RevMeta::update`]: crate::meta::RevMeta::update
 //! [global log range]: crate::meta::RevMeta::contains
 //! [`RevDirection`]: crate::meta::RevDirection
-//! [`RevDirection::Forward`]: crate::meta::RevDirection::Forward
-//! [`Forward`]: crate::meta::RevDirection::Forward
+//! [`RevDirection::NotLog`]: crate::meta::RevDirection::NotLog
+//! [NotLog]: crate::meta::RevDirection::NotLog
 //! [`RevDirection::BackwardLog`]: crate::meta::RevDirection::BackwardLog
 //! [`BackwardLog`]: crate::meta::RevDirection::BackwardLog
 //! [`RevDirection::ForwardLog`]: crate::meta::RevDirection::ForwardLog

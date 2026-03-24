@@ -54,7 +54,7 @@
 //! # use bevy_oozlum::prelude::*;
 //! fn rev_system_2(meta: Res<RevMeta>) {
 //!     match meta.running_direction() {
-//!         RevDirection::Forward { .. } => println!("hello world!"),
+//!         RevDirection::NotLog(_) => println!("hello world!"),
 //!         RevDirection::BackwardLog => println!("!dlrow olleh (log)"),
 //!         RevDirection::ForwardLog => println!("hello world! (log)")
 //!     }
@@ -63,7 +63,7 @@
 //!
 //! If there is the need to maintain logs of changes inside the system, check the [`log`] module.
 //!
-//! Both system variants can be combined, [`RevDirection::Forward`] contains the [`NotLog`] value
+//! Both system variants can be combined, [`RevDirection::NotLog`] contains the [`NotLog`] value
 //! needed for reversible commands.
 //!
 //! Reversible systems are added to the app using [`rev_add_systems`]. Defining reversible orderings
@@ -191,7 +191,7 @@
 //!
 //! [`NotLog`]: crate::meta::NotLog
 //! [`RevMeta`]: crate::meta::RevMeta
-//! [`RevDirection::Forward`]: crate::meta::RevDirection::Forward
+//! [`RevDirection::NotLog`]: crate::meta::RevDirection::NotLog
 //! [`rev_add_systems`]: crate::app::RevApp::rev_add_systems
 //! [`RevUpdate`]: crate::schedule::RevUpdate
 //! [`rev_run_schedule`]: crate::undo_redo::RevCommands::rev_run_schedule
@@ -233,6 +233,7 @@ ISSUES/DISCUSSIONS:
 - RevBundle::rev_insert_inner out of trait
 - schedule::set_base_sets should not need to chain forward/backward configs
 - exclusive reversible system sharp edges: ordering of ops
+- at RevDirection::BackwardLog, decrease now after RevUpdate ran
 
 */
 // todo: deny

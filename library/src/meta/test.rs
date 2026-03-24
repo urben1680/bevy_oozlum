@@ -3,7 +3,7 @@ use core::mem::Discriminant;
 use super::*;
 
 impl RevDirection {
-    const FWD_DISCRIMINANT: Discriminant<Self> = Self::FORWARD_MIN.discriminant();
+    const FWD_DISCRIMINANT: Discriminant<Self> = Self::NOT_LOG_MIN.discriminant();
     const fn discriminant(self) -> Discriminant<Self> {
         core::mem::discriminant(&self)
     }
