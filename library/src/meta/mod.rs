@@ -272,22 +272,6 @@ impl RevMeta {
         self.future_end.wrapping_sub(frame) < self.future_len()
     }
 
-    /// Returns `true` if [`now`] is equal to [`past_end`].
-    ///
-    /// [`now`]: Self::now
-    /// [`past_end`]: Self::past_end
-    pub fn end_of_log_backward(&self) -> bool {
-        self.now == self.past_end
-    }
-
-    /// Returns `true` if [`now`] is equal to [`future_end`].
-    ///
-    /// [`now`]: Self::now
-    /// [`future_end`]: Self::future_end
-    pub fn end_of_log_forward(&self) -> bool {
-        self.now == self.future_end
-    }
-
     /// Update `RevMeta` and run `c` once unless paused. `c` should return it's `RevMeta` argument
     /// without replacing it at some point. It may be mutated however with any method **except**
     /// this one.
@@ -324,11 +308,11 @@ impl RevMeta {
                 false,
             ),
             RunningOrRan::Ran(RevDirection::ForwardLog) => (
-                (!self.end_of_log_forward()).then_some(RevDirection::ForwardLog),
+                (self.now != self.future_end).then_some(RevDirection::ForwardLog),
                 true,
             ),
             RunningOrRan::Ran(RevDirection::BackwardLog) => (
-                (!self.end_of_log_backward()).then_some(RevDirection::BackwardLog),
+                (self.now != self.past_end).then_some(RevDirection::BackwardLog),
                 true,
             ),
             RunningOrRan::Pause { after_log } => (None, after_log),
@@ -346,10 +330,10 @@ impl RevMeta {
                 }
                 Some(RevDirection::NOT_LOG_MIN) // gets updated below
             }
-            Some(RevQueue::RunForwardLog) if !self.end_of_log_forward() => {
+            Some(RevQueue::RunForwardLog) if self.now != self.future_end => {
                 Some(RevDirection::ForwardLog)
             }
-            Some(RevQueue::RunBackwardLog) if !self.end_of_log_backward() => {
+            Some(RevQueue::RunBackwardLog) if self.now != self.past_end => {
                 Some(RevDirection::BackwardLog)
             }
             Some(RevQueue::ClearThenRunForward) => {
@@ -375,7 +359,7 @@ impl RevMeta {
         };
 
         let direction = match queue_or_ran {
-            RevDirection::NotLog(_) => {
+            RevDirection::NotLog(_not_log_min) => {
                 self.now += 1;
                 self.future_end = self.now;
                 let max_past_len = self.max_past_len.get();
@@ -390,11 +374,7 @@ impl RevMeta {
                 self.now += 1;
                 RevDirection::ForwardLog
             }
-            RevDirection::BackwardLog => {
-                // todo: consider to do this after `c` ran
-                self.now -= 1;
-                RevDirection::BackwardLog
-            }
+            RevDirection::BackwardLog => RevDirection::BackwardLog,
         };
 
         // set running direction, call closure, set ran direction
@@ -405,6 +385,9 @@ impl RevMeta {
         };
         if meta.immutable_running_state() != immutable_running_state {
             return Err(RevMetaUpdateErr::RevMetaReplaced { meta });
+        }
+        if direction.is_backward() {
+            meta.now -= 1;
         }
         meta.direction = RunningOrRan::Ran(direction);
 

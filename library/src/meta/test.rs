@@ -99,7 +99,7 @@ fn traverses_log() {
         Some(RevQueue::RunBackwardLog),
         Some(RunValues {
             past_end: 1,
-            now: 4,
+            now: 5,
             future_end: 5,
             log_exits: 0,
             log_clears: 0,
@@ -110,7 +110,7 @@ fn traverses_log() {
         None,
         Some(RunValues {
             past_end: 1,
-            now: 3,
+            now: 4,
             future_end: 5,
             log_exits: 0,
             log_clears: 0,
@@ -121,7 +121,7 @@ fn traverses_log() {
         Some(RevQueue::RunBackwardLog),
         Some(RunValues {
             past_end: 1,
-            now: 2,
+            now: 3,
             future_end: 5,
             log_exits: 0,
             log_clears: 0,
@@ -132,7 +132,7 @@ fn traverses_log() {
         None,
         Some(RunValues {
             past_end: 1,
-            now: 1,
+            now: 2,
             future_end: 5,
             log_exits: 0,
             log_clears: 0,
@@ -191,7 +191,7 @@ fn traverses_log() {
         Some(RevQueue::RunBackwardLog),
         Some(RunValues {
             past_end: 1,
-            now: 4,
+            now: 5,
             future_end: 5,
             log_exits: 0,
             log_clears: 0,
@@ -202,7 +202,7 @@ fn traverses_log() {
         None,
         Some(RunValues {
             past_end: 1,
-            now: 3,
+            now: 4,
             future_end: 5,
             log_exits: 0,
             log_clears: 0,
@@ -225,7 +225,7 @@ fn traverses_log() {
         Some(RevQueue::RunBackwardLog),
         Some(RunValues {
             past_end: 1,
-            now: 3,
+            now: 4,
             future_end: 4,
             log_exits: 1,
             log_clears: 0,
@@ -236,7 +236,7 @@ fn traverses_log() {
         None,
         Some(RunValues {
             past_end: 1,
-            now: 2,
+            now: 3,
             future_end: 4,
             log_exits: 1,
             log_clears: 0,
@@ -281,7 +281,7 @@ fn traverses_log() {
         Some(RevQueue::RunBackwardLog),
         Some(RunValues {
             past_end: 2,
-            now: 4,
+            now: 5,
             future_end: 5,
             log_exits: 0,
             log_clears: 1,
@@ -292,7 +292,7 @@ fn traverses_log() {
         None,
         Some(RunValues {
             past_end: 2,
-            now: 3,
+            now: 4,
             future_end: 5,
             log_exits: 0,
             log_clears: 1,

@@ -130,7 +130,7 @@ pub fn finalize_despawns(world: &mut World) -> Result<(), DespawnFinalizerErr> {
                     }
                 }
                 RevDirection::BackwardLog => {
-                    if this.init_at <= meta.now() + 1 {
+                    if this.init_at <= meta.now() {
                         this.spawn_despawn.backward_log(meta)?;
                     }
                 }

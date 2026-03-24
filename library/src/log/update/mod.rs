@@ -19,7 +19,7 @@ mod offset;
 /// [`RevUpdate`](crate::schedule::RevUpdate).
 ///
 /// This type is usually accompied by another log that would grow too large if
-/// [`PastLen`](crate::meta::PastLen) from
+/// [`NotLog`](crate::meta::NotLog) from
 /// [`RevDirection::NotLog`](crate::meta::RevDirection::NotLog) was used when it actually updates
 /// much more rarely. Another use case can be when it runs arbitrarily often per frame and there is
 /// no other way to determine to which length a log should be at most when updating.
@@ -332,9 +332,7 @@ impl UpdateLog {
             return false;
         };
 
-        let now_plus_1 = meta.now() + 1;
-
-        if self.last_update != now_plus_1 {
+        if self.last_update != meta.now() {
             // if last_update is larger than now, an update was missed but it is up to the RevMeta
             // update to report on that
             return false;
@@ -350,7 +348,7 @@ impl UpdateLog {
             self.update_state.as_mut().unwrap(), // set by pre_update_to_clear
             UpdateLogLimit::new_log(
                 backward_limit,
-                meta.now(),
+                meta.now() - 1,
                 caller.map(|caller| caller.unwrap_or(DEFAULT_LOCATION)),
             ),
         );

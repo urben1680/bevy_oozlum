@@ -233,7 +233,6 @@ ISSUES/DISCUSSIONS:
 - RevBundle::rev_insert_inner out of trait
 - schedule::set_base_sets should not need to chain forward/backward configs
 - exclusive reversible system sharp edges: ordering of ops
-- at RevDirection::BackwardLog, decrease now after RevUpdate ran
 
 */
 // todo: deny
