@@ -31,7 +31,7 @@ fn on_insert<const ROW: u64>(mut world: DeferredWorld, context: HookContext) {
     };
 
     // NotLog is like a token to prove that methods needing it are called during
-    // RevDirection::Forward. Because of this it should not be stored past that.
+    // RevDirection::NotLog. Because of this it should not be stored past that.
 
     let waste = *world.get::<Waste>(context.entity).unwrap();
     if waste.row != ROW {

@@ -175,11 +175,11 @@ impl OffsetLog {
     /// Remove all future offsets from the log.
     pub(super) fn truncate_future(&mut self) {
         self.offsets.truncate(self.meta.index);
-        if let Some((ref mut streak, step)) = self.meta.streak_and_step {
-            if streak.max != step {
-                streak.max = step;
-                *self.offsets.back_mut().unwrap() = (*streak).into();
-            }
+        if let Some((ref mut streak, step)) = self.meta.streak_and_step
+            && streak.max != step
+        {
+            streak.max = step;
+            *self.offsets.back_mut().unwrap() = (*streak).into();
         }
     }
 
@@ -304,6 +304,7 @@ impl OffsetLog {
     pub(super) fn push(&mut self, offset: u64) {
         self.debug_assert_no_future();
 
+        #[allow(clippy::match_overlapping_arm)] // readability
         match offset {
             0 => self.push_streak::<false>(),
             1 => self.push_streak::<true>(),

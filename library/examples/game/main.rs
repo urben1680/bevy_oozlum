@@ -100,7 +100,7 @@ struct Waste {
     tossed_at: u64,
 }
 
-// Increase the score and speed during RevDirection::Forward, check for winning condition
+// Increase the score and speed during RevDirection::NotLog, check for winning condition
 fn increase_score(mut world: DeferredWorld, _: HookContext) {
     // Hooks sensible to RevDirection must be written as such, here we do not want to react on
     // undo-redo logic, only the initial insertion
@@ -143,7 +143,7 @@ fn despawn_lost_waste(
     mut next_state: ResMut<NextState<GameState>>,
     mut commands: Commands,
 ) {
-    // Only during RevDirection::Forward RevMeta::past_end could have increased, so skip otherwise
+    // Only during RevDirection::NotLog RevMeta::past_end could have increased, so skip otherwise
     if meta
         .get_running_direction()
         .is_none_or(RevDirection::is_log)

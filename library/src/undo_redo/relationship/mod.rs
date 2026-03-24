@@ -155,6 +155,7 @@ impl<R: Relationship, E: AsRef<[Entity]> + Send + 'static, const ADD: bool>
     AddRemoveRelated<R, E, ADD>
 {
     pub(super) fn new(entity: Entity, related: E, caller: MaybeLocation) -> Self {
+        #[allow(clippy::let_unit_value)]
         let _ = R::ASSERT;
         Self {
             entity,
@@ -164,6 +165,7 @@ impl<R: Relationship, E: AsRef<[Entity]> + Send + 'static, const ADD: bool>
         }
     }
     fn toggle<const UNDO: bool>(&mut self, world: &mut World) {
+        #[allow(clippy::let_unit_value)]
         let _ = R::ASSERT;
         match world.get_entity_mut(self.entity) {
             Ok(mut entity) => {
@@ -235,8 +237,7 @@ pub(super) fn get_new_related<R: Relationship>(
                 .unwrap()
                 .collection()
                 .iter()
-                .filter(|child| !existing_children.contains(child))
-                .next()
+                .find(|child| !existing_children.contains(child))
                 .unwrap()
         }
         None => c(entity)

@@ -2,7 +2,7 @@ use bevy::prelude::*;
 
 // Every row does more or less the same:
 //
-// RevDirection::Forward => an entity is spawned with Waste
+// RevDirection::NotLog => an entity is spawned with Waste
 // RevDirection::BackwardLog => the entity is either disabled or despawned
 // RevDirection::ForwardLog => the entity is either enabled or respawned
 

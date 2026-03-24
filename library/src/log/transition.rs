@@ -363,7 +363,7 @@ impl<'a, T> TransitionDrain<'a, T> {
     }
 
     pub(super) fn transition_mut(&mut self) -> &mut T {
-        &mut *self.transition
+        &mut self.transition
     }
 }
 

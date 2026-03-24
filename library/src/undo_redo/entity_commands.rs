@@ -283,6 +283,7 @@ impl<'a> RevEntityCommands<'a> for EntityCommands<'a> {
 
     #[track_caller]
     fn rev_detach_all_related<R: Relationship>(&mut self, not_log: NotLog) -> &mut Self {
+        #[allow(clippy::let_unit_value)]
         let _ = R::ASSERT; // may contain non-default extra data
         let caller = MaybeLocation::caller();
         self.queue(move |mut entity_world_mut: EntityWorldMut| {
@@ -303,6 +304,7 @@ impl<'a> RevEntityCommands<'a> for EntityCommands<'a> {
         not_log: NotLog,
         related: impl AsRef<[Entity]> + Send + 'static,
     ) -> &mut Self {
+        #[allow(clippy::let_unit_value)]
         let _ = R::ASSERT; // may contain non-default extra data
         let caller = MaybeLocation::caller();
         self.queue(move |mut entity_world_mut: EntityWorldMut| {
@@ -332,6 +334,7 @@ impl<'a> RevEntityCommands<'a> for EntityCommands<'a> {
         not_log: NotLog,
         related: impl AsRef<[Entity]> + Send + 'static,
     ) -> &mut Self {
+        #[allow(clippy::let_unit_value)]
         let _ = R::ASSERT; // may contain non-default extra data
         let caller = MaybeLocation::caller();
         self.queue(move |mut entity_world_mut: EntityWorldMut| {

@@ -1,7 +1,4 @@
-use core::{
-    any::TypeId,
-    hash::{BuildHasher, Hash, Hasher},
-};
+use core::{any::TypeId, hash::BuildHasher};
 
 use bevy_ecs::{
     change_detection::{CheckChangeTicks, MaybeLocation, Tick},
@@ -267,12 +264,8 @@ impl FailedCache {
     }
     fn insert_get_key(&mut self, failed: &BevyError) -> u64 {
         let string = failed.to_string();
-
         let hash_state = FixedState::default();
-        let mut hasher = hash_state.build_hasher();
-        string.hash(&mut hasher);
-        let hash = hasher.finish();
-
+        let hash = hash_state.hash_one(&string);
         let entry = self.0.raw_entry_mut().from_key_hashed_nocheck(hash, &hash);
         match entry {
             RawEntryMut::Vacant(entry) => {

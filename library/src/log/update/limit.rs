@@ -34,7 +34,8 @@ pub(crate) struct UpdateLogLimits {
     ///   draining order will ensure only the last limit of a specific log is stored in
     ///   [`Self::update_log_limits`].
     #[cfg_attr(feature = "bevy_reflect", reflect(ignore))]
-    update_log_updates: Parallel<Vec<Vec<(NonMaxU32, UpdateLogLimit)>>>,
+    #[allow(clippy::type_complexity)]
+    update_log_updates: Box<Parallel<Vec<Vec<(NonMaxU32, UpdateLogLimit)>>>>,
 
     /// The most recent limits per [`UpdateLog`](super::UpdateLog) with [UpdateLogState::index]
     /// being used as the index in this vector.

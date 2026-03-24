@@ -497,11 +497,8 @@ where
     pub fn all<'b>(
         &'b mut self,
     ) -> TransitionsDrainIters<DrainAll<'b, T>, DrainAll<'b, TransitionsLogUpdate<U>>, U> {
-        let transitions = DrainAll::new(
-            &mut self.transitions,
-            &mut self.gap_range,
-            &mut self.gap_buffer,
-        );
+        let transitions =
+            DrainAll::new(self.transitions, &mut self.gap_range, &mut self.gap_buffer);
         let updates = self.updates.all();
         TransitionsDrainIters {
             transitions,
@@ -523,7 +520,7 @@ where
             // todo: use truncate_front https://github.com/rust-lang/rust/issues/140667
             self.transitions.drain(..self.gap_range.start);
         }
-        prepend(&mut self.transitions, &mut self.gap_buffer);
+        prepend(self.transitions, &mut self.gap_buffer);
         let transitions_iter = unsafe {
             // SAFETY: Only called this once and only in this Drop
             ManuallyDrop::take(&mut self.transitions_iter)

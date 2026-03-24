@@ -179,10 +179,11 @@ impl ModifiedRevPlugin {
     /// [`set_runner_in_schedule`]: Self::set_runner_in_schedule
     /// [`set_runner_in_set`]: Self::set_runner_in_set
     pub fn unset_runner(mut self) -> ModifiedRevPlugin {
-        if let Some((schedule, set)) = self.runner {
-            if schedule != FixedUpdate.intern() || set.is_some() {
-                warn!("overwrote plugin change with RevUpdate::unset_runner");
-            }
+        if self
+            .runner
+            .is_some_and(|(schedule, set)| schedule != FixedUpdate.intern() || set.is_some())
+        {
+            warn!("overwrote plugin change with RevUpdate::unset_runner");
         }
         self.runner = None;
         self

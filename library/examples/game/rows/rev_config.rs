@@ -20,7 +20,7 @@ pub fn plugin<const ROW: u64>(app: &mut App) {
         RevUpdate,
         RowSystems
             // Use rev_run_if to make any condition reversible.
-            // It will executed during RevDirection::Forward and the output is logged and used at
+            // It will executed during RevDirection::NotLog and the output is logged and used at
             // any other RevDirection.
             .rev_run_if(condition::<ROW>),
     );
@@ -50,10 +50,7 @@ fn system1(meta: Res<RevMeta>, signal: Option<Res<Signal>>, mut commands: Comman
             // Because the systems only run when you pressed the row number, that is also true
             // backwards: it only runs when that specific frame is undone.
 
-            // When Meta::now at forward is n, it is n-1 when the frame n is undone. To compensate
-            // this, we add 1 back to the value here, because that is the frame system1 spawned the
-            // entity at.
-            assert_eq!(*signal.unwrap(), Signal::DidSpawn { at: meta.now() + 1 });
+            assert_eq!(*signal.unwrap(), Signal::DidSpawn { at: meta.now() });
         }
         _ => {}
     }
@@ -65,7 +62,7 @@ fn system2<const ROW: u64>(meta: Res<RevMeta>, mut signal: ResMut<Signal>, mut c
             assert_eq!(*signal, Signal::DoSpawn { at: meta.now() });
 
             // NotLog is like a token to prove that methods needing it are called during
-            // RevDirection::Forward. Because of this it should not be stored past that.
+            // RevDirection::NotLog. Because of this it should not be stored past that.
 
             // As Commands::spawn, this spawns an entity.
             // If this is undone, the entity is at first disabled and later fully despawned if the redo
@@ -79,7 +76,7 @@ fn system2<const ROW: u64>(meta: Res<RevMeta>, mut signal: ResMut<Signal>, mut c
             );
         }
         RevDirection::BackwardLog => {
-            *signal = Signal::DidSpawn { at: meta.now() + 1 };
+            *signal = Signal::DidSpawn { at: meta.now() };
         }
         _ => {}
     }

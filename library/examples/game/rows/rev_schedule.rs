@@ -12,13 +12,11 @@ pub fn plugin<const ROW: u64>(app: &mut App) {
 #[derive(ScheduleLabel, Copy, Clone, Debug, Hash, PartialEq, Eq)]
 struct RevUpdateInner;
 
-fn system1(meta: Res<RevMeta>, mut commands: Commands) {
-    if let Some(not_log) = meta.get_not_log() {
-        // NotLog is like a token to prove that methods needing it are called during
-        // RevDirection::Forward. Because of this it should not be stored past that.
+fn system1(not_log: NotLog, mut commands: Commands) {
+    // NotLog is like a token to prove that methods needing it are called during
+    // RevDirection::NotLog. Because of this it should not be stored past that.
 
-        commands.rev_run_schedule(not_log, RevUpdateInner);
-    }
+    commands.rev_run_schedule(not_log, RevUpdateInner);
 }
 
 fn system2<const ROW: u64>(input: Res<JustPressed>, meta: Res<RevMeta>, mut commands: Commands) {

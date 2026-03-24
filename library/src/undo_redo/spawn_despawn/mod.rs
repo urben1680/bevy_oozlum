@@ -38,11 +38,11 @@ mod test;
 /// [`RevEntityWorldMut::rev_mark_spawned`] (or variants) will ...
 ///
 /// - ... receive this component when the above actions are **undone** and should be treated as
-/// despawned.
+///   despawned.
 /// - ... have this component removed when the above actions are **redone** and should be treated as
-/// spawned.
+///   spawned.
 /// - ... will be despawned if the above actions are not **redone** before the next update with
-/// [`RevDirection::NotLog`] runs.
+///   [`RevDirection::NotLog`] runs.
 ///
 /// # Reversible despawn
 ///
@@ -51,25 +51,24 @@ mod test;
 ///
 /// - ... receive this component **immediately** and should be treated as despawned.
 /// - ... have this component removed when the above actions are **undone** and should be treated as
-/// spawned.
+///   spawned.
 /// - ... receive this component when the above actions are **redone** and should be treated as
-/// despawned.
+///   despawned.
 /// - ... will be despawned if the above actions are not **undone** before the next update with
-/// [`RevDirection::NotLog`] runs and the frame the reversible despawn happened falls behind
-/// [`RevMeta::past_end`].
+///   [`RevDirection::NotLog`] runs and the frame the reversible despawn happened falls behind
+///   [`RevMeta::past_end`].
 ///
 /// # Notes
 ///
 /// - The APIs mind linked entities based on [`RelationshipTarget::LINKED_SPAWN`].
 /// - Manually inserting or removing this component is discouraged because no finalized despawn will
-/// take place in these cases.
+///   take place in these cases.
 ///
 /// [`RevWorld::rev_spawn`]: crate::undo_redo::RevWorld::rev_spawn
 /// [`RevEntityWorldMut::rev_mark_spawned`]: crate::undo_redo::RevEntityWorldMut::rev_mark_spawned
 /// [`RevWorld::rev_despawn`]: crate::undo_redo::RevWorld::rev_despawn
 /// [`RevEntityWorldMut::rev_despawn`]: crate::undo_redo::RevEntityWorldMut::rev_despawn
 /// [`RelationshipTarget::LINKED_SPAWN`]: bevy_ecs::relationship::RelationshipTarget::LINKED_SPAWN
-
 // todo: store MaybeLocation in component change meta instead of here, https://github.com/bevyengine/bevy/issues/20494
 pub struct RevDespawned(pub MaybeLocation);
 

@@ -238,6 +238,7 @@ impl RevMeta {
     ///
     /// [`past_len`]: Self::past_len
     /// [`future_len`]: Self::future_len
+    #[allow(clippy::len_without_is_empty)] // never empty
     pub fn len(&self) -> u64 {
         self.future_end - self.past_end + 1 // both ends are inclusive
     }
@@ -317,7 +318,7 @@ impl RevMeta {
             ),
             RunningOrRan::Pause { after_log } => (None, after_log),
             RunningOrRan::Running(_) => {
-                return Err(RevMetaUpdateErr::AlreadyRunning { meta: self });
+                return Err(RevMetaUpdateErr::AlreadyRunning { meta: self.into() });
             }
         };
 
@@ -384,7 +385,7 @@ impl RevMeta {
             return Err(RevMetaUpdateErr::RevMetaNotReturned);
         };
         if meta.immutable_running_state() != immutable_running_state {
-            return Err(RevMetaUpdateErr::RevMetaReplaced { meta });
+            return Err(RevMetaUpdateErr::RevMetaReplaced { meta: meta.into() });
         }
         if direction.is_backward() {
             meta.now -= 1;
@@ -399,7 +400,7 @@ impl RevMeta {
         {
             Ok(()) => Ok(meta),
             Err(update_logs_missed) => Err(RevMetaUpdateErr::UpdateLogsMissed {
-                meta,
+                meta: meta.into(),
                 update_logs_missed,
             }),
         }
@@ -467,7 +468,7 @@ impl RevMeta {
                         meta,
                         update_logs_missed,
                     }) => {
-                        *self = meta;
+                        *self = *meta;
                         assert_eq!(update_logs_missed, [missed]);
                     }
                     other => panic!("unexpected {other:#?}"),
@@ -512,17 +513,17 @@ pub fn run_rev_update(world: &mut World) -> Result<(), RunSystemError> {
                 ));
             };
 
-            if let Some(buffer) = world.get_resource::<UndoRedoBuffer>() {
-                if !buffer.is_empty() {
-                    let err = Err(RunSystemError::Skipped(
-                        SystemParamValidationError::invalid::<RevMeta>(format!(
-                            "the resource containing buffered UndoRedo implementors was not \
+            if let Some(buffer) = world.get_resource::<UndoRedoBuffer>()
+                && !buffer.is_empty()
+            {
+                let err = Err(RunSystemError::Skipped(
+                    SystemParamValidationError::invalid::<RevMeta>(format!(
+                        "the resource containing buffered UndoRedo implementors was not \
                         empty, it contained the following types:\n{buffer:?}\n{meta:?}"
-                        )),
-                    ));
-                    world.insert_resource(meta);
-                    return err;
-                }
+                    )),
+                ));
+                world.insert_resource(meta);
+                return err;
             }
 
             // update RevMeta and DespawnFinalizer
@@ -566,7 +567,7 @@ pub fn run_rev_update(world: &mut World) -> Result<(), RunSystemError> {
                             "RevMeta is already running\n{meta:?}"
                         )),
                     ));
-                    world.insert_resource(meta);
+                    world.insert_resource(*meta);
                     err
                 }
                 Err(RevMetaUpdateErr::RevMetaNotReturned) => {
@@ -589,7 +590,7 @@ pub fn run_rev_update(world: &mut World) -> Result<(), RunSystemError> {
                     let err = Err(RunSystemError::Failed(
                         format!("RevMeta was replaced with a different value\n{meta:?}").into(),
                     ));
-                    world.insert_resource(meta);
+                    world.insert_resource(*meta);
                     err
                 }
                 Err(RevMetaUpdateErr::UpdateLogsMissed {
@@ -602,11 +603,11 @@ pub fn run_rev_update(world: &mut World) -> Result<(), RunSystemError> {
                         to:\n{update_logs_missed:?}\n{meta:?}"
                     );
 
-                    world.insert_resource(meta);
+                    world.insert_resource(*meta);
 
                     Err(RunSystemError::Failed(
                         match despawn_finalizer_result {
-                            Ok(()) => format!("{err}"),
+                            Ok(()) => err.to_string(),
                             Err(DespawnFinalizerErr::OutOfLog) => format!(
                                 "the resource that finally despawns entities that were reversibly \
                             marked for spawn or despawn went out-of-log, additionally {err:?}"
@@ -808,9 +809,9 @@ impl Command<BevyResult> for RevQueue {
 #[cfg_attr(feature = "bevy_reflect", derive(bevy_reflect::Reflect))]
 pub struct NotLog(NonZeroU64);
 
-impl Into<NonZeroU64> for NotLog {
-    fn into(self) -> NonZeroU64 {
-        self.0
+impl From<NotLog> for NonZeroU64 {
+    fn from(value: NotLog) -> Self {
+        value.0
     }
 }
 
@@ -895,7 +896,7 @@ pub enum RevMetaUpdateErr {
     /// [in a running state]: RevMeta::running_direction
     AlreadyRunning {
         /// `RevMeta` in the state it was attempted to be updated with.
-        meta: RevMeta,
+        meta: Box<RevMeta>,
     },
 
     /// The closure of [`RevMeta::update`] did not return `RevMeta`.
@@ -904,7 +905,7 @@ pub enum RevMetaUpdateErr {
     /// `RevMeta` was replaced with a different value during [`RevMeta::update`].
     RevMetaReplaced {
         /// `RevMeta` in the state as it was returned from the closure of [`RevMeta::update`].
-        meta: RevMeta,
+        meta: Box<RevMeta>,
     },
 
     /// Any [`UpdateLog`] did not update when it was expected to, in the amount it was expected
@@ -914,7 +915,7 @@ pub enum RevMetaUpdateErr {
     /// [log directions]: RevDirection::is_log
     UpdateLogsMissed {
         /// `RevMeta` in the state after it was updated regardless of this error.
-        meta: RevMeta,
+        meta: Box<RevMeta>,
 
         /// Information about which [`UpdateLog`]s did not update as they should have.
         ///

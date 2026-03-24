@@ -218,7 +218,7 @@ impl RevWorld for World {
         I: IntoIterator<Item: Bundle<Effect: NoBundleEffect>>,
     {
         let entities = self.spawn_batch(iter).collect::<Vec<_>>();
-        mark_entities::<true>(not_log, self, &*entities, true, caller);
+        mark_entities::<true>(not_log, self, &entities, true, caller);
         entities
     }
 

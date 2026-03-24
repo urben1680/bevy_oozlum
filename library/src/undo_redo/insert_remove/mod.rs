@@ -539,6 +539,7 @@ impl<R: Relationship, B: Bundle> RevBundle<[R; 2]> for SpawnOneRelated<R, B> {
         mode: InsertMode,
         caller: MaybeLocation,
     ) {
+        #[allow(clippy::let_unit_value)]
         let _ = <R as SlimRelationship>::ASSERT;
         self.rev_insert_inner(not_log, entity, mode, caller);
     }
@@ -577,6 +578,7 @@ impl<R: Relationship, L: SpawnableList<R> + Send + Sync + 'static> RevBundle<[R;
         mode: InsertMode,
         caller: MaybeLocation,
     ) {
+        #[allow(clippy::let_unit_value)]
         let _ = <R as SlimRelationship>::ASSERT;
         self.rev_insert_inner(not_log, entity, mode, caller);
     }
@@ -590,7 +592,7 @@ impl<R: Relationship, L: SpawnableList<R> + Send + Sync + 'static> RevBundle<[R;
     ) {
         let new_related = get_new_related_entities::<R>(entity, |entity| entity.insert(self));
         entity.world_scope(|world| {
-            mark_entities::<true>(not_log, world, &*new_related, true, MaybeLocation::caller())
+            mark_entities::<true>(not_log, world, &new_related, true, MaybeLocation::caller())
         });
         let id = entity.id();
         entity.buffer_undo_redo(

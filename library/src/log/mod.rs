@@ -210,7 +210,7 @@ impl<'a, T> DrainAll<'a, T> {
     ) -> Self {
         // this_range is basically the state before the iteration, and gap_range will be mutated
         // here to the state after iteration/drop
-        let mut this_range = gap_range.clone();
+        let mut this_range = *gap_range;
 
         let drain;
         if gap_range.end == log.len() {

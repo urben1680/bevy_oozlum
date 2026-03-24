@@ -55,7 +55,7 @@ mod offset;
 ///     mut message_log: Local<TransitionsLog<MyMessage>>,
 /// ) -> Result {
 ///     match meta.running_direction() {
-///         RevDirection::Forward { .. } => {
+///         RevDirection::NotLog(_) => {
 ///             if !messages.is_empty() {
 ///                 let iter = messages.read().cloned().inspect(|my_message| {
 ///                     // use message
@@ -445,7 +445,7 @@ impl UpdateLog {
 
 // Reversible systems should never miss to run at the expected frame.
 // If you followed an error to this line, you may have encountered a bug, please report it.
-const DEFAULT_LOCATION: &'static Location = Location::caller();
+const DEFAULT_LOCATION: &Location = Location::caller();
 
 /// Defines in which way a log has to be adjusted to reflect new changes to
 /// [`RevMeta`](crate::meta::RevMeta) since the last time the log was updated.

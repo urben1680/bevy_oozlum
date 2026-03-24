@@ -249,16 +249,17 @@ impl<'w> RevEntityWorld for EntityWorldMut<'w> {
         caller: MaybeLocation,
     ) -> Result<&mut Self, EntityRevDespawnedError> {
         self.assert_not_rev_despawned()?;
-        self.get::<R::RelationshipTarget>()
-            .map(|related| related.collection().iter().collect::<Vec<_>>())
-            .map(|related| {
-                let id = self.id();
-                self.detach_all_related::<R>().buffer_undo_redo(
-                    not_log,
-                    AddRemoveRelated::<R, _, false>::new(id, related, caller),
-                    caller,
-                )
-            });
+        let related = self
+            .get::<R::RelationshipTarget>()
+            .map(|related| related.collection().iter().collect::<Vec<_>>());
+        if let Some(related) = related {
+            let id = self.id();
+            self.detach_all_related::<R>().buffer_undo_redo(
+                not_log,
+                AddRemoveRelated::<R, _, false>::new(id, related, caller),
+                caller,
+            )
+        }
         Ok(self)
     }
 
@@ -301,7 +302,7 @@ impl<'w> RevEntityWorld for EntityWorldMut<'w> {
         };
         let related: Vec<Entity> = target.collection().iter().collect();
         let id = self.id();
-        self.world_scope(|world| world.rev_despawn_batch(not_log, &*related, caller));
+        self.world_scope(|world| world.rev_despawn_batch(not_log, &related, caller));
         self.redo_and_buffer(
             not_log,
             AddRemoveRelated::<S::Relationship, _, false>::new(id, related, caller),
