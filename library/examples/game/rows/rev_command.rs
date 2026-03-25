@@ -17,7 +17,7 @@ fn system<const ROW: u64>(input: Res<JustPressed>, meta: Res<RevMeta>, mut comma
 
         // As Commands::spawn, this spawns an entity.
         // If this is undone, the entity is at first disabled and later fully despawned if the redo
-        // becomes unreachable.
+        // becomes unreachable for RevDirection::BackwardLog.
         commands.rev_spawn(
             not_log,
             Waste {

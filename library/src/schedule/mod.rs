@@ -174,7 +174,8 @@ struct BackwardDeferredAndSystemSet(InternedSystemSet);
 pub trait RevSchedule {
     /// Reversible version of [`Schedule::add_systems`].
     ///
-    /// Does not support exclusive systems.
+    /// Does not support exclusive systems. Never mix reversible systems and regular systems in the
+    /// same schedule without separating them with ordered system sets.
     fn rev_add_systems<Marker>(
         &mut self,
         systems: impl IntoRevScheduleConfigs<ScheduleSystem, Marker>,
@@ -279,6 +280,11 @@ impl From<ApplyDeferred> for RevScheduleConfigs<ScheduleSystem> {
 }
 
 /// Reversible variant of [`IntoScheduleConfigs`].
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` does not describe a valid reversible system configuration. Make sure to use
+    the `rev_*` prefixed methods, **not** the regular bevy methods.",
+    label = "invalid reversible system configuration"
+)]
 pub trait IntoRevScheduleConfigs<
     T: Schedulable<Metadata = GraphInfo, GroupMetadata = Chain>,
     Marker,

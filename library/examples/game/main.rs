@@ -3,14 +3,15 @@ use bevy::{
     prelude::*,
 };
 use bevy_oozlum::prelude::*;
-use std::time::Duration;
 
-const ROWS: usize = 7;
+const ROWS: usize = 8;
 const MAX_PAST_LEN: u64 = 70;
-const CURRENT_BEVY_VERSION: u64 = 0_17_0;
+const CURRENT_BEVY_VERSION: u64 = 0_18_0;
 const WINNING_BEVY_VERSION: u64 = 1_00_0;
-const FRAME_DURATION_MAX: Duration = Duration::from_millis(100);
-const FRAME_DURATION_MIN: Duration = Duration::from_millis(15);
+const FRAMERATE_MIN: f64 = 10.0;
+const FRAMERATE_MAX: f64 = 66.667;
+
+// todo: forward log bug related to UpdateLog, fix + add test
 
 // This example is a game in which you have to toss a large amount of trash into the ocean.
 // Since pollution is bad, you have to undo that to leave the ocean clean but keep your score.
@@ -19,16 +20,15 @@ const FRAME_DURATION_MIN: Duration = Duration::from_millis(15);
 // Leave behind 10 units of waste and it is game over.
 // For every waste tossed, the bevy version number and game speed rises, at 1.0 you win!
 //
-// To be able to pollute even more, you have 7 rows of water to throw into.
+// To be able to pollute even more, you have 8 rows of water to throw into.
 
-// In this example you can see how to write reversible logic:
+// In this module you can see how to write reversible logic
 mod rows;
 
-// And how to control the world state:
+// And in this how to control the global reversible progression
 mod control;
 
-// Everything gets rendered to an ASCII interface, which is not that interesting for the purpose of
-// this example as showcasing the crate:
+// This renders the ASCII output, ugly and not interesting for learning the crate
 mod render;
 
 fn main() {
@@ -36,12 +36,9 @@ fn main() {
         .add_plugins((
             // Add the RevPlugin to your application.
             //
-            // If you only use bevy_ecs, always at least register RevDespawned as a disabling
-            // component before initializing RevUpdate and custom schedules ran from it.
-            //
             // The plugin adds an unpaused RevMeta with a max past length of NonZeroU64::MIN
             // and the run_rev_update system to FixedUpdate. We modify the max past len
-            // here.
+            // here. The Plugin also registers a disabling component: RevDespawned.
             //
             // General order of systems:
             // 1. run_rev_update runs in the specified schedule (here FixedUpdate)
@@ -64,7 +61,7 @@ fn main() {
         )
         .init_state::<GameState>()
         .init_resource::<Stats>()
-        .insert_resource(Time::<Fixed>::from_duration(FRAME_DURATION_MAX))
+        .insert_resource(Time::<Fixed>::from_hz(FRAMERATE_MIN))
         .run();
 }
 
@@ -106,8 +103,7 @@ fn increase_score(mut world: DeferredWorld, _: HookContext) {
     // undo-redo logic, only the initial insertion
     if world
         .get_resource::<RevMeta>()
-        .and_then(RevMeta::get_running_direction)
-        .is_some_and(RevDirection::is_not_log)
+        .is_some_and(RevMeta::is_running_not_log)
         && *world.resource::<State<GameState>>().get() != GameState::Running
     {
         return;
@@ -119,35 +115,30 @@ fn increase_score(mut world: DeferredWorld, _: HookContext) {
     const SCORE_MAX: u64 = WINNING_BEVY_VERSION - CURRENT_BEVY_VERSION;
 
     let mut time = world.resource_mut::<Time<Fixed>>();
-    let score_normalized = score as f32 / SCORE_MAX as f32;
-    let micros_delta = FRAME_DURATION_MAX.as_micros() - FRAME_DURATION_MIN.as_micros();
-    let score_micros = (micros_delta as f32 * score_normalized) as u64;
-    let micros = FRAME_DURATION_MAX.as_micros() as u64 - score_micros;
-    time.set_timestep(Duration::from_micros(micros));
+    let score_normalized = score as f64 / SCORE_MAX as f64;
+    let score_frame_rate = (FRAMERATE_MAX - FRAMERATE_MIN) * score_normalized + FRAMERATE_MIN;
+
+    time.set_timestep_hz(score_frame_rate);
 
     if score == SCORE_MAX {
         world
             .resource_mut::<NextState<GameState>>()
             .set(GameState::Won);
-        return;
     }
 }
 
-// RevMeta::past_end is increased to prevent the past length to exceed the maximum. Then existing
-// Waste could get out-of-log and brings you closer to the losing condition.
+// RevMeta::past_end is increased to prevent the past length to exceed the maximum. Then existing,
+// old Waste could get out-of-log, is despawne dhere and brings you closer to the losing condition.
 fn despawn_lost_waste(
     meta: Res<RevMeta>,
     waste_query: Query<(Entity, &Waste)>,
     this_state: Res<State<GameState>>,
-    mut counts: ResMut<Stats>,
+    mut stats: ResMut<Stats>,
     mut next_state: ResMut<NextState<GameState>>,
     mut commands: Commands,
 ) {
     // Only during RevDirection::NotLog RevMeta::past_end could have increased, so skip otherwise
-    if meta
-        .get_running_direction()
-        .is_none_or(RevDirection::is_log)
-    {
+    if !meta.is_running_not_log() {
         return;
     }
 
@@ -156,9 +147,9 @@ fn despawn_lost_waste(
             commands.entity(entity).despawn();
 
             if *this_state.get() == GameState::Running {
-                counts.lost += 1;
+                stats.lost = (stats.lost + 1).max(10);
 
-                if counts.lost == 10 {
+                if stats.lost == 10 {
                     next_state.set(GameState::Lost);
                 }
             }

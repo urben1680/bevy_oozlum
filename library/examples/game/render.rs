@@ -28,8 +28,13 @@ pub fn window_plugin() -> WindowPlugin {
 }
 
 pub fn plugin(app: &mut App) {
-    app.add_systems(Startup, setup)
-        .add_systems(FixedUpdate, render::<ROWS>.after(run_rev_update));
+    app.add_systems(Startup, setup).add_systems(
+        FixedUpdate,
+        // A difference to use renderer after RevSystems in RevUpdate is that this way here
+        // RevMeta::now is decreased during RevDirection::BackwardLog, something that is not the
+        // case while RevUpdate is still running.
+        render::<ROWS>.after(run_rev_update),
+    );
 }
 
 fn setup(mut commands: Commands) {
@@ -55,10 +60,6 @@ fn render<const ROWS: usize>(
     mut text: Single<&mut Text>,
     mut last_future_end: Local<Option<u64>>,
 ) -> Result {
-    if meta.paused() {
-        return Ok(());
-    }
-
     text.clear();
 
     let padding_cols = match *last_future_end {

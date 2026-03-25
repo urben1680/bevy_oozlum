@@ -21,7 +21,8 @@ use crate::{
 pub trait RevApp {
     /// Reversible version of [`App::add_systems`].
     ///
-    /// Does not support exclusive systems.
+    /// Does not support exclusive systems. Never mix reversible systems and regular systems in the
+    /// same schedule without separating them with ordered system sets.
     fn rev_add_systems<Marker>(
         &mut self,
         schedule: impl ScheduleLabel,
@@ -76,7 +77,8 @@ impl RevPlugin {
         ModifiedRevPlugin::default().unset_meta()
     }
 
-    /// Sets the maximum amount of frames that can be reversed by.
+    /// Sets the maximum amount of frames that can be reversed by. Will be camped to a minimum of 1
+    /// frame.
     ///
     /// The value is stored in [`RevMeta`]. Using [`unset_meta`] will ignore prior calls of this.
     ///
@@ -93,7 +95,12 @@ impl RevPlugin {
         ModifiedRevPlugin::default().set_paused()
     }
 
-    /// Unsets [`run_rev_update`] addition to an schedule.
+    /// Unsets [`run_rev_update`] addition to an schedule. This will require to write a replacement
+    /// and insert it manually. Using [`set_runner_in_schedule`] or [`set_runner_in_set`] will
+    /// ignore prior calls of this.
+    ///
+    /// [`set_runner_in_schedule`]: Self::set_runner_in_schedule
+    /// [`set_runner_in_set`]: Self::set_runner_in_set
     pub fn unset_runner(self) -> ModifiedRevPlugin {
         ModifiedRevPlugin::default().unset_runner()
     }
@@ -135,7 +142,8 @@ impl ModifiedRevPlugin {
         self
     }
 
-    /// Sets the maximum amount of frames that can be reversed by.
+    /// Sets the maximum amount of frames that can be reversed by. Will be camped to a minimum of 1
+    /// frame.
     ///
     /// The value is stored in [`RevMeta`]. Using [`unset_meta`] will ignore prior calls of this.
     ///
@@ -173,8 +181,9 @@ impl ModifiedRevPlugin {
         self
     }
 
-    /// Unsets [`run_rev_update`] addition to an schedule. Using [`set_runner_in_schedule`]
-    /// pr [`set_runner_in_set`] will ignore prior calls of this.
+    /// Unsets [`run_rev_update`] addition to an schedule. This will require to write a replacement
+    /// and insert it manually. Using [`set_runner_in_schedule`] or [`set_runner_in_set`] will
+    /// ignore prior calls of this.
     ///
     /// [`set_runner_in_schedule`]: Self::set_runner_in_schedule
     /// [`set_runner_in_set`]: Self::set_runner_in_set

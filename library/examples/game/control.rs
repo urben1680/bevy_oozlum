@@ -55,22 +55,23 @@ fn system(
         meta.set_queue(RevQueue::RunBackwardLog);
     } else if input.just_pressed(KeyCode::Backspace) {
         // One can also pause after clearing with RevQueue::ClearThenPause.
-        // Beware that this instantly loses all tossed waste that was not undone yet
+        // Beware that this instantly loses all tossed waste that was not undone yet.
         meta.set_queue(RevQueue::ClearThenRunForward);
     }
 
     // The maximum past length can be adjusted at any time and has an effect the next time RevUpdate
     // is about to be run.
-    if input.pressed(KeyCode::Enter) {
+    if input.pressed(KeyCode::Enter) && meta.is_running_not_log() {
         let max_past_len = meta.past_len().saturating_sub(1);
         meta.set_max_past_len(max_past_len);
     } else if input.just_released(KeyCode::Enter) {
         meta.set_max_past_len(MAX_PAST_LEN);
     }
 
-    for row in 1..=ROWS {
+    for (index, pressed) in just_pressed.0.iter_mut().enumerate() {
+        let row = index + 1;
         if digit_input.just_pressed(Key::Character(row.to_string().into())) {
-            just_pressed.0[row - 1] = true;
+            *pressed = true;
         }
     }
 }

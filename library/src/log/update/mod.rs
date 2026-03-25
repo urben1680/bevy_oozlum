@@ -372,6 +372,7 @@ impl UpdateLog {
         meta: &RevMeta,
         caller: MaybeLocation<Option<&'static Location>>,
     ) -> bool {
+        println!("{self:#?}\n{meta:#?}");
         if self.pre_update_to_clear(meta, caller) {
             self.clear();
             return false;

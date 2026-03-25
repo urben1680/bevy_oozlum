@@ -4,11 +4,12 @@ use bevy_ecs::{
     bundle::Bundle,
     change_detection::MaybeLocation,
     component::Component,
-    entity::{Entity, EntityHashSet},
+    entity::{Entity, EntityHashSet, EntityNotSpawnedError, EntityValidButNotSpawnedError},
     resource::Resource,
     world::{
         EntityMut, EntityMutExcept, EntityRef, EntityRefExcept, EntityWorldMut, FilteredEntityMut,
-        FilteredEntityRef, FromWorld, World, error::EntityMutableFetchError,
+        FilteredEntityRef, FromWorld, World, WorldEntityFetch, error::EntityMutableFetchError,
+        unsafe_world_cell::UnsafeWorldCell,
     },
 };
 use bevy_log::error;
@@ -27,15 +28,16 @@ mod test;
 #[cfg_attr(feature = "bevy_reflect", derive(bevy_reflect::Reflect))]
 #[component(immutable)]
 /// Marker component for entities that were marked as despawned but the actual despawn is delayed
-/// so this can be reversed. This component disables the Entity,
-/// see [`World::register_disabling_component`]. For various entity pointer types you can use
-/// [`IsRevDespawned::is_rev_despawned`] to check for the existence of this component. Such entities
-/// should be treated as despawned in reversible logic.
+/// so this can be reversed if needed. This component disables the Entity to not show up in queries,
+/// see [`World::register_disabling_component`]. If an entity is not queried but fetched, wrap the
+/// id(s) in [`RevFetch`] or, if that is not possible, use [`IsRevDespawned::is_rev_despawned`] on
+/// the returned entity pointers. These check for the existence of this component. These entities
+/// should be handled as despawned, including in code outside of reversible systems.
 ///
 /// # Reversible spawn
 ///
-/// Entities that are spawned with [`RevWorld::rev_spawn`] or marked with
-/// [`RevEntityWorldMut::rev_mark_spawned`] (or variants) will ...
+/// Entities that are spawned with [`Commands::rev_spawn`] or marked with
+/// [`EntityCommands::rev_mark_spawned`] (or variants) will ...
 ///
 /// - ... receive this component when the above actions are **undone** and should be treated as
 ///   despawned.
@@ -46,10 +48,11 @@ mod test;
 ///
 /// # Reversible despawn
 ///
-/// Entities that are despawned with [`RevWorld::rev_despawn`] or [`RevEntityWorldMut::rev_despawn`]
+/// Entities that are despawned with [`Commands::rev_despawn`] or [`EntityCommands::rev_despawn`]
 /// (or variants) will ...
 ///
-/// - ... receive this component **immediately** and should be treated as despawned.
+/// - ... receive this component **immediately** at the next sync point and should be treated as
+///   despawned.
 /// - ... have this component removed when the above actions are **undone** and should be treated as
 ///   spawned.
 /// - ... receive this component when the above actions are **redone** and should be treated as
@@ -64,10 +67,10 @@ mod test;
 /// - Manually inserting or removing this component is discouraged because no finalized despawn will
 ///   take place in these cases.
 ///
-/// [`RevWorld::rev_spawn`]: crate::undo_redo::RevWorld::rev_spawn
-/// [`RevEntityWorldMut::rev_mark_spawned`]: crate::undo_redo::RevEntityWorldMut::rev_mark_spawned
-/// [`RevWorld::rev_despawn`]: crate::undo_redo::RevWorld::rev_despawn
-/// [`RevEntityWorldMut::rev_despawn`]: crate::undo_redo::RevEntityWorldMut::rev_despawn
+/// [`Commands::rev_spawn`]: crate::undo_redo::RevCommands::rev_spawn
+/// [`EntityCommands::rev_mark_spawned`]: crate::undo_redo::RevEntityCommands::rev_mark_spawned
+/// [`Commands::rev_despawn`]: crate::undo_redo::RevCommands::rev_despawn
+/// [`EntityCommands::rev_despawn`]: crate::undo_redo::RevEntityCommands::rev_despawn
 /// [`RelationshipTarget::LINKED_SPAWN`]: bevy_ecs::relationship::RelationshipTarget::LINKED_SPAWN
 // todo: store MaybeLocation in component change meta instead of here, https://github.com/bevyengine/bevy/issues/20494
 pub struct RevDespawned(pub MaybeLocation);
@@ -374,7 +377,8 @@ impl FromWorld for DespawnFinalizer {
     }
 }
 
-/// Extension trait for entity pointers to check if an entity is reversibly despawned.
+/// Extension trait for entity pointers to check if an entity is reversibly despawned. Prefer to use
+/// the [`RevFetch`] wrapper at the fetching point if possible.
 ///
 /// See the [`RevDespawned`](super::RevDespawned) documentation to understand the mechanics of
 /// reversible spawn/despawn.
@@ -426,5 +430,316 @@ impl IsRevDespawned for FilteredEntityMut<'_, '_> {
 impl IsRevDespawned for EntityWorldMut<'_> {
     fn is_rev_despawned(&self) -> bool {
         self.contains::<RevDespawned>()
+    }
+}
+
+/// A wrapper for the argument of...
+///
+/// - [`World::get_entity`]
+/// - [`World::get_entity_mut`]
+/// - [`DeferredWorld::get_entity_mut`]
+///
+/// ... to also return an [`EntityValidButNotSpawnedError`] error when any of the fetched entities
+/// is reversibly despawned.
+///
+/// This should be used on every fetch that regard entities potentially spawned or despawned by
+/// reversible systems. Where only the fetched entity pointer is available, use
+/// [`IsRevDespawned::is_rev_despawned`].
+///
+/// See the [`RevDespawned`](super::RevDespawned) documentation to understand the mechanics of
+/// reversible spawn/despawn.
+///
+/// # Example
+///
+/// ```
+/// # use bevy_ecs::{prelude::*, change_detection::MaybeLocation};
+/// # use bevy_oozlum::{prelude::*, undo_redo::RevDespawned};
+/// # let mut world = World::new();
+/// // for demonstration, normally RevDespawned is not manually inserted
+/// let entity = world.spawn(RevDespawned(MaybeLocation::caller())).id();
+///
+/// assert!(world.get_entity(entity).is_ok());
+/// assert!(world.get_entity(RevFetch(entity)).is_err());
+/// ```
+///
+/// [`DeferredWorld::get_entity_mut`]: bevy_ecs::world::DeferredWorld::get_entity_mut
+#[derive(Copy, Clone, Debug)]
+pub struct RevFetch<T>(pub T);
+
+// SAFETY:
+// - safety contract is fulfilled by the inner fetch calls
+// - inner fetch call safety contract is fulfilled by the callers
+unsafe impl WorldEntityFetch for RevFetch<Entity> {
+    type Ref<'w> = <Entity as WorldEntityFetch>::Ref<'w>;
+
+    type Mut<'w> = <Entity as WorldEntityFetch>::Mut<'w>;
+
+    type DeferredMut<'w> = <Entity as WorldEntityFetch>::DeferredMut<'w>;
+
+    unsafe fn fetch_ref<'w>(
+        self,
+        cell: UnsafeWorldCell<'w>,
+    ) -> Result<Self::Ref<'w>, EntityNotSpawnedError> {
+        // SAFETY: Caller ensures correct access
+        let result = unsafe { self.0.fetch_ref(cell) };
+        result.and_then(fetch_ref_and)
+    }
+
+    unsafe fn fetch_mut(
+        self,
+        cell: UnsafeWorldCell<'_>,
+    ) -> Result<Self::Mut<'_>, EntityMutableFetchError> {
+        // SAFETY: Caller ensures correct access
+        let result = unsafe { self.0.fetch_mut(cell) };
+        result.and_then(fetch_and)
+    }
+
+    unsafe fn fetch_deferred_mut(
+        self,
+        cell: UnsafeWorldCell<'_>,
+    ) -> Result<Self::DeferredMut<'_>, EntityMutableFetchError> {
+        // SAFETY: Caller ensures correct access
+        let result = unsafe { self.0.fetch_deferred_mut(cell) };
+        result.and_then(fetch_and)
+    }
+}
+
+// SAFETY:
+// - safety contract is fulfilled by the inner fetch calls
+// - inner fetch call safety contract is fulfilled by the callers
+unsafe impl<'a> WorldEntityFetch for RevFetch<&'a [Entity]> {
+    type Ref<'w> = <&'a [Entity] as WorldEntityFetch>::Ref<'w>;
+    type Mut<'w> = <&'a [Entity] as WorldEntityFetch>::Mut<'w>;
+    type DeferredMut<'w> = <&'a [Entity] as WorldEntityFetch>::DeferredMut<'w>;
+
+    unsafe fn fetch_ref<'w>(
+        self,
+        cell: UnsafeWorldCell<'w>,
+    ) -> Result<Self::Ref<'w>, EntityNotSpawnedError> {
+        // SAFETY: Caller ensures correct access
+        let result = unsafe { self.0.fetch_ref(cell) };
+        result.and_then(|entities| {
+            for entity in &entities {
+                fetch_ref_and(*entity)?;
+            }
+            Ok(entities)
+        })
+    }
+
+    unsafe fn fetch_mut(
+        self,
+        cell: UnsafeWorldCell<'_>,
+    ) -> Result<Self::Mut<'_>, EntityMutableFetchError> {
+        // SAFETY: Caller ensures correct access
+        let result = unsafe { self.0.fetch_mut(cell) };
+        result.and_then(|entities| {
+            for entity in &entities {
+                fetch_ref_and(entity.into())?;
+            }
+            Ok(entities)
+        })
+    }
+
+    unsafe fn fetch_deferred_mut(
+        self,
+        cell: UnsafeWorldCell<'_>,
+    ) -> Result<Self::DeferredMut<'_>, EntityMutableFetchError> {
+        // SAFETY: Caller ensures correct access
+        let result = unsafe { self.0.fetch_deferred_mut(cell) };
+        result.and_then(|entities| {
+            for entity in &entities {
+                fetch_ref_and(entity.into())?;
+            }
+            Ok(entities)
+        })
+    }
+}
+
+// SAFETY:
+// - safety contract is fulfilled by the inner fetch calls
+// - inner fetch call safety contract is fulfilled by the callers
+unsafe impl<'a, const N: usize> WorldEntityFetch for RevFetch<&'a [Entity; N]> {
+    type Ref<'w> = <&'a [Entity; N] as WorldEntityFetch>::Ref<'w>;
+    type Mut<'w> = <&'a [Entity; N] as WorldEntityFetch>::Mut<'w>;
+    type DeferredMut<'w> = <&'a [Entity; N] as WorldEntityFetch>::DeferredMut<'w>;
+
+    unsafe fn fetch_ref<'w>(
+        self,
+        cell: UnsafeWorldCell<'w>,
+    ) -> Result<Self::Ref<'w>, EntityNotSpawnedError> {
+        // SAFETY: Caller ensures correct access
+        let result = unsafe { self.0.fetch_ref(cell) };
+        result.and_then(|entities| {
+            for entity in &entities {
+                fetch_ref_and(*entity)?;
+            }
+            Ok(entities)
+        })
+    }
+
+    unsafe fn fetch_mut(
+        self,
+        cell: UnsafeWorldCell<'_>,
+    ) -> Result<Self::Mut<'_>, EntityMutableFetchError> {
+        // SAFETY: Caller ensures correct access
+        let result = unsafe { self.0.fetch_mut(cell) };
+        result.and_then(|entities| {
+            for entity in &entities {
+                fetch_ref_and(entity.into())?;
+            }
+            Ok(entities)
+        })
+    }
+
+    unsafe fn fetch_deferred_mut(
+        self,
+        cell: UnsafeWorldCell<'_>,
+    ) -> Result<Self::DeferredMut<'_>, EntityMutableFetchError> {
+        // SAFETY: Caller ensures correct access
+        let result = unsafe { self.0.fetch_deferred_mut(cell) };
+        result.and_then(|entities| {
+            for entity in &entities {
+                fetch_ref_and(entity.into())?;
+            }
+            Ok(entities)
+        })
+    }
+}
+
+// SAFETY:
+// - safety contract is fulfilled by the inner fetch calls
+// - inner fetch call safety contract is fulfilled by the callers
+unsafe impl<const N: usize> WorldEntityFetch for RevFetch<[Entity; N]> {
+    type Ref<'w> = <[Entity; N] as WorldEntityFetch>::Ref<'w>;
+    type Mut<'w> = <[Entity; N] as WorldEntityFetch>::Mut<'w>;
+    type DeferredMut<'w> = <[Entity; N] as WorldEntityFetch>::DeferredMut<'w>;
+
+    unsafe fn fetch_ref<'w>(
+        self,
+        cell: UnsafeWorldCell<'w>,
+    ) -> Result<Self::Ref<'w>, EntityNotSpawnedError> {
+        // SAFETY: Caller ensures correct access
+        let result = unsafe { self.0.fetch_ref(cell) };
+        result.and_then(|entities| {
+            for entity in &entities {
+                fetch_ref_and(*entity)?;
+            }
+            Ok(entities)
+        })
+    }
+
+    unsafe fn fetch_mut(
+        self,
+        cell: UnsafeWorldCell<'_>,
+    ) -> Result<Self::Mut<'_>, EntityMutableFetchError> {
+        // SAFETY: Caller ensures correct access
+        let result = unsafe { self.0.fetch_mut(cell) };
+        result.and_then(|entities| {
+            for entity in &entities {
+                fetch_ref_and(entity.into())?;
+            }
+            Ok(entities)
+        })
+    }
+
+    unsafe fn fetch_deferred_mut(
+        self,
+        cell: UnsafeWorldCell<'_>,
+    ) -> Result<Self::DeferredMut<'_>, EntityMutableFetchError> {
+        // SAFETY: Caller ensures correct access
+        let result = unsafe { self.0.fetch_deferred_mut(cell) };
+        result.and_then(|entities| {
+            for entity in &entities {
+                fetch_ref_and(entity.into())?;
+            }
+            Ok(entities)
+        })
+    }
+}
+
+// SAFETY:
+// - safety contract is fulfilled by the inner fetch calls
+// - inner fetch call safety contract is fulfilled by the callers
+unsafe impl<'a> WorldEntityFetch for RevFetch<&'a EntityHashSet> {
+    type Ref<'w> = <&'a EntityHashSet as WorldEntityFetch>::Ref<'w>;
+    type Mut<'w> = <&'a EntityHashSet as WorldEntityFetch>::Mut<'w>;
+    type DeferredMut<'w> = <&'a EntityHashSet as WorldEntityFetch>::DeferredMut<'w>;
+
+    unsafe fn fetch_ref<'w>(
+        self,
+        cell: UnsafeWorldCell<'w>,
+    ) -> Result<Self::Ref<'w>, EntityNotSpawnedError> {
+        // SAFETY: Caller ensures correct access
+        let result = unsafe { self.0.fetch_ref(cell) };
+        result.and_then(|entities| {
+            for entity in entities.values() {
+                fetch_ref_and(*entity)?;
+            }
+            Ok(entities)
+        })
+    }
+
+    unsafe fn fetch_mut(
+        self,
+        cell: UnsafeWorldCell<'_>,
+    ) -> Result<Self::Mut<'_>, EntityMutableFetchError> {
+        // SAFETY: Caller ensures correct access
+        let result = unsafe { self.0.fetch_mut(cell) };
+        result.and_then(|entities| {
+            for entity in entities.values() {
+                fetch_ref_and(entity.into())?;
+            }
+            Ok(entities)
+        })
+    }
+
+    unsafe fn fetch_deferred_mut(
+        self,
+        cell: UnsafeWorldCell<'_>,
+    ) -> Result<Self::DeferredMut<'_>, EntityMutableFetchError> {
+        // SAFETY: Caller ensures correct access
+        let result = unsafe { self.0.fetch_deferred_mut(cell) };
+        result.and_then(|entities| {
+            for entity in entities.values() {
+                fetch_ref_and(entity.into())?;
+            }
+            Ok(entities)
+        })
+    }
+}
+
+fn fetch_ref_and(entity: EntityRef) -> Result<EntityRef, EntityNotSpawnedError> {
+    if size_of::<MaybeLocation>() == 0 {
+        if entity.contains::<RevDespawned>() {
+            Err(EntityNotSpawnedError::ValidButNotSpawned(
+                EntityValidButNotSpawnedError {
+                    entity: entity.id(),
+                    location: MaybeLocation::caller(),
+                },
+            ))
+        } else {
+            Ok(entity)
+        }
+    } else {
+        match entity.get::<RevDespawned>() {
+            None => Ok(entity),
+            Some(RevDespawned(location)) => Err(EntityNotSpawnedError::ValidButNotSpawned(
+                EntityValidButNotSpawnedError {
+                    entity: entity.id(),
+                    location: *location,
+                },
+            )),
+        }
+    }
+}
+
+fn fetch_and<T, E: From<EntityNotSpawnedError>>(entity: T) -> Result<T, E>
+where
+    for<'a> EntityRef<'a>: From<&'a T>,
+{
+    let entity_ref: EntityRef = (&entity).into();
+    match fetch_ref_and(entity_ref) {
+        Ok(_) => Ok(entity),
+        Err(err) => Err(err.into()),
     }
 }

@@ -1,4 +1,5 @@
 use bevy_ecs::{
+    bundle::InsertMode,
     hierarchy::{ChildOf, Children},
     spawn::SpawnRelated,
 };

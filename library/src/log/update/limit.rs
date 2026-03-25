@@ -4,6 +4,8 @@
 //! errors if it did not update at the current frame as it did during
 //! [`RevDirection::NotLog`](crate::meta::RevDirection::NotLog).
 
+use crate::log::update::DEFAULT_LOCATION;
+
 use super::PreUpdateKind;
 use bevy_ecs::change_detection::MaybeLocation;
 use bevy_utils::Parallel;
@@ -443,7 +445,7 @@ impl<'a> Iterator for UpdatesIter<'a> {
 /// This error can be manually received from [`RevMeta::update`](crate::meta::RevMeta::update). If
 /// [`run_rev_update`](crate::meta::run_rev_update) is used, this error, if it
 /// occurs, is given to the default error handler.
-#[derive(Debug, PartialEq, Clone, Copy)]
+#[derive(PartialEq, Clone, Copy)]
 pub struct UpdateLogMissed {
     /// The internal [id](super::UpdateLog::id) of the [`UpdateLog`](super::UpdateLog).
     pub id: UpdateLogId,
@@ -452,6 +454,18 @@ pub struct UpdateLogMissed {
     ///
     /// Requires to use bevy's `track_location` feature.
     pub last_update: MaybeLocation,
+}
+
+impl Debug for UpdateLogMissed {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        if size_of::<MaybeLocation>() == 0 {
+            write!(f, "{}", self.id)
+        } else if self.last_update == MaybeLocation::new(DEFAULT_LOCATION) {
+            write!(f, "{} (bevy_oozlum bug)", self.id)
+        } else {
+            write!(f, "{} (modified {})", self.id, self.last_update)
+        }
+    }
 }
 
 #[cfg(test)]

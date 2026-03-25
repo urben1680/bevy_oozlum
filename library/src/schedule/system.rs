@@ -54,6 +54,9 @@ where
         // Instead, rev_* API should always come last. To enforce that, it makes more sense to use
         // DeferredWorld systems that explicitly use commands which make it obvious they are not
         // applied in the middle of the exclusive system.
+        // This API limitation also is helpful in the context of UndoRedo implementations where
+        // reversible operations, if there were any public ones intended for exclusive systems,
+        // should not be used.
         // This limitation also makes the System impl for RevSystem more simple as reversible
         // exclusive systems are implemented differently and that does not need to be accounted for.
         unimplemented!(

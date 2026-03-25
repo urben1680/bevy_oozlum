@@ -19,9 +19,9 @@ pub fn plugin<const ROW: u64>(app: &mut App) {
     .rev_configure_sets(
         RevUpdate,
         RowSystems
-            // Use rev_run_if to make any condition reversible.
-            // It will executed during RevDirection::NotLog and the output is logged and used at
-            // any other RevDirection.
+            // Use rev_run_if to make any condition and its effect on the set/system reversible.
+            // The condition itself will executed during RevDirection::NotLog and the output is
+            // logged and used at RevDirection::ForwardLog and RevDirection::BackwardLog.
             .rev_run_if(condition::<ROW>),
     );
 }
@@ -49,6 +49,8 @@ fn system1(meta: Res<RevMeta>, signal: Option<Res<Signal>>, mut commands: Comman
         RevDirection::BackwardLog => {
             // Because the systems only run when you pressed the row number, that is also true
             // backwards: it only runs when that specific frame is undone.
+            //
+            // As system2 now ran before system1, we can assert on its effect here.
 
             assert_eq!(*signal.unwrap(), Signal::DidSpawn { at: meta.now() });
         }
@@ -59,14 +61,12 @@ fn system1(meta: Res<RevMeta>, signal: Option<Res<Signal>>, mut commands: Comman
 fn system2<const ROW: u64>(meta: Res<RevMeta>, mut signal: ResMut<Signal>, mut commands: Commands) {
     match meta.running_direction() {
         RevDirection::NotLog(not_log) => {
-            assert_eq!(*signal, Signal::DoSpawn { at: meta.now() });
-
             // NotLog is like a token to prove that methods needing it are called during
             // RevDirection::NotLog. Because of this it should not be stored past that.
 
             // As Commands::spawn, this spawns an entity.
-            // If this is undone, the entity is at first disabled and later fully despawned if the redo
-            // becomes unreachable.
+            // If this is undone, the entity is at first disabled and later fully despawned if the
+            // redo becomes unreachable for RevDirection::BackwardLog.
             commands.rev_spawn(
                 not_log,
                 Waste {
@@ -74,6 +74,9 @@ fn system2<const ROW: u64>(meta: Res<RevMeta>, mut signal: ResMut<Signal>, mut c
                     tossed_at: meta.now(),
                 },
             );
+
+            // Lets assert system1 ran before system2 in this direction, for completeness.
+            assert_eq!(*signal, Signal::DoSpawn { at: meta.now() });
         }
         RevDirection::BackwardLog => {
             *signal = Signal::DidSpawn { at: meta.now() };

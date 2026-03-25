@@ -217,20 +217,12 @@ TODO:
 - update README
 - reflect subtrait derives
 - github ci
-
-Docs
-- no reversible change detection (copy over to new repo)
-- no manual sync point configuration
--- ScheduleBuildSettings::auto_insert_apply_deferred
-- subset of EntityCommands as scope limit
-- no exclusive reversible systems
 - make fake variadics docs work
 - docs for private UndoRedo types
 
 ISSUES/DISCUSSIONS:
 - feature track_update_logs to opt-out
 - no_std
-- RevBundle::rev_insert_inner out of trait
 - schedule::set_base_sets should not need to chain forward/backward configs
 - exclusive reversible system sharp edges: ordering of ops
 
@@ -257,7 +249,8 @@ pub mod prelude {
     };
     pub use crate::undo_redo::{
         BuffersUndoRedo as _, IsRevDespawned as _, RevCommands as _, RevEntityCommands as _,
-        RevEntityEntryCommands as _, RevRelatedSpawnerCommands as _, UndoRedo, UndoRedoDirection,
+        RevEntityEntryCommands as _, RevFetch, RevRelatedSpawnerCommands as _, UndoRedo,
+        UndoRedoDirection,
     };
 }
 

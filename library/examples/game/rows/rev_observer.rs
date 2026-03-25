@@ -37,6 +37,6 @@ fn observer(event: On<WasteEvent>, mut commands: Commands) {
 
     // As Commands::spawn, this spawns an entity.
     // If this is undone, the entity is at first disabled and later fully despawned if the redo
-    // becomes unreachable.
+    // becomes unreachable for RevDirection::BackwardLog.
     commands.rev_spawn(not_log, waste);
 }

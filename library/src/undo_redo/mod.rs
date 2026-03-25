@@ -30,7 +30,7 @@ mod world;
 pub use commands::*;
 pub use entity_commands::*;
 pub use entity_world::*;
-pub use insert_remove::*;
+use insert_remove::*;
 use relationship::*;
 pub use spawn_despawn::*;
 pub use world::*;

@@ -26,12 +26,13 @@ fn system<const ROW: u64>(
             }
 
             // TransitionLog and TransitionsLog need the past length to shorten the log if needed.
-            // This can either be NotLog from RevDirection (if it is updated exactly once every
-            // time RevUpdate) or the value returned by UpdateLog::forward_past_len.
+            // This can either be NotLog from RevDirection (if the log is updated exactly once every
+            // time RevUpdate runs) or the value returned by UpdateLog::forward_past_len.
             // UpdateLog keeps track how long the past needs to be to keep it as small as possible
             // without running out-of-log when fully going backwards.
             let past_len = pressed_log.forward_past_len(&meta);
 
+            // Note that this is no rev_spawn but a regular spawn, we want to handle this manually.
             let entity = commands.spawn(waste).id();
 
             // The spawned entity is logged in TransitionLog.
@@ -41,11 +42,19 @@ fn system<const ROW: u64>(
             // At undo the spawned entity gets despawned.
             let entity = spawn_log.backward_log(&meta)?;
             commands.entity(*entity).despawn();
+
+            // **NOTE** it may be problematic to use commands during RevDirection::BackwardLog for
+            // reversible logic because this will not be applied *before* the system like a proper
+            // rev_spawn used at RevDirection::NotLog.
+            // This here may lead to unexpected ordering problems among other systems. Systems like
+            // this should instead modify existing components or resources at most, not using
+            // commands.
         }
         RevDirection::ForwardLog if pressed_log.forward_log(&meta) => {
             // At redo a new entity with the Waste component is spawned.
             // This could be problematic if you expect the original Entity ID to become valid again.
-            // Because of this rev_spawn is instead disabled at undo and enabled at redo again.
+            // Because of this the rev_spawn command is instead disabling the entity at undo and
+            // enabling it at redo again until it can finally be despawned.
             let entity = spawn_log.forward_log(&meta)?;
             *entity = commands.spawn(waste).id();
         }

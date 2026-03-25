@@ -29,6 +29,9 @@ pub trait RevEntityCommands<'w> {
     fn rev_mark_spawned(&mut self, not_log: NotLog, include_unlinked_related: bool) -> &mut Self;
 
     /// Reversible version of [`EntityCommands::despawn`].
+    ///
+    /// See the [`RevDespawned`](super::RevDespawned) documentation to understand the mechanics of
+    /// reversible spawn/despawn.
     fn rev_despawn(&mut self, not_log: NotLog);
 
     /// Reversible version of [`EntityCommands::with_related`].
