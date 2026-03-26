@@ -900,7 +900,7 @@ unsafe impl SystemParam for NotLog {
         };
         meta.and_then(RevMeta::get_not_log).unwrap_or_else(|| {
             panic!(
-                "Resource requested by {} does not exist: RevMeta",
+                "RevMeta requested by {} does not exist or RevUpdate is not running or is running in log",
                 system_meta.name()
             );
         })

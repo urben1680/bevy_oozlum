@@ -14,8 +14,8 @@ use bevy_ecs::{
     query::FilteredAccessSet,
     schedule::{ApplyDeferred, InternedSystemSet, IntoScheduleConfigs, SystemSet},
     system::{
-        IntoSystem, ReadOnlySystem, RunSystemError, ScheduleSystem, System, SystemIn, SystemInput,
-        SystemParamValidationError, SystemStateFlags,
+        IntoSystem, RunSystemError, ScheduleSystem, System, SystemIn, SystemParamValidationError,
+        SystemStateFlags,
     },
     world::{DeferredWorld, World, unsafe_world_cell::UnsafeWorldCell},
 };
@@ -32,10 +32,9 @@ use crate::{
 
 use super::RevScheduleConfigs;
 
-pub(super) fn into_rev_system<T, In, Out, M1, M2>(system: T) -> RevScheduleConfigs<ScheduleSystem>
+pub(super) fn into_rev_system<T, M1, M2>(system: T) -> RevScheduleConfigs<ScheduleSystem>
 where
-    T: IntoSystem<In, Out, M1>,
-    In: SystemInput,
+    T: IntoSystem<(), (), M1>, // parts of piping systems to not get converted, only as a whole
     RevSystem<T::System, true>: IntoScheduleConfigs<ScheduleSystem, M2>,
     RevSystem<T::System, false>: IntoScheduleConfigs<ScheduleSystem, M2>,
 {
@@ -168,6 +167,9 @@ pub(super) struct RevSystem<T, const FORWARD: bool> {
     shared: Arc<Shared<T>>,
     name: DebugName,
     flags: SystemStateFlags,
+
+    // todo: depcrecate with bevy 0.19, check run_unsafe err instead if needed
+    skipped_with_deferred: bool,
 }
 
 impl<T, const FORWARD: bool> RevSystem<T, FORWARD> {
@@ -176,6 +178,7 @@ impl<T, const FORWARD: bool> RevSystem<T, FORWARD> {
             shared,
             name,
             flags: SystemStateFlags::empty(),
+            skipped_with_deferred: false,
         }
     }
 }
@@ -209,9 +212,9 @@ impl<T> From<T> for Inner<T> {
     }
 }
 
-impl<T: System, const FORWARD: bool> System for RevSystem<T, FORWARD> {
-    type In = T::In;
-    type Out = T::Out;
+impl<T: System<In = (), Out = ()>, const FORWARD: bool> System for RevSystem<T, FORWARD> {
+    type In = ();
+    type Out = ();
 
     fn name(&self) -> DebugName {
         self.name.clone()
@@ -226,30 +229,40 @@ impl<T: System, const FORWARD: bool> System for RevSystem<T, FORWARD> {
         &mut self,
         world: UnsafeWorldCell,
     ) -> Result<(), SystemParamValidationError> {
+        if FORWARD && self.skipped_with_deferred {
+            return Err(SystemParamValidationError::invalid::<Self>(
+                "a previous call of validate_param_unsafe that returned Ok(()) had to be \
+                followed by a system run",
+            ));
+        }
+
         let system = &mut self
             .shared
             .inner
             .try_lock()
             .map_err(try_lock_validation_err(&self.name))?
             .system;
-        unsafe {
+        let result = unsafe {
             // SAFETY: Self::initialize called T::initialize to register all access of T
             system.validate_param_unsafe(world)
+        };
+
+        debug_assert!(!FORWARD || !self.skipped_with_deferred);
+        if FORWARD && self.has_deferred() && result.as_ref().is_err_and(|err| err.skipped) {
+            self.skipped_with_deferred = true;
+            return Ok(());
         }
-    }
-    fn validate_param(&mut self, world: &World) -> Result<(), SystemParamValidationError> {
-        self.shared
-            .inner
-            .try_lock()
-            .map_err(try_lock_validation_err(&self.name))?
-            .system
-            .validate_param(world)
+        result
     }
     unsafe fn run_unsafe(
         &mut self,
         input: SystemIn<'_, Self>,
         world: UnsafeWorldCell,
-    ) -> Result<Self::Out, RunSystemError> {
+    ) -> Result<(), RunSystemError> {
+        if FORWARD && self.skipped_with_deferred {
+            self.skipped_with_deferred = false;
+            return Ok(());
+        }
         let mut shared = self.shared.inner.try_lock().map_err(try_lock_system_err)?;
         unsafe {
             // SAFETY: Self::initialize called T::initialize to register all access of T
@@ -306,24 +319,6 @@ impl<T: System, const FORWARD: bool> System for RevSystem<T, FORWARD> {
     fn set_last_run(&mut self, last_run: Tick) {
         let mut inner = self.shared.get_inner(&self.name);
         inner.system.set_last_run(last_run);
-    }
-}
-
-// SAFETY: Self has no additional access to the world besides in System::apply_deferred to T
-unsafe impl<T: ReadOnlySystem<In = (), Out = ()>, const FORWARD: bool> ReadOnlySystem
-    for RevSystem<T, FORWARD>
-{
-    fn run_readonly(
-        &mut self,
-        input: SystemIn<'_, Self>,
-        world: &World,
-    ) -> Result<Self::Out, RunSystemError> {
-        self.shared
-            .inner
-            .try_lock()
-            .map_err(try_lock_system_err)?
-            .system
-            .run_readonly(input, world)
     }
 }
 
@@ -436,13 +431,6 @@ impl<T: System> System for BackwardDeferred<T> {
     }
 }
 
-// SAFETY: Self does not access the world as it is noop
-unsafe impl<T: System> ReadOnlySystem for BackwardDeferred<T> {
-    fn run_readonly(&mut self, _input: (), _world: &World) -> Result<(), RunSystemError> {
-        Ok(())
-    }
-}
-
 fn try_lock_system_err<T>(err: TryLockError<T>) -> RunSystemError {
     RunSystemError::Failed(err.to_string().into())
 }
@@ -469,7 +457,7 @@ mod test {
         observer::On,
         resource::Resource,
         schedule::IntoScheduleConfigs,
-        system::{Command, Commands},
+        system::{Command, Commands, RunSystemError, SystemParamValidationError},
         world::{DeferredWorld, World},
     };
 
@@ -539,31 +527,46 @@ mod test {
     }
 
     #[test]
-    fn skipping_system_does_not_skip_undo_redo() {
+    fn skipping_system_does_not_skip_redo() {
         #[derive(Resource, Default)]
         struct Counter(u8);
 
-        fn system(not_log: NotLog, mut commands: Commands) {
+        fn system1(not_log: NotLog, mut commands: Commands) {
             commands.redo_and_buffer(not_log, |world: &mut World, _: UndoRedoDirection| {
                 world.get_resource_or_init::<Counter>().0 += 1;
             });
         }
 
+        fn system2(not_log: NotLog, commands: Commands) -> Result<(), RunSystemError> {
+            system1(not_log, commands);
+            Err(RunSystemError::Skipped(
+                SystemParamValidationError::skipped::<()>(""),
+            ))
+        }
+
+        fn system3(meta: Res<RevMeta>, commands: Commands) -> Result<(), RunSystemError> {
+            if let Some(not_log) = meta.get_not_log() {
+                system1(not_log, commands);
+            }
+            Err(RunSystemError::Skipped(
+                SystemParamValidationError::skipped::<()>(""),
+            ))
+        }
+
         panic_on_error_events();
         let mut app = App::new();
         app.add_plugins(RevPlugin.set_runner_in_schedule(Update))
-            // non-reversible systems should leak undo_redo into the next reversible system
-            .add_systems(RevUpdate, system);
+            .rev_add_systems(RevUpdate, (system1, system2, system3));
 
         app.update();
-        assert_eq!(app.world().resource::<Counter>().0, 1);
+        assert_eq!(app.world().resource::<Counter>().0, 3);
 
         RevQueue::RunBackwardLog.apply(app.world_mut()).unwrap();
         app.update();
-        assert_eq!(app.world().resource::<Counter>().0, 2);
+        assert_eq!(app.world().resource::<Counter>().0, 6);
 
         RevQueue::RunForwardLog.apply(app.world_mut()).unwrap();
         app.update();
-        assert_eq!(app.world().resource::<Counter>().0, 3);
+        assert_eq!(app.world().resource::<Counter>().0, 9);
     }
 }
