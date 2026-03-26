@@ -467,8 +467,9 @@ mod test {
         event::Event,
         lifecycle::HookContext,
         observer::On,
+        resource::Resource,
         schedule::IntoScheduleConfigs,
-        system::Commands,
+        system::{Command, Commands},
         world::{DeferredWorld, World},
     };
 
@@ -535,5 +536,34 @@ mod test {
             .update();
         let buffer = app.world().resource::<UndoRedoBuffer>();
         assert!(buffer.is_empty(), "{buffer:?}");
+    }
+
+    #[test]
+    fn skipping_system_does_not_skip_undo_redo() {
+        #[derive(Resource, Default)]
+        struct Counter(u8);
+
+        fn system(not_log: NotLog, mut commands: Commands) {
+            commands.redo_and_buffer(not_log, |world: &mut World, _: UndoRedoDirection| {
+                world.get_resource_or_init::<Counter>().0 += 1;
+            });
+        }
+
+        panic_on_error_events();
+        let mut app = App::new();
+        app.add_plugins(RevPlugin.set_runner_in_schedule(Update))
+            // non-reversible systems should leak undo_redo into the next reversible system
+            .add_systems(RevUpdate, system);
+
+        app.update();
+        assert_eq!(app.world().resource::<Counter>().0, 1);
+
+        RevQueue::RunBackwardLog.apply(app.world_mut()).unwrap();
+        app.update();
+        assert_eq!(app.world().resource::<Counter>().0, 2);
+
+        RevQueue::RunForwardLog.apply(app.world_mut()).unwrap();
+        app.update();
+        assert_eq!(app.world().resource::<Counter>().0, 3);
     }
 }
