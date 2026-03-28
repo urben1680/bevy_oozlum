@@ -3,11 +3,8 @@ use core::{
     fmt::Debug,
     hash::{Hash, Hasher},
 };
-use std::sync::{
-    Arc, Mutex, MutexGuard, TryLockError,
-    atomic::{AtomicU32, Ordering},
-};
 
+use alloc::{format, string::ToString, vec::Vec};
 use bevy_ecs::{
     change_detection::{CheckChangeTicks, Tick},
     error::BevyError,
@@ -20,6 +17,10 @@ use bevy_ecs::{
     world::{DeferredWorld, World, unsafe_world_cell::UnsafeWorldCell},
 };
 use bevy_log::error;
+use bevy_platform::sync::{
+    Arc, Mutex, MutexGuard, TryLockError,
+    atomic::{AtomicU32, Ordering},
+};
 use bevy_utils::prelude::DebugName;
 
 use crate::{

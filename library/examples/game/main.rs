@@ -2,6 +2,7 @@ use bevy::{
     ecs::{lifecycle::HookContext, world::DeferredWorld},
     prelude::*,
 };
+
 use bevy_oozlum::prelude::*;
 
 const ROWS: usize = 8;
@@ -29,40 +30,53 @@ mod rows;
 mod control;
 
 // This renders the ASCII output, ugly and not interesting for learning the crate
+#[cfg(not(feature = "ci-mode"))]
 mod render;
 
 fn main() {
-    App::new()
-        .add_plugins((
-            // Add the RevPlugin to your application.
-            //
-            // The plugin adds an unpaused RevMeta with a max past length of NonZeroU64::MIN
-            // and the run_rev_update system to FixedUpdate. We modify the max past len
-            // here. The Plugin also registers a disabling component: RevDespawned.
-            //
-            // General order of systems:
-            // 1. run_rev_update runs in the specified schedule (here FixedUpdate)
-            // 2. RevUpdate schedule runs unless paused
-            // 3. Reversible systems and sync points, all in the RevSystems set, run in normal or
-            //    reversed order, depending on the current RevDirection
-            RevPlugin.set_max_past_len(MAX_PAST_LEN),
-            // Add other plugins needed for this example.
-            DefaultPlugins.set(render::window_plugin()),
-            rows::plugin,
-            control::plugin,
-            render::plugin,
-        ))
-        .add_systems(
-            // You can add regular, non-reversible systems to RevUpdate using the vanilla
-            // add_systems API, though in that case they should be ordered relative to the
-            // RevSystems set
-            RevUpdate,
-            despawn_lost_waste.after(RevSystems),
-        )
-        .init_state::<GameState>()
-        .init_resource::<Stats>()
-        .insert_resource(Time::<Fixed>::from_hz(FRAMERATE_MIN))
-        .run();
+    let mut app = App::new();
+
+    // Add the RevPlugin to your application.
+    //
+    // The plugin adds an unpaused RevMeta with a max past length of 1 frame and the run_rev_update
+    // system to FixedUpdate. We modify the max past len here. The Plugin also registers a disabling
+    // component: RevDespawned.
+    //
+    // General order of systems:
+    // 1. run_rev_update runs in the specified schedule (here FixedUpdate)
+    // 2. RevUpdate schedule runs unless paused
+    // 3. Reversible systems and sync points, all in the RevSystems set, run in normal or
+    //    reversed order, depending on the current RevDirection
+    let rev_plugin = RevPlugin.set_max_past_len(MAX_PAST_LEN);
+
+    #[cfg(feature = "ci-mode")]
+    let rev_plugin = rev_plugin.set_runner_in_schedule(Update);
+
+    app.add_plugins((
+        rev_plugin,
+        rows::plugin,
+        control::plugin,
+        #[cfg(not(feature = "ci-mode"))]
+        (DefaultPlugins.set(render::window_plugin()), render::plugin),
+        #[cfg(feature = "ci-mode")]
+        (MinimalPlugins, StatesPlugin, InputPlugin),
+    ))
+    .add_systems(
+        // You can add regular, non-reversible systems to RevUpdate using the vanilla
+        // add_systems API, though in that case they should be ordered relative to the
+        // RevSystems set
+        RevUpdate,
+        despawn_lost_waste.after(RevSystems),
+    )
+    .init_state::<GameState>()
+    .init_resource::<Stats>()
+    .insert_resource(Time::<Fixed>::from_hz(FRAMERATE_MIN));
+
+    #[cfg(not(feature = "ci-mode"))]
+    app.run();
+
+    #[cfg(feature = "ci-mode")]
+    test::test(app);
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default, States)]
@@ -156,3 +170,9 @@ fn despawn_lost_waste(
         }
     }
 }
+
+#[cfg(feature = "ci-mode")]
+use bevy::{input::InputPlugin, state::app::StatesPlugin};
+
+#[cfg(feature = "ci-mode")]
+mod test;

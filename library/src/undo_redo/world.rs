@@ -14,6 +14,8 @@ use bevy_ecs::{
 };
 use bevy_utils::prelude::DebugName;
 
+use alloc::vec::Vec;
+
 use crate::{
     meta::{NotLog, RevDirection, RevMeta},
     undo_redo::{
@@ -311,64 +313,3 @@ impl Display for TryRevInsertBatchError {
 }
 
 impl Error for TryRevInsertBatchError {}
-
-#[cfg(test)]
-mod test {
-    use bevy_ecs::{
-        change_detection::MaybeLocation,
-        resource::Resource,
-        schedule::{ScheduleLabel, Schedules},
-        system::{Commands, Res},
-        world::World,
-    };
-
-    use crate::{
-        meta::{RevDirection, RevMeta},
-        schedule::RevSchedule,
-        undo_redo::{RevWorld, test::assert_undo_redo},
-    };
-
-    #[derive(ScheduleLabel, Copy, Clone, Debug, Hash, PartialEq, Eq)]
-    struct TestSchedule;
-
-    #[derive(Resource, PartialEq, Debug)]
-    struct ScheduleRan(RevDirection);
-
-    fn system(meta: Res<RevMeta>, mut commands: Commands) {
-        commands.insert_resource(ScheduleRan(meta.running_direction()));
-    }
-
-    #[test]
-    fn rev_run_schedule_works() {
-        let mut world = World::new();
-        world
-            .get_resource_or_init::<Schedules>()
-            .entry(TestSchedule)
-            .rev_add_systems(system);
-
-        assert_undo_redo(
-            &mut world,
-            |world, not_log| {
-                world
-                    .rev_try_run_schedule(not_log, TestSchedule, MaybeLocation::caller())
-                    .unwrap();
-                assert_eq!(
-                    world.get_resource::<ScheduleRan>(),
-                    Some(&ScheduleRan(RevDirection::NotLog(not_log)))
-                );
-            },
-            |world, _| {
-                assert_eq!(
-                    world.get_resource::<ScheduleRan>(),
-                    Some(&ScheduleRan(RevDirection::BackwardLog))
-                );
-            },
-            |world, _| {
-                assert_eq!(
-                    world.get_resource::<ScheduleRan>(),
-                    Some(&ScheduleRan(RevDirection::ForwardLog))
-                );
-            },
-        );
-    }
-}

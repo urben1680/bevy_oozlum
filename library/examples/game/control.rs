@@ -1,9 +1,17 @@
-use bevy::{input::keyboard::Key, prelude::*};
+use bevy::{
+    input::{InputSystems, keyboard::Key},
+    prelude::*,
+};
 use bevy_oozlum::prelude::*;
 
 use crate::{GameState, MAX_PAST_LEN, ROWS};
 
 pub fn plugin(app: &mut App) {
+    #[cfg(feature = "ci-mode")]
+    let system = system.before(InputSystems);
+    #[cfg(not(feature = "ci-mode"))]
+    let system = system.after(InputSystems);
+
     app.add_systems(
         // read and use inputs before RevUpdate
         PreUpdate, system,

@@ -211,25 +211,25 @@
 //! [Relationships]: bevy_ecs::relationship
 //! [`auto_insert_apply_deferred`]: bevy_ecs::schedule::ScheduleBuildSettings::auto_insert_apply_deferred
 
+#![warn(missing_docs)]
+#![no_std]
+
+extern crate alloc;
 /*
 TODO:
 
 - update README
 - reflect subtrait derives
-- github ci
 - make fake variadics docs work
 - docs for private UndoRedo types
+- comment or replace all unwrap with error!
 
 ISSUES/DISCUSSIONS:
 - feature track_update_logs to opt-out
-- no_std
-- schedule::set_base_sets should not need to chain forward/backward configs
-- exclusive reversible system sharp edges: ordering of ops
+- crate::schedule::set_base_sets should not need to chain forward/backward configs
 
 */
 // todo: deny
-#![deny(rustdoc::broken_intra_doc_links)] // works only in cargo doc --no-deps
-#![warn(missing_docs)]
 
 #[cfg(feature = "bevy_app")]
 pub mod app;
@@ -255,8 +255,8 @@ pub mod prelude {
 }
 
 /// Make `error!` and `error_once!` cause panics.
-#[cfg(test)]
-fn panic_on_error_events() {
+#[cfg(any(test, feature = "ci-mode"))]
+pub fn panic_on_error_events() {
     use bevy_log::{
         Level,
         tracing::{Event, Subscriber, dispatcher::get_default},

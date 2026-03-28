@@ -2,6 +2,11 @@ use super::*;
 
 use core::{num::NonZeroU64, str::Chars};
 
+use alloc::{
+    string::{String, ToString},
+    vec::Vec,
+};
+
 use crate::meta::{RevMeta, RevQueue};
 
 static EMPTY: &[char] = &[];

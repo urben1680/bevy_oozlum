@@ -2,18 +2,25 @@
 name = "bevy_oozlum"
 version = "0.1.0"
 edition = "2024"
+license = "MIT OR Apache-2.0"
 rust-version = "1.92.0" # keep in sync with bevy
+description = "Write reversible schedules"
+repository = "https://github.com/you/bevy_your_crate"
+readme = "README.md"
+keywords = ["bevy", "gamedev"]
+categories = ["game-development"]
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[package.metadata.docs.rs]
+cargo-args = ["-Zunstable-options", "-Zrustdoc-scrape-examples"]
 
 [dependencies]
-bevy_app = { version = "=0.18", optional = true }
-bevy_ecs = "=0.18"
-bevy_log = "=0.18"
-bevy_platform = "=0.18"
-bevy_ptr = "=0.18" 
-bevy_reflect = { version = "=0.18", optional = true }
-bevy_utils = "=0.18"
+bevy_app = { version = "=0.18", optional = true, default-features = false }
+bevy_ecs = { version = "=0.18", default-features = false }
+bevy_log = { version = "=0.18", default-features = false }
+bevy_platform = { version = "=0.18", default-features = false }
+bevy_ptr = { version = "=0.18", default-features = false } 
+bevy_reflect = { version = "=0.18", optional = true, default-features = false }
+bevy_utils = { version = "=0.18", default-features = false }
 nonmax = { version = "0.5", default-features = false } # keep in sync with bevy
 variadics_please = "1.1" # keep in sync with bevy
 
@@ -24,3 +31,4 @@ bevy = { version = "=0.18", features = ["track_location", "debug"] }
 default = ["bevy_app", "bevy_reflect"]
 bevy_app = ["dep:bevy_app"]
 bevy_reflect = ["dep:bevy_reflect"]
+ci-mode = [] # used for example and to exclude ci code there from scraped examples in docs

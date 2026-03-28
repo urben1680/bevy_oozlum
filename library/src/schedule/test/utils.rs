@@ -1,3 +1,4 @@
+use alloc::boxed::Box;
 use bevy_app::FixedUpdate;
 use bevy_ecs::{
     observer::On,

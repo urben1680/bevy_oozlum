@@ -1,5 +1,4 @@
-use std::sync::Arc;
-
+use alloc::vec::Vec;
 use bevy_ecs::{
     bundle::Bundle,
     change_detection::MaybeLocation,
@@ -13,6 +12,7 @@ use bevy_ecs::{
     },
 };
 use bevy_log::error;
+use bevy_platform::sync::Arc;
 
 use crate::{
     log::{OutOfLog, TransitionsLog},

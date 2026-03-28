@@ -45,11 +45,11 @@
 //! to minimize that for the most frequent updates, namely streaks of `0` and `1` and truncations of
 //! small amounts of offsets at the front of the log if they become globally out-of-log.
 
-use core::borrow::Borrow;
-use std::collections::{
+use alloc::collections::{
     VecDeque,
     vec_deque::{Iter, IterMut},
 };
+use core::borrow::Borrow;
 
 const WRAPPED_OFFSET_MASK: u8 = 0b0_1111111;
 const NON_WRAPPED_BYTE_MASK: u8 = 0b00_111111;
@@ -657,6 +657,8 @@ impl From<&u8> for FirstByte {
 #[cfg(test)]
 mod test {
     use super::*;
+
+    use alloc::vec::Vec;
 
     #[rustfmt::skip]
     const OFFSETS_ENCODED: [u8; 114] = [

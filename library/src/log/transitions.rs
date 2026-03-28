@@ -5,9 +5,13 @@ use core::{
     mem::ManuallyDrop,
     num::NonZeroU64,
 };
-use std::collections::{
-    TryReserveError, VecDeque,
-    vec_deque::{Drain, Iter, IterMut},
+
+use alloc::{
+    boxed::Box,
+    collections::{
+        TryReserveError, VecDeque,
+        vec_deque::{Drain, Iter, IterMut},
+    },
 };
 
 use crate::{

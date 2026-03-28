@@ -9,6 +9,8 @@ use bevy_ecs::{
     world::EntityWorldMut,
 };
 
+use alloc::vec::Vec;
+
 use crate::{
     meta::NotLog,
     prelude::UndoRedo,

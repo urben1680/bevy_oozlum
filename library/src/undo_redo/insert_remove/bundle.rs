@@ -10,6 +10,8 @@ use bevy_ecs::{
 };
 use variadics_please::all_tuples;
 
+use alloc::vec::Vec;
+
 use crate::{
     meta::NotLog,
     undo_redo::{

@@ -1,8 +1,9 @@
+use alloc::collections::TryReserveError;
 use core::{
     fmt::{Debug, Display},
     num::NonZeroU64,
+    panic::Location,
 };
-use std::{collections::TryReserveError, panic::Location};
 
 use bevy_ecs::change_detection::MaybeLocation;
 

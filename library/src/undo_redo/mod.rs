@@ -14,6 +14,8 @@ use bevy_ecs::{
 use bevy_platform::cell::SyncCell;
 use bevy_utils::prelude::DebugName;
 
+use alloc::{boxed::Box, format, string::ToString, vec::Vec};
+
 use crate::{
     log::{OutOfLog, TransitionsLog, UpdateLog},
     meta::{NotLog, RevDirection, RevMeta},

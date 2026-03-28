@@ -1,9 +1,9 @@
+use alloc::{borrow::Cow, boxed::Box, format, string::ToString, vec::Vec};
 use core::{
     fmt::{Debug, Display},
     num::NonZeroU64,
     panic::Location,
 };
-use std::borrow::Cow;
 
 use bevy_ecs::{
     change_detection::{MaybeLocation, Tick},
@@ -379,11 +379,12 @@ impl RevMeta {
 
         // take queue or fall back to previous direction, return early if no direction from both
         let Some(queue_or_ran) = queue.or(ran) else {
+            self.direction = RunningOrRan::Pause { after_log };
             return Ok(self);
         };
 
         let direction = match queue_or_ran {
-            RevDirection::NotLog(_not_log_min) => {
+            RevDirection::NotLog(_) => {
                 self.now += 1;
                 self.future_end = self.now;
                 let max_past_len = self.max_past_len.get();
@@ -477,6 +478,7 @@ impl RevMeta {
                     err => panic!("unexpected {err:#?}"),
                 }
                 assert_eq!(ran, should_run);
+                assert_eq!(ran, !self.paused())
             }
             Err(missed) => {
                 let mut ran = false;
@@ -531,7 +533,7 @@ pub fn run_rev_update(world: &mut World) -> Result<(), RunSystemError> {
                 return Err(RunSystemError::Skipped(
                     SystemParamValidationError::skipped::<RevMeta>(Cow::Borrowed(
                         "resource RevMeta does not exist, schedule RevUpdate will not be run \
-                    until it is inserted",
+                        until it is inserted",
                     )),
                 ));
             };

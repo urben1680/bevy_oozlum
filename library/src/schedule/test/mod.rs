@@ -1,3 +1,7 @@
+use alloc::{
+    vec,
+    vec::{IntoIter, Vec},
+};
 use bevy_app::{App, Update};
 use bevy_ecs::{
     change_detection::{Res, ResMut},
@@ -117,7 +121,7 @@ impl UndoRedo for LogEntry<u8> {
 }
 
 impl IntoIterator for Test {
-    type IntoIter = std::vec::IntoIter<LogEntry<u8>>;
+    type IntoIter = IntoIter<LogEntry<u8>>;
     type Item = LogEntry<u8>;
     fn into_iter(self) -> Self::IntoIter {
         match self {

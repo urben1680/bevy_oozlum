@@ -10,6 +10,8 @@ use bevy_ecs::{
 };
 use bevy_log::error;
 
+use alloc::vec::Vec;
+
 use crate::{
     prelude::UndoRedo,
     undo_redo::{IsRevDespawned, LOCATION_PREFIX, undo_redo_str},

@@ -9,6 +9,8 @@ use bevy_ecs::{
 };
 use bevy_log::{error, info, warn};
 
+use alloc::vec::Vec;
+
 use crate::{prelude::UndoRedo, undo_redo::LOCATION_PREFIX};
 
 mod bundle;

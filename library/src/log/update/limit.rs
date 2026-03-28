@@ -7,6 +7,7 @@
 use crate::log::update::DEFAULT_LOCATION;
 
 use super::PreUpdateKind;
+use alloc::{boxed::Box, vec::Vec};
 use bevy_ecs::change_detection::MaybeLocation;
 use bevy_utils::Parallel;
 use core::{
@@ -471,6 +472,8 @@ impl Debug for UpdateLogMissed {
 #[cfg(test)]
 mod test {
     use super::*;
+
+    use alloc::vec;
 
     #[test]
     fn updates_state() {

@@ -124,12 +124,15 @@
 //! [`UpdateLogsMissed`]: crate::meta::RevMetaUpdateErr::UpdateLogsMissed
 //! [reversible scheduling]: crate::schedule::RevSchedule
 //! [reversible commands]: crate::undo_redo::RevCommands
+use alloc::{
+    boxed::Box,
+    collections::{VecDeque, vec_deque::Drain},
+};
 use core::{
     error::Error,
     fmt::{Debug, Display, Formatter, Result as FmtResult},
     iter::FusedIterator,
 };
-use std::collections::{VecDeque, vec_deque::Drain};
 
 use bevy_ecs::change_detection::MaybeLocation;
 

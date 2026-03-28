@@ -1,5 +1,10 @@
 use core::{any::TypeId, hash::BuildHasher};
 
+use alloc::{
+    boxed::Box,
+    string::{String, ToString},
+    vec::Vec,
+};
 use bevy_ecs::{
     change_detection::{CheckChangeTicks, MaybeLocation, Tick},
     component::ComponentId,

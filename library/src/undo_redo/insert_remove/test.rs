@@ -4,6 +4,8 @@ use bevy_ecs::{
     spawn::SpawnRelated,
 };
 
+use alloc::vec;
+
 use crate::undo_redo::{IsRevDespawned, test::assert_undo_redo};
 
 use super::*;

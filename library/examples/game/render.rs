@@ -27,8 +27,8 @@ pub fn window_plugin() -> WindowPlugin {
     }
 }
 
-pub fn plugin(app: &mut App) {
-    app.add_systems(Startup, setup).add_systems(
+pub fn plugin(_app: &mut App) {
+    _app.add_systems(Startup, setup).add_systems(
         FixedUpdate,
         // A difference to use renderer after RevSystems in RevUpdate is that this way here
         // RevMeta::now is decreased during RevDirection::BackwardLog, something that is not the
