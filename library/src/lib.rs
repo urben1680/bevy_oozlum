@@ -217,18 +217,14 @@
 //! [`auto_insert_apply_deferred`]: bevy_ecs::schedule::ScheduleBuildSettings::auto_insert_apply_deferred
 
 #![no_std]
+#![allow(internal_features)]
+#![cfg_attr(any(docsrs, docsrs_dep), feature(rustdoc_internals))]
 
 extern crate alloc;
 /*
-TODO:
-
-- update README
-- make fake variadics docs work
-
 ISSUES/DISCUSSIONS:
 - feature track_update_logs to opt-out
 - crate::schedule::set_base_sets should not need to chain forward/backward configs
-
 */
 
 #[cfg(feature = "bevy_app")]

@@ -538,7 +538,8 @@ struct BackwardConfigs<T: Schedulable> {
 }
 
 macro_rules! impl_into_rev_schedule_configs {
-    ($(($T: ident, $M: ident, $var: ident)),*) => {
+    ($(#[$meta:meta])* $(($T: ident, $M: ident, $var: ident)),*) => {
+        $(#[$meta])*
         impl<S, $($T, $M),*> IntoRevScheduleConfigs<S, (ScheduleConfigTupleMarker, $($M,)*)> for ($($T,)*)
         where
             S: Schedulable<Metadata = GraphInfo, GroupMetadata = Chain>,
@@ -581,4 +582,4 @@ macro_rules! impl_into_rev_schedule_configs {
     };
 }
 
-all_tuples!(impl_into_rev_schedule_configs, 1, 20, T, M, var);
+all_tuples!(#[doc(fake_variadic)] impl_into_rev_schedule_configs, 1, 20, T, M, var);

@@ -273,7 +273,8 @@ impl<R: Relationship, L: SpawnableList<R> + Send + Sync + 'static> RevBundle<[R;
 }
 
 macro_rules! impl_buffer_bundle {
-    ($(($T: ident, $M: ident, $var: ident)),*) => {
+    ($(#[$meta:meta])* $(($T: ident, $M: ident, $var: ident)),*) => {
+        $(#[$meta])*
         impl<$($T, $M),*> RevBundle<($($M,)*)> for ($($T,)*)
         where
             $($T: RevBundle<$M>,)*
@@ -311,7 +312,7 @@ macro_rules! impl_buffer_bundle {
     };
 }
 
-all_tuples!(impl_buffer_bundle, 1, 15, T, M, var);
+all_tuples!(#[doc(fake_variadic)] impl_buffer_bundle, 1, 15, T, M, var);
 
 #[cfg(test)]
 const _: () = {
