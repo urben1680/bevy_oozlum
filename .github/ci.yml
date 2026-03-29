@@ -43,7 +43,11 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: cargo clippy --all-targets --all-features -- \
+          -D warnings \
+          -D clippy::undocumented_unsafe_blocks \
+          -D clippy::missing_safety_doc \
+          -D unsafe_op_in_unsafe_fn
 
       - name: Tests
         run: cargo test --all-targets --all-features
