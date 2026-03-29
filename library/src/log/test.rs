@@ -106,7 +106,7 @@ fn drain_all_iterator_works() {
         let mut deque = ABC.iter().cloned().collect::<VecDeque<_>>();
         let mut gap_buffer = Default::default();
         let drain_all = DrainAll::new(&mut deque, &mut gap_range, &mut gap_buffer);
-        let updated_gap = gap_range.clone();
+        let updated_gap = gap_range;
 
         let drained = drain_all.collect::<Vec<_>>();
 
@@ -146,7 +146,7 @@ impl TransitionDrain<'_, char> {
         assert_eq!(iter.size_hint().0, expected.len());
         let actual = iter.collect::<Vec<_>>();
         assert_eq!(actual, expected);
-        if expected.len() != 0 {
+        if !expected.is_empty() {
             let iter = self.past();
             assert_eq!(iter.size_hint().0, 0);
             assert_eq!(iter.count(), 0);
@@ -159,7 +159,7 @@ impl TransitionDrain<'_, char> {
         assert_eq!(iter.len(), expected.len());
         let actual = iter.collect::<Vec<_>>();
         assert_eq!(actual, expected);
-        if expected.len() != 0 {
+        if !expected.is_empty() {
             let iter = self.future();
             assert_eq!(iter.len(), 0);
             assert_eq!(iter.count(), 0);
@@ -371,14 +371,14 @@ impl Logs<TransitionsLog<char, char>> {
         match expected {
             Ok((transitions, update)) => {
                 for log in logs {
-                    let actual = log.forward_log(meta).map(TransitionsLogIterMut::to_tuple);
+                    let actual = log.forward_log(meta).map(TransitionsLogIterMut::into_tuple);
                     assert_eq!(actual, Ok((transitions.to_string(), update)));
                 }
             }
             Err(()) => {
                 for log in logs {
                     assert_eq!(
-                        log.forward_log(meta).map(TransitionsLogIterMut::to_tuple),
+                        log.forward_log(meta).map(TransitionsLogIterMut::into_tuple),
                         Err(OutOfLog::caller())
                     );
                 }
@@ -405,14 +405,17 @@ impl Logs<TransitionsLog<char, char>> {
         match expected {
             Ok((transitions, update)) => {
                 for log in logs {
-                    let actual = log.backward_log(meta).map(TransitionsLogIterMut::to_tuple);
+                    let actual = log
+                        .backward_log(meta)
+                        .map(TransitionsLogIterMut::into_tuple);
                     assert_eq!(actual, Ok((transitions.to_string(), update)));
                 }
             }
             Err(()) => {
                 for log in logs {
                     assert_eq!(
-                        log.backward_log(meta).map(TransitionsLogIterMut::to_tuple),
+                        log.backward_log(meta)
+                            .map(TransitionsLogIterMut::into_tuple),
                         Err(OutOfLog::caller())
                     );
                 }
@@ -430,13 +433,13 @@ impl TransitionsDrain<'_, char, char, Chars<'_>> {
             .sum::<usize>();
         assert_eq!(iter.transitions.size_hint().0, len);
         assert_eq!(iter.updates.size_hint().0, expected.len());
-        let actual = iter.to_tuples();
+        let actual = iter.into_tuples();
         let expected = expected
             .iter()
             .map(|(transitions, update)| (transitions.to_string(), *update))
             .collect::<Vec<_>>();
         assert_eq!(actual, expected);
-        if expected.len() != 0 {
+        if !expected.is_empty() {
             let iter = self.past();
             assert_eq!(iter.transitions.size_hint().0, 0);
             assert_eq!(iter.transitions.count(), 0);
@@ -453,13 +456,13 @@ impl TransitionsDrain<'_, char, char, Chars<'_>> {
             .sum::<usize>();
         assert_eq!(iter.transitions.len(), len);
         assert_eq!(iter.updates.len(), expected.len());
-        let actual = iter.to_tuples();
+        let actual = iter.into_tuples();
         let expected = expected
             .iter()
             .map(|(transitions, update)| (transitions.to_string(), *update))
             .collect::<Vec<_>>();
         assert_eq!(actual, expected);
-        if expected.len() != 0 {
+        if !expected.is_empty() {
             let iter = self.future();
             assert_eq!(iter.transitions.len(), 0);
             assert_eq!(iter.transitions.count(), 0);
@@ -484,7 +487,7 @@ impl TransitionsDrain<'_, char, char, Chars<'_>> {
         assert_eq!(iter.updates.len(), drain_sum_len);
         assert_eq!(iter.past_transitions_len(), past_transitions_len);
         assert_eq!(iter.past_updates_len(), past.len());
-        let actual = iter.to_tuples();
+        let actual = iter.into_tuples();
         let expected = past
             .iter()
             .cloned()
@@ -510,7 +513,7 @@ where
     TI: Iterator<Item = char>,
     UI: Iterator<Item = TransitionsLogUpdate<char>>,
 {
-    fn to_tuples(mut self) -> Vec<(String, char)> {
+    fn into_tuples(mut self) -> Vec<(String, char)> {
         let mut v = Vec::new();
         while let Some((transitions, update)) = self.next_log_entry() {
             v.push((transitions.collect(), update))
@@ -520,7 +523,7 @@ where
 }
 
 impl<'a> TransitionsLogIterMut<'a, char, char> {
-    fn to_tuple(self) -> (String, char) {
+    fn into_tuple(self) -> (String, char) {
         let update = *self.update;
         (self.map(|char| *char).collect(), update)
     }

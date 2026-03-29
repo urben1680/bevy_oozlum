@@ -319,27 +319,27 @@ fn contains_returns_expected() {
     meta.now = 3;
     meta.future_end = 5;
 
-    assert_eq!(meta.contains(0), false, "{meta:#?}");
-    assert_eq!(meta.contains(1), true, "{meta:#?}");
-    assert_eq!(meta.contains(2), true, "{meta:#?}");
-    assert_eq!(meta.contains(3), true, "{meta:#?}");
-    assert_eq!(meta.contains(4), true, "{meta:#?}");
-    assert_eq!(meta.contains(5), true, "{meta:#?}");
-    assert_eq!(meta.contains(6), false, "{meta:#?}");
+    assert!(!meta.contains(0), "{meta:#?}");
+    assert!(meta.contains(1), "{meta:#?}");
+    assert!(meta.contains(2), "{meta:#?}");
+    assert!(meta.contains(3), "{meta:#?}");
+    assert!(meta.contains(4), "{meta:#?}");
+    assert!(meta.contains(5), "{meta:#?}");
+    assert!(!meta.contains(6), "{meta:#?}");
 
-    assert_eq!(meta.past_contains(0), false, "{meta:#?}");
-    assert_eq!(meta.past_contains(1), true, "{meta:#?}");
-    assert_eq!(meta.past_contains(2), true, "{meta:#?}");
-    assert_eq!(meta.past_contains(3), false, "{meta:#?}");
-    assert_eq!(meta.past_contains(4), false, "{meta:#?}");
-    assert_eq!(meta.past_contains(5), false, "{meta:#?}");
-    assert_eq!(meta.past_contains(6), false, "{meta:#?}");
+    assert!(!meta.past_contains(0), "{meta:#?}");
+    assert!(meta.past_contains(1), "{meta:#?}");
+    assert!(meta.past_contains(2), "{meta:#?}");
+    assert!(!meta.past_contains(3), "{meta:#?}");
+    assert!(!meta.past_contains(4), "{meta:#?}");
+    assert!(!meta.past_contains(5), "{meta:#?}");
+    assert!(!meta.past_contains(6), "{meta:#?}");
 
-    assert_eq!(meta.future_contains(0), false, "{meta:#?}");
-    assert_eq!(meta.future_contains(1), false, "{meta:#?}");
-    assert_eq!(meta.future_contains(2), false, "{meta:#?}");
-    assert_eq!(meta.future_contains(3), false, "{meta:#?}");
-    assert_eq!(meta.future_contains(4), true, "{meta:#?}");
-    assert_eq!(meta.future_contains(5), true, "{meta:#?}");
-    assert_eq!(meta.future_contains(6), false, "{meta:#?}");
+    assert!(!meta.future_contains(0), "{meta:#?}");
+    assert!(!meta.future_contains(1), "{meta:#?}");
+    assert!(!meta.future_contains(2), "{meta:#?}");
+    assert!(!meta.future_contains(3), "{meta:#?}");
+    assert!(meta.future_contains(4), "{meta:#?}");
+    assert!(meta.future_contains(5), "{meta:#?}");
+    assert!(!meta.future_contains(6), "{meta:#?}");
 }

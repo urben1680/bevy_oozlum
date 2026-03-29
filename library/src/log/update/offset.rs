@@ -789,16 +789,16 @@ mod test {
         // from start to some end and back
         for steps in 0..OFFSETS_DECODED.len() {
             let mut iter = log.now_to_future();
-            for index in 0..steps {
+            for &expected in &OFFSETS_DECODED[..steps] {
                 let actual = iter.next().unwrap();
-                assert_eq!(actual, OFFSETS_DECODED[index],);
+                assert_eq!(actual, expected);
             }
             iter.sync();
 
             let mut iter = log.now_to_past();
-            for index in (0..steps).rev() {
+            for &expected in (&OFFSETS_DECODED[..steps]).iter().rev() {
                 let actual = iter.next().unwrap();
-                assert_eq!(actual, OFFSETS_DECODED[index],);
+                assert_eq!(actual, expected);
             }
             iter.sync();
         }

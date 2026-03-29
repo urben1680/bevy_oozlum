@@ -27,7 +27,7 @@ mod test;
 pub use direction::*;
 
 /// The central resource of this crate. It is used for:
-/// 
+///
 /// 1. To read in reversible systems that need to match the [`RevDirection`] via
 ///    [`running_direction`] to decide if they should run forwards or backwards.
 /// 2. To queue a new direction via [`set_queue`] or to pause.
@@ -36,7 +36,7 @@ pub use direction::*;
 ///    This is also done via [`set_queue`].
 /// 5. To read the reversible frame ids via [`now`] and other methods, possibly to track important
 ///    moments one wants to revert to.
-/// 
+///
 /// [`running_direction`]: Self::running_direction
 /// [`set_queue`]: Self::set_queue
 /// [`set_max_past_len`]: Self::set_max_past_len
@@ -193,12 +193,12 @@ impl RevMeta {
     }
 
     /// The reversible frame of the [`RevUpdate`] schedule.
-    /// 
+    ///
     /// It is increased right before the schedule runs [forward]. When running at
     /// [`RevDirection::BackwardLog`], the frame is reduced _afterwards_. Because of this, undoing
     /// a specific frame `n` will also make this method return the same `n`. This also means this
     /// value is never `0` when reversible systems are running.
-    /// 
+    ///
     /// This is not increased or decreased multiple times per reversible frame, so it is **no**
     /// reversible alternative to [`Tick`].
     ///
@@ -485,7 +485,7 @@ impl RevMeta {
                     c(&mut meta, direction);
                     Some(meta)
                 });
-                assert_eq!(ran, true);
+                assert!(ran);
                 match result {
                     Err(RevMetaUpdateErr::UpdateLogsMissed {
                         meta,

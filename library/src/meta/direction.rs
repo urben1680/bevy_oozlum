@@ -106,7 +106,7 @@ pub(super) enum RunningOrRan {
 /// The next state [`RevMeta`] should be in via [`RevMeta::set_queue`], will be applied when
 /// [`run_rev_update`] runs. Before that, a different queue can be set, which will
 /// overwrite a different pending value. Can also be [unset] before that.
-/// 
+///
 /// This type may also be used as a [`Command`] that can fail if [`RevMeta`] is missing.
 ///
 /// [`run_rev_update`]: super::run_rev_update
@@ -164,14 +164,14 @@ impl Command<BevyResult> for RevQueue {
 
 /// A type for when [`RevUpdate`] is currently running at [`RevDirection::NotLog`]. This is used as
 /// an argument for:
-/// 
+///
 /// - [`RevCommands`]
 /// - [`RevEntityCommands`]
 /// - [`BuffersUndoRedo`]
-/// 
+///
 /// ... to ensure these are only queued at that direction. Because of this, this type must not be
 /// stored past the frame it is accessed from.
-/// 
+///
 /// It is also a newtyped value of [`RevMeta::past_len`] which, during this direction, can never be
 /// zero. As this, [`TransitionLog::forward_push`]/[`TransitionsLog::forward_extend`] can use it for
 /// their `past_len` argument. This is adviced when the logs are updated exactly once per reversible

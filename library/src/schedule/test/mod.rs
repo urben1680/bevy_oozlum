@@ -281,11 +281,10 @@ fn truncates_future_command_log() {
     fn system(meta: Res<RevMeta>, mut commands: Commands, mut command_queued: Local<bool>) {
         if !*command_queued
             && let Some(RevDirection::NotLog(not_log)) = meta.get_running_direction()
+            && meta.now() == 2
         {
-            if meta.now() == 2 {
-                commands.rev_spawn_empty(not_log);
-                *command_queued = true;
-            }
+            commands.rev_spawn_empty(not_log);
+            *command_queued = true;
         }
     }
 

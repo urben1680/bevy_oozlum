@@ -16,7 +16,7 @@ mod offset;
 /// A log that keeps track when it was updated and provides the value for the `past_len` argument of
 /// [`TransitionLog::forward_push`]/[`TransitionsLog::forward_extend`]. This is useful for when
 /// these logs are *not* updated exactly once per [`RevUpdate`](crate::schedule::RevUpdate).
-/// 
+///
 /// This log is also useful alone as a compact `TransitionLog<bool>`.
 ///
 /// If an update is missed, for example when the scope of the log is behind complicated and
@@ -75,7 +75,7 @@ mod offset;
 ///     Ok(())
 /// }
 /// ```
-/// 
+///
 /// [`TransitionLog::forward_push`]: super::TransitionLog::forward_push
 /// [`TransitionsLog::forward_extend`]: super::TransitionsLog::forward_extend
 /// [`run_rev_update`]: crate::meta::run_rev_update
@@ -514,10 +514,9 @@ mod test {
                     self.meta.set_queue(RevQueue::RunForwardLog);
                     self.meta.update_ref(Err(missed), |meta, _| {
                         for _ in 0..insufficient_updates {
-                            assert_eq!(
+                            assert!(
                                 self.update_log
                                     .forward_log_with_caller(meta, caller.map(Some)),
-                                true
                             );
                         }
                     });
@@ -535,7 +534,7 @@ mod test {
                     );
                 }
                 // assert no more updates would run
-                assert_eq!(self.update_log.forward_log(meta), false);
+                assert!(!self.update_log.forward_log(meta));
             });
 
             if updates != 0 {
@@ -557,10 +556,9 @@ mod test {
                     self.meta.set_queue(RevQueue::RunBackwardLog);
                     self.meta.update_ref(Err(missed), |meta, _| {
                         for _ in 0..insufficient_updates {
-                            assert_eq!(
+                            assert!(
                                 self.update_log
-                                    .backward_log_with_caller(meta, caller.map(Some)),
-                                true
+                                    .backward_log_with_caller(meta, caller.map(Some))
                             );
                         }
                     });
@@ -578,7 +576,7 @@ mod test {
                     );
                 }
                 // assert no more updates would run
-                assert_eq!(self.update_log.backward_log(meta), false);
+                assert!(!self.update_log.backward_log(meta));
             });
 
             if updates != 0 {
@@ -601,18 +599,16 @@ mod test {
             self.meta.update_ref(Ok(true), |meta, _| {
                 if forward {
                     for _ in 0..updates {
-                        assert_eq!(
+                        assert!(
                             self.update_log
                                 .forward_log_with_caller(meta, self.last_update.map(Some)),
-                            true,
                         );
                     }
                 } else {
                     for _ in 0..updates {
-                        assert_eq!(
+                        assert!(
                             self.update_log
                                 .backward_log_with_caller(meta, self.last_update.map(Some)),
-                            true,
                         );
                     }
                 }

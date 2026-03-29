@@ -31,7 +31,7 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
     variant: usize,
     config: &C,
     apply_final_deferred: bool,
-    expected: &Vec<Vec<Test>>,
+    expected: &[Vec<Test>],
 ) {
     // set up world
     let mut world = World::new();
@@ -147,7 +147,7 @@ fn test_step(
     variant: usize,
     apply_final_deferred: bool,
     step: usize,
-    expected: &Vec<Test>,
+    expected: &[Test],
     direction: RevDirection,
 ) {
     world.run_schedule(FixedUpdate);
@@ -166,7 +166,7 @@ fn test_step(
         return;
     }
     let actual = Test::from_log_entries(&actual_tests, direction);
-    let iter = expected.into_iter().map(|ok| Result::<_, ()>::Ok(ok));
+    let iter = expected.iter().map(Result::<_, ()>::Ok);
     let expected: Vec<_> = if direction.is_forward() {
         iter.collect()
     } else {
