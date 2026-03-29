@@ -24,13 +24,13 @@ pub trait RevEntityCommands<'w> {
     ///
     /// When possible, use `Commands::rev_spawn` instead.
     ///
-    /// See the [`RevDespawned`](super::RevDespawned) documentation to understand the mechanics of
+    /// See the [`undo_redo`](crate::undo_redo) module documentation to understand the mechanics of
     /// reversible spawn/despawn.
     fn rev_mark_spawned(&mut self, not_log: NotLog, include_unlinked_related: bool) -> &mut Self;
 
     /// Reversible version of [`EntityCommands::despawn`].
     ///
-    /// See the [`RevDespawned`](super::RevDespawned) documentation to understand the mechanics of
+    /// See the [`undo_redo`](crate::undo_redo) module documentation to understand the mechanics of
     /// reversible spawn/despawn.
     fn rev_despawn(&mut self, not_log: NotLog);
 
@@ -111,13 +111,13 @@ pub trait RevEntityCommands<'w> {
 
     /// Reversible version of [`EntityCommands::despawn_related`].
     ///
-    /// See the [`RevDespawned`](super::RevDespawned) documentation to understand the mechanics of
+    /// See the [`undo_redo`](crate::undo_redo) module documentation to understand the mechanics of
     /// reversible spawn/despawn.
     fn rev_despawn_related<S: RelationshipTarget>(&mut self, not_log: NotLog) -> &mut Self;
 
     /// Reversible version of [`EntityCommands::despawn_children`].
     ///
-    /// See the [`RevDespawned`](super::RevDespawned) documentation to understand the mechanics of
+    /// See the [`undo_redo`](crate::undo_redo) module documentation to understand the mechanics of
     /// reversible spawn/despawn.
     fn rev_despawn_children(&mut self, not_log: NotLog) -> &mut Self;
 
@@ -572,13 +572,13 @@ impl<T: Component> RevEntityEntryCommands<T> for EntityEntryCommands<'_, T> {
 pub trait RevRelatedSpawnerCommands {
     /// Reversible version of [`RelatedSpawnerCommands::spawn`].
     ///
-    /// See the [`RevDespawned`](super::RevDespawned) documentation to understand the mechanics of
+    /// See the [`undo_redo`](crate::undo_redo) module documentation to understand the mechanics of
     /// reversible spawn/despawn.
     fn rev_spawn(&mut self, not_log: NotLog, bundle: impl Bundle) -> EntityCommands<'_>;
 
     /// Reversible version of [`RelatedSpawnerCommands::spawn_empty`].
     ///
-    /// See the [`RevDespawned`](super::RevDespawned) documentation to understand the mechanics of
+    /// See the [`undo_redo`](crate::undo_redo) module documentation to understand the mechanics of
     /// reversible spawn/despawn.
     fn rev_spawn_empty(&mut self, not_log: NotLog) -> EntityCommands<'_>;
 }
@@ -666,7 +666,7 @@ pub fn rev_remove<T: RevBundle<Marker>, Marker>(not_log: NotLog) -> impl EntityC
 
 /// Reversible version of [`despawn`](bevy_ecs::system::entity_command::despawn).
 ///
-/// See the [`RevDespawned`](super::RevDespawned) documentation to understand the mechanics of
+/// See the [`undo_redo`](crate::undo_redo) module documentation to understand the mechanics of
 /// reversible spawn/despawn.
 #[track_caller]
 pub fn rev_despawn(not_log: NotLog) -> impl EntityCommand<CmdOut> {

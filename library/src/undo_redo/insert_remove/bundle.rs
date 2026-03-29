@@ -26,11 +26,7 @@ use crate::{
 /// Adapter trait for [`Bundle`] implementors to enable reversible insert/remove of the contained
 /// components and common bundle effects like [`children!`] returns.
 ///
-/// This trait is usually not directly used but is a bound of some
-/// [`RevEntityWorldMut`]/[`RevEntityCommands`] methods.
-///
 /// [`children!`]: bevy_ecs::children
-/// [`RevEntityCommands`]: crate::undo_redo::RevEntityCommands
 pub trait RevBundle<Marker>: Bundle {
     /// Inserts `self` into `entity` depending on `mode`.
     ///
@@ -48,7 +44,6 @@ pub trait RevBundle<Marker>: Bundle {
 
     /// This is called within [`RevBundle::rev_insert`] and should not be called elsewhere as this
     /// alone will not make the insertion of required components reversible.
-    // todo: try to remove from public API
     #[doc(hidden)]
     fn rev_insert_inner(
         self,
@@ -221,7 +216,9 @@ impl<R: Relationship, B: Bundle> RevBundle<[R; 2]> for SpawnOneRelated<R, B> {
         _mode: InsertMode,
         caller: MaybeLocation,
     ) {
-        let new_related = get_new_related::<R>(entity, |entity| entity.insert(self));
+        let Some(new_related) = get_new_related::<R>(entity, |entity| entity.insert(self)) else {
+            return;
+        };
         entity.world_scope(|world| {
             if let Ok(mut new_related) = world.get_entity_mut(new_related) {
                 mark_entity::<true>(not_log, &mut new_related, true, caller);

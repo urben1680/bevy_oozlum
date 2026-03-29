@@ -13,19 +13,19 @@ mod rev_command; // reversible command from a simple system
 mod rev_config; // reversible schedule configuration
 mod rev_hook; // reversible command from hook
 mod rev_logs_drain; // reversible logic using log types, utilizes drain to clean up
-mod rev_logs_mut; // reversible logic using log types, utilizes mutation of log entries
+mod rev_logs_mut;
 mod rev_observer; // reversible command from observer
-mod rev_schedule; // running other schedules during RevUpdate
+mod rev_schedule; // running other schedules during RevUpdate // reversible logic using log types, utilizes mutation of log entries
 
 pub fn plugin(app: &mut App) {
     app.add_plugins((
-        rev_buffer_undo_redo::plugin::<1>,
-        rev_command::plugin::<2>,
-        rev_config::plugin::<3>,
+        rev_command::plugin::<1>,
+        rev_config::plugin::<2>,
+        rev_schedule::plugin::<3>,
         rev_hook::plugin::<4>,
-        rev_logs_drain::plugin::<5>,
-        rev_logs_mut::plugin::<6>,
-        rev_observer::plugin::<7>,
-        rev_schedule::plugin::<8>,
+        rev_observer::plugin::<5>,
+        rev_buffer_undo_redo::plugin::<6>,
+        rev_logs_drain::plugin::<7>,
+        rev_logs_mut::plugin::<8>,
     ));
 }

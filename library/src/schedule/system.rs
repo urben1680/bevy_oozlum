@@ -242,10 +242,8 @@ impl<T: System<In = (), Out = ()>, const FORWARD: bool> System for RevSystem<T, 
             .try_lock()
             .map_err(try_lock_validation_err(&self.name))?
             .system;
-        let result = unsafe {
-            // SAFETY: Self::initialize called T::initialize to register all access of T
-            system.validate_param_unsafe(world)
-        };
+        // SAFETY: Self::initialize called T::initialize to register all access of T
+        let result = unsafe { system.validate_param_unsafe(world) };
 
         debug_assert!(!FORWARD || !self.skipped_with_deferred);
         if FORWARD && self.has_deferred() && result.as_ref().is_err_and(|err| err.skipped) {
@@ -264,10 +262,8 @@ impl<T: System<In = (), Out = ()>, const FORWARD: bool> System for RevSystem<T, 
             return Ok(());
         }
         let mut shared = self.shared.inner.try_lock().map_err(try_lock_system_err)?;
-        unsafe {
-            // SAFETY: Self::initialize called T::initialize to register all access of T
-            shared.system.run_unsafe(input, world)
-        }
+        // SAFETY: Self::initialize called T::initialize to register all access of T
+        unsafe { shared.system.run_unsafe(input, world) }
     }
     fn apply_deferred(&mut self, world: &mut World) {
         let mut result = || -> Result<(), BevyError> {

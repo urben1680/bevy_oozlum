@@ -1,3 +1,50 @@
+//! This module contains additional API for reversible commands for bevy.
+//!
+//! Generally all reversible commands use [`UndoRedo`] internally. With this trait, along the
+//! immediate effect of commands, additional values to undo and redo these effects are generated and
+//! drained into the system's state that queued them. Either directly through commands or indirectly
+//! in hooks and observers. After that, the system can queue new commands at [log directions].
+//!
+//! ## Reversible spawn
+//!
+//! Entities that are spawned with [`Commands::rev_spawn`] or marked with
+//! [`EntityCommands::rev_mark_spawned`] (or variants) will ...
+//!
+//! - ... receive [`RevDespawned`] when the above actions are **undone** and should be treated as
+//!   despawned.
+//! - ... have this component removed when the above actions are **redone** and should be treated as
+//!   spawned.
+//! - ... will be despawned if the above actions are not **redone** before the next update with
+//!   [`RevDirection::NotLog`] runs.
+//!
+//! ## Reversible despawn
+//!
+//! Entities that are despawned with [`Commands::rev_despawn`] or [`EntityCommands::rev_despawn`]
+//! (or variants) will ...
+//!
+//! - ... receive [`RevDespawned`] **immediately** at the next sync point and should be treated as
+//!   despawned.
+//! - ... have this component removed when the above actions are **undone** and should be treated as
+//!   spawned.
+//! - ... receive this component when the above actions are **redone** and should be treated as
+//!   despawned.
+//! - ... will be despawned if the above actions are not **undone** before the next update with
+//!   [`RevDirection::NotLog`] runs and the frame the reversible despawn happened falls behind
+//!   [`RevMeta::past_end`].
+//!
+//! ## Notes
+//!
+//! - The APIs mind linked entities based on [`RelationshipTarget::LINKED_SPAWN`].
+//! - Manually inserting or removing [`RevDespawned`] is discouraged because no finalized despawn
+//!   will take place in these cases.
+//!
+//! [log directions]: RevDirection::is_log
+//! [`Commands::rev_spawn`]: crate::undo_redo::RevCommands::rev_spawn
+//! [`EntityCommands::rev_mark_spawned`]: crate::undo_redo::RevEntityCommands::rev_mark_spawned
+//! [`Commands::rev_despawn`]: crate::undo_redo::RevCommands::rev_despawn
+//! [`EntityCommands::rev_despawn`]: crate::undo_redo::RevEntityCommands::rev_despawn
+//! [`RelationshipTarget::LINKED_SPAWN`]: bevy_ecs::relationship::RelationshipTarget::LINKED_SPAWN
+
 use alloc::{boxed::Box, format, string::ToString, vec::Vec};
 use bevy_ecs::{
     change_detection::MaybeLocation,
@@ -29,11 +76,11 @@ mod world;
 
 pub use commands::*;
 pub use entity_commands::*;
-pub use entity_world::*;
+use entity_world::*;
 use insert_remove::*;
 use relationship::*;
 pub use spawn_despawn::*;
-pub use world::*;
+use world::*;
 
 const LOCATION_PREFIX: &str = if size_of::<MaybeLocation>() == 0 {
     ""

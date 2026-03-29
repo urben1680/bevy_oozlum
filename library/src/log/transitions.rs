@@ -524,10 +524,8 @@ where
             self.transitions.drain(..self.gap_range.start);
         }
         prepend(self.transitions, &mut self.gap_buffer);
-        let transitions_iter = unsafe {
-            // SAFETY: Only called this once and only in this Drop
-            ManuallyDrop::take(&mut self.transitions_iter)
-        };
+        // SAFETY: Only called this once and only in this Drop
+        let transitions_iter = unsafe { ManuallyDrop::take(&mut self.transitions_iter) };
         let mut len = self.transitions.len();
         self.transitions.extend(transitions_iter);
         len = self.transitions.len() - len;

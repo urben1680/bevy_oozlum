@@ -55,5 +55,5 @@ jobs:
       - name: Documentation
         run: cargo doc --all-features --no-deps
 
-      - name: Interactive example (CI mode)
+      - name: Example game (CI mode)
         run: cargo run --example game --features ci-mode

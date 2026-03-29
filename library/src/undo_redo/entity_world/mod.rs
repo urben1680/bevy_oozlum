@@ -2,12 +2,10 @@ use alloc::vec::Vec;
 use bevy_ecs::{
     bundle::{Bundle, InsertMode},
     change_detection::MaybeLocation,
-    component::Component,
     entity::Entity,
     relationship::{Relationship, RelationshipSourceCollection, RelationshipTarget},
     world::EntityWorldMut,
 };
-use core::marker::PhantomData;
 
 use crate::{
     meta::NotLog,
@@ -197,7 +195,11 @@ impl<'w> RevEntityWorld for EntityWorldMut<'w> {
         caller: MaybeLocation,
     ) -> Result<&mut Self, EntityRevDespawnedError> {
         self.assert_not_rev_despawned()?;
-        let new_related = get_new_related::<R>(self, |entity| entity.with_related::<R>(bundle));
+        let Some(new_related) =
+            get_new_related::<R>(self, |entity| entity.with_related::<R>(bundle))
+        else {
+            return Ok(self);
+        };
         let id = self.id();
         self.world_scope(|world| {
             if world.rev_mark_spawned(not_log, new_related, true, caller) {
@@ -326,177 +328,5 @@ impl<'w> RevEntityWorld for EntityWorldMut<'w> {
             });
         }
         Ok(())
-    }
-}
-
-/// [`ComponentEntry`](bevy_ecs::world::ComponentEntry) variant with additional reversible methods.
-pub enum RevComponentEntry<'w, 'a, T: Component> {
-    /// An occupied entry.
-    Occupied(RevOccupiedComponentEntry<'w, 'a, T>),
-    /// A vacant entry.
-    Vacant(RevVacantComponentEntry<'w, 'a, T>),
-}
-
-/// [`ComponentEntry`](bevy_ecs::world::OccupiedComponentEntry) variant with additional reversible
-/// methods.
-pub struct RevOccupiedComponentEntry<'w, 'a, T> {
-    entity_world_mut: &'a mut EntityWorldMut<'w>,
-    _marker: PhantomData<T>,
-}
-
-/// [`ComponentEntry`](bevy_ecs::world::VacantComponentEntry) variant with additional reversible
-/// methods.
-pub struct RevVacantComponentEntry<'w, 'a, T> {
-    entity_world_mut: &'a mut EntityWorldMut<'w>,
-    _marker: PhantomData<T>,
-}
-
-impl<'w, 'a, T: Component> RevComponentEntry<'w, 'a, T> {
-    /// See [`ComponentEntry::target_entity`](bevy_ecs::world::ComponentEntry::insert_entry).
-    #[track_caller]
-    pub fn insert_entry(self, component: T) -> RevOccupiedComponentEntry<'w, 'a, T> {
-        match self {
-            RevComponentEntry::Occupied(mut entry) => {
-                entry.insert(component);
-                entry
-            }
-            RevComponentEntry::Vacant(entry) => entry.insert(component),
-        }
-    }
-
-    /// Reversible version of
-    /// [`ComponentEntry::target_entity`](bevy_ecs::world::ComponentEntry::insert_entry).
-    #[track_caller]
-    pub fn rev_insert_entry(
-        self,
-        not_log: NotLog,
-        component: T,
-    ) -> RevOccupiedComponentEntry<'w, 'a, T> {
-        match self {
-            RevComponentEntry::Occupied(mut entry) => {
-                entry.rev_insert(not_log, component);
-                entry
-            }
-            RevComponentEntry::Vacant(entry) => entry.rev_insert(not_log, component),
-        }
-    }
-
-    /// See [`ComponentEntry::or_insert`](bevy_ecs::world::ComponentEntry::or_insert).
-    #[track_caller]
-    pub fn or_insert(self, default: T) -> RevOccupiedComponentEntry<'w, 'a, T> {
-        match self {
-            RevComponentEntry::Occupied(entry) => entry,
-            RevComponentEntry::Vacant(entry) => entry.insert(default),
-        }
-    }
-
-    /// Reversible version of [`ComponentEntry::or_insert`](bevy_ecs::world::ComponentEntry::or_insert).
-    #[track_caller]
-    pub fn rev_or_insert(
-        self,
-        not_log: NotLog,
-        default: T,
-    ) -> RevOccupiedComponentEntry<'w, 'a, T> {
-        match self {
-            RevComponentEntry::Occupied(entry) => entry,
-            RevComponentEntry::Vacant(entry) => entry.rev_insert(not_log, default),
-        }
-    }
-
-    /// See [`ComponentEntry::or_insert_with`](bevy_ecs::world::ComponentEntry::or_insert_with).
-    #[track_caller]
-    pub fn or_insert_with<F: FnOnce() -> T>(
-        self,
-        default: F,
-    ) -> RevOccupiedComponentEntry<'w, 'a, T> {
-        match self {
-            RevComponentEntry::Occupied(entry) => entry,
-            RevComponentEntry::Vacant(entry) => entry.insert(default()),
-        }
-    }
-
-    /// Reversible version of
-    /// [`ComponentEntry::or_insert_with`](bevy_ecs::world::ComponentEntry::or_insert_with).
-    #[track_caller]
-    pub fn rev_or_insert_with<F: FnOnce() -> T>(
-        self,
-        not_log: NotLog,
-        default: F,
-    ) -> RevOccupiedComponentEntry<'w, 'a, T> {
-        match self {
-            RevComponentEntry::Occupied(entry) => entry,
-            RevComponentEntry::Vacant(entry) => entry.rev_insert(not_log, default()),
-        }
-    }
-}
-
-impl<'w, 'a, T: Component + Default> RevComponentEntry<'w, 'a, T> {
-    /// See [`ComponentEntry::or_insert_with`](bevy_ecs::world::ComponentEntry::or_default).
-    #[track_caller]
-    pub fn or_default(self) -> RevOccupiedComponentEntry<'w, 'a, T> {
-        match self {
-            RevComponentEntry::Occupied(entry) => entry,
-            RevComponentEntry::Vacant(entry) => entry.insert(Default::default()),
-        }
-    }
-
-    /// Reversible version of
-    /// [`ComponentEntry::or_insert_with`](bevy_ecs::world::ComponentEntry::or_default).
-    #[track_caller]
-    pub fn rev_or_default(self, not_log: NotLog) -> RevOccupiedComponentEntry<'w, 'a, T> {
-        match self {
-            RevComponentEntry::Occupied(entry) => entry,
-            RevComponentEntry::Vacant(entry) => entry.rev_insert(not_log, Default::default()),
-        }
-    }
-}
-
-impl<'w, 'a, T: Component> RevOccupiedComponentEntry<'w, 'a, T> {
-    /// See
-    /// [`OccupiedComponentEntry::or_insert_with`](bevy_ecs::world::OccupiedComponentEntry::insert).
-    #[track_caller]
-    pub fn insert(&mut self, component: T) {
-        self.entity_world_mut.insert(component);
-    }
-
-    /// Reversible version of
-    /// [`OccupiedComponentEntry::or_insert_with`](bevy_ecs::world::OccupiedComponentEntry::insert).
-    #[track_caller]
-    pub fn rev_insert(&mut self, not_log: NotLog, component: T) {
-        self.entity_world_mut
-            .rev_insert(not_log, component, MaybeLocation::caller())
-            .unwrap();
-    }
-
-    /// See [`OccupiedComponentEntry::take`](bevy_ecs::world::OccupiedComponentEntry::take).
-    #[track_caller]
-    pub fn take(self) -> T {
-        // This shouldn't panic because if we have an OccupiedEntry the component must exist.
-        self.entity_world_mut.take().unwrap()
-    }
-}
-
-impl<'w, 'a, T: Component> RevVacantComponentEntry<'w, 'a, T> {
-    /// See [`VacantComponentEntry::insert`](bevy_ecs::world::VacantComponentEntry::insert).
-    #[track_caller]
-    pub fn insert(self, component: T) -> RevOccupiedComponentEntry<'w, 'a, T> {
-        self.entity_world_mut.insert(component);
-        RevOccupiedComponentEntry {
-            entity_world_mut: self.entity_world_mut,
-            _marker: PhantomData,
-        }
-    }
-
-    /// Reversible version of
-    /// [`VacantComponentEntry::insert`](bevy_ecs::world::VacantComponentEntry::insert).
-    #[track_caller]
-    pub fn rev_insert(self, not_log: NotLog, component: T) -> RevOccupiedComponentEntry<'w, 'a, T> {
-        self.entity_world_mut
-            .rev_insert(not_log, component, MaybeLocation::caller())
-            .unwrap();
-        RevOccupiedComponentEntry {
-            entity_world_mut: self.entity_world_mut,
-            _marker: PhantomData,
-        }
     }
 }

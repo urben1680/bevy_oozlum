@@ -380,10 +380,8 @@ impl<T> Drop for TransitionDrain<'_, T> {
             self.log.transitions.drain(..self.gap_range.start);
         }
         prepend(&mut self.log.transitions, &mut self.gap_buffer);
-        let transition = unsafe {
-            // SAFETY: Only called this once and only in this Drop
-            ManuallyDrop::take(&mut self.transition)
-        };
+        // SAFETY: Only called this once and only in this Drop
+        let transition = unsafe { ManuallyDrop::take(&mut self.transition) };
         self.log.transitions.push_back(transition);
         self.log.index = self.log.transitions.len();
         self.log.index_max = self.log.transitions.len();

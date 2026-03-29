@@ -187,10 +187,8 @@ impl UpdateLogLimits {
                 if now < limits.past || now > limits.future {
                     update_logs_missed.push(UpdateLogMissed {
                         id: UpdateLogId {
-                            index: unsafe {
-                                // SAFETY: `index` originates from an NonMaxU32 value
-                                NonMaxU32::new_unchecked(index as u32)
-                            },
+                            // SAFETY: `index` originates from an NonMaxU32 value
+                            index: unsafe { NonMaxU32::new_unchecked(index as u32) },
                             witnessed_log_clears: meta_log_clears,
                         },
                         last_update: limits.last_update,

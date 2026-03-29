@@ -270,14 +270,8 @@ impl UndoRedo for RevRunSchedule {
     }
 }
 
-/// The error type returned by [`World::rev_try_insert_batch`] and
-/// [`World::rev_try_insert_batch_if_new`] if any of the provided entities do not exist or were
-/// reversibly despawned.
-///
-/// See the [`RevDespawned`](super::RevDespawned) documentation to understand the mechanics of
-/// reversible spawn/despawn.
 #[derive(Debug, Clone)]
-pub struct TryRevInsertBatchError {
+pub(super) struct TryRevInsertBatchError {
     /// The bundles' type name.
     pub bundle_type: DebugName,
     /// The IDs of the provided entities that do not exist.

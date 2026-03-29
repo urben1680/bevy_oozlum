@@ -82,26 +82,25 @@ impl<T: ReadOnlySystem<In = (), Out = bool>> System for RevCondition<T> {
     ) -> Result<(), SystemParamValidationError> {
         // RevMeta validation happens in run_unsafe as its failing verification is never a skipping
         // error but an error that must be handled
-        unsafe {
-            // SAFETY: in `initialize` T returned the required access to make this safe
-            self.condition.validate_param_unsafe(world)
-        }
+
+        // SAFETY: in `initialize` T returned the required access to make this safe
+        unsafe { self.condition.validate_param_unsafe(world) }
     }
     unsafe fn run_unsafe(
         &mut self,
         (): SystemIn<'_, Self>,
         world: UnsafeWorldCell,
     ) -> Result<bool, RunSystemError> {
-        let ptr = unsafe {
-            // SAFETY:
-            // - Registered read access to resource in `initialize`
-            // - T cannot have write access on the resource because T: ReadOnlySystem
-            world.get_resource_by_id(self.meta_id.unwrap())
-        };
+        // SAFETY: caller assures self.initialize did run
+        let meta_id = unsafe { self.meta_id.unwrap_unchecked() };
+        // SAFETY:
+        // - Registered read access to resource in `initialize`
+        // - T cannot have write access on the resource because T: ReadOnlySystem
+        let ptr = unsafe { world.get_resource_by_id(meta_id) };
         let meta = ptr
-            .map(|ptr| unsafe {
+            .map(|ptr| {
                 // SAFETY: `Self::meta_id` is the id of `RevMeta`, so Ptr is its erased pointee type
-                ptr.deref::<RevMeta>()
+                unsafe { ptr.deref::<RevMeta>() }
             })
             .ok_or_else(|| RunSystemError::Failed("`RevMeta` is missing but required".into()))?;
         let direction = meta.get_running_direction().ok_or_else(|| {
@@ -112,12 +111,10 @@ impl<T: ReadOnlySystem<In = (), Out = bool>> System for RevCondition<T> {
 
         match direction {
             RevDirection::NotLog(_) => {
-                let result = unsafe {
-                    // SAFETY:
-                    // - in `initialize` T returned the required access to make this safe
-                    // - T is readonly so the meta reference is allowed to exist while T runs
-                    self.condition.run_unsafe((), world)
-                };
+                // SAFETY:
+                // - in `initialize` T returned the required access to make this safe
+                // - T is readonly so the meta reference is allowed to exist while T runs
+                let result = unsafe { self.condition.run_unsafe((), world) };
 
                 self.logs.insert(meta, &result)?;
 

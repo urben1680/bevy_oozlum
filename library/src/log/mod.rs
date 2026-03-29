@@ -1,13 +1,13 @@
 //! This module contains log variants and types around them that can be used in reversible systems.
 //!
-//! # Log variants
+//! ## Log variants
 //!
 //! - [`TransitionLog`], for storing singular values to transition a state forward or backward.
 //! - [`TransitionsLog`], for storing multiple values to transition a state forward or backward.
 //! - [`UpdateLog`], for keeping track when, how often and with which `past_len` value the other
 //!   logs need to update in cases these updates happen irregularily.
 //!
-//! # Optimal log length
+//! ## Optimal log length
 //!
 //! All logs in an application can sum up to a large amount of data and it is undesired to store any
 //! more transition data than what is really needed to cover the [global log length].
@@ -28,7 +28,7 @@
 //! Ideally, as few logs and as few updates as possible are required for the application to keep the
 //! memory usage low.
 //!
-//! # Missing updates
+//! ## Missing updates
 //!
 //! Errornous user code can cause logs missing the frame they are supposed to update at. In the case
 //! of [log directions] this can cause the continuity of the world state to break. For example, when
@@ -62,7 +62,7 @@
 //! Log clears happen not when the queue above is applied but at the first next update of each log
 //! after that.
 //!
-//! # Draining transitions
+//! ## Draining transitions
 //!
 //! Updating the transition logs with [`forward_push`] and [`forward_extend`] also returns draining
 //! iterators. These can be used to clean up other resources the logs are tracking, such as
@@ -294,7 +294,7 @@ fn prepend<T>(deque: &mut VecDeque<T>, gap_buffer: &mut Box<[T]>) {
     match buffer.len() {
         0 => {}
         1 => {
-            let entry = unsafe { buffer.next().unwrap_unchecked() };
+            let entry = buffer.next().unwrap(); // len != 0 expects an item
             deque.push_front(entry);
         }
         len => {

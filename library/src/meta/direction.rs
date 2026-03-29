@@ -178,6 +178,7 @@ impl Command<BevyResult> for RevQueue {
 /// frame. For every other update strategy, use the value returned by
 /// [`UpdateLog::forward_past_len`] instead.
 ///
+/// [`RevUpdate`]: crate::schedule::RevUpdate
 /// [`RevCommands`]: crate::undo_redo::RevCommands
 /// [`RevEntityCommands`]: crate::undo_redo::RevEntityCommands
 /// [`BuffersUndoRedo`]: crate::undo_redo::BuffersUndoRedo

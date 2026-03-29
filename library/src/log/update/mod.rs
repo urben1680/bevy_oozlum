@@ -337,7 +337,7 @@ impl UpdateLog {
         }
 
         let mut iter = self.offsets.now_to_past();
-        self.last_update -= iter.next().unwrap();
+        self.last_update -= iter.next().unwrap(); // must be Some because self.past_len != 0
         iter.sync();
         self.past_len -= 1;
         let backward_limit = iter.next().map_or(0, |_| self.last_update);

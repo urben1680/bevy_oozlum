@@ -179,6 +179,7 @@ impl OffsetLog {
             && streak.max != step
         {
             streak.max = step;
+            // expects an offset to exist when streak_and_step is Some
             *self.offsets.back_mut().unwrap() = (*streak).into();
         }
     }
@@ -796,7 +797,7 @@ mod test {
             iter.sync();
 
             let mut iter = log.now_to_past();
-            for &expected in (&OFFSETS_DECODED[..steps]).iter().rev() {
+            for &expected in OFFSETS_DECODED[..steps].iter().rev() {
                 let actual = iter.next().unwrap();
                 assert_eq!(actual, expected);
             }

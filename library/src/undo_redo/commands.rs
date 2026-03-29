@@ -33,7 +33,7 @@ pub trait RevCommands {
     ///
     /// When possible, use `Commands::rev_spawn` instead.
     ///
-    /// See the [`RevDespawned`](super::RevDespawned) documentation to understand the mechanics of
+    /// See the [`undo_redo`](crate::undo_redo) module documentation to understand the mechanics of
     /// reversible spawn/despawn.
     fn rev_mark_spawned(&mut self, not_log: NotLog, entity: Entity, include_unlinked_related: bool);
 
@@ -42,7 +42,7 @@ pub trait RevCommands {
     ///
     /// When possible, use `Commands::rev_spawn_batch` instead.
     ///
-    /// See the [`RevDespawned`](super::RevDespawned) documentation to understand the mechanics of
+    /// See the [`undo_redo`](crate::undo_redo) module documentation to understand the mechanics of
     /// reversible spawn/despawn.
     fn rev_mark_spawned_batch(
         &mut self,
@@ -53,13 +53,13 @@ pub trait RevCommands {
 
     /// Command to reversibly despawn an entity.
     ///
-    /// See the [`RevDespawned`](super::RevDespawned) documentation to understand the mechanics of
+    /// See the [`undo_redo`](crate::undo_redo) module documentation to understand the mechanics of
     /// reversible spawn/despawn.
     fn rev_despawn(&mut self, not_log: NotLog, entity: Entity);
 
     /// Command to reversibly despawn multiple entities.
     ///
-    /// See the [`RevDespawned`](super::RevDespawned) documentation to understand the mechanics of
+    /// See the [`undo_redo`](crate::undo_redo) module documentation to understand the mechanics of
     /// reversible spawn/despawn.
     fn rev_despawn_batch(
         &mut self,
@@ -129,7 +129,9 @@ impl RevCommands for Commands<'_, '_> {
         let caller = MaybeLocation::caller();
         let mut entity_cmds = self.spawn(bundle);
         entity_cmds.queue(move |mut entity_mut: EntityWorldMut| {
-            entity_mut.rev_mark_spawned(not_log, true, caller).unwrap();
+            entity_mut
+                .rev_mark_spawned(not_log, true, caller)
+                .map(|_| ())
         });
         entity_cmds
     }
@@ -265,9 +267,9 @@ where
 /// Reversible version of [`spawn_batch`](bevy_ecs::system::command::insert_batch).
 ///
 /// If any entities do not exist in the world or are reversibly despawned, this command will return
-/// a [`TryRevInsertBatchError`](super::TryRevInsertBatchError).
+/// an error.
 ///
-/// See the [`RevDespawned`](super::RevDespawned) documentation to understand the mechanics of
+/// See the [`undo_redo`](crate::undo_redo) module documentation to understand the mechanics of
 /// reversible spawn/despawn.
 #[track_caller]
 pub fn rev_insert_batch<I, B, Marker>(

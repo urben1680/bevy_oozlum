@@ -34,49 +34,13 @@ mod test;
 /// the returned entity pointers. These check for the existence of this component. These entities
 /// should be handled as despawned, including in code outside of reversible systems.
 ///
-/// # Reversible spawn
-///
-/// Entities that are spawned with [`Commands::rev_spawn`] or marked with
-/// [`EntityCommands::rev_mark_spawned`] (or variants) will ...
-///
-/// - ... receive this component when the above actions are **undone** and should be treated as
-///   despawned.
-/// - ... have this component removed when the above actions are **redone** and should be treated as
-///   spawned.
-/// - ... will be despawned if the above actions are not **redone** before the next update with
-///   [`RevDirection::NotLog`] runs.
-///
-/// # Reversible despawn
-///
-/// Entities that are despawned with [`Commands::rev_despawn`] or [`EntityCommands::rev_despawn`]
-/// (or variants) will ...
-///
-/// - ... receive this component **immediately** at the next sync point and should be treated as
-///   despawned.
-/// - ... have this component removed when the above actions are **undone** and should be treated as
-///   spawned.
-/// - ... receive this component when the above actions are **redone** and should be treated as
-///   despawned.
-/// - ... will be despawned if the above actions are not **undone** before the next update with
-///   [`RevDirection::NotLog`] runs and the frame the reversible despawn happened falls behind
-///   [`RevMeta::past_end`].
-///
-/// # Notes
-///
-/// - The APIs mind linked entities based on [`RelationshipTarget::LINKED_SPAWN`].
-/// - Manually inserting or removing this component is discouraged because no finalized despawn will
-///   take place in these cases.
-///
-/// [`Commands::rev_spawn`]: crate::undo_redo::RevCommands::rev_spawn
-/// [`EntityCommands::rev_mark_spawned`]: crate::undo_redo::RevEntityCommands::rev_mark_spawned
-/// [`Commands::rev_despawn`]: crate::undo_redo::RevCommands::rev_despawn
-/// [`EntityCommands::rev_despawn`]: crate::undo_redo::RevEntityCommands::rev_despawn
-/// [`RelationshipTarget::LINKED_SPAWN`]: bevy_ecs::relationship::RelationshipTarget::LINKED_SPAWN
+/// This component should not be manually inserted because this would not automatically despawn the
+/// entity at some point.
 // todo: store MaybeLocation in component change meta instead of here, https://github.com/bevyengine/bevy/issues/20494
 pub struct RevDespawned(pub MaybeLocation);
 
 /// Despawn entities that are currently considered reversibly despawned and their relevant operation
-/// to revert that fell out of log.
+/// to revert that fell out of log. This must not be manually called if [`run_rev_update`] is used.
 ///
 /// # Errors
 ///
@@ -86,6 +50,7 @@ pub struct RevDespawned(pub MaybeLocation);
 /// - If the internal log went out of log, this will return [`DespawnFinalizerErr::OutOfLog`]. This
 ///   can happen if this is called more than once while [`RevUpdate`] ran.
 ///
+/// [`run_rev_update`]: crate::meta::run_rev_update
 /// [running]: RevMeta::running_direction
 /// [`RevUpdate`]: crate::schedule::RevUpdate
 pub fn finalize_despawns(world: &mut World) -> Result<(), DespawnFinalizerErr> {
@@ -380,13 +345,13 @@ impl FromWorld for DespawnFinalizer {
 /// Extension trait for entity pointers to check if an entity is reversibly despawned. Prefer to use
 /// the [`RevFetch`] wrapper at the fetching point if possible.
 ///
-/// See the [`RevDespawned`](super::RevDespawned) documentation to understand the mechanics of
+/// See the [`undo_redo`](crate::undo_redo) module documentation to understand the mechanics of
 /// reversible spawn/despawn.
 pub trait IsRevDespawned {
     /// Returns `true` if the entity is markes as reversibly despawned. In that case the entity
     /// should be treated as despawned. Returns `false` otherwise.
     ///
-    /// See the [`RevDespawned`](super::RevDespawned) documentation to understand the mechanics of
+    /// See the [`undo_redo`](crate::undo_redo) module documentation to understand the mechanics of
     /// reversible spawn/despawn.
     fn is_rev_despawned(&self) -> bool;
 }
@@ -446,7 +411,7 @@ impl IsRevDespawned for EntityWorldMut<'_> {
 /// reversible systems. Where only the fetched entity pointer is available, use
 /// [`IsRevDespawned::is_rev_despawned`].
 ///
-/// See the [`RevDespawned`](super::RevDespawned) documentation to understand the mechanics of
+/// See the [`undo_redo`](crate::undo_redo) module documentation to understand the mechanics of
 /// reversible spawn/despawn.
 ///
 /// # Example

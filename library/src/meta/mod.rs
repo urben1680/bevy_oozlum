@@ -82,7 +82,6 @@ impl RevMeta {
     /// [`RevPlugin`]: crate::app::RevPlugin
     /// [`set_queue`]: Self::set_queue
     /// [`set_max_past_len`]: Self::set_max_past_len
-    /// [`run_rev_update`]: Self::run_rev_update
     pub fn new(max_past_len: u64, paused: bool) -> Self {
         Self {
             past_end: 0,
@@ -309,13 +308,11 @@ impl RevMeta {
     ///   [`RevMetaUpdateErr::AlreadyRunning`].
     /// - If `c` does not return `RevMeta`, this will return
     ///   [`RevMetaUpdateErr::RevMetaNotReturned`].
-    /// - If `RevMeta` was replaced in `c` with a value that is not running in the same direction,
-    ///   this will return [`RevMetaUpdateErr::DirectionChanged`].
+    /// - If `RevMeta` was replaced in `c`, this will return [`RevMetaUpdateErr::RevMetaReplaced`].
     /// - If any [`UpdateLog`] did not update when it was expected to, in the amount it was expected
     ///   to, this will return [`RevMetaUpdateErr::UpdateLogsMissed`]. This may only happen during
     ///   [log directions].
     ///
-    /// [`run_rev_update`]: Self::run_rev_update
     /// [in a running state]: Self::running_direction
     /// [`UpdateLog`]: crate::log::UpdateLog
     /// [log directions]: RevDirection::is_log

@@ -1,10 +1,12 @@
 //! `bevy_oozlum` is a crate for [`bevy`] to write reversible systems and schedules.
+//! It may be useful to implement rewind features in a game that run as smoothly as the normal
+//! gameplay.
 //!
 //! "Oozlum" is a mythical bird that is able to fly backwards.
 //!
 //! **This crate is experimential and may be discontinued at any time.**
 //!
-//! # Features
+//! ## Features
 //!
 //! This crate offers additional APIs for reversible schedules and reversible (entity) commands.
 //!
@@ -26,7 +28,7 @@
 //! **Hooks and observers** may or may not additionally run at log directions depending on how they
 //! are triggered. Still they can be written to issue reversible commands which will work just fine.
 //!
-//! # Examples
+//! ## Examples
 //!
 //! A system that only has logic when running normally, so not backward or forward in log, and put
 //! their undo/redo logic into reversible commands, the [`NotLog`] system param can be used. It
@@ -116,72 +118,74 @@
 //! If one wants to jump to a specific frame in the log, the system also has to check [`now`] to
 //! queue [`Pause`] when desired. These frames are enumerated in `u64`.
 //!
-//! # Setup
+//! ## Setup
 //!
 //! The [`RevPlugin`] plugin is used to set everything up:
 //!
-//! ## Construct and insert [`RevMeta`]
+//! ### Construct and insert [`RevMeta`]
 //!
 //! Per default it is unpaused and will keep a maximum log length of 1 frame. Both can be modified
 //! at the plugin, just as it can be set to not insert the resource at all. The maximum log length
 //! can be set to a higher number via a plugin method, but also at any time when the app is running
 //! using [`set_max_past_len`]. The minimum is 1.
 //!
-//! ## Add the system that runs [`RevUpdate`]
+//! ### Add the system that runs [`RevUpdate`]
 //!
 //! Per default this system, namely [`run_rev_update`], is added to [`FixedUpdate`]. This can be
 //! changed or suppressed entirely at the plugin. One can also define a set the system is put into.
 //!
-//! ## Register [`RevDespawned`] as a disabling component
+//! ### Register [`RevDespawned`] as a disabling component
 //!
 //! This is needed to make entities [not show up in queries] when they were [reversibly despawned]
 //! but cannot be actually despawned yet as long undoing that is still possible. They can still be
 //! accessed via entity pointers though, so make sure to use the [`is_rev_despawned`] method to
 //! check on that. Reversible commands on such entities will fail.
 //!
-//! # Cargo Features
+//! ## Cargo Features
 //!
-//! | feature        | description                                | default feature |
+//! | Feature        | Description                                | Default feature |
 //! | -------------- | ------------------------------------------ | --------------- |
 //! | `bevy_app`     | `App` related features                     | yes             |
 //! | `bevy_reflect` | Reflection derives on resources/components | yes             |
+//! 
+//! `std` is not used in this crate so it is `no_std` compatible, to the extend of bevy's support.
 //!
-//! # Limitations
+//! ## Limitations
 //!
 //! Not everything one can do in bevy is also possible in a reversible manner with this crate.
 //!
-//! ## Change detection
+//! ### Change detection
 //!
 //! Attempting to use change detection in queries, resources, run conditions or other APIs that
 //! expose or work with [`Tick`]s will not work here. The mechanism behind them will be unable to
 //! differentiate between changes at non-log and log phases. Because of this it would not behave
 //! determistically.
 //!
-//! ## Exclusive systems
+//! ### Exclusive systems
 //!
 //! As supporting reversible exclusive systems would come with some footguns that are hard to detect
 //! or prevent, they are not supported and will cause panics. This also reduces the maintenance
 //! burden of this crate noticably.
 //!
-//! ## Untyped/dynamic commands
+//! ### Untyped/dynamic commands
 //!
 //! Reversible (entity) commands lack some methods that are available in vanilla bevy, most
 //! prominently those that are based on `ComponentId` or entity cloning. While these could be
 //! supported, it would be way past the scope of this crate.
 //!
-//! ## [Relationships] with extra data
+//! ### [Relationships] with extra data
 //!
 //! Reversible commands working with relationships are generally available. If custom types are used
 //! that also contain other data next to the entity collections however, some APIs in this crate
 //! will not compile in the best case or will silently make that data unrecoverable at the worst
 //! case. This has to do with the lack of untyped API support as pointed out above.
 //!
-//! ## Manual sync point configurations
+//! ### Manual sync point configurations
 //!
 //! The behavior of reversible sync points is tightly embedded in this crate. APIs such as
 //! [`auto_insert_apply_deferred`] must not be used on reversible schedules.
 //!
-//! ## Other?
+//! ### Other?
 //!
 //! There are a few more unsupported things that however just are not implemented yet. Check the
 //! existing issues of the repository in case you want to contribute.
@@ -189,6 +193,7 @@
 //! Note however that I will not merge every other fancy new feature if it surpasses what I am able
 //! and willing to maintain. Contact me first before putting effort into a pull request.
 //!
+//! [`bevy`]: https://bevy.org/
 //! [`NotLog`]: crate::meta::NotLog
 //! [`RevMeta`]: crate::meta::RevMeta
 //! [`RevDirection::NotLog`]: crate::meta::RevDirection::NotLog
@@ -211,7 +216,6 @@
 //! [Relationships]: bevy_ecs::relationship
 //! [`auto_insert_apply_deferred`]: bevy_ecs::schedule::ScheduleBuildSettings::auto_insert_apply_deferred
 
-#![warn(missing_docs)]
 #![no_std]
 
 extern crate alloc;
@@ -220,8 +224,6 @@ TODO:
 
 - update README
 - make fake variadics docs work
-- docs for private UndoRedo types
-- comment or replace all unwrap with error!
 
 ISSUES/DISCUSSIONS:
 - feature track_update_logs to opt-out

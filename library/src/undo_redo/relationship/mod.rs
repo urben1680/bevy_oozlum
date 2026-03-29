@@ -11,7 +11,7 @@ use bevy_ecs::{
     },
     world::{EntityRef, EntityWorldMut, World, error::EntityMutableFetchError},
 };
-use bevy_log::error;
+use bevy_log::{error, info, warn};
 use core::{any::type_name, marker::PhantomData};
 
 #[cfg(test)]
@@ -20,7 +20,7 @@ mod test;
 /// Compile-time assertion that [`Relationship`] and its [`RelationshipTarget`] do not contain extra
 /// Non-ZST fields.
 ///
-/// This limitation is needed because doing backups in `UndoRedo` buffers is too complex.
+/// This limitation is needed because doing backups in `UndoRedo` buffers is out of scope.
 ///
 /// The associated constant needs to be assigned to a local variable with `let` to
 /// utilize this assertion.
@@ -105,17 +105,17 @@ pub(super) fn add_children(
             world
                 .components()
                 .get_info(component_id)
-                .unwrap()
+                .unwrap() // listed component id should be known to the world
                 .relationship_accessor()
                 .and_then(|relationship| match *relationship {
                     RelationshipAccessor::RelationshipTarget { iter, linked_spawn }
                         if include_unlinked_related || linked_spawn =>
                     {
+                        // should not panic as parent's archetype lists this component id
                         let ptr = parent.get_by_id(component_id).unwrap();
-                        unsafe {
-                            // SAFETY: given ComponentId matches the RelationshipAccessor of the component type
-                            Some(iter(ptr))
-                        }
+                        // SAFETY: given ComponentId matches the RelationshipAccessor of the
+                        // component type
+                        unsafe { Some(iter(ptr)) }
                     }
                     _ => None,
                 })
@@ -203,48 +203,77 @@ pub(super) fn get_new_related_entities<R: Relationship>(
     entity: &mut EntityWorldMut,
     c: impl for<'a, 'w> FnOnce(&'a mut EntityWorldMut<'w>) -> &'a mut EntityWorldMut<'w>,
 ) -> Vec<Entity> {
-    match entity.get::<R::RelationshipTarget>() {
+    let children = match entity.get::<R::RelationshipTarget>() {
         Some(target) => {
             let existing_children: EntityHashSet = target.collection().iter().collect();
-            c(entity)
-                .get::<R::RelationshipTarget>()
-                .unwrap()
-                .collection()
-                .iter()
-                .filter(|child| !existing_children.contains(child))
-                .collect()
+            match c(entity).get::<R::RelationshipTarget>() {
+                Some(children) => children
+                    .collection()
+                    .iter()
+                    .filter(|child| !existing_children.contains(child))
+                    .collect(),
+                None if existing_children.is_empty() => Vec::new(),
+                None => {
+                    error!(
+                        "reversible spawning of multiple children resulted in the loss of existing \
+                        children {existing_children:?}, these are unrecoverable"
+                    );
+                    return Vec::new();
+                }
+            }
         }
         None => c(entity)
             .get::<R::RelationshipTarget>()
-            .unwrap()
-            .collection()
-            .iter()
-            .collect(),
+            .map(|children| children.collection().iter().collect())
+            .unwrap_or_default(),
+    };
+
+    if children.is_empty() {
+        info!(
+            "reversible spawning of multiple children did not result in any, it cannot be determined
+            if this was just an empty list of spawns or if new children were immediately despawned"
+        )
     }
+
+    children
 }
 
 /// Calls `c` and returns the new child of `entity` from that.
+///
+/// May be `None` in error cases, like an immediate despawn or unlink via a hook.
 pub(super) fn get_new_related<R: Relationship>(
     entity: &mut EntityWorldMut,
     c: impl for<'a, 'w> FnOnce(&'a mut EntityWorldMut<'w>) -> &'a mut EntityWorldMut<'w>,
-) -> Entity {
-    match entity.get::<R::RelationshipTarget>() {
+) -> Option<Entity> {
+    let child = match entity.get::<R::RelationshipTarget>() {
         Some(target) => {
             let existing_children: EntityHashSet = target.collection().iter().collect();
-            c(entity)
-                .get::<R::RelationshipTarget>()
-                .unwrap()
-                .collection()
-                .iter()
-                .find(|child| !existing_children.contains(child))
-                .unwrap()
+            match c(entity).get::<R::RelationshipTarget>() {
+                Some(children) => children
+                    .collection()
+                    .iter()
+                    .find(|child| !existing_children.contains(child)),
+                None if existing_children.is_empty() => None,
+                None => {
+                    error!(
+                        "reversible spawning of a single child resulted in the loss of existing \
+                        children {existing_children:?}, these are unrecoverable"
+                    );
+                    return None;
+                }
+            }
         }
         None => c(entity)
             .get::<R::RelationshipTarget>()
-            .unwrap()
-            .collection()
-            .iter()
-            .next()
-            .unwrap(),
+            .and_then(|children| children.collection().iter().next()),
+    };
+
+    if child.is_none() {
+        warn!(
+            "reversible spawning of a single child did not result in a new child, it may have
+            been immediately despawned"
+        );
     }
+
+    child
 }

@@ -1,3 +1,5 @@
+#![allow(clippy::inconsistent_digit_grouping, clippy::zero_prefixed_literal)]
+
 use bevy::{
     ecs::{lifecycle::HookContext, world::DeferredWorld},
     prelude::*,

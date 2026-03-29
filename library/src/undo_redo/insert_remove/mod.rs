@@ -1,3 +1,11 @@
+//! This module manages reversible structural operations on components and resources.
+//!
+//! It is attempted to be as tolerant towards problems as possible here. For example when at
+//! [`NotLog`](super::NotLog) a component is inserted that is new to an entity, and after undoing
+//! this and attempting to redo the insertion, an unexpected value at the entity is not overwritten
+//! but instead swapped with the to-insert value. These are the `unexpected_swap` methods below that
+//! log a warning.
+
 use alloc::vec::Vec;
 use bevy_ecs::{
     change_detection::MaybeLocation,
@@ -52,7 +60,7 @@ impl<C> InnerComponentBuffer<C> {
         );
     }
     #[inline(never)]
-    fn entity_err(&self, undo_redo: &str, op: &str, err: impl Error) {
+    fn entity_err(&self, undo_redo: &str, op: &str, err: EntityMutableFetchError) {
         entity_err::<C>(undo_redo, op, self.caller, err);
     }
 }
@@ -108,7 +116,7 @@ impl<C: Component> InnerComponentBuffer<C> {
     fn toggle_component(
         &mut self,
         world: &mut World,
-    ) -> Result<ToggleResult, impl Error + 'static> {
+    ) -> Result<ToggleResult, EntityMutableFetchError> {
         world.get_entity_mut(self.entity).map(|mut entity| {
             match self.buffer.as_mut() {
                 None => {
@@ -124,10 +132,9 @@ impl<C: Component> InnerComponentBuffer<C> {
                         ToggleResult::Swapped
                     })
                     .unwrap_or_else(|| {
-                        entity.insert(unsafe {
-                            // SAFETY: Some branch ensures successful unwrap
-                            self.buffer.take().unwrap_unchecked()
-                        });
+                        // SAFETY: Some branch ensures successful unwrap
+                        let c = unsafe { self.buffer.take().unwrap_unchecked() };
+                        entity.insert(c);
                         ToggleResult::Inserted
                     }),
             }
@@ -152,10 +159,9 @@ impl<R: Resource> InnerResourceBuffer<R> {
                     ToggleResult::Swapped
                 })
                 .unwrap_or_else(|| {
-                    world.insert_resource(unsafe {
-                        // SAFETY: Some branch ensures successful unwrap
-                        self.buffer.take().unwrap_unchecked()
-                    });
+                    // SAFETY: Some branch ensures successful unwrap
+                    let r = unsafe { self.buffer.take().unwrap_unchecked() };
+                    world.insert_resource(r);
                     ToggleResult::Inserted
                 }),
         }
@@ -336,6 +342,6 @@ impl<T: Send + 'static> UndoRedo for RevNewRequired<T> {
         }
     }
     fn redo(&mut self, _: &mut World) {
-        // required components are reinserted by UndoRedo::redo of inserter type
+        // required components are reinserted by UndoRedo::redo of the requiring type
     }
 }

@@ -4,7 +4,7 @@
 //! The main reversible schedule that is run by [`run_rev_update`](crate::meta::run_rev_update) is
 //! [`RevUpdate`].
 //!
-//! # Reversible systems
+//! ## Reversible systems
 //!
 //! This crate cannot magically make systems reversible, they have to be written in that way. This
 //! is usually done by matching the value from [`RevMeta::running_direction`] to implement their
@@ -46,13 +46,13 @@
 //!
 //! Reversible systems work best in fixed intervals.
 //!
-//! # Reversible conditions
+//! ## Reversible conditions
 //!
 //! Conditions do not need to be redesigned, they can be used as they are because the internal
 //! wrapper only calls them at [`NotLog`], logs their outputs and and only uses these log entries
 //! during [log directions].
 //!
-//! # Reversible configurations
+//! ## Reversible configurations
 //!
 //! [`RevSchedule`] automatically handles this aspect in the `rev_*` methods.
 //!
