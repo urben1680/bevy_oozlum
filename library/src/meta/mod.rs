@@ -1,40 +1,52 @@
-use alloc::{borrow::Cow, boxed::Box, format, string::ToString, vec::Vec};
-use core::{
-    fmt::{Debug, Display},
-    num::NonZeroU64,
-    panic::Location,
-};
-
-use bevy_ecs::{
-    change_detection::{MaybeLocation, Tick},
-    component::ComponentId,
-    error::Result as BevyResult,
-    query::FilteredAccessSet,
-    resource::Resource,
-    system::{
-        Command, ReadOnlySystemParam, RunSystemError, SystemMeta, SystemParam,
-        SystemParamValidationError,
-    },
-    world::{World, unsafe_world_cell::UnsafeWorldCell},
-};
-use bevy_log::info;
+//! This module contains [`RevMeta`], the crate's central resource to manage reversible schedules
+//! and to provide additional context to reversible systems. Multiple other types around it are also
+//! contained here.
 
 use crate::{
     log::{PreUpdateKind, UpdateLogLimits, UpdateLogMissed, UpdateLogState},
     prelude::RevUpdate,
     undo_redo::{DespawnFinalizerErr, UndoRedoBuffer, finalize_despawns},
 };
+use alloc::{borrow::Cow, boxed::Box, format, string::ToString, vec::Vec};
+use bevy_ecs::{
+    change_detection::MaybeLocation,
+    resource::Resource,
+    system::{RunSystemError, SystemParamValidationError},
+    world::World,
+};
+use bevy_log::info;
+#[cfg(feature = "bevy_reflect")]
+use bevy_reflect::prelude::ReflectDefault;
+use core::{fmt::Debug, num::NonZeroU64, panic::Location};
+
+mod direction;
 
 #[cfg(test)]
 mod test;
 
-/// The central resource that runs [`RevUpdate`] with a controlled [`RevDirection`] via the
-/// [`run_rev_update`] system. It also tracks the global log which contains the world states that
-/// can be reversed/advanced to.
-///
-/// [`run_rev_update`]: Self::run_rev_update
+pub use direction::*;
+
+/// The central resource of this crate. It is used for:
+/// 
+/// 1. To read in reversible systems that need to match the [`RevDirection`] via
+///    [`running_direction`] to decide if they should run forwards or backwards.
+/// 2. To queue a new direction via [`set_queue`] or to pause.
+/// 3. To modify the maximum past length that should be tracked via [`set_max_past_len`].
+/// 4. To globally clear all logs, for example when the level changes and all logs become obsolete.
+///    This is also done via [`set_queue`].
+/// 5. To read the reversible frame ids via [`now`] and other methods, possibly to track important
+///    moments one wants to revert to.
+/// 
+/// [`running_direction`]: Self::running_direction
+/// [`set_queue`]: Self::set_queue
+/// [`set_max_past_len`]: Self::set_max_past_len
+/// [`now`]: Self::now
 #[derive(Resource, Debug)]
-#[cfg_attr(feature = "bevy_reflect", derive(bevy_reflect::Reflect))]
+#[cfg_attr(
+    feature = "bevy_reflect",
+    derive(bevy_reflect::Reflect),
+    reflect(Default)
+)]
 pub struct RevMeta {
     past_end: u64,
     now: u64,
@@ -57,7 +69,7 @@ impl RevMeta {
     pub(crate) const DEFAULT_MAX_PAST_LEN: u64 = 1;
     pub(crate) const DEFAULT_PAUSED: bool = false;
 
-    /// Construct a new value.
+    /// Construct a new value. This is usually done automatically by [`RevPlugin`].
     ///
     /// - `max_past_len` defines how many frames can be reverted to via [`set_queue`] with
     ///   [`RevQueue::RunBackwardLog`]. The amount can be later changed via
@@ -67,6 +79,7 @@ impl RevMeta {
     ///   must have been added to the app. If it is inserted in the paused state, it can be unpaused
     ///   via [`set_queue`] with [`RevQueue::RunForward`].
     ///
+    /// [`RevPlugin`]: crate::app::RevPlugin
     /// [`set_queue`]: Self::set_queue
     /// [`set_max_past_len`]: Self::set_max_past_len
     /// [`run_rev_update`]: Self::run_rev_update
@@ -86,24 +99,18 @@ impl RevMeta {
 
     /// Change the current [`RevQueue`] that will be applied right before the next time
     /// [`run_rev_update`] runs. See the `RevQueue` docs for more information.
-    ///
-    /// [`run_rev_update`]: Self::run_rev_update
     pub fn set_queue(&mut self, queue: RevQueue) {
         self.queue = Some(queue);
     }
 
     /// Remove the current [`RevQueue`] before it could be applied right before the next time
     /// [`run_rev_update`] runs.
-    ///
-    /// [`run_rev_update`]: Self::run_rev_update
     pub fn unset_queue(&mut self) {
         self.queue = None;
     }
 
     /// Get the current [`RevQueue`] that will be applied right before the next time
     /// [`run_rev_update`] runs.
-    ///
-    /// [`run_rev_update`]: Self::run_rev_update
     pub fn get_queue(&self) -> Option<RevQueue> {
         self.queue
     }
@@ -114,8 +121,6 @@ impl RevMeta {
     /// Note that this is coming into effect right before the next time [`run_rev_update`] runs. If
     /// at that point one or more frames of the log fall past that limit, the log will be truncated.
     /// This is final, increasing the limit again will not bring back truncated log entries.
-    ///
-    /// [`run_rev_update`]: Self::run_rev_update
     pub fn set_max_past_len(&mut self, max_past_len: u64) {
         self.max_past_len = NonZeroU64::new(max_past_len).unwrap_or(NonZeroU64::MIN);
     }
@@ -188,21 +193,14 @@ impl RevMeta {
     }
 
     /// The reversible frame of the [`RevUpdate`] schedule.
-    ///
-    /// When the schedule is not running, this frame can be understood as the id of the present
-    /// world state. This is not increased or decreased multiple times per reversible frame, so it
-    /// is **no** reversible alternative to [`Tick`].
-    ///
-    /// When the schedule is running, the world state of this id reflects what the systems should
-    /// work towards to. For example when the schedule is running [forward], `now` is increased from
-    /// `n` to `n+1` and the reversible systems now have to bring the world state to from `n` to
-    /// `n+1`.
-    ///
-    /// That is why, when the schedule is running backward, the returned value is not the same but
-    /// one less than when it ran forward just previously, as the reversible systems have to bring
-    /// the world from `n+1` back to `n` again.
-    ///
-    /// Can only be `0` at or after [`RevDirection::BackwardLog`] and is otherwise non-zero.
+    /// 
+    /// It is increased right before the schedule runs [forward]. When running at
+    /// [`RevDirection::BackwardLog`], the frame is reduced _afterwards_. Because of this, undoing
+    /// a specific frame `n` will also make this method return the same `n`. This also means this
+    /// value is never `0` when reversible systems are running.
+    /// 
+    /// This is not increased or decreased multiple times per reversible frame, so it is **no**
+    /// reversible alternative to [`Tick`].
     ///
     /// [`Tick`]: bevy_ecs::change_detection::Tick
     /// [forward]: RevDirection::is_forward
@@ -663,254 +661,6 @@ pub fn run_rev_update(world: &mut World) -> Result<(), RunSystemError> {
             ))
         })
 }
-
-/// The direction [`RevUpdate`] is currently running at. Reversible systems should mind this value.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "bevy_reflect", derive(bevy_reflect::Reflect))]
-pub enum RevDirection {
-    /// The world is updated for a new reversible frame. If [this particular frame] or
-    /// [any future frame] existed in the log, they will be truncated and replaced from now on.
-    ///
-    /// [this particular frame]: RevMeta::now
-    /// [any future frame]: RevMeta::future_len
-    NotLog(NotLog),
-
-    /// The world is advanced in the log.
-    ForwardLog,
-
-    /// The world is reversed in the log.
-    BackwardLog,
-}
-
-impl RevDirection {
-    pub(crate) const NOT_LOG_MIN: Self = Self::NotLog(NotLog(NonZeroU64::MIN));
-
-    /// Is [NotLog] or [`ForwardLog`].
-    ///
-    /// [NotLog]: Self::NotLog
-    /// [`ForwardLog`]: Self::ForwardLog
-    pub fn is_forward(self) -> bool {
-        !self.is_backward()
-    }
-
-    /// Is [`BackwardLog`].
-    ///
-    /// [`BackwardLog`]: Self::BackwardLog
-    pub fn is_backward(self) -> bool {
-        matches!(self, Self::BackwardLog)
-    }
-
-    /// Is [`ForwardLog`] or [`BackwardLog`].
-    ///
-    /// [`ForwardLog`]: Self::ForwardLog
-    /// [`BackwardLog`]: Self::BackwardLog
-    pub fn is_log(self) -> bool {
-        !self.is_not_log()
-    }
-
-    /// Is [NotLog].
-    ///
-    /// [NotLog]: Self::NotLog
-    pub fn is_not_log(self) -> bool {
-        matches!(self, Self::NotLog(_))
-    }
-
-    /// Returns `NotLog` in [NotLog].
-    ///
-    /// # Panics
-    ///
-    /// This method panics for different directions.
-    ///
-    /// [NotLog]: Self::NotLog
-    pub fn past_len(self) -> NotLog {
-        self.get_past_len().unwrap()
-    }
-
-    /// Returns `NotLog` in [NotLog].
-    ///
-    /// Returns `None` for different directions.
-    ///
-    /// [NotLog]: Self::NotLog
-    pub fn get_past_len(self) -> Option<NotLog> {
-        match self {
-            Self::NotLog(not_log) => Some(not_log),
-            _ => None,
-        }
-    }
-}
-
-impl Display for RevDirection {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match *self {
-            RevDirection::NotLog(_) => write!(f, "RevDirection::NotLog"),
-            RevDirection::ForwardLog => write!(f, "RevDirection::ForwardLog"),
-            RevDirection::BackwardLog => write!(f, "RevDirection::BackwardLog"),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "bevy_reflect", derive(bevy_reflect::Reflect))]
-enum RunningOrRan {
-    Running(RevDirection),
-    Ran(RevDirection),
-    Pause { after_log: bool },
-}
-
-/// The next state [`RevMeta`] should be in via [`RevMeta::set_queue`], will be applied when
-/// [`run_rev_update`] runs. Before that, a different queue can be set, which will
-/// overwrite a different pending value. Can also be [unset] before that.
-///
-/// [unset]: RevMeta::unset_queue
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "bevy_reflect", derive(bevy_reflect::Reflect))]
-pub enum RevQueue {
-    /// Run in [`RevDirection::NotLog`] next.
-    ///
-    /// If there is a [future segment], it will be truncated globally.
-    ///
-    /// If the [past segment] is longer than [the maximum], the excessive past end will be truncated
-    /// globally.
-    ///
-    /// [future segment]: RevMeta::future_len
-    /// [past segment]: RevMeta::past_len
-    /// [the maximum]: RevMeta::get_max_past_len
-    RunForward,
-
-    /// Run in [`RevDirection::ForwardLog`] next until the [future end] is reached, then `RevMeta`
-    /// will be paused. If it is already at that, this will pause directly.
-    ///
-    /// [future end]: RevMeta::future_end
-    RunForwardLog,
-
-    /// Run in [`RevDirection::BackwardLog`] next until the [past end] is reached, then `RevMeta`
-    /// will be paused. If it is already at that, this will pause directly.
-    ///
-    /// [past end]: RevMeta::past_end
-    RunBackwardLog,
-
-    /// Pause `RevMeta` until a different queue will be set.
-    Pause,
-
-    /// Globally truncate the full [log], then run [`RevDirection::NotLog`] next.
-    ///
-    /// [log]: RevMeta::len
-    ClearThenRunForward,
-
-    /// Globally truncate the full [log], then pause `RevMeta`.
-    ///
-    /// [log]: RevMeta::len
-    ClearThenPause,
-}
-
-impl Command<BevyResult> for RevQueue {
-    fn apply(self, world: &mut World) -> BevyResult {
-        world
-            .get_resource_mut::<RevMeta>()
-            .ok_or_else(|| format!("could not queue {self:?}, RevMeta is missing"))?
-            .set_queue(self);
-        Ok(())
-    }
-}
-
-/// A newtyped value of [`RevMeta::past_len`] that only exists during [`RevDirection::NotLog`].
-/// At that it can never be zero. It is used as a token to "prove" that particular direction is
-/// running. Because of this, it should not be stored beyond a frame.
-///
-/// The [`RevCommands`]/[`RevEntityCommands`] including [`BuffersUndoRedo`] APIs need this as they
-/// also should only be used during that direction.
-///
-/// [`TransitionLog::forward_push`]/[`TransitionsLog::forward_extend`] also need this if they are
-/// updated exactly once per reversible frame. If not, they should use the value returned by
-/// [`UpdateLog::forward_past_len`] instead.
-///
-/// [`RevCommands`]: crate::undo_redo::RevCommands
-/// [`RevEntityCommands`]: crate::undo_redo::RevEntityCommands
-/// [`BuffersUndoRedo`]: crate::undo_redo::BuffersUndoRedo
-/// [`TransitionLog::forward_push`]: crate::log::TransitionLog::forward_push
-/// [`TransitionsLog::forward_extend`]: crate::log::TransitionsLog::forward_extend
-/// [`UpdateLog::forward_past_len`]: crate::log::UpdateLog::forward_past_len`
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "bevy_reflect", derive(bevy_reflect::Reflect))]
-pub struct NotLog(NonZeroU64);
-
-impl From<NotLog> for NonZeroU64 {
-    fn from(value: NotLog) -> Self {
-        value.0
-    }
-}
-
-unsafe impl SystemParam for NotLog {
-    type State = ComponentId;
-    type Item<'w, 's> = NotLog;
-
-    fn init_state(world: &mut World) -> Self::State {
-        world
-            .components_registrator()
-            .register_resource::<RevMeta>()
-    }
-
-    fn init_access(
-        &component_id: &Self::State,
-        system_meta: &mut SystemMeta,
-        component_access_set: &mut FilteredAccessSet,
-        _world: &mut World,
-    ) {
-        let combined_access = component_access_set.combined_access();
-        assert!(
-            !combined_access.has_resource_write(component_id),
-            "error[B0002]: NotLog in system {} conflicts with a previous ResMut<RevMeta> access. Consider removing the duplicate access. See: https://bevy.org/learn/errors/b0002",
-            system_meta.name(),
-        );
-
-        component_access_set.add_unfiltered_resource_read(component_id);
-    }
-
-    #[inline]
-    unsafe fn validate_param(
-        &mut component_id: &mut Self::State,
-        _system_meta: &SystemMeta,
-        world: UnsafeWorldCell,
-    ) -> Result<(), SystemParamValidationError> {
-        // SAFETY: Read-only access to resource metadata.
-        let meta = unsafe {
-            world
-                .get_resource_by_id(component_id)
-                .map(|ptr| ptr.deref())
-        };
-        if meta.and_then(RevMeta::get_not_log).is_some() {
-            Ok(())
-        } else {
-            Err(SystemParamValidationError::skipped::<Self>(
-                "RevMeta does not exist or RevUpdate is not running or is running in log",
-            ))
-        }
-    }
-
-    #[inline]
-    unsafe fn get_param<'w, 's>(
-        &mut component_id: &'s mut Self::State,
-        system_meta: &SystemMeta,
-        world: UnsafeWorldCell<'w>,
-        _change_tick: Tick,
-    ) -> NotLog {
-        // SAFETY: Read-only access to resource metadata.
-        let meta = unsafe {
-            world
-                .get_resource_by_id(component_id)
-                .map(|ptr| ptr.deref())
-        };
-        meta.and_then(RevMeta::get_not_log).unwrap_or_else(|| {
-            panic!(
-                "RevMeta requested by {} does not exist or RevUpdate is not running or is running in log",
-                system_meta.name()
-            );
-        })
-    }
-}
-
-// SAFETY: NotLog only reads RevMeta resource
-unsafe impl ReadOnlySystemParam for NotLog {}
 
 /// Error type that [`RevMeta::update`] may return.
 #[derive(Debug)]

@@ -1,5 +1,4 @@
-use core::{error::Error, fmt::Display};
-
+use alloc::vec::Vec;
 use bevy_ecs::{
     bundle::{Bundle, NoBundleEffect},
     change_detection::MaybeLocation,
@@ -13,8 +12,7 @@ use bevy_ecs::{
     },
 };
 use bevy_utils::prelude::DebugName;
-
-use alloc::vec::Vec;
+use core::{error::Error, fmt::Display};
 
 use crate::{
     meta::{NotLog, RevDirection, RevMeta},

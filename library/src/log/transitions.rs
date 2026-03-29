@@ -1,17 +1,16 @@
-use core::{
-    fmt::Debug,
-    iter::{FusedIterator, Take},
-    marker::PhantomData,
-    mem::ManuallyDrop,
-    num::NonZeroU64,
-};
-
 use alloc::{
     boxed::Box,
     collections::{
         TryReserveError, VecDeque,
         vec_deque::{Drain, Iter, IterMut},
     },
+};
+use core::{
+    fmt::Debug,
+    iter::{FusedIterator, Take},
+    marker::PhantomData,
+    mem::ManuallyDrop,
+    num::NonZeroU64,
 };
 
 use crate::{

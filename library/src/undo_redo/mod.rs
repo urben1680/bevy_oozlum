@@ -1,9 +1,4 @@
-use core::{
-    any::type_name_of_val,
-    error::Error,
-    fmt::{Debug, Display},
-};
-
+use alloc::{boxed::Box, format, string::ToString, vec::Vec};
 use bevy_ecs::{
     change_detection::MaybeLocation,
     entity::Entity,
@@ -13,8 +8,11 @@ use bevy_ecs::{
 };
 use bevy_platform::cell::SyncCell;
 use bevy_utils::prelude::DebugName;
-
-use alloc::{boxed::Box, format, string::ToString, vec::Vec};
+use core::{
+    any::type_name_of_val,
+    error::Error,
+    fmt::{Debug, Display},
+};
 
 use crate::{
     log::{OutOfLog, TransitionsLog, UpdateLog},

@@ -1,5 +1,8 @@
-use core::{any::type_name, marker::PhantomData};
-
+use crate::{
+    prelude::UndoRedo,
+    undo_redo::{IsRevDespawned, LOCATION_PREFIX, undo_redo_str},
+};
+use alloc::vec::Vec;
 use bevy_ecs::{
     change_detection::MaybeLocation,
     entity::{Entity, EntityHashSet},
@@ -9,13 +12,7 @@ use bevy_ecs::{
     world::{EntityRef, EntityWorldMut, World, error::EntityMutableFetchError},
 };
 use bevy_log::error;
-
-use alloc::vec::Vec;
-
-use crate::{
-    prelude::UndoRedo,
-    undo_redo::{IsRevDespawned, LOCATION_PREFIX, undo_redo_str},
-};
+use core::{any::type_name, marker::PhantomData};
 
 #[cfg(test)]
 mod test;

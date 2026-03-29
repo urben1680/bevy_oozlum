@@ -4,9 +4,8 @@
 //! errors if it did not update at the current frame as it did during
 //! [`RevDirection::NotLog`](crate::meta::RevDirection::NotLog).
 
-use crate::log::update::DEFAULT_LOCATION;
-
 use super::PreUpdateKind;
+use crate::log::update::DEFAULT_LOCATION;
 use alloc::{boxed::Box, vec::Vec};
 use bevy_ecs::change_detection::MaybeLocation;
 use bevy_utils::Parallel;

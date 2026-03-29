@@ -219,7 +219,6 @@ extern crate alloc;
 TODO:
 
 - update README
-- reflect subtrait derives
 - make fake variadics docs work
 - docs for private UndoRedo types
 - comment or replace all unwrap with error!
@@ -229,7 +228,6 @@ ISSUES/DISCUSSIONS:
 - crate::schedule::set_base_sets should not need to chain forward/backward configs
 
 */
-// todo: deny
 
 #[cfg(feature = "bevy_app")]
 pub mod app;

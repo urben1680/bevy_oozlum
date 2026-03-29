@@ -1,5 +1,4 @@
-use core::{any::TypeId, marker::PhantomData, mem::swap};
-
+use alloc::vec::Vec;
 use bevy_ecs::{
     bundle::{Bundle, InsertMode},
     change_detection::MaybeLocation,
@@ -8,9 +7,8 @@ use bevy_ecs::{
     spawn::{SpawnOneRelated, SpawnRelatedBundle, SpawnableList},
     world::EntityWorldMut,
 };
+use core::{any::TypeId, marker::PhantomData, mem::swap};
 use variadics_please::all_tuples;
-
-use alloc::vec::Vec;
 
 use crate::{
     meta::NotLog,

@@ -65,7 +65,6 @@ pub fn test(mut app: App) {
     app.update();
 
     press_key(&mut app, KeyCode::ArrowUp);
-    app.update();
     press_all_nums(&mut app);
     for _ in 0..=MAX_PAST_LEN {
         app.update();

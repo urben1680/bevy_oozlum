@@ -1,5 +1,4 @@
-use core::marker::PhantomData;
-
+use alloc::vec::Vec;
 use bevy_ecs::{
     bundle::{Bundle, InsertMode},
     change_detection::MaybeLocation,
@@ -8,8 +7,7 @@ use bevy_ecs::{
     relationship::{Relationship, RelationshipSourceCollection, RelationshipTarget},
     world::EntityWorldMut,
 };
-
-use alloc::vec::Vec;
+use core::marker::PhantomData;
 
 use crate::{
     meta::NotLog,

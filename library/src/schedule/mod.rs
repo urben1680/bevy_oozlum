@@ -74,8 +74,6 @@
 //! [`World`]: bevy_ecs::world::World
 //! [`Commands`]: bevy_ecs::system::Commands
 
-use core::{fmt::Debug, hash::Hash};
-
 use bevy_ecs::{
     change_detection::Res,
     schedule::{
@@ -85,6 +83,7 @@ use bevy_ecs::{
     },
     system::{IntoSystem, ScheduleSystem},
 };
+use core::{fmt::Debug, hash::Hash};
 use variadics_please::all_tuples;
 
 use crate::meta::RevMeta;

@@ -1,13 +1,11 @@
+use crate::{log::update::offset::OffsetLog, meta::RevMeta};
 use alloc::collections::TryReserveError;
+use bevy_ecs::change_detection::MaybeLocation;
 use core::{
     fmt::{Debug, Display},
     num::NonZeroU64,
     panic::Location,
 };
-
-use bevy_ecs::change_detection::MaybeLocation;
-
-use crate::{log::update::offset::OffsetLog, meta::RevMeta};
 
 pub use limit::UpdateLogId;
 use limit::*;
@@ -15,33 +13,27 @@ use limit::*;
 pub(super) mod limit;
 mod offset;
 
-/// A log that keeps track when it was updated and provides an alternative value to
-/// [`NotLog`](crate::meta::NotLog) for when these updates do not happen exactly once per
-/// [`RevUpdate`](crate::schedule::RevUpdate).
-///
-/// This type is usually accompied by another log that would grow too large if
-/// [`NotLog`](crate::meta::NotLog) from
-/// [`RevDirection::NotLog`](crate::meta::RevDirection::NotLog) was used when it actually updates
-/// much more rarely. Another use case can be when it runs arbitrarily often per frame and there is
-/// no other way to determine to which length a log should be at most when updating.
+/// A log that keeps track when it was updated and provides the value for the `past_len` argument of
+/// [`TransitionLog::forward_push`]/[`TransitionsLog::forward_extend`]. This is useful for when
+/// these logs are *not* updated exactly once per [`RevUpdate`](crate::schedule::RevUpdate).
+/// 
+/// This log is also useful alone as a compact `TransitionLog<bool>`.
 ///
 /// If an update is missed, for example when the scope of the log is behind complicated and
 /// error-prone scheduling and is just not reached when it should, [`RevMeta::update`] and from that
-/// [`run_rev_update`](crate::meta::run_rev_update) will detect this at the end of the schedule and
-/// return an error.
+/// [`run_rev_update`] will detect this at the end of the schedule and return an error.
 ///
 /// # Example
 ///
 /// The following system reacts on messages. These may not be written for many frames, but then
-/// again they could appear in a large amount in a single frame. One could use a
-/// [`TransitionsLog`](super::TransitionsLog) for that and just extend it with an empty iterator if
-/// there are no messages.
+/// again they could appear in a large amount in a single frame. One could use a [`TransitionsLog`]
+/// for that and just extend it with an empty iterator if there are no messages.
 ///
 /// But if this system in turn is also used with a run condition, then it is impossible to pick a
 /// good `past_len` value that makes sure not too many messages are drained or the log grows way
 /// beyond what is needed.
 ///
-/// For that case and other comparable ones, the solution is to pair the log(s) with a `UpdateLog`.
+/// For that case and other comparable ones, the solution is to pair the log(s) with an `UpdateLog`.
 ///
 /// ```
 /// # use bevy_ecs::prelude::*;
@@ -83,6 +75,11 @@ mod offset;
 ///     Ok(())
 /// }
 /// ```
+/// 
+/// [`TransitionLog::forward_push`]: super::TransitionLog::forward_push
+/// [`TransitionsLog::forward_extend`]: super::TransitionsLog::forward_extend
+/// [`run_rev_update`]: crate::meta::run_rev_update
+/// [`TransitionsLog`]: super::TransitionsLog
 #[derive(Default, Debug)]
 pub struct UpdateLog {
     /// Offsets that need to be added or subtracted from [`Self::last_update`] to calculate at which
@@ -133,7 +130,7 @@ impl UpdateLog {
 
     /// Creates an empty log with space for at least `bytes_capacity` bytes.
     ///
-    /// See [`VecDeque::with_capacity`](std::collections::VecDeque::with_capacity).
+    /// See [`VecDeque::with_capacity`](alloc::collections::VecDeque::with_capacity).
     ///
     /// Note that the number of bytes has no relation to the length of the log.
     pub fn with_capacity(bytes_capacity: usize) -> Self {
@@ -145,7 +142,7 @@ impl UpdateLog {
 
     /// Returns the number of bytes in the log.
     ///
-    /// See [`VecDeque::len`](std::collections::VecDeque::len).
+    /// See [`VecDeque::len`](alloc::collections::VecDeque::len).
     ///
     /// Note that the number of bytes has no relation to the length of the log.
     pub fn bytes_len(&self) -> usize {
@@ -154,7 +151,7 @@ impl UpdateLog {
 
     /// Returns the number of bytes the log can hold without reallocating.
     ///
-    /// See [`VecDeque::capacity`](std::collections::VecDeque::capacity).
+    /// See [`VecDeque::capacity`](alloc::collections::VecDeque::capacity).
     ///
     /// Note that the number of bytes has no relation to the length of the log.
     pub fn bytes_capacity(&self) -> usize {
@@ -163,7 +160,7 @@ impl UpdateLog {
 
     /// Returns `true` if the log contains no bytes.
     ///
-    /// See [`VecDeque::is_empty`](std::collections::VecDeque::is_empty).
+    /// See [`VecDeque::is_empty`](alloc::collections::VecDeque::is_empty).
     ///
     /// Note that the number of bytes has no relation to the length of the log.
     pub fn bytes_is_empty(&self) -> bool {
@@ -172,7 +169,7 @@ impl UpdateLog {
 
     /// Reserves capacity for at least `additional` more bytes.
     ///
-    /// See [`VecDeque::reserve`](std::collections::VecDeque::reserve).
+    /// See [`VecDeque::reserve`](alloc::collections::VecDeque::reserve).
     ///
     /// Note that the number of bytes has no relation to the length of the log.
     pub fn bytes_reserve(&mut self, additional: usize) {
@@ -181,7 +178,7 @@ impl UpdateLog {
 
     /// Reserves capacity for at least `additional` more bytes.
     ///
-    /// See [`VecDeque::reserve_exact`](std::collections::VecDeque::reserve_exact).
+    /// See [`VecDeque::reserve_exact`](alloc::collections::VecDeque::reserve_exact).
     ///
     /// Note that the number of bytes has no relation to the length of the log.
     pub fn bytes_reserve_exact(&mut self, additional: usize) {
@@ -190,7 +187,7 @@ impl UpdateLog {
 
     /// Tries to reserve capacity for at least `additional` more bytes.
     ///
-    /// See [`VecDeque::try_reserve`](std::collections::VecDeque::try_reserve).
+    /// See [`VecDeque::try_reserve`](alloc::collections::VecDeque::try_reserve).
     ///
     /// Note that the number of bytes has no relation to the length of the log.
     pub fn bytes_try_reserve(&mut self, additional: usize) -> Result<(), TryReserveError> {
@@ -199,7 +196,7 @@ impl UpdateLog {
 
     /// Tries to reserve capacity for at least `additional` more bytes.
     ///
-    /// See [`VecDeque::try_reserve_exact`](std::collections::VecDeque::try_reserve_exact).
+    /// See [`VecDeque::try_reserve_exact`](alloc::collections::VecDeque::try_reserve_exact).
     ///
     /// Note that the number of bytes has no relation to the length of the log.
     pub fn bytes_try_reserve_exact(&mut self, additional: usize) -> Result<(), TryReserveError> {
@@ -208,7 +205,7 @@ impl UpdateLog {
 
     /// Shrinks the capacity of the log with a lower bound.
     ///
-    /// See [`VecDeque::shrink_to`](std::collections::VecDeque::shrink_to).
+    /// See [`VecDeque::shrink_to`](alloc::collections::VecDeque::shrink_to).
     ///
     /// Note that the number of bytes has no relation to the length of the log.
     pub fn bytes_shrink_to(&mut self, min_capacity: usize) {
@@ -217,7 +214,7 @@ impl UpdateLog {
 
     /// Shrinks the capacity of the log as much as possible.
     ///
-    /// See [`VecDeque::shrink_to_fit`](std::collections::VecDeque::shrink_to_fit).
+    /// See [`VecDeque::shrink_to_fit`](alloc::collections::VecDeque::shrink_to_fit).
     ///
     /// Note that the number of bytes has no relation to the length of the log.
     pub fn bytes_shrink_to_fit(&mut self) {

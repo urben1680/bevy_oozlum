@@ -1,9 +1,3 @@
-use core::{
-    any::TypeId,
-    fmt::Debug,
-    hash::{Hash, Hasher},
-};
-
 use alloc::{format, string::ToString, vec::Vec};
 use bevy_ecs::{
     change_detection::{CheckChangeTicks, Tick},
@@ -22,6 +16,11 @@ use bevy_platform::sync::{
     atomic::{AtomicU32, Ordering},
 };
 use bevy_utils::prelude::DebugName;
+use core::{
+    any::TypeId,
+    fmt::Debug,
+    hash::{Hash, Hasher},
+};
 
 use crate::{
     schedule::{

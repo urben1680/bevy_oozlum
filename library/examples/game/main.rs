@@ -12,8 +12,6 @@ const WINNING_BEVY_VERSION: u64 = 1_00_0;
 const FRAMERATE_MIN: f64 = 10.0;
 const FRAMERATE_MAX: f64 = 66.667;
 
-// todo: forward log bug related to UpdateLog, fix + add test
-
 // This example is a game in which you have to toss a large amount of trash into the ocean.
 // Since pollution is bad, you have to undo that to leave the ocean clean but keep your score.
 //
@@ -28,10 +26,6 @@ mod rows;
 
 // And in this how to control the global reversible progression
 mod control;
-
-// This renders the ASCII output, ugly and not interesting for learning the crate
-#[cfg(not(feature = "ci-mode"))]
-mod render;
 
 fn main() {
     let mut app = App::new();
@@ -173,6 +167,9 @@ fn despawn_lost_waste(
 
 #[cfg(feature = "ci-mode")]
 use bevy::{input::InputPlugin, state::app::StatesPlugin};
+
+#[cfg(not(feature = "ci-mode"))]
+mod render;
 
 #[cfg(feature = "ci-mode")]
 mod test;

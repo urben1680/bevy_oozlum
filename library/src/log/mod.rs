@@ -19,7 +19,7 @@
 //!
 //! | source                          | situation                                   |
 //! | ------------------------------- | ------------------------------------------- |
-//! | [`NotLog`]                 | the log updates at every frame exactly once |
+//! | [`NotLog`]                      | the log updates at every frame exactly once |
 //! | [`UpdateLog::forward_past_len`] | the log updates arbitrarily                 |
 //! | [`NonZeroU64::MAX`]             | the log is allowed to have unlimited growth |
 //!
@@ -28,30 +28,12 @@
 //! Ideally, as few logs and as few updates as possible are required for the application to keep the
 //! memory usage low.
 //!
-//! # Continuity
-//!
-//! It is important that the transition logs are updated at the correct frames. This is trivial if
-//! they update at every frame exactly once. For other cases, refer to this table:
-//!
-//! | [`RevDirection`] | method                          | [`RevMeta::now`] |
-//! | ---------------- | ------------------------------- | ---------------- |
-//! | [NotLog]      | `forward_push`/`forward_extend` | `n`              |
-//! | [`BackwardLog`]  | `backward_log`                  | `n-1`            |
-//! | [`ForwardLog`]   | `forward_log`                   | `n`              |
-//!
-//! If a log is updated multiple times per frame, then these amounts must match for these frames as
-//! well.
-//!
-//! As this can become hard to manage, a [`UpdateLog`] can support these updates by tracking when
-//! and how often transition logs need to update. See the type documentation of [`UpdateLog`] for
-//! examples.
-//!
-//! ## Missing updates
+//! # Missing updates
 //!
 //! Errornous user code can cause logs missing the frame they are supposed to update at. In the case
 //! of [log directions] this can cause the continuity of the world state to break. For example, when
-//! at the frame `n` a component is added to an entity, then the component must be removed at frame
-//! `n-1` again when going backward and added again at frame `n` when going forward in the log.
+//! the world is mutated at a certain frame and a log entry is saved to undo and redo this mutation,
+//! it must not be missed to do that.
 //!
 //! If the code where the log updates happen does not run, log methods have no chance to detect and
 //! report that error.
@@ -80,43 +62,20 @@
 //! Log clears happen not when the queue above is applied but at the first next update of each log
 //! after that.
 //!
-//! ## Draining transitions
+//! # Draining transitions
 //!
 //! Updating the transition logs with [`forward_push`] and [`forward_extend`] also returns draining
-//! iterators.
-//!
-//! ### Example
-//!
-//! A [`UpdateLog::forward_past_len`] runs at [frame `42`](crate::meta::RevMeta::now) during
-//! [`RevDirection::NotLog`]. This is the first time this log updated. `UpdateLog` will then inform
-//! [`RevMeta`] that there is no future frame it expects to run at during
-//! [`RevDirection::ForwardLog`] but expects to run at frame `41` when going backward.
-//!
-//! When then [`UpdateLog::backward_log`] of this specific log runs at `41` during
-//! [`RevDirection::BackwardLog`], this gets updated: Now there is no other frame in the past it
-//! expects to run at, however it expects to run at frame `42` during [`RevDirection::ForwardLog`].
-//!
-//! If these updates during the [log directions] do not happen however, [`RevMeta`] will notice
-//! that, which triggers the [`UpdateLogsMissed`] error right at the frame where the update was
-//! missed. That way the `backward_log`/`forward_log` methods of transition logs that are updated
-//! alongside will never fail with [`OutOfLog`].
+//! iterators. These can be used to clean up other resources the logs are tracking, such as
+//! temporary entities holding additional transition data.
 //!
 //! [`forward_push`]: TransitionLog::forward_push
 //! [`forward_extend`]: TransitionsLog::forward_extend
 //! [id of the `UpdateLog` instance]: UpdateLog::id
 //! [`NonZeroU64::MAX`]: core::num::NonZeroU64::MAX
 //! [`RevMeta`]: crate::meta::RevMeta
-//! [`RevMeta::now`]: crate::meta::RevMeta::now
 //! [`NotLog`]: crate::meta::NotLog
 //! [`RevMeta::update`]: crate::meta::RevMeta::update
 //! [global log range]: crate::meta::RevMeta::contains
-//! [`RevDirection`]: crate::meta::RevDirection
-//! [`RevDirection::NotLog`]: crate::meta::RevDirection::NotLog
-//! [NotLog]: crate::meta::RevDirection::NotLog
-//! [`RevDirection::BackwardLog`]: crate::meta::RevDirection::BackwardLog
-//! [`BackwardLog`]: crate::meta::RevDirection::BackwardLog
-//! [`RevDirection::ForwardLog`]: crate::meta::RevDirection::ForwardLog
-//! [`ForwardLog`]: crate::meta::RevDirection::ForwardLog
 //! [log directions]: crate::meta::RevDirection::is_log
 //! [`RevQueue::ClearThenRunForward`]: crate::meta::RevQueue::ClearThenRunForward
 //! [`RevQueue::ClearThenPause`]: crate::meta::RevQueue::ClearThenPause
@@ -128,13 +87,12 @@ use alloc::{
     boxed::Box,
     collections::{VecDeque, vec_deque::Drain},
 };
+use bevy_ecs::change_detection::MaybeLocation;
 use core::{
     error::Error,
     fmt::{Debug, Display, Formatter, Result as FmtResult},
     iter::FusedIterator,
 };
-
-use bevy_ecs::change_detection::MaybeLocation;
 
 pub(crate) use update::{
     PreUpdateKind,

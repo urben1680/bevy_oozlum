@@ -1,5 +1,4 @@
-use core::{any::type_name, error::Error, marker::PhantomData, mem::swap};
-
+use alloc::vec::Vec;
 use bevy_ecs::{
     change_detection::MaybeLocation,
     component::{Component, ComponentId},
@@ -8,8 +7,7 @@ use bevy_ecs::{
     world::{World, error::EntityMutableFetchError},
 };
 use bevy_log::{error, info, warn};
-
-use alloc::vec::Vec;
+use core::{any::type_name, error::Error, marker::PhantomData, mem::swap};
 
 use crate::{prelude::UndoRedo, undo_redo::LOCATION_PREFIX};
 

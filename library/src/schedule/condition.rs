@@ -1,5 +1,3 @@
-use core::{any::TypeId, hash::BuildHasher};
-
 use alloc::{
     boxed::Box,
     string::{String, ToString},
@@ -25,6 +23,7 @@ use bevy_platform::{
     hash::{FixedState, PassHash},
 };
 use bevy_utils::prelude::DebugName;
+use core::{any::TypeId, hash::BuildHasher};
 
 use crate::{
     log::{TransitionLog, UpdateLog},
@@ -54,6 +53,7 @@ struct RevCondition<T> {
     /// [`ComponentId`] of [`RevMeta`].
     meta_id: Option<ComponentId>,
 
+    /// Contains logs of the condition output.
     logs: ConditionLogs,
 }
 

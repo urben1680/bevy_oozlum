@@ -1,10 +1,9 @@
+use alloc::vec;
 use bevy_ecs::{
     bundle::InsertMode,
     hierarchy::{ChildOf, Children},
     spawn::SpawnRelated,
 };
-
-use alloc::vec;
 
 use crate::undo_redo::{IsRevDespawned, test::assert_undo_redo};
 

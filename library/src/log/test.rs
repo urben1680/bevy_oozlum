@@ -1,11 +1,10 @@
 use super::*;
 
-use core::{num::NonZeroU64, str::Chars};
-
 use alloc::{
     string::{String, ToString},
     vec::Vec,
 };
+use core::{num::NonZeroU64, str::Chars};
 
 use crate::meta::{RevMeta, RevQueue};
 
