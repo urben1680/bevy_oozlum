@@ -167,7 +167,6 @@ impl Command<BevyResult> for RevQueue {
 ///
 /// - [`RevCommands`]
 /// - [`RevEntityCommands`]
-/// - [`BuffersUndoRedo`]
 ///
 /// ... to ensure these are only queued at that direction. Because of this, this type must not be
 /// stored past the frame it is accessed from.
@@ -187,7 +186,6 @@ impl Command<BevyResult> for RevQueue {
 /// [`RevUpdate`]: crate::schedule::RevUpdate
 /// [`RevCommands`]: crate::undo_redo::commands::RevCommands
 /// [`RevEntityCommands`]: crate::undo_redo::entity_commands::RevEntityCommands
-/// [`BuffersUndoRedo`]: crate::undo_redo::BuffersUndoRedo
 /// [`TransitionLog::forward_push`]: crate::log::TransitionLog::forward_push
 /// [`TransitionsLog::forward_extend`]: crate::log::TransitionsLog::forward_extend
 /// [`UpdateLog::forward_past_len`]: crate::log::UpdateLog::forward_past_len`

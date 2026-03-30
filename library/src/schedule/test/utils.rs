@@ -12,7 +12,6 @@ use crate::{
     meta::RevDirection,
     panic_on_error_events,
     schedule::{RevUpdate, run_rev_update},
-    undo_redo::BuffersUndoRedo,
 };
 
 pub(super) fn test_run<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(

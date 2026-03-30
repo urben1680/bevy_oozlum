@@ -17,7 +17,7 @@ use crate::{
     meta::{RevDirection, RevQueue},
     panic_on_error_events,
     schedule::RevUpdate,
-    undo_redo::{BuffersUndoRedo, UndoRedo, commands::RevCommands},
+    undo_redo::{UndoRedo, commands::RevCommands},
 };
 
 use super::*;

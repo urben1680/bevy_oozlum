@@ -1,14 +1,12 @@
 use alloc::vec::Vec;
 use bevy_ecs::{
-    bundle::Bundle,
     change_detection::MaybeLocation,
     component::Component,
     entity::{Entity, EntityHashSet, EntityNotSpawnedError, EntityValidButNotSpawnedError},
     resource::Resource,
     world::{
-        EntityMut, EntityMutExcept, EntityRef, EntityRefExcept, EntityWorldMut, FilteredEntityMut,
-        FilteredEntityRef, FromWorld, World, WorldEntityFetch, error::EntityMutableFetchError,
-        unsafe_world_cell::UnsafeWorldCell,
+        EntityMut, EntityRef, EntityWorldMut, FromWorld, World, WorldEntityFetch,
+        error::EntityMutableFetchError, unsafe_world_cell::UnsafeWorldCell,
     },
 };
 use bevy_log::error;
@@ -362,31 +360,7 @@ impl IsRevDespawned for EntityRef<'_> {
     }
 }
 
-impl<B: Bundle> IsRevDespawned for EntityRefExcept<'_, '_, B> {
-    fn is_rev_despawned(&self) -> bool {
-        self.contains::<RevDespawned>()
-    }
-}
-
-impl IsRevDespawned for FilteredEntityRef<'_, '_> {
-    fn is_rev_despawned(&self) -> bool {
-        self.contains::<RevDespawned>()
-    }
-}
-
 impl IsRevDespawned for EntityMut<'_> {
-    fn is_rev_despawned(&self) -> bool {
-        self.contains::<RevDespawned>()
-    }
-}
-
-impl<B: Bundle> IsRevDespawned for EntityMutExcept<'_, '_, B> {
-    fn is_rev_despawned(&self) -> bool {
-        self.contains::<RevDespawned>()
-    }
-}
-
-impl IsRevDespawned for FilteredEntityMut<'_, '_> {
     fn is_rev_despawned(&self) -> bool {
         self.contains::<RevDespawned>()
     }

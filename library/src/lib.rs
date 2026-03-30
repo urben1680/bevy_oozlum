@@ -244,7 +244,7 @@ pub mod prelude {
         IntoRevScheduleConfigs as _, RevSchedule as _, RevSystems, RevUpdate,
     };
     pub use crate::undo_redo::{
-        BuffersUndoRedo as _, IsRevDespawned as _, RevFetch, UndoRedo, UndoRedoDirection,
+        IsRevDespawned as _, RevFetch, UndoRedo, UndoRedoDirection,
         commands::RevCommands as _,
         entity_commands::{
             RevEntityCommands as _, RevEntityEntryCommands as _, RevRelatedSpawnerCommands as _,

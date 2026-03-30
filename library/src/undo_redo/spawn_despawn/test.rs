@@ -1,4 +1,4 @@
-use bevy_ecs::hierarchy::ChildOf;
+use bevy_ecs::{bundle::Bundle, hierarchy::ChildOf};
 
 use crate::undo_redo::test::{UnlinkedChildOf, assert_undo_redo_finalize};
 

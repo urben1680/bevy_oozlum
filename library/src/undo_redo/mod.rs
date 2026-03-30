@@ -46,13 +46,7 @@
 //! [`RelationshipTarget::LINKED_SPAWN`]: bevy_ecs::relationship::RelationshipTarget::LINKED_SPAWN
 
 use alloc::{boxed::Box, format, string::ToString, vec::Vec};
-use bevy_ecs::{
-    change_detection::MaybeLocation,
-    entity::Entity,
-    resource::Resource,
-    system::{Commands, EntityCommands},
-    world::{EntityWorldMut, World},
-};
+use bevy_ecs::{change_detection::MaybeLocation, entity::Entity, resource::Resource, world::World};
 use bevy_platform::cell::SyncCell;
 use bevy_utils::prelude::DebugName;
 use core::{
@@ -113,104 +107,6 @@ impl Display for EntityRevDespawnedError {
 }
 
 impl Error for EntityRevDespawnedError {}
-
-/// Extension trait for the buffering reversible operations.
-pub trait BuffersUndoRedo {
-    /// Buffers an [`UndoRedo`] implementor in a resource to be collected by the reversible system's
-    /// state.
-    #[track_caller]
-    fn buffer_undo_redo(&mut self, not_log: NotLog, undo_redo: impl UndoRedo) -> &mut Self {
-        self.buffer_undo_redo_with_caller(not_log, undo_redo, MaybeLocation::caller())
-    }
-
-    /// Buffers an [`UndoRedo`] implementor in a resource to be collected by the reversible system's
-    /// state.
-    ///
-    /// This will also trigger the [redo logic] at the sync point.
-    ///
-    /// This shorthand method is useful for when applying the reversible operation is doing the
-    /// exact same as it's redo logic.
-    ///
-    /// [redo logic]: UndoRedo::redo
-    #[track_caller]
-    fn redo_and_buffer(&mut self, not_log: NotLog, undo_redo: impl UndoRedo) -> &mut Self {
-        self.redo_and_buffer_with_caller(not_log, undo_redo, MaybeLocation::caller())
-    }
-
-    /// As [`BuffersUndoRedo::buffer_undo_redo`] but with explicit [`MaybeLocation`].
-    ///
-    /// The location can be helpful for identifying non-reversible systems using reversible API.
-    /// [`run_rev_update`](crate::schedule::run_rev_update) may return the relevant error in that case.
-    fn buffer_undo_redo_with_caller(
-        &mut self,
-        not_log: NotLog,
-        undo_redo: impl UndoRedo,
-        caller: MaybeLocation,
-    ) -> &mut Self;
-
-    /// As [`BuffersUndoRedo::redo_and_buffer`] but with explicit [`MaybeLocation`].
-    ///
-    /// The location can be helpful for identifying non-reversible systems using reversible API.
-    /// [`run_rev_update`](crate::schedule::run_rev_update) may return the relevant error in that case.
-    fn redo_and_buffer_with_caller(
-        &mut self,
-        not_log: NotLog,
-        undo_redo: impl UndoRedo,
-        caller: MaybeLocation,
-    ) -> &mut Self;
-}
-
-impl BuffersUndoRedo for Commands<'_, '_> {
-    fn buffer_undo_redo_with_caller(
-        &mut self,
-        not_log: NotLog,
-        undo_redo: impl UndoRedo,
-        caller: MaybeLocation,
-    ) -> &mut Self {
-        self.queue(move |world: &mut World| {
-            world.buffer_undo_redo(not_log, undo_redo, caller);
-        });
-        self
-    }
-
-    fn redo_and_buffer_with_caller(
-        &mut self,
-        not_log: NotLog,
-        undo_redo: impl UndoRedo,
-        caller: MaybeLocation,
-    ) -> &mut Self {
-        self.queue(move |world: &mut World| {
-            world.redo_and_buffer(not_log, undo_redo, caller);
-        });
-        self
-    }
-}
-
-impl BuffersUndoRedo for EntityCommands<'_> {
-    fn buffer_undo_redo_with_caller(
-        &mut self,
-        not_log: NotLog,
-        undo_redo: impl UndoRedo,
-        caller: MaybeLocation,
-    ) -> &mut Self {
-        self.queue(move |mut world: EntityWorldMut| {
-            world.buffer_undo_redo(not_log, undo_redo, caller);
-        });
-        self
-    }
-
-    fn redo_and_buffer_with_caller(
-        &mut self,
-        not_log: NotLog,
-        undo_redo: impl UndoRedo,
-        caller: MaybeLocation,
-    ) -> &mut Self {
-        self.queue(move |mut world: EntityWorldMut| {
-            world.redo_and_buffer(not_log, undo_redo, caller);
-        });
-        self
-    }
-}
 
 /// Reversible operations store their [`UndoRedo`] value in this resource so reversible systems can
 /// load them after that. This way, these systems can undo and redo them.
@@ -301,8 +197,7 @@ impl Debug for BoxedUndoRedo {
 /// They are stored in the system's state that did them, including indirectly via commands, hooks or
 /// observers.
 ///
-/// Custom `FnMut(&mut World, UndoRedoDirection)` closures can be buffered via [`BuffersUndoRedo`].
-/// See [`UndoRedoDirection`] docs.
+/// This is implemented for `impl FnMut(&mut World, UndoRedoDirection)`, see [`UndoRedoDirection`].
 pub trait UndoRedo: Send + 'static {
     /// Undo the reversible operation during [`RevDirection::BackwardLog`].
     fn undo(&mut self, world: &mut World);

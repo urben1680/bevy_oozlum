@@ -6,19 +6,63 @@ use bevy_ecs::{
     hierarchy::{ChildOf, Children},
     relationship::{RelatedSpawnerCommands, Relationship, RelationshipTarget},
     system::{EntityCommand, EntityCommands, EntityEntryCommands},
-    world::{EntityWorldMut, FromWorld},
+    world::{EntityWorldMut, FromWorld, World},
 };
 
 use crate::{
     meta::NotLog,
+    prelude::UndoRedo,
     undo_redo::{
-        EntityRevDespawnedError, RevBundle, RevEntityWorld, commands::RevCommands,
+        EntityRevDespawnedError, RevBundle, RevEntityWorld, RevWorld, commands::RevCommands,
         relationship::SlimRelationship,
     },
 };
 
 /// Extension trait for [`EntityCommands`] with reversible variants of various methods.
 pub trait RevEntityCommands<'w> {
+    /// Buffers an [`UndoRedo`] implementor in a resource to be collected by the reversible system's
+    /// state.
+    #[track_caller]
+    fn buffer_undo_redo(&mut self, not_log: NotLog, undo_redo: impl UndoRedo) -> &mut Self {
+        self.buffer_undo_redo_with_caller(not_log, undo_redo, MaybeLocation::caller())
+    }
+
+    /// Buffers an [`UndoRedo`] implementor in a resource to be collected by the reversible system's
+    /// state.
+    ///
+    /// This will also trigger the [redo logic] at the sync point.
+    ///
+    /// This shorthand method is useful for when applying the reversible operation is doing the
+    /// exact same as it's redo logic.
+    ///
+    /// [redo logic]: UndoRedo::redo
+    #[track_caller]
+    fn redo_and_buffer(&mut self, not_log: NotLog, undo_redo: impl UndoRedo) -> &mut Self {
+        self.redo_and_buffer_with_caller(not_log, undo_redo, MaybeLocation::caller())
+    }
+
+    /// As [`buffer_undo_redo`](Self::buffer_undo_redo) but with explicit [`MaybeLocation`].
+    ///
+    /// The location can be helpful for identifying non-reversible systems using reversible API.
+    /// [`run_rev_update`](crate::schedule::run_rev_update) may return the relevant error in that case.
+    fn buffer_undo_redo_with_caller(
+        &mut self,
+        not_log: NotLog,
+        undo_redo: impl UndoRedo,
+        caller: MaybeLocation,
+    ) -> &mut Self;
+
+    /// As [`redo_and_buffer`](Self::redo_and_buffer) but with explicit [`MaybeLocation`].
+    ///
+    /// The location can be helpful for identifying non-reversible systems using reversible API.
+    /// [`run_rev_update`](crate::schedule::run_rev_update) may return the relevant error in that case.
+    fn redo_and_buffer_with_caller(
+        &mut self,
+        not_log: NotLog,
+        undo_redo: impl UndoRedo,
+        caller: MaybeLocation,
+    ) -> &mut Self;
+
     /// Helper method to mark an entity as reversibly spawned. Useful when the actual spawn is
     /// hidden and cannot be done with [`Commands::rev_spawn`](RevCommands::rev_spawn).
     ///
@@ -205,6 +249,30 @@ pub trait RevEntityCommands<'w> {
 }
 
 impl<'a> RevEntityCommands<'a> for EntityCommands<'a> {
+    fn buffer_undo_redo_with_caller(
+        &mut self,
+        not_log: NotLog,
+        undo_redo: impl UndoRedo,
+        caller: MaybeLocation,
+    ) -> &mut Self {
+        self.commands_mut().queue(move |world: &mut World| {
+            world.buffer_undo_redo(not_log, undo_redo, caller);
+        });
+        self
+    }
+
+    fn redo_and_buffer_with_caller(
+        &mut self,
+        not_log: NotLog,
+        undo_redo: impl UndoRedo,
+        caller: MaybeLocation,
+    ) -> &mut Self {
+        self.commands_mut().queue(move |world: &mut World| {
+            world.redo_and_buffer(not_log, undo_redo, caller);
+        });
+        self
+    }
+
     #[track_caller]
     fn rev_mark_spawned(&mut self, not_log: NotLog, include_unlinked_related: bool) -> &mut Self {
         let caller = MaybeLocation::caller();
