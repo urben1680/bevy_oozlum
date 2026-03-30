@@ -68,7 +68,7 @@
 //! [`ForwardLog`]: crate::meta::RevDirection::ForwardLog
 //! [`BackwardLog`]: crate::meta::RevDirection::BackwardLog
 //! [log directions]: crate::meta::RevDirection::is_log
-//! [reversible commands]: crate::undo_redo::RevCommands
+//! [reversible commands]: crate::undo_redo::commands::RevCommands
 //! [`rev_after`]: IntoRevScheduleConfigs::rev_after
 //! [`before`]: IntoScheduleConfigs::before
 //! [`World`]: bevy_ecs::world::World
@@ -582,4 +582,12 @@ macro_rules! impl_into_rev_schedule_configs {
     };
 }
 
-all_tuples!(#[doc(fake_variadic)] impl_into_rev_schedule_configs, 1, 20, T, M, var);
+all_tuples!(
+    #[doc(fake_variadic)]
+    impl_into_rev_schedule_configs,
+    1,
+    20,
+    T,
+    M,
+    var
+);

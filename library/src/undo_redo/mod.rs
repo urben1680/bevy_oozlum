@@ -39,10 +39,10 @@
 //!   will take place in these cases.
 //!
 //! [log directions]: RevDirection::is_log
-//! [`Commands::rev_spawn`]: crate::undo_redo::RevCommands::rev_spawn
-//! [`EntityCommands::rev_mark_spawned`]: crate::undo_redo::RevEntityCommands::rev_mark_spawned
-//! [`Commands::rev_despawn`]: crate::undo_redo::RevCommands::rev_despawn
-//! [`EntityCommands::rev_despawn`]: crate::undo_redo::RevEntityCommands::rev_despawn
+//! [`Commands::rev_spawn`]: crate::undo_redo::commands::RevCommands::rev_spawn
+//! [`EntityCommands::rev_mark_spawned`]: crate::undo_redo::entity_commands::RevEntityCommands::rev_mark_spawned
+//! [`Commands::rev_despawn`]: crate::undo_redo::commands::RevCommands::rev_despawn
+//! [`EntityCommands::rev_despawn`]: crate::undo_redo::entity_commands::RevEntityCommands::rev_despawn
 //! [`RelationshipTarget::LINKED_SPAWN`]: bevy_ecs::relationship::RelationshipTarget::LINKED_SPAWN
 
 use alloc::{boxed::Box, format, string::ToString, vec::Vec};
@@ -66,16 +66,14 @@ use crate::{
     meta::{NotLog, RevDirection, RevMeta},
 };
 
-mod commands;
-mod entity_commands;
+pub mod commands;
+pub mod entity_commands;
 mod entity_world;
 mod insert_remove;
 mod relationship;
 mod spawn_despawn;
 mod world;
 
-pub use commands::*;
-pub use entity_commands::*;
 use entity_world::*;
 use insert_remove::*;
 use relationship::*;

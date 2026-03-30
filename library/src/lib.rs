@@ -147,7 +147,7 @@
 //! | -------------- | ------------------------------------------ | --------------- |
 //! | `bevy_app`     | `App` related features                     | yes             |
 //! | `bevy_reflect` | Reflection derives on resources/components | yes             |
-//! 
+//!
 //! `std` is not used in this crate so it is `no_std` compatible, to the extend of bevy's support.
 //!
 //! ## Limitations
@@ -199,7 +199,7 @@
 //! [`RevDirection::NotLog`]: crate::meta::RevDirection::NotLog
 //! [`rev_add_systems`]: crate::app::RevApp::rev_add_systems
 //! [`RevUpdate`]: crate::schedule::RevUpdate
-//! [`rev_run_schedule`]: crate::undo_redo::RevCommands::rev_run_schedule
+//! [`rev_run_schedule`]: crate::undo_redo::commands::RevCommands::rev_run_schedule
 //! [`RevDirection`]: crate::meta::RevDirection
 //! [`set_queue`]: crate::meta::RevMeta::set_queue
 //! [`now`]: crate::meta::RevMeta::now
@@ -210,7 +210,7 @@
 //! [`FixedUpdate`]: bevy_app::FixedUpdate
 //! [`RevDespawned`]: crate::undo_redo::RevDespawned
 //! [not show up in queries]: bevy_ecs::entity_disabling
-//! [reversibly despawned]: crate::undo_redo::RevCommands::rev_despawn
+//! [reversibly despawned]: crate::undo_redo::commands::RevCommands::rev_despawn
 //! [`is_rev_despawned`]: crate::undo_redo::IsRevDespawned::is_rev_despawned
 //! [`Tick`]: bevy_ecs::change_detection::Tick
 //! [Relationships]: bevy_ecs::relationship
@@ -244,9 +244,11 @@ pub mod prelude {
         IntoRevScheduleConfigs as _, RevSchedule as _, RevSystems, RevUpdate,
     };
     pub use crate::undo_redo::{
-        BuffersUndoRedo as _, IsRevDespawned as _, RevCommands as _, RevEntityCommands as _,
-        RevEntityEntryCommands as _, RevFetch, RevRelatedSpawnerCommands as _, UndoRedo,
-        UndoRedoDirection,
+        BuffersUndoRedo as _, IsRevDespawned as _, RevFetch, UndoRedo, UndoRedoDirection,
+        commands::RevCommands as _,
+        entity_commands::{
+            RevEntityCommands as _, RevEntityEntryCommands as _, RevRelatedSpawnerCommands as _,
+        },
     };
 }
 

@@ -77,7 +77,7 @@ impl RevPlugin {
         ModifiedRevPlugin::default().unset_meta()
     }
 
-    /// Sets the maximum amount of frames that can be reversed by. Will be camped to a minimum of 1
+    /// Sets the maximum amount of frames that can be reversed by. Will be clamped to a minimum of 1
     /// frame.
     ///
     /// The value is stored in [`RevMeta`]. Using [`unset_meta`] will ignore prior calls of this.
@@ -142,7 +142,7 @@ impl ModifiedRevPlugin {
         self
     }
 
-    /// Sets the maximum amount of frames that can be reversed by. Will be camped to a minimum of 1
+    /// Sets the maximum amount of frames that can be reversed by. Will be clamped to a minimum of 1
     /// frame.
     ///
     /// The value is stored in [`RevMeta`]. Using [`unset_meta`] will ignore prior calls of this.

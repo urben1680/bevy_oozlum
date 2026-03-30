@@ -12,7 +12,7 @@ use bevy_ecs::{
 use crate::{
     meta::NotLog,
     undo_redo::{
-        EntityRevDespawnedError, RevBundle, RevCommands, RevEntityWorld,
+        EntityRevDespawnedError, RevBundle, RevEntityWorld, commands::RevCommands,
         relationship::SlimRelationship,
     },
 };
@@ -20,7 +20,7 @@ use crate::{
 /// Extension trait for [`EntityCommands`] with reversible variants of various methods.
 pub trait RevEntityCommands<'w> {
     /// Helper method to mark an entity as reversibly spawned. Useful when the actual spawn is
-    /// hidden and cannot be done with [`Commands::rev_spawn`](super::RevCommands::rev_spawn).
+    /// hidden and cannot be done with [`Commands::rev_spawn`](RevCommands::rev_spawn).
     ///
     /// When possible, use `Commands::rev_spawn` instead.
     ///

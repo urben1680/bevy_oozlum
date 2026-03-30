@@ -1,5 +1,3 @@
-#![allow(clippy::inconsistent_digit_grouping, clippy::zero_prefixed_literal)]
-
 use bevy::{
     ecs::{lifecycle::HookContext, world::DeferredWorld},
     prelude::*,
@@ -9,8 +7,8 @@ use bevy_oozlum::prelude::*;
 
 const ROWS: usize = 8;
 const MAX_PAST_LEN: u64 = 70;
-const CURRENT_BEVY_VERSION: u64 = 0_18_0;
-const WINNING_BEVY_VERSION: u64 = 1_00_0;
+const CURRENT_BEVY_VERSION: u64 = 190; // 0.19.0
+const WINNING_BEVY_VERSION: u64 = 1000; // 1.00.0
 const FRAMERATE_MIN: f64 = 10.0;
 const FRAMERATE_MAX: f64 = 66.667;
 
@@ -29,33 +27,27 @@ mod rows;
 // And in this how to control the global reversible progression
 mod control;
 
+#[cfg(not(feature = "ci-mode"))]
 fn main() {
     let mut app = App::new();
 
-    // Add the RevPlugin to your application.
-    //
-    // The plugin adds an unpaused RevMeta with a max past length of 1 frame and the run_rev_update
-    // system to FixedUpdate. We modify the max past len here. The Plugin also registers a disabling
-    // component: RevDespawned.
-    //
-    // General order of systems:
-    // 1. run_rev_update runs in the specified schedule (here FixedUpdate)
-    // 2. RevUpdate schedule runs unless paused
-    // 3. Reversible systems and sync points, all in the RevSystems set, run in normal or
-    //    reversed order, depending on the current RevDirection
-    let rev_plugin = RevPlugin.set_max_past_len(MAX_PAST_LEN);
-
-    #[cfg(feature = "ci-mode")]
-    let rev_plugin = rev_plugin.set_runner_in_schedule(Update);
-
     app.add_plugins((
-        rev_plugin,
+        // Add the RevPlugin to your application.
+        //
+        // The plugin adds an unpaused RevMeta with a max past length of 1 frame and the
+        // run_rev_update system to FixedUpdate. We modify the max past len here. The Plugin also
+        // registers a disabling component: RevDespawned.
+        //
+        // General order of systems:
+        // 1. run_rev_update runs in the specified schedule (here FixedUpdate)
+        // 2. RevUpdate schedule runs unless paused
+        // 3. Reversible systems and sync points, all in the RevSystems set, run in normal or
+        //    reversed order, depending on the current RevDirection
+        RevPlugin.set_max_past_len(MAX_PAST_LEN),
         rows::plugin,
         control::plugin,
-        #[cfg(not(feature = "ci-mode"))]
-        (DefaultPlugins.set(render::window_plugin()), render::plugin),
-        #[cfg(feature = "ci-mode")]
-        (MinimalPlugins, StatesPlugin, InputPlugin),
+        render::plugin,
+        DefaultPlugins.set(render::window_plugin()),
     ))
     .add_systems(
         // You can add regular, non-reversible systems to RevUpdate using the vanilla
@@ -148,12 +140,14 @@ fn despawn_lost_waste(
     mut commands: Commands,
 ) {
     // Only during RevDirection::NotLog RevMeta::past_end could have increased, so skip otherwise
-    if !meta.is_running_not_log() {
+    if meta.is_running_log() {
         return;
     }
 
     for (entity, &Waste { tossed_at, .. }) in waste_query {
         if tossed_at < meta.past_end() {
+            // If you want entities to only exist when their spawn was within the current log,
+            // you have to handle the despawn yourself
             commands.entity(entity).despawn();
 
             if *this_state.get() == GameState::Running {
@@ -167,11 +161,13 @@ fn despawn_lost_waste(
     }
 }
 
-#[cfg(feature = "ci-mode")]
-use bevy::{input::InputPlugin, state::app::StatesPlugin};
-
 #[cfg(not(feature = "ci-mode"))]
 mod render;
 
 #[cfg(feature = "ci-mode")]
 mod test;
+
+#[cfg(feature = "ci-mode")]
+fn main() {
+    test::main()
+}

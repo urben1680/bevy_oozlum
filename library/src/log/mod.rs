@@ -82,7 +82,7 @@
 //! [`RevMetaUpdateErr::UpdateLogsMissed`]: crate::meta::RevMetaUpdateErr::UpdateLogsMissed
 //! [`UpdateLogsMissed`]: crate::meta::RevMetaUpdateErr::UpdateLogsMissed
 //! [reversible scheduling]: crate::schedule::RevSchedule
-//! [reversible commands]: crate::undo_redo::RevCommands
+//! [reversible commands]: crate::undo_redo::commands::RevCommands
 use alloc::{
     boxed::Box,
     collections::{VecDeque, vec_deque::Drain},

@@ -1,13 +1,39 @@
-use bevy::{input::keyboard::Key, prelude::*};
+use bevy::{
+    input::{InputPlugin, keyboard::Key},
+    prelude::*,
+    state::app::StatesPlugin,
+};
 use bevy_oozlum::{
     meta::{RevDirection, RevMeta},
     panic_on_error_events,
 };
 use core::panic::Location;
 
-use crate::{MAX_PAST_LEN, ROWS, Waste};
+use super::*;
 
-pub fn test(mut app: App) {
+const MAX_PAST_LEN: u64 = 5;
+
+pub fn main() {
+    // setup should align with main.rs main()
+    let mut app = App::new();
+    app.add_plugins((
+        RevPlugin
+            .set_max_past_len(MAX_PAST_LEN)
+            .set_runner_in_schedule(Update), // not FixedUpdae
+        rows::plugin,
+        control::plugin,
+        MinimalPlugins,
+        StatesPlugin,
+        InputPlugin,
+    ))
+    .add_systems(RevUpdate, despawn_lost_waste.after(RevSystems))
+    .init_state::<GameState>()
+    .init_resource::<Stats>();
+
+    test(app);
+}
+
+fn test(mut app: App) {
     panic_on_error_events();
 
     app.update();

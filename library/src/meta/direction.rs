@@ -178,9 +178,15 @@ impl Command<BevyResult> for RevQueue {
 /// frame. For every other update strategy, use the value returned by
 /// [`UpdateLog::forward_past_len`] instead.
 ///
+/// # System parameter
+///
+/// This type can be used as a system parameter. It will skip the system if [`RevUpdate`] is not
+/// running at [`RevDirection::NotLog`]. Because of this, reversible logic has to be done via
+/// reversible commands.
+///
 /// [`RevUpdate`]: crate::schedule::RevUpdate
-/// [`RevCommands`]: crate::undo_redo::RevCommands
-/// [`RevEntityCommands`]: crate::undo_redo::RevEntityCommands
+/// [`RevCommands`]: crate::undo_redo::commands::RevCommands
+/// [`RevEntityCommands`]: crate::undo_redo::entity_commands::RevEntityCommands
 /// [`BuffersUndoRedo`]: crate::undo_redo::BuffersUndoRedo
 /// [`TransitionLog::forward_push`]: crate::log::TransitionLog::forward_push
 /// [`TransitionsLog::forward_extend`]: crate::log::TransitionsLog::forward_extend

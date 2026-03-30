@@ -312,7 +312,15 @@ macro_rules! impl_buffer_bundle {
     };
 }
 
-all_tuples!(#[doc(fake_variadic)] impl_buffer_bundle, 1, 15, T, M, var);
+all_tuples!(
+    #[doc(fake_variadic)]
+    impl_buffer_bundle,
+    1,
+    15,
+    T,
+    M,
+    var
+);
 
 #[cfg(test)]
 const _: () = {
