@@ -165,6 +165,7 @@ fn despawn_lost_waste(
 mod render;
 
 #[cfg(feature = "ci-mode")]
+#[doc(hidden)]
 mod test;
 
 #[cfg(feature = "ci-mode")]

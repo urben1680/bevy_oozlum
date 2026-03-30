@@ -206,7 +206,7 @@
 //! [`Pause`]: crate::meta::RevQueue::Pause
 //! [`RevPlugin`]: crate::app::RevPlugin
 //! [`set_max_past_len`]: crate::meta::RevMeta::set_max_past_len
-//! [`run_rev_update`]: crate::meta::run_rev_update
+//! [`run_rev_update`]: crate::schedule::run_rev_update
 //! [`FixedUpdate`]: bevy_app::FixedUpdate
 //! [`RevDespawned`]: crate::undo_redo::RevDespawned
 //! [not show up in queries]: bevy_ecs::entity_disabling
@@ -254,6 +254,7 @@ pub mod prelude {
 
 /// Make `error!` and `error_once!` cause panics.
 #[cfg(any(test, feature = "ci-mode"))]
+#[doc(hidden)]
 pub fn panic_on_error_events() {
     use bevy_log::{
         Level,

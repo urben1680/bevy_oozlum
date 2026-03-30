@@ -3,7 +3,7 @@ use bevy::{
     prelude::*,
     window::{EnabledButtons, WindowResolution},
 };
-use bevy_oozlum::{meta::run_rev_update, prelude::*};
+use bevy_oozlum::{prelude::*, schedule::run_rev_update};
 
 use std::{fmt::Write, iter::repeat_n};
 

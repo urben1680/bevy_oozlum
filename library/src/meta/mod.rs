@@ -79,6 +79,7 @@ impl RevMeta {
     ///   must have been added to the app. If it is inserted in the paused state, it can be unpaused
     ///   via [`set_queue`] with [`RevQueue::RunForward`].
     ///
+    /// [`run_rev_update`]: crate::schedule::run_rev_update
     /// [`RevPlugin`]: crate::app::RevPlugin
     /// [`set_queue`]: Self::set_queue
     /// [`set_max_past_len`]: Self::set_max_past_len
@@ -97,19 +98,20 @@ impl RevMeta {
     }
 
     /// Change the current [`RevQueue`] that will be applied right before the next time
-    /// [`run_rev_update`] runs. See the `RevQueue` docs for more information.
+    /// [`run_rev_update`](crate::schedule::run_rev_update) runs. See the `RevQueue` docs for more
+    /// information.
     pub fn set_queue(&mut self, queue: RevQueue) {
         self.queue = Some(queue);
     }
 
     /// Remove the current [`RevQueue`] before it could be applied right before the next time
-    /// [`run_rev_update`] runs.
+    /// [`run_rev_update`](crate::schedule::run_rev_update) runs.
     pub fn unset_queue(&mut self) {
         self.queue = None;
     }
 
     /// Get the current [`RevQueue`] that will be applied right before the next time
-    /// [`run_rev_update`] runs.
+    /// [`run_rev_update`](crate::schedule::run_rev_update) runs.
     pub fn get_queue(&self) -> Option<RevQueue> {
         self.queue
     }
@@ -117,9 +119,10 @@ impl RevMeta {
     /// Set how many past frames can be reveres to at most. If `0` is used, the value is replaced
     /// with `1`.
     ///
-    /// Note that this is coming into effect right before the next time [`run_rev_update`] runs. If
-    /// at that point one or more frames of the log fall past that limit, the log will be truncated.
-    /// This is final, increasing the limit again will not bring back truncated log entries.
+    /// Note that this is coming into effect right before the next time
+    /// [`run_rev_update`](crate::schedule::run_rev_update) runs. If at that point one or more
+    /// frames of the log fall past that limit, the log will be truncated. This is final,
+    /// increasing the limit again will not bring back truncated log entries.
     pub fn set_max_past_len(&mut self, max_past_len: u64) {
         self.max_past_len = NonZeroU64::new(max_past_len).unwrap_or(NonZeroU64::MIN);
     }
@@ -313,6 +316,7 @@ impl RevMeta {
     ///   to, this will return [`RevMetaUpdateErr::UpdateLogsMissed`]. This may only happen during
     ///   [log directions].
     ///
+    /// [`run_rev_update`]: crate::schedule::run_rev_update
     /// [in a running state]: Self::running_direction
     /// [`UpdateLog`]: crate::log::UpdateLog
     /// [log directions]: RevDirection::is_log
@@ -511,58 +515,50 @@ impl RevMeta {
     pub(super) fn update_log_limits(&self) -> &UpdateLogLimits {
         &self.update_log_limits
     }
-}
 
-/// Update [`RevMeta`] and run [`RevUpdate`] once unless paused.
-///
-/// This can fail if `RevMeta` or internal resources are removed or replaced. Otherwise, the
-/// only common source of error is doing mistakes at updating [`UpdateLog`]s at the expected
-/// frames in the expected amounts.
-///
-/// [`UpdateLog`]: crate::log::UpdateLog
-pub fn run_rev_update(world: &mut World) -> Result<(), RunSystemError> {
-    world
-        .try_schedule_scope(RevUpdate, |world, schedule| {
-            // check for skipping conditions
-            let Some(meta) = world.remove_resource::<RevMeta>() else {
-                return Err(RunSystemError::Skipped(
-                    SystemParamValidationError::skipped::<RevMeta>(Cow::Borrowed(
-                        "resource RevMeta does not exist, schedule RevUpdate will not be run \
+    pub(crate) fn run_rev_update(world: &mut World) -> Result<(), RunSystemError> {
+        world
+            .try_schedule_scope(RevUpdate, |world, schedule| {
+                // check for skipping conditions
+                let Some(meta) = world.remove_resource::<RevMeta>() else {
+                    return Err(RunSystemError::Skipped(
+                        SystemParamValidationError::skipped::<RevMeta>(Cow::Borrowed(
+                            "resource RevMeta does not exist, schedule RevUpdate will not be run \
                         until it is inserted",
-                    )),
-                ));
-            };
+                        )),
+                    ));
+                };
 
-            if let Some(buffer) = world.get_resource::<UndoRedoBuffer>()
-                && !buffer.is_empty()
-            {
-                let err = Err(RunSystemError::Skipped(
-                    SystemParamValidationError::invalid::<RevMeta>(format!(
-                        "the resource containing buffered UndoRedo implementors was not \
+                if let Some(buffer) = world.get_resource::<UndoRedoBuffer>()
+                    && !buffer.is_empty()
+                {
+                    let err = Err(RunSystemError::Skipped(
+                        SystemParamValidationError::invalid::<RevMeta>(format!(
+                            "the resource containing buffered UndoRedo implementors was not \
                         empty, it contained the following types:\n{buffer:?}\n{meta:?}"
-                    )),
-                ));
-                world.insert_resource(meta);
-                return err;
-            }
+                        )),
+                    ));
+                    world.insert_resource(meta);
+                    return err;
+                }
 
-            // update RevMeta and DespawnFinalizer
-            let mut despawn_finalizer_result = Ok(());
-            let meta_result = meta.update(|meta, _| {
-                world.insert_resource(meta);
-                schedule.run(world);
-                despawn_finalizer_result = finalize_despawns(world);
-                world.remove_resource::<RevMeta>()
-            });
+                // update RevMeta and DespawnFinalizer
+                let mut despawn_finalizer_result = Ok(());
+                let meta_result = meta.update(|meta, _| {
+                    world.insert_resource(meta);
+                    schedule.run(world);
+                    despawn_finalizer_result = finalize_despawns(world);
+                    world.remove_resource::<RevMeta>()
+                });
 
-            // map errors
-            match meta_result {
-                Ok(meta) => {
-                    let Err(err) = despawn_finalizer_result else {
-                        world.insert_resource(meta);
-                        return Ok(());
-                    };
-                    let err = Err(RunSystemError::Failed(
+                // map errors
+                match meta_result {
+                    Ok(meta) => {
+                        let Err(err) = despawn_finalizer_result else {
+                            world.insert_resource(meta);
+                            return Ok(());
+                        };
+                        let err = Err(RunSystemError::Failed(
                         match err {
                             DespawnFinalizerErr::OutOfLog => format!(
                                 "the resource that finally despawns entities that were reversibly \
@@ -578,54 +574,54 @@ pub fn run_rev_update(world: &mut World) -> Result<(), RunSystemError> {
                         }
                         .into(),
                     ));
-                    world.insert_resource(meta);
-                    err
-                }
-                Err(RevMetaUpdateErr::AlreadyRunning { meta }) => {
-                    let err = Err(RunSystemError::Skipped(
-                        SystemParamValidationError::invalid::<RevMeta>(format!(
-                            "RevMeta is already running\n{meta:?}"
-                        )),
-                    ));
-                    world.insert_resource(*meta);
-                    err
-                }
-                Err(RevMetaUpdateErr::RevMetaNotReturned) => {
-                    Err(RunSystemError::Failed(match despawn_finalizer_result {
-                        Ok(()) => "RevMeta was removed during RevUpdate, possible in hooks or \
+                        world.insert_resource(meta);
+                        err
+                    }
+                    Err(RevMetaUpdateErr::AlreadyRunning { meta }) => {
+                        let err = Err(RunSystemError::Skipped(
+                            SystemParamValidationError::invalid::<RevMeta>(format!(
+                                "RevMeta is already running\n{meta:?}"
+                            )),
+                        ));
+                        world.insert_resource(*meta);
+                        err
+                    }
+                    Err(RevMetaUpdateErr::RevMetaNotReturned) => {
+                        Err(RunSystemError::Failed(match despawn_finalizer_result {
+                            Ok(()) => "RevMeta was removed during RevUpdate, possible in hooks or \
                             observers related to despawns"
-                            .into(),
-                        Err(DespawnFinalizerErr::MetaMissing) => "RevMeta was removed during \
+                                .into(),
+                            Err(DespawnFinalizerErr::MetaMissing) => "RevMeta was removed during \
                             RevUpdate"
-                            .into(),
-                        Err(DespawnFinalizerErr::OutOfLog)
-                        | Err(DespawnFinalizerErr::MetaNotRunning) => unreachable!(
-                            "when update_spawn_despawn returns {despawn_finalizer_result:?}, \
+                                .into(),
+                            Err(DespawnFinalizerErr::OutOfLog)
+                            | Err(DespawnFinalizerErr::MetaNotRunning) => unreachable!(
+                                "when update_spawn_despawn returns {despawn_finalizer_result:?}, \
                             then only when RevMeta existed at that point, but then nothing is \
                             executed that could have removed RevMeta here"
-                        ),
-                    }))
-                }
-                Err(RevMetaUpdateErr::RevMetaReplaced { meta }) => {
-                    let err = Err(RunSystemError::Failed(
-                        format!("RevMeta was replaced with a different value\n{meta:?}").into(),
-                    ));
-                    world.insert_resource(*meta);
-                    err
-                }
-                Err(RevMetaUpdateErr::UpdateLogsMissed {
-                    meta,
-                    update_logs_missed,
-                }) => {
-                    // todo: use fmt::from_fn instead of format! when bevy switches to 1.93
-                    let err = format!(
-                        "UpdateLog instances did not run when they were expected \
+                            ),
+                        }))
+                    }
+                    Err(RevMetaUpdateErr::RevMetaReplaced { meta }) => {
+                        let err = Err(RunSystemError::Failed(
+                            format!("RevMeta was replaced with a different value\n{meta:?}").into(),
+                        ));
+                        world.insert_resource(*meta);
+                        err
+                    }
+                    Err(RevMetaUpdateErr::UpdateLogsMissed {
+                        meta,
+                        update_logs_missed,
+                    }) => {
+                        // todo: use fmt::from_fn instead of format! when bevy switches to 1.93
+                        let err = format!(
+                            "UpdateLog instances did not run when they were expected \
                         to:\n{update_logs_missed:?}\n{meta:?}"
-                    );
+                        );
 
-                    world.insert_resource(*meta);
+                        world.insert_resource(*meta);
 
-                    Err(RunSystemError::Failed(
+                        Err(RunSystemError::Failed(
                         match despawn_finalizer_result {
                             Ok(()) => err.to_string(),
                             Err(DespawnFinalizerErr::OutOfLog) => format!(
@@ -643,20 +639,21 @@ pub fn run_rev_update(world: &mut World) -> Result<(), RunSystemError> {
                         }
                         .into(),
                     ))
+                    }
                 }
-            }
-        })
-        .unwrap_or_else(|_| {
-            let err = if world.contains_resource::<RevMeta>() {
-                "schedule RevUpdate does not exist, it will not be run until it is inserted"
-            } else {
-                "schedule RevUpdate and resource RevMeta do not exist, the schedule will not \
+            })
+            .unwrap_or_else(|_| {
+                let err = if world.contains_resource::<RevMeta>() {
+                    "schedule RevUpdate does not exist, it will not be run until it is inserted"
+                } else {
+                    "schedule RevUpdate and resource RevMeta do not exist, the schedule will not \
                 be run until both are inserted"
-            };
-            Err(RunSystemError::Skipped(
-                SystemParamValidationError::skipped::<RevMeta>(Cow::Borrowed(err)),
-            ))
-        })
+                };
+                Err(RunSystemError::Skipped(
+                    SystemParamValidationError::skipped::<RevMeta>(Cow::Borrowed(err)),
+                ))
+            })
+    }
 }
 
 /// Error type that [`RevMeta::update`] may return.

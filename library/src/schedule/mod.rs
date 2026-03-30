@@ -1,8 +1,7 @@
 //! This module contains extension traits and accompanying types to add reversible systems, regular
 //! conditions and system set configurations to schedule to make their effect reversible.
 //!
-//! The main reversible schedule that is run by [`run_rev_update`](crate::meta::run_rev_update) is
-//! [`RevUpdate`].
+//! The main reversible schedule that is run by [`run_rev_update`] is [`RevUpdate`].
 //!
 //! ## Reversible systems
 //!
@@ -81,7 +80,8 @@ use bevy_ecs::{
         Schedule, ScheduleConfigTupleMarker, ScheduleConfigs, ScheduleLabel, SystemCondition,
         SystemSet, graph::GraphInfo,
     },
-    system::{IntoSystem, ScheduleSystem},
+    system::{IntoSystem, RunSystemError, ScheduleSystem},
+    world::World,
 };
 use core::{fmt::Debug, hash::Hash};
 use variadics_please::all_tuples;
@@ -97,7 +97,7 @@ mod system;
 #[cfg(test)]
 mod test;
 
-/// The schedule that is run by [`run_rev_update`](crate::meta::run_rev_update). All reversible
+/// The schedule that is run by [`run_rev_update`]. All reversible
 /// systems go in here, directly or indirectly in schedules that are run within this.
 ///
 /// Reversible systems in a schedule are automatically added to the [`RevSystems`] set so other,
@@ -168,6 +168,17 @@ struct BackwardSystemSet(InternedSystemSet);
 /// [`RevSystem::<T, false>`](system::RevSystem) of a system.
 #[derive(SystemSet, Debug, Copy, Clone, Hash, PartialEq, Eq)]
 struct BackwardDeferredAndSystemSet(InternedSystemSet);
+
+/// Update [`RevMeta`] and run [`RevUpdate`] once unless paused.
+///
+/// This can fail if `RevMeta` or internal resources are removed or replaced. Otherwise, the
+/// only common source of error is doing mistakes at updating [`UpdateLog`]s at the expected
+/// frames in the expected amounts.
+///
+/// [`UpdateLog`]: crate::log::UpdateLog
+pub fn run_rev_update(world: &mut World) -> Result<(), RunSystemError> {
+    RevMeta::run_rev_update(world)
+}
 
 /// Extension trait for [`Schedule`] for adding reversible systems and configurations.
 pub trait RevSchedule {

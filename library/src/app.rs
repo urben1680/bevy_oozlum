@@ -12,8 +12,8 @@ use bevy_ecs::{
 use bevy_log::warn;
 
 use crate::{
-    meta::{RevMeta, run_rev_update},
-    schedule::{IntoRevScheduleConfigs, RevSchedule},
+    meta::RevMeta,
+    schedule::{IntoRevScheduleConfigs, RevSchedule, run_rev_update},
     undo_redo::RevDespawned,
 };
 

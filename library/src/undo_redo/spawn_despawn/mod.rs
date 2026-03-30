@@ -50,7 +50,7 @@ pub struct RevDespawned(pub MaybeLocation);
 /// - If the internal log went out of log, this will return [`DespawnFinalizerErr::OutOfLog`]. This
 ///   can happen if this is called more than once while [`RevUpdate`] ran.
 ///
-/// [`run_rev_update`]: crate::meta::run_rev_update
+/// [`run_rev_update`]: crate::schedule::run_rev_update
 /// [running]: RevMeta::running_direction
 /// [`RevUpdate`]: crate::schedule::RevUpdate
 pub fn finalize_despawns(world: &mut World) -> Result<(), DespawnFinalizerErr> {

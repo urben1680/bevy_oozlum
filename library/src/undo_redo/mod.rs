@@ -140,7 +140,7 @@ pub trait BuffersUndoRedo {
     /// As [`BuffersUndoRedo::buffer_undo_redo`] but with explicit [`MaybeLocation`].
     ///
     /// The location can be helpful for identifying non-reversible systems using reversible API.
-    /// [`run_rev_update`](crate::meta::run_rev_update) may return the relevant error in that case.
+    /// [`run_rev_update`](crate::schedule::run_rev_update) may return the relevant error in that case.
     fn buffer_undo_redo_with_caller(
         &mut self,
         not_log: NotLog,
@@ -151,7 +151,7 @@ pub trait BuffersUndoRedo {
     /// As [`BuffersUndoRedo::redo_and_buffer`] but with explicit [`MaybeLocation`].
     ///
     /// The location can be helpful for identifying non-reversible systems using reversible API.
-    /// [`run_rev_update`](crate::meta::run_rev_update) may return the relevant error in that case.
+    /// [`run_rev_update`](crate::schedule::run_rev_update) may return the relevant error in that case.
     fn redo_and_buffer_with_caller(
         &mut self,
         not_log: NotLog,

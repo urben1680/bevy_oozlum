@@ -9,9 +9,9 @@ use bevy_ecs::{
 
 use super::*;
 use crate::{
-    meta::{RevDirection, run_rev_update},
+    meta::RevDirection,
     panic_on_error_events,
-    schedule::RevUpdate,
+    schedule::{RevUpdate, run_rev_update},
     undo_redo::BuffersUndoRedo,
 };
 

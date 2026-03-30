@@ -109,7 +109,7 @@ pub(super) enum RunningOrRan {
 ///
 /// This type may also be used as a [`Command`] that can fail if [`RevMeta`] is missing.
 ///
-/// [`run_rev_update`]: super::run_rev_update
+/// [`run_rev_update`]: crate::schedule::run_rev_update
 /// [unset]: RevMeta::unset_queue
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "bevy_reflect", derive(bevy_reflect::Reflect))]

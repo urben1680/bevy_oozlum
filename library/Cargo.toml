@@ -11,20 +11,16 @@ keywords = ["bevy", "gamedev"]
 categories = ["game-development"]
 
 [package.metadata.docs.rs]
-# needed for #[doc(fake_variadic)]
 rustc-args = ["--cfg", "docsrs_dep"]
 cargo-args = ["-Zunstable-options", "-Zrustdoc-scrape-examples"]
 rustdoc-args = [
   "-Zunstable-options",
   "--generate-link-to-definition",
   "--generate-macro-expansion",
-  # Embed tags to the top of documentation pages for common Bevy traits
-  # that are implemented by the current type, like `Component` or `Resource`.
-  # This makes it easier to see at a glance what types are used for.
   "--html-after-content",
   "docs-rs/trait-tags.html",
 ]
-all-features = true
+features = ["bevy_app", "bevy_reflect"] # all but ci-mode
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(docsrs_dep)'] }
@@ -42,6 +38,10 @@ variadics_please = "1.1" # keep in sync with bevy
 
 [dev-dependencies]
 bevy = { version = "=0.18", features = ["track_location", "debug"] }
+
+[[example]]
+name = "game"
+doc-scrape-examples = true
 
 [features]
 default = ["bevy_app", "bevy_reflect"]

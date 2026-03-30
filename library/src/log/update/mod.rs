@@ -78,7 +78,7 @@ mod offset;
 ///
 /// [`TransitionLog::forward_push`]: super::TransitionLog::forward_push
 /// [`TransitionsLog::forward_extend`]: super::TransitionsLog::forward_extend
-/// [`run_rev_update`]: crate::meta::run_rev_update
+/// [`run_rev_update`]: crate::schedule::run_rev_update
 /// [`TransitionsLog`]: super::TransitionsLog
 #[derive(Default, Debug)]
 pub struct UpdateLog {
@@ -230,7 +230,7 @@ impl UpdateLog {
     /// The [`Display`] implemention of `UpdateLog` solely contains this id.
     ///
     /// This id is useful to identify missed updates from [`RevMeta::update`]. If
-    /// [`run_rev_update`](crate::meta::run_rev_update) is used, such errors are handled by the
+    /// [`run_rev_update`](crate::schedule::run_rev_update) is used, such errors are handled by the
     /// default error handler.
     pub fn id(&self) -> Option<UpdateLogId> {
         self.update_state.map(|update_state| update_state.id())
