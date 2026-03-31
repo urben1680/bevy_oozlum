@@ -219,6 +219,7 @@ extern crate alloc;
 /*
 ISSUES/DISCUSSIONS:
 - feature track_update_logs to opt-out
+- hotpatch
 - crate::schedule::set_base_sets should not need to chain forward/backward configs
 - benchmarks
 - set MaybeLocation of component meta, https://github.com/bevyengine/bevy/issues/20494
