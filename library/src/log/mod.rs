@@ -10,7 +10,7 @@
 //! ## Optimal log length
 //!
 //! All logs in an application can sum up to a large amount of data and it is undesired to store any
-//! more transition data than what is really needed to cover the [global log length].
+//! more transition data than what is really needed to cover the [global log range].
 //!
 //! The transition logs need a `past_len` value as a parameter in their [`forward_push`] and
 //! [`forward_extend`] methods to determine how many past log entries they should keep to not go

@@ -390,8 +390,8 @@ impl RevMeta {
                 if self.past_len() > max_past_len {
                     self.past_end = self.now - max_past_len;
                 }
-                let past_len = NonZeroU64::new(self.now - self.past_end)
-                    .expect("now is increased here and larger than past_end");
+                // now is increased here and larger than past_end
+                let past_len = NonZeroU64::new(self.now - self.past_end).unwrap();
                 RevDirection::NotLog(NotLog(past_len))
             }
             RevDirection::ForwardLog => {
@@ -516,6 +516,7 @@ impl RevMeta {
         &self.update_log_limits
     }
 
+    /// See [`run_rev_update`](crate::schedule::run_rev_update).
     pub(crate) fn run_rev_update(world: &mut World) -> Result<(), RunSystemError> {
         world
             .try_schedule_scope(RevUpdate, |world, schedule| {
@@ -567,10 +568,9 @@ impl RevMeta {
                             DespawnFinalizerErr::MetaNotRunning => format!(
                                 "RevMeta stopped running early, it may have been replaced\n{meta:?}"
                             ),
-                            DespawnFinalizerErr::MetaMissing => unreachable!(
-                                "update_spawn_despawn would skip all logic without RevMeta, \
-                            nothing could return it to be present again here"
-                            ),
+                            // update_spawn_despawn would skip all logic without RevMeta,
+                            // nothing could return it to be present again here
+                            DespawnFinalizerErr::MetaMissing => unreachable!(),
                         }
                         .into(),
                     ));
@@ -594,12 +594,11 @@ impl RevMeta {
                             Err(DespawnFinalizerErr::MetaMissing) => "RevMeta was removed during \
                             RevUpdate"
                                 .into(),
+                            // when update_spawn_despawn returns any of those errors, then only when
+                            // RevMeta existed at that point, but then nothing is executed that
+                            // could have removed RevMeta here
                             Err(DespawnFinalizerErr::OutOfLog)
-                            | Err(DespawnFinalizerErr::MetaNotRunning) => unreachable!(
-                                "when update_spawn_despawn returns {despawn_finalizer_result:?}, \
-                            then only when RevMeta existed at that point, but then nothing is \
-                            executed that could have removed RevMeta here"
-                            ),
+                            | Err(DespawnFinalizerErr::MetaNotRunning) => unreachable!(),
                         }))
                     }
                     Err(RevMetaUpdateErr::RevMetaReplaced { meta }) => {
@@ -632,10 +631,9 @@ impl RevMeta {
                                 "RevMeta stopped running early, it may have been replaced, \
                             additionally {err:?}"
                             ),
-                            Err(DespawnFinalizerErr::MetaMissing) => unreachable!(
-                                "update_spawn_despawn would skip all logic without RevMeta, \
-                            nothing could return it to be present again here"
-                            ),
+                            // update_spawn_despawn would skip all logic without RevMeta, nothing
+                            // could return it to be present again here
+                            Err(DespawnFinalizerErr::MetaMissing) => unreachable!(),
                         }
                         .into(),
                     ))

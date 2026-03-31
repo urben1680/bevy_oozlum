@@ -252,8 +252,6 @@ impl UpdateLog {
         meta: &RevMeta,
         caller: MaybeLocation<Option<&'static Location>>,
     ) -> NonZeroU64 {
-        let past_len;
-
         if self.not_log_should_clear(meta, caller) {
             // log is empty or all updates are out of log
             // it is not important what offset is pushed as long log_start + offset = now
@@ -264,13 +262,11 @@ impl UpdateLog {
             self.log_start = meta.now() - 1; // now() is never 0 during RevDirection::NotLog
             self.last_update = meta.now();
             self.past_len = 1;
-            past_len = NonZeroU64::MIN;
         } else {
             let offset = meta.now() - self.last_update;
             self.offsets.push(offset);
             self.last_update = meta.now();
-            past_len = NonZeroU64::new(self.past_len + 1).expect("should not overflow");
-            self.past_len = past_len.get();
+            self.past_len += 1;
         }
 
         meta.update_log_limits().push_limit(
@@ -281,7 +277,8 @@ impl UpdateLog {
             ),
         );
 
-        past_len
+        // past_len is either set to 1 or increased above, overflow is unexpected
+        NonZeroU64::new(self.past_len).unwrap()
     }
 
     /// Sets/updates [`Self::update_state`] so it is `Some`.
@@ -303,11 +300,17 @@ impl UpdateLog {
         }
     }
 
-    /// Checks at [`RevDirection::BackwardLog`](crate::meta::RevDirection::BackwardLog) if this log
-    /// has been updated at this frame.
+    /// Updates the log at [`RevDirection::BackwardLog`] if [`forward_past_len`] has been called at
+    /// this frame.
     ///
-    /// Returns `true` if that is the case or `false` if not. This log is insensitive on
-    /// checking outside its range of logged frames and just returns `false` then as well.
+    /// Returns `true` if that is the case or `false` if not. This will return `true` for as many
+    /// times during the same frame as `forward_past_len` was called.
+    ///
+    /// This method is insensitive on on being called during frames outside its internal log and
+    /// returns `false` in that case.
+    ///
+    /// [`RevDirection::BackwardLog`]: crate::meta::RevDirection::BackwardLog
+    /// [`forward_past_len`]: Self::forward_past_len
     #[track_caller]
     pub fn backward_log(&mut self, meta: &RevMeta) -> bool {
         let caller = MaybeLocation::caller().map(Some);
@@ -354,11 +357,17 @@ impl UpdateLog {
         true
     }
 
-    /// Checks at [`RevDirection::ForwardLog`](crate::meta::RevDirection::ForwardLog) if this log
-    /// has been updated at this frame.
+    /// Updates the log at [`RevDirection::ForwardLog`] if [`forward_past_len`] has been called at
+    /// this frame.
     ///
-    /// Returns `true` if that is the case or `false` if not. This log is insensitive on
-    /// checking outside its range of logged frames and just returns `false` then as well.
+    /// Returns `true` if that is the case or `false` if not. This will return `true` for as many
+    /// times during the same frame as `forward_past_len` was called.
+    ///
+    /// This method is insensitive on on being called during frames outside its internal log and
+    /// returns `false` in that case.
+    ///
+    /// [`RevDirection::ForwardLog`]: crate::meta::RevDirection::ForwardLog
+    /// [`forward_past_len`]: Self::forward_past_len
     #[track_caller]
     pub fn forward_log(&mut self, meta: &RevMeta) -> bool {
         let caller = MaybeLocation::caller().map(Some);

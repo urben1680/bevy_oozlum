@@ -75,7 +75,8 @@ impl UpdateLogLimits {
             let index = self
                 .past_len_count
                 .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-            let index = NonMaxU32::new(index).expect("exhausted maximum number of `UpdateLog`");
+            // exhausted maximum number of `UpdateLog` if this panics
+            let index = NonMaxU32::new(index).unwrap();
             let state = UpdateLogState {
                 index,
                 updates_this_frame: 0,
@@ -164,10 +165,8 @@ impl UpdateLogLimits {
             self.update_log_limits[index] = limits;
         }
 
-        self.limits_updates = self
-            .limits_updates
-            .checked_add(1)
-            .expect("exhausted maximum number of `UpdateLog` updates");
+        // exhausted maximum number of `UpdateLog` updates if this panics
+        self.limits_updates = self.limits_updates.checked_add(1).unwrap();
 
         // there should be no gaps in the 2D vector, otherwise that would be a bug here
         assert_eq!(

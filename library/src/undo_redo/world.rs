@@ -243,6 +243,7 @@ impl RevWorld for World {
                 Err(EntityMutableFetchError::NotSpawned(err)) => {
                     not_existing_entities.push(err);
                 }
+                // only one entity is fetched
                 Err(EntityMutableFetchError::AliasedMutability(_)) => unreachable!(),
             }
         }

@@ -21,18 +21,18 @@
 //! crates is most likely not enough. The same is true with commands and schedules that use bevy's
 //! vanilla API.
 //!
-//! One exception are run conditions, those will work generally and can be written as usually.
+//! One exception are **run conditions**, those will work generally and can be written as usual.
 //! Though an exception to the exception are conditions based on change ticks. These are
-//! unsupported, see **Limitations** below.
+//! unsupported, see _Limitations_ below.
 //!
 //! **Hooks and observers** may or may not additionally run at log directions depending on how they
 //! are triggered. Still they can be written to issue reversible commands which will work just fine.
 //!
 //! ## Examples
 //!
-//! A system that only has logic when running normally, so not backward or forward in log, and put
-//! their undo/redo logic into reversible commands, the [`NotLog`] system param can be used. It
-//! skips the system in log phases and is needed for the reversible command API.
+//! A system that only has logic when running normally, so not backward or forward in log, can use
+//! the [`NotLog`] system param. It skips the system in log phases and is needed for the reversible
+//! command API that is used for this system's undo/redo logic.
 //!
 //! ```
 //! # use bevy::prelude::*;
@@ -48,8 +48,8 @@
 //! }
 //! ```
 //!
-//! If the system itself should handle the undo/redo logic, this can be done with the [`RevMeta`]
-//! resource to check in which direction the schedule is running.
+//! If the system itself should handle the undo/redo logic directly and not in a command, this can
+//! be done with the [`RevMeta`] resource to check in which direction the schedule is running.
 //!
 //! ```
 //! # use bevy::prelude::*;
@@ -124,10 +124,10 @@
 //!
 //! ### Construct and insert [`RevMeta`]
 //!
-//! Per default it is unpaused and will keep a maximum log length of 1 frame. Both can be modified
-//! at the plugin, just as it can be set to not insert the resource at all. The maximum log length
-//! can be set to a higher number via a plugin method, but also at any time when the app is running
-//! using [`set_max_past_len`]. The minimum is 1.
+//! Per default `RevMeta` is unpaused and will keep a maximum log length of 1 frame. Both can be
+//! modified at the plugin, just as it can be set to not insert the resource at all. The maximum log
+//! length can be set to a higher number via a plugin method, but also at any time when the app is
+//! running using [`set_max_past_len`]. The minimum is 1.
 //!
 //! ### Add the system that runs [`RevUpdate`]
 //!
@@ -138,15 +138,17 @@
 //!
 //! This is needed to make entities [not show up in queries] when they were [reversibly despawned]
 //! but cannot be actually despawned yet as long undoing that is still possible. They can still be
-//! accessed via entity pointers though, so make sure to use the [`is_rev_despawned`] method to
-//! check on that. Reversible commands on such entities will fail.
+//! accessed via entity pointers though, so make sure to use the [`RevFetch`] wrapper at fetching
+//! or, if that is not possible, use the [`is_rev_despawned`] method.
+//!
+//! Reversible commands on such entities will fail.
+//!
+//! See the [`undo_redo`] module documentation for more information.
 //!
 //! ## Cargo Features
 //!
-//! | Feature        | Description                                | Default feature |
-//! | -------------- | ------------------------------------------ | --------------- |
-//! | `bevy_app`     | `App` related features                     | yes             |
-//! | `bevy_reflect` | Reflection derives on resources/components | yes             |
+//! - `bevy_app`: default feature that includes the [`app`] module
+//! - `bevy_reflect`: default feature that derives [`Reflect`] on components and resources
 //!
 //! `std` is not used in this crate so it is `no_std` compatible, to the extend of bevy's support.
 //!
@@ -164,14 +166,13 @@
 //! ### Exclusive systems
 //!
 //! As supporting reversible exclusive systems would come with some footguns that are hard to detect
-//! or prevent, they are not supported and will cause panics. This also reduces the maintenance
-//! burden of this crate noticably.
+//! and prevent, they are not supported and will cause panics.
 //!
 //! ### Untyped/dynamic commands
 //!
 //! Reversible (entity) commands lack some methods that are available in vanilla bevy, most
-//! prominently those that are based on `ComponentId` or entity cloning. While these could be
-//! supported, it would be way past the scope of this crate.
+//! prominently those that are based on `ComponentId` or entity cloning. Supporting them is past the
+//! scope of this crate.
 //!
 //! ### [Relationships] with extra data
 //!
@@ -184,14 +185,6 @@
 //!
 //! The behavior of reversible sync points is tightly embedded in this crate. APIs such as
 //! [`auto_insert_apply_deferred`] must not be used on reversible schedules.
-//!
-//! ### Other?
-//!
-//! There are a few more unsupported things that however just are not implemented yet. Check the
-//! existing issues of the repository in case you want to contribute.
-//!
-//! Note however that I will not merge every other fancy new feature if it surpasses what I am able
-//! and willing to maintain. Contact me first before putting effort into a pull request.
 //!
 //! [`bevy`]: https://bevy.org/
 //! [`NotLog`]: crate::meta::NotLog
@@ -211,7 +204,9 @@
 //! [`RevDespawned`]: crate::undo_redo::RevDespawned
 //! [not show up in queries]: bevy_ecs::entity_disabling
 //! [reversibly despawned]: crate::undo_redo::commands::RevCommands::rev_despawn
+//! [`RevFetch`]: crate::undo_redo::RevFetch
 //! [`is_rev_despawned`]: crate::undo_redo::IsRevDespawned::is_rev_despawned
+//! [`Reflect`]: bevy_reflect::Reflect
 //! [`Tick`]: bevy_ecs::change_detection::Tick
 //! [Relationships]: bevy_ecs::relationship
 //! [`auto_insert_apply_deferred`]: bevy_ecs::schedule::ScheduleBuildSettings::auto_insert_apply_deferred
@@ -225,6 +220,8 @@ extern crate alloc;
 ISSUES/DISCUSSIONS:
 - feature track_update_logs to opt-out
 - crate::schedule::set_base_sets should not need to chain forward/backward configs
+- benchmarks
+- set MaybeLocation of component meta, https://github.com/bevyengine/bevy/issues/20494
 */
 
 #[cfg(feature = "bevy_app")]

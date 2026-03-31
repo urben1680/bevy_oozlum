@@ -106,27 +106,26 @@ mod test;
 #[derive(ScheduleLabel, Copy, Clone, Debug, Hash, PartialEq, Eq)]
 pub struct RevUpdate;
 
-/// Contains a forward and a backward set that run depending on the current
+/// A system set that contains a forward and a backward set that run depending on the current
 /// [`RevMeta::running_direction`].
 pub struct RevSystems;
 
 /// [`RevSystems`] does not implement [`SystemSet`] because it is not meant to be configured but
 /// only to order other sets and systems relative to itself using
 /// [non-reversible configurations](IntoScheduleConfigs).
-impl IntoSystemSet<()> for RevSystems {
-    /// Refrain from using this type in user code.
+impl IntoSystemSet<RevSystemsSet> for RevSystems {
     type Set = RevSystemsSet;
     fn into_system_set(self) -> Self::Set {
-        RevSystemsSet
+        RevSystemsSet(())
     }
 }
 
-mod rev_systems_private {
+mod sealed_rev_systems {
     #[derive(super::SystemSet, Debug, Copy, Clone, Hash, PartialEq, Eq)]
-    pub struct RevSystemsSet;
+    pub struct RevSystemsSet(pub(super) ());
 }
 
-use rev_systems_private::RevSystemsSet;
+use sealed_rev_systems::RevSystemsSet;
 
 /// Subset of [`RevSystems`].
 ///
@@ -141,28 +140,28 @@ struct ForwardSystems;
 #[derive(SystemSet, Debug, Copy, Clone, Hash, PartialEq, Eq)]
 struct BackwardSystems;
 
-/// Subsets of [`RevSystems`].
+/// Subsets of [`ForwardSystems`].
 ///
 /// Each value of this set contains the specific [`RevSystem::<T, true>`](system::RevSystem) of a
 /// system.
 #[derive(SystemSet, Debug, Copy, Clone, Hash, PartialEq, Eq)]
 struct ForwardSystemSet(InternedSystemSet);
 
-/// Subsets of [`RevSystems`].
+/// Subsets of [`BackwardSystems`].
 ///
 /// Each value of this set contains the specific [`BackwardDeferred`](system::BackwardDeferred) of a
 /// system.
 #[derive(SystemSet, Debug, Copy, Clone, Hash, PartialEq, Eq)]
 struct BackwardDeferredSet(InternedSystemSet);
 
-/// Subsets of [`RevSystems`].
+/// Subsets of [`BackwardSystems`].
 ///
 /// Each value of this set contains the specific [`RevSystem::<T, false>`](system::RevSystem) of a
 /// system.
 #[derive(SystemSet, Debug, Copy, Clone, Hash, PartialEq, Eq)]
 struct BackwardSystemSet(InternedSystemSet);
 
-/// Subsets of [`RevSystems`].
+/// Subsets of [`BackwardSystems`].
 ///
 /// Each value of this set contains the specific [`BackwardDeferred`](system::BackwardDeferred) and
 /// [`RevSystem::<T, false>`](system::RevSystem) of a system.
@@ -244,7 +243,7 @@ fn set_base_sets(schedule: &mut Schedule) {
                 BackwardSystems.run_if(is_forward::<false>),
             )
                 .chain() // todo: remove chain to reduce sync points
-                .in_set(RevSystemsSet),
+                .in_set(RevSystemsSet(())),
         );
     }
 }

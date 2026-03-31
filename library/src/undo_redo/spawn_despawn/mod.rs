@@ -26,14 +26,16 @@ mod test;
 #[cfg_attr(feature = "bevy_reflect", derive(bevy_reflect::Reflect))]
 #[component(immutable)]
 /// Marker component for entities that were marked as despawned but the actual despawn is delayed
-/// so this can be reversed if needed. This component disables the Entity to not show up in queries,
+/// so this can be reversed if needed.
+///
+/// This component disables the Entity to not show up in queries,
 /// see [`World::register_disabling_component`]. If an entity is not queried but fetched, wrap the
 /// id(s) in [`RevFetch`] or, if that is not possible, use [`IsRevDespawned::is_rev_despawned`] on
 /// the returned entity pointers. These check for the existence of this component. These entities
 /// should be handled as despawned, including in code outside of reversible systems.
 ///
-/// This component should not be manually inserted because this would not automatically despawn the
-/// entity at some point.
+/// Manually inserting it is discouraged because no finalized despawn will take place in these
+/// cases. Manually removing it will also not prevent the despawn.
 // todo: store MaybeLocation in component change meta instead of here, https://github.com/bevyengine/bevy/issues/20494
 pub struct RevDespawned(pub MaybeLocation);
 
@@ -254,6 +256,7 @@ impl<E: EntityCollection, const SPAWN: bool> RevSpawnDespawn<E, SPAWN> {
                         undo_redo_str::<UNDO>(),
                         self.caller
                     ),
+                    // only one entity is fetched
                     Err(EntityMutableFetchError::AliasedMutability(_)) => unreachable!(),
                 }
             }

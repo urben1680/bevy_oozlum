@@ -182,6 +182,7 @@ impl<R: Relationship, E: AsRef<[Entity]> + Send + 'static, const ADD: bool>
                     self.caller
                 );
             }
+            // only one entity is fetched
             Err(EntityMutableFetchError::AliasedMutability(_)) => unreachable!(),
         }
     }

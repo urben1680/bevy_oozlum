@@ -35,8 +35,8 @@
 //! ## Notes
 //!
 //! - The APIs mind linked entities based on [`RelationshipTarget::LINKED_SPAWN`].
-//! - Manually inserting or removing [`RevDespawned`] is discouraged because no finalized despawn
-//!   will take place in these cases.
+//! - Manually inserting [`RevDespawned`] is discouraged because no finalized despawn will take
+//!   place in these cases. Manually removing it will also not prevent the despawn.
 //!
 //! [log directions]: RevDirection::is_log
 //! [`Commands::rev_spawn`]: crate::undo_redo::commands::RevCommands::rev_spawn
@@ -194,8 +194,6 @@ impl Debug for BoxedUndoRedo {
 }
 
 /// Trait that all reversible (deferred) operations use to define how to undo and redo them.
-/// They are stored in the system's state that did them, including indirectly via commands, hooks or
-/// observers.
 ///
 /// This is implemented for `impl FnMut(&mut World, UndoRedoDirection)`, see [`UndoRedoDirection`].
 pub trait UndoRedo: Send + 'static {

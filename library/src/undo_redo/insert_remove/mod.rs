@@ -338,6 +338,7 @@ impl<T: Send + 'static> UndoRedo for RevNewRequired<T> {
             Err(EntityMutableFetchError::NotSpawned(err)) => {
                 entity_err::<T>(UNDO, INSERT, self.caller, err)
             }
+            // only one entity is fetched
             Err(EntityMutableFetchError::AliasedMutability(_)) => unreachable!(),
         }
     }

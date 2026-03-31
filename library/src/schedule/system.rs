@@ -48,8 +48,8 @@ where
     if system.is_exclusive() {
         // Exclusive systems return true here as they do not need to be initialized first.
         // Allowing exclusive systems has the problem that using rev_* API before other,
-        // non-buffering reversible system logic "foo" would make it impossible to ensure this order
-        // is reversed when going backward. That can lead to bugs.
+        // non-buffering reversible system logic would make it impossible to ensure this order is
+        // reversed when going backward. That can lead to bugs.
         // Instead, rev_* API should always come last. To enforce that, it makes more sense to use
         // DeferredWorld systems that explicitly use commands which make it obvious they are not
         // applied in the middle of the exclusive system.
@@ -292,7 +292,7 @@ impl<T: System<In = (), Out = ()>, const FORWARD: bool> System for RevSystem<T, 
         }
     }
     fn queue_deferred(&mut self, _world: DeferredWorld) {
-        unreachable!("reversible systems are not used as observers")
+        unreachable!() // reversible systems are not used as observers
     }
     fn initialize(&mut self, world: &mut World) -> FilteredAccessSet {
         let mut inner = self.shared.get_inner(&self.name);
@@ -403,7 +403,7 @@ impl<T: System> System for BackwardDeferred<T> {
         }
     }
     fn queue_deferred(&mut self, _world: DeferredWorld) {
-        unreachable!("reversible systems are not used as observers")
+        unreachable!(); // reversible systems are not used as observers
     }
     fn initialize(&mut self, world: &mut World) -> FilteredAccessSet {
         let mut inner = self.shared.get_inner(&self.name);

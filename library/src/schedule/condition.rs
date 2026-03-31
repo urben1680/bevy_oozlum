@@ -125,10 +125,10 @@ impl<T: ReadOnlySystem<In = (), Out = bool>> System for RevCondition<T> {
         }
     }
     fn apply_deferred(&mut self, _world: &mut World) {
-        unreachable!("reversible conditions do not get their deferred parameters applied")
+        unreachable!() // reversible conditions do not get their deferred parameters applied
     }
     fn queue_deferred(&mut self, _world: DeferredWorld) {
-        unreachable!("reversible conditions are not used as observers")
+        unreachable!() // reversible conditions are not used as observers
     }
     fn default_system_sets(&self) -> Vec<InternedSystemSet> {
         self.condition.default_system_sets()
