@@ -48,7 +48,7 @@ where
     if system.is_exclusive() {
         // Exclusive systems return true here as they do not need to be initialized first.
         // Allowing exclusive systems has the problem that using rev_* API before other,
-        // non-buffering reversible system logic would make it impossible to ensure this order is
+        // non-command reversible system logic would make it impossible to ensure this order is
         // reversed when going backward. That can lead to bugs.
         // Instead, rev_* API should always come last. To enforce that, it makes more sense to use
         // DeferredWorld systems that explicitly use commands which make it obvious they are not
@@ -280,7 +280,7 @@ impl<T: System<In = (), Out = ()>, const FORWARD: bool> System for RevSystem<T, 
                 return Ok(());
             }
 
-            // reverisble commands are now in the buffer resource so commands_log can take them
+            // reverisble commands are now in the queue resource so commands_log can take them
             shared.deferred_log.forward(world).map_err(Into::into)
         };
 
@@ -457,7 +457,7 @@ mod test {
         world::{DeferredWorld, World},
     };
 
-    use crate::{panic_on_error_events, prelude::*, undo_redo::UndoRedoBuffer};
+    use crate::{panic_on_error_events, prelude::*, undo_redo::UndoRedoQueue};
 
     fn blank_undo_redo(_: &mut World, _: UndoRedoDirection) {}
 
@@ -468,7 +468,7 @@ mod test {
         let not_log = world.resource::<RevMeta>().not_log();
         world
             .commands()
-            .buffer_undo_redo(not_log, blank_undo_redo)
+            .queue_undo_redo(not_log, blank_undo_redo)
             .spawn(EmptyOnAdd);
     }
 
@@ -476,7 +476,7 @@ mod test {
     struct EmptyObserver;
     fn empty_observer(_: On<Observer>, mut world: DeferredWorld) {
         let not_log = world.resource::<RevMeta>().not_log();
-        world.commands().buffer_undo_redo(not_log, blank_undo_redo);
+        world.commands().queue_undo_redo(not_log, blank_undo_redo);
     }
 
     #[derive(Component)]
@@ -486,7 +486,7 @@ mod test {
         let not_log = world.resource::<RevMeta>().not_log();
         world
             .commands()
-            .buffer_undo_redo(not_log, blank_undo_redo)
+            .queue_undo_redo(not_log, blank_undo_redo)
             .trigger(EmptyObserver);
     }
 
@@ -495,14 +495,14 @@ mod test {
     struct EmptyOnAdd;
     fn empty_on_add(mut world: DeferredWorld, _: HookContext) {
         let not_log = world.resource::<RevMeta>().not_log();
-        world.commands().buffer_undo_redo(not_log, blank_undo_redo);
+        world.commands().queue_undo_redo(not_log, blank_undo_redo);
     }
 
     #[test]
     fn non_exclusive_system_drains_all_undo_redo() {
         fn system(meta: Res<RevMeta>, mut commands: Commands) {
             let not_log = meta.not_log();
-            commands.buffer_undo_redo(not_log, blank_undo_redo);
+            commands.queue_undo_redo(not_log, blank_undo_redo);
             commands.queue(|world: &mut World| {
                 world.trigger(Observer);
                 world.spawn(OnAdd);
@@ -518,8 +518,8 @@ mod test {
             .add_observer(observer)
             .add_observer(empty_observer)
             .update();
-        let buffer = app.world().resource::<UndoRedoBuffer>();
-        assert!(buffer.is_empty(), "{buffer:?}");
+        let queue = app.world().resource::<UndoRedoQueue>();
+        assert!(queue.is_empty(), "{queue:?}");
     }
 
     #[test]
@@ -528,7 +528,7 @@ mod test {
         struct Counter(u8);
 
         fn system1(not_log: NotLog, mut commands: Commands) {
-            commands.redo_and_buffer(not_log, |world: &mut World, _: UndoRedoDirection| {
+            commands.redo_and_queue(not_log, |world: &mut World, _: UndoRedoDirection| {
                 world.get_resource_or_init::<Counter>().0 += 1;
             });
         }

@@ -5,7 +5,7 @@
 use crate::{
     log::{PreUpdateKind, UpdateLogLimits, UpdateLogMissed, UpdateLogState},
     prelude::RevUpdate,
-    undo_redo::{DespawnFinalizerErr, UndoRedoBuffer, finalize_despawns},
+    undo_redo::{DespawnFinalizerErr, UndoRedoQueue, finalize_despawns},
 };
 use alloc::{borrow::Cow, boxed::Box, format, string::ToString, vec::Vec};
 use bevy_ecs::{
@@ -530,13 +530,13 @@ impl RevMeta {
                     ));
                 };
 
-                if let Some(buffer) = world.get_resource::<UndoRedoBuffer>()
-                    && !buffer.is_empty()
+                if let Some(queue) = world.get_resource::<UndoRedoQueue>()
+                    && !queue.is_empty()
                 {
                     let err = Err(RunSystemError::Skipped(
                         SystemParamValidationError::invalid::<RevMeta>(format!(
-                            "the resource containing buffered UndoRedo implementors was not \
-                        empty, it contained the following types:\n{buffer:?}\n{meta:?}"
+                            "the resource containing queued UndoRedo implementors was not \
+                        empty, it contained the following types:\n{queue:?}\n{meta:?}"
                         )),
                     ));
                     world.insert_resource(meta);

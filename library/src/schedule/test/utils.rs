@@ -78,7 +78,7 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
                 .push(LogEntry::SysObsvCmd((n, RevDirection::NOT_LOG_MIN)));
         });
         let test = LogEntry::SysObsvCmd(n);
-        world.commands().buffer_undo_redo(not_log, test);
+        world.commands().queue_undo_redo(not_log, test);
     });
 
     // set up hooks
@@ -97,7 +97,7 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
                     .push(LogEntry::SysHookCmd((n, RevDirection::NOT_LOG_MIN)));
             });
             let test = LogEntry::SysHookCmd(n);
-            world.commands().buffer_undo_redo(not_log, test);
+            world.commands().queue_undo_redo(not_log, test);
         });
 
     // run tests forward

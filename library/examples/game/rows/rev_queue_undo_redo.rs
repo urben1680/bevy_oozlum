@@ -29,7 +29,7 @@ fn system<const ROW: u64>(input: Res<JustPressed>, meta: Res<RevMeta>, mut comma
         // sync-point. This is useful when this does the same as what we would need to do via a
         // command ourselves here. And as that is the case (we want to insert the Waste component)
         // we use redo_and_buffer.
-        commands.redo_and_buffer(
+        commands.redo_and_queue(
             not_log,
             InsertRemoveWaste {
                 entity,

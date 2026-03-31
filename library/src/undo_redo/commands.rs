@@ -17,14 +17,14 @@ use crate::{
 
 /// Extension trait for [`Commands`] with reversible variants of various methods.
 pub trait RevCommands {
-    /// Buffers an [`UndoRedo`] implementor in a resource to be collected by the reversible system's
+    /// Queues an [`UndoRedo`] implementor in a resource to be collected by the reversible system's
     /// state.
     #[track_caller]
-    fn buffer_undo_redo(&mut self, not_log: NotLog, undo_redo: impl UndoRedo) -> &mut Self {
-        self.buffer_undo_redo_with_caller(not_log, undo_redo, MaybeLocation::caller())
+    fn queue_undo_redo(&mut self, not_log: NotLog, undo_redo: impl UndoRedo) -> &mut Self {
+        self.queue_undo_redo_with_caller(not_log, undo_redo, MaybeLocation::caller())
     }
 
-    /// Buffers an [`UndoRedo`] implementor in a resource to be collected by the reversible system's
+    /// Queues an [`UndoRedo`] implementor in a resource to be collected by the reversible system's
     /// state.
     ///
     /// This will also trigger the [redo logic] at the sync point.
@@ -34,26 +34,26 @@ pub trait RevCommands {
     ///
     /// [redo logic]: UndoRedo::redo
     #[track_caller]
-    fn redo_and_buffer(&mut self, not_log: NotLog, undo_redo: impl UndoRedo) -> &mut Self {
-        self.redo_and_buffer_with_caller(not_log, undo_redo, MaybeLocation::caller())
+    fn redo_and_queue(&mut self, not_log: NotLog, undo_redo: impl UndoRedo) -> &mut Self {
+        self.redo_and_queue_with_caller(not_log, undo_redo, MaybeLocation::caller())
     }
 
-    /// As [`buffer_undo_redo`](Self::buffer_undo_redo) but with explicit [`MaybeLocation`].
+    /// As [`queue_undo_redo`](Self::queue_undo_redo) but with explicit [`MaybeLocation`].
     ///
     /// The location can be helpful for identifying non-reversible systems using reversible API.
     /// [`run_rev_update`](crate::schedule::run_rev_update) may return the relevant error in that case.
-    fn buffer_undo_redo_with_caller(
+    fn queue_undo_redo_with_caller(
         &mut self,
         not_log: NotLog,
         undo_redo: impl UndoRedo,
         caller: MaybeLocation,
     ) -> &mut Self;
 
-    /// As [`redo_and_buffer`](Self::redo_and_buffer) but with explicit [`MaybeLocation`].
+    /// As [`redo_and_queue`](Self::redo_and_queue) but with explicit [`MaybeLocation`].
     ///
     /// The location can be helpful for identifying non-reversible systems using reversible API.
     /// [`run_rev_update`](crate::schedule::run_rev_update) may return the relevant error in that case.
-    fn redo_and_buffer_with_caller(
+    fn redo_and_queue_with_caller(
         &mut self,
         not_log: NotLog,
         undo_redo: impl UndoRedo,
@@ -148,26 +148,26 @@ pub trait RevCommands {
 }
 
 impl RevCommands for Commands<'_, '_> {
-    fn buffer_undo_redo_with_caller(
+    fn queue_undo_redo_with_caller(
         &mut self,
         not_log: NotLog,
         undo_redo: impl UndoRedo,
         caller: MaybeLocation,
     ) -> &mut Self {
         self.queue(move |world: &mut World| {
-            world.buffer_undo_redo(not_log, undo_redo, caller);
+            world.queue_undo_redo(not_log, undo_redo, caller);
         });
         self
     }
 
-    fn redo_and_buffer_with_caller(
+    fn redo_and_queue_with_caller(
         &mut self,
         not_log: NotLog,
         undo_redo: impl UndoRedo,
         caller: MaybeLocation,
     ) -> &mut Self {
         self.queue(move |world: &mut World| {
-            world.redo_and_buffer(not_log, undo_redo, caller);
+            world.redo_and_queue(not_log, undo_redo, caller);
         });
         self
     }

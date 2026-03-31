@@ -20,7 +20,8 @@ mod test;
 /// Compile-time assertion that [`Relationship`] and its [`RelationshipTarget`] do not contain extra
 /// Non-ZST fields.
 ///
-/// This limitation is needed because doing backups in `UndoRedo` buffers is out of scope.
+/// This limitation is needed because doing backups in `UndoRedo` implementing types is out of
+/// scope.
 ///
 /// The associated constant needs to be assigned to a local variable with `let` to
 /// utilize this assertion.

@@ -8,13 +8,13 @@ use bevy::prelude::*;
 //
 // In the disabling/enabling case, this is done with the RevDespawned component under the hood.
 
-mod rev_buffer_undo_redo; // manual UndoRedo implementation and buffering
 mod rev_command; // reversible command from a simple system
 mod rev_config; // reversible schedule configuration
 mod rev_hook; // reversible command from hook
 mod rev_logs_drain; // reversible logic using log types, utilizes drain to clean up
 mod rev_logs_mut;
 mod rev_observer; // reversible command from observer
+mod rev_queue_undo_redo; // manual UndoRedo implementation and buffering
 mod rev_schedule; // running other schedules during RevUpdate // reversible logic using log types, utilizes mutation of log entries
 
 pub fn plugin(app: &mut App) {
@@ -24,7 +24,7 @@ pub fn plugin(app: &mut App) {
         rev_schedule::plugin::<3>,
         rev_hook::plugin::<4>,
         rev_observer::plugin::<5>,
-        rev_buffer_undo_redo::plugin::<6>,
+        rev_queue_undo_redo::plugin::<6>,
         rev_logs_drain::plugin::<7>,
         rev_logs_mut::plugin::<8>,
     ));

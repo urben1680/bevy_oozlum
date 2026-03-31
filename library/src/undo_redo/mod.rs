@@ -111,15 +111,15 @@ impl Error for EntityRevDespawnedError {}
 /// Reversible operations store their [`UndoRedo`] value in this resource so reversible systems can
 /// load them after that. This way, these systems can undo and redo them.
 #[derive(Resource, Default)]
-pub(crate) struct UndoRedoBuffer(Vec<BoxedUndoRedo>);
+pub(crate) struct UndoRedoQueue(Vec<BoxedUndoRedo>);
 
-impl UndoRedoBuffer {
-    /// Returns `true` when the buffer is empty, otherwise returns `false`.
+impl UndoRedoQueue {
+    /// Returns `true` when the queue is empty, otherwise returns `false`.
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
     #[track_caller]
-    pub(crate) fn buffer_undo_redo<T: UndoRedo>(
+    pub(crate) fn queue_undo_redo<T: UndoRedo>(
         &mut self,
         _: NotLog,
         caller: MaybeLocation,
@@ -136,7 +136,7 @@ impl UndoRedoBuffer {
 }
 
 #[cfg(test)]
-impl UndoRedo for UndoRedoBuffer {
+impl UndoRedo for UndoRedoQueue {
     fn undo(&mut self, world: &mut World) {
         for boxed in self.0.iter_mut().rev() {
             boxed.undo_redo.get().undo(world)
@@ -149,7 +149,7 @@ impl UndoRedo for UndoRedoBuffer {
     }
 }
 
-impl Debug for UndoRedoBuffer {
+impl Debug for UndoRedoQueue {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match (size_of::<DebugName>(), size_of::<MaybeLocation>()) {
             (0, 0) => write!(
@@ -214,7 +214,7 @@ pub trait UndoRedo: Send + 'static {
 /// # };
 /// # let mut world = World::new();
 /// # let mut commands = world.commands();
-/// commands.buffer_undo_redo(not_log, |world: &mut World, direction| {
+/// commands.queue_undo_redo(not_log, |world: &mut World, direction| {
 ///     match direction {
 ///         UndoRedoDirection::Undo => {
 ///             // undo logic
@@ -356,7 +356,7 @@ impl Display for UndoRedoLogError {
 impl Error for UndoRedoLogError {}
 
 impl UndoRedoLog {
-    /// At [`RevDirection::NotLog`], load applied reversible operations from [`UndoRedoBuffer`],
+    /// At [`RevDirection::NotLog`], load applied reversible operations from [`UndoRedoQueue`],
     /// if any.
     ///
     /// At [`RevDirection::ForwardLog`], redo reversible operations, if any.
@@ -368,15 +368,15 @@ impl UndoRedoLog {
         let now = meta.now();
         match meta.get_running_direction() {
             Some(RevDirection::NotLog(_)) => {
-                // UndoRedoBuffer may not exist if no reversible commands were buffered yet
-                world.try_resource_scope::<UndoRedoBuffer, _>(|world, mut buffer| {
-                    if !buffer.0.is_empty() {
+                // UndoRedoQueue may not exist if no reversible commands were queued yet
+                world.try_resource_scope::<UndoRedoQueue, _>(|world, mut queue| {
+                    if !queue.0.is_empty() {
                         let meta = world.resource::<RevMeta>();
                         let not_log = self
                             .update_log
                             .forward_past_len_with_caller(meta, MaybeLocation::new(None));
-                        let buffers = buffer.0.drain(..).map(|boxed| DebugHidden(boxed.undo_redo));
-                        self.undo_redo_log.forward_extend(meta, not_log, buffers);
+                        let undo_redo = queue.0.drain(..).map(|boxed| DebugHidden(boxed.undo_redo));
+                        self.undo_redo_log.forward_extend(meta, not_log, undo_redo);
                     }
                 });
                 Ok(())
@@ -516,7 +516,7 @@ mod test {
                 };
                 meta.set_queue(queue);
                 world.insert_resource(meta);
-                world.resource_scope::<UndoRedoBuffer, _>(|world, mut buffer| buffer.undo(world));
+                world.resource_scope::<UndoRedoQueue, _>(|world, mut queue| queue.undo(world));
                 finalize_despawns(world).unwrap();
                 backward_log(world, state.as_mut().unwrap());
                 world.remove_resource()
@@ -530,9 +530,7 @@ mod test {
                     assert_eq!(direction, RevDirection::ForwardLog);
                     meta.set_queue(RevQueue::RunForward);
                     world.insert_resource(meta);
-                    world.resource_scope::<UndoRedoBuffer, _>(|world, mut buffer| {
-                        buffer.redo(world)
-                    });
+                    world.resource_scope::<UndoRedoQueue, _>(|world, mut queue| queue.redo(world));
                     finalize_despawns(world).unwrap();
                     forward_log(world, state.as_mut().unwrap());
                     world.remove_resource()

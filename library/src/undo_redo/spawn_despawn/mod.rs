@@ -207,7 +207,7 @@ pub(super) fn mark_spawn_empty(
             .get_resource_or_init::<DespawnFinalizer>()
             .spawn_queue
             .push((id, caller));
-        world.buffer_undo_redo(not_log, spawn_despawn, caller);
+        world.queue_undo_redo(not_log, spawn_despawn, caller);
     })
 }
 
@@ -229,10 +229,10 @@ fn mark_inner<const SPAWN: bool>(
 
     if SPAWN {
         resource.spawn_queue.extend(iter);
-        world.buffer_undo_redo(not_log, spawn_despawn, caller);
+        world.queue_undo_redo(not_log, spawn_despawn, caller);
     } else {
         resource.despawn_queue.extend(iter);
-        world.redo_and_buffer(not_log, spawn_despawn, caller);
+        world.redo_and_queue(not_log, spawn_despawn, caller);
     }
 }
 

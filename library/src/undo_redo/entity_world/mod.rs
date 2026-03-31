@@ -20,14 +20,9 @@ use crate::{
 mod test;
 
 pub(super) trait RevEntityWorld {
-    fn buffer_undo_redo(
-        &mut self,
-        not_log: NotLog,
-        undo_redo: impl UndoRedo,
-        caller: MaybeLocation,
-    );
+    fn queue_undo_redo(&mut self, not_log: NotLog, undo_redo: impl UndoRedo, caller: MaybeLocation);
 
-    fn redo_and_buffer(&mut self, not_log: NotLog, undo_redo: impl UndoRedo, caller: MaybeLocation);
+    fn redo_and_queue(&mut self, not_log: NotLog, undo_redo: impl UndoRedo, caller: MaybeLocation);
 
     fn rev_mark_spawned(
         &mut self,
@@ -113,25 +108,20 @@ pub(super) trait RevEntityWorld {
 }
 
 impl<'w> RevEntityWorld for EntityWorldMut<'w> {
-    fn buffer_undo_redo(
+    fn queue_undo_redo(
         &mut self,
         not_log: NotLog,
         undo_redo: impl UndoRedo,
         caller: MaybeLocation,
     ) {
         self.world_scope(|world| {
-            world.buffer_undo_redo(not_log, undo_redo, caller);
+            world.queue_undo_redo(not_log, undo_redo, caller);
         })
     }
 
-    fn redo_and_buffer(
-        &mut self,
-        not_log: NotLog,
-        undo_redo: impl UndoRedo,
-        caller: MaybeLocation,
-    ) {
+    fn redo_and_queue(&mut self, not_log: NotLog, undo_redo: impl UndoRedo, caller: MaybeLocation) {
         self.world_scope(|world| {
-            world.redo_and_buffer(not_log, undo_redo, caller);
+            world.redo_and_queue(not_log, undo_redo, caller);
         })
     }
 
@@ -203,7 +193,7 @@ impl<'w> RevEntityWorld for EntityWorldMut<'w> {
         let id = self.id();
         self.world_scope(|world| {
             if world.rev_mark_spawned(not_log, new_related, true, caller) {
-                world.buffer_undo_redo(
+                world.queue_undo_redo(
                     not_log,
                     AddRemoveRelated::<R, _, true>::new(id, [new_related], caller),
                     caller,
@@ -221,7 +211,7 @@ impl<'w> RevEntityWorld for EntityWorldMut<'w> {
     ) -> Result<&mut Self, EntityRevDespawnedError> {
         self.assert_not_rev_despawned()?;
         let id = self.id();
-        self.add_related::<R>(related.as_ref()).buffer_undo_redo(
+        self.add_related::<R>(related.as_ref()).queue_undo_redo(
             not_log,
             AddRemoveRelated::<R, _, true>::new(id, related, caller),
             caller,
@@ -237,7 +227,7 @@ impl<'w> RevEntityWorld for EntityWorldMut<'w> {
     ) -> Result<&mut Self, EntityRevDespawnedError> {
         self.assert_not_rev_despawned()?;
         let id = self.id();
-        self.add_one_related::<R>(entity).buffer_undo_redo(
+        self.add_one_related::<R>(entity).queue_undo_redo(
             not_log,
             AddRemoveRelated::<R, _, true>::new(id, [entity], caller),
             caller,
@@ -256,7 +246,7 @@ impl<'w> RevEntityWorld for EntityWorldMut<'w> {
             .map(|related| related.collection().iter().collect::<Vec<_>>());
         if let Some(related) = related {
             let id = self.id();
-            self.detach_all_related::<R>().buffer_undo_redo(
+            self.detach_all_related::<R>().queue_undo_redo(
                 not_log,
                 AddRemoveRelated::<R, _, false>::new(id, related, caller),
                 caller,
@@ -274,7 +264,7 @@ impl<'w> RevEntityWorld for EntityWorldMut<'w> {
         self.assert_not_rev_despawned()?;
         if self.contains::<R::RelationshipTarget>() {
             let id = self.id();
-            self.remove_related::<R>(related.as_ref()).buffer_undo_redo(
+            self.remove_related::<R>(related.as_ref()).queue_undo_redo(
                 not_log,
                 AddRemoveRelated::<R, _, false>::new(id, related, caller),
                 caller,
@@ -305,7 +295,7 @@ impl<'w> RevEntityWorld for EntityWorldMut<'w> {
         let related: Vec<Entity> = target.collection().iter().collect();
         let id = self.id();
         self.world_scope(|world| world.rev_despawn_batch(not_log, &related, caller));
-        self.redo_and_buffer(
+        self.redo_and_queue(
             not_log,
             AddRemoveRelated::<S::Relationship, _, false>::new(id, related, caller),
             caller,

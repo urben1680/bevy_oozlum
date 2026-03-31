@@ -18,19 +18,14 @@ use crate::{
     meta::{NotLog, RevDirection, RevMeta},
     undo_redo::{
         EntityRevDespawnedError, RevBundle, RevInsertResourceNew, RevInsertResourceOverwrite,
-        RevRemoveResource, UndoRedo, UndoRedoBuffer, mark_entities, mark_entity,
+        RevRemoveResource, UndoRedo, UndoRedoQueue, mark_entities, mark_entity,
     },
 };
 
 pub(super) trait RevWorld {
-    fn buffer_undo_redo(
-        &mut self,
-        not_log: NotLog,
-        undo_redo: impl UndoRedo,
-        caller: MaybeLocation,
-    );
+    fn queue_undo_redo(&mut self, not_log: NotLog, undo_redo: impl UndoRedo, caller: MaybeLocation);
 
-    fn redo_and_buffer(&mut self, not_log: NotLog, undo_redo: impl UndoRedo, caller: MaybeLocation);
+    fn redo_and_queue(&mut self, not_log: NotLog, undo_redo: impl UndoRedo, caller: MaybeLocation);
 
     fn rev_try_run_schedule(
         &mut self,
@@ -99,7 +94,7 @@ pub(super) trait RevWorld {
 }
 
 impl RevWorld for World {
-    fn buffer_undo_redo(
+    fn queue_undo_redo(
         &mut self,
         not_log: NotLog,
         undo_redo: impl UndoRedo,
@@ -112,18 +107,18 @@ impl RevWorld for World {
                     _ => false,
                 })
         }));
-        self.get_resource_or_init::<UndoRedoBuffer>()
-            .buffer_undo_redo(not_log, caller, undo_redo);
+        self.get_resource_or_init::<UndoRedoQueue>()
+            .queue_undo_redo(not_log, caller, undo_redo);
     }
 
-    fn redo_and_buffer(
+    fn redo_and_queue(
         &mut self,
         not_log: NotLog,
         mut undo_redo: impl UndoRedo,
         caller: MaybeLocation,
     ) {
         undo_redo.redo(self);
-        self.buffer_undo_redo(not_log, undo_redo, caller);
+        self.queue_undo_redo(not_log, undo_redo, caller);
     }
 
     fn rev_try_run_schedule(
@@ -134,7 +129,7 @@ impl RevWorld for World {
     ) -> Result<(), TryRunScheduleError> {
         let label = label.intern();
         self.try_run_schedule(label).inspect(move |()| {
-            self.buffer_undo_redo(not_log, RevRunSchedule(label), caller);
+            self.queue_undo_redo(not_log, RevRunSchedule(label), caller);
         })
     }
 
@@ -178,7 +173,7 @@ impl RevWorld for World {
         caller: MaybeLocation,
     ) -> ComponentId {
         if !self.contains_resource::<R>() {
-            self.buffer_undo_redo(not_log, RevInsertResourceNew::<R>::new(caller), caller);
+            self.queue_undo_redo(not_log, RevInsertResourceNew::<R>::new(caller), caller);
         }
         self.init_resource::<R>()
     }
@@ -190,12 +185,12 @@ impl RevWorld for World {
         caller: MaybeLocation,
     ) {
         match self.remove_resource::<R>() {
-            Some(resource) => self.buffer_undo_redo(
+            Some(resource) => self.queue_undo_redo(
                 not_log,
                 RevInsertResourceOverwrite::new(resource, caller),
                 caller,
             ),
-            None => self.buffer_undo_redo(not_log, RevInsertResourceNew::<R>::new(caller), caller),
+            None => self.queue_undo_redo(not_log, RevInsertResourceNew::<R>::new(caller), caller),
         }
         self.insert_resource(resource);
     }
@@ -208,7 +203,7 @@ impl RevWorld for World {
     ) -> Option<Out> {
         self.remove_resource::<R>().map(|resource| {
             let out = c(&resource);
-            self.buffer_undo_redo(not_log, RevRemoveResource::new(resource, caller), caller);
+            self.queue_undo_redo(not_log, RevRemoveResource::new(resource, caller), caller);
             out
         })
     }

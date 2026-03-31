@@ -109,7 +109,7 @@ fn required_inner<T: Send + 'static>(
     new_required: Vec<ComponentId>,
 ) {
     if !new_required.is_empty() {
-        entity.buffer_undo_redo(
+        entity.queue_undo_redo(
             not_log,
             RevNewRequired::<T> {
                 entity: entity.id(),
@@ -152,7 +152,7 @@ impl<C: Component> RevBundle<[C; 1]> for C {
         match mode {
             InsertMode::Keep => {
                 if !entity.contains::<C>() {
-                    entity.redo_and_buffer(
+                    entity.redo_and_queue(
                         not_log,
                         RevInsertComponentNew::<_>(InnerComponentBuffer {
                             entity: entity.id(),
@@ -173,9 +173,9 @@ impl<C: Component> RevBundle<[C; 1]> for C {
                     caller,
                 };
                 if swapped {
-                    entity.buffer_undo_redo(not_log, RevInsertComponentOverwrite(inner), caller);
+                    entity.queue_undo_redo(not_log, RevInsertComponentOverwrite(inner), caller);
                 } else {
-                    entity.redo_and_buffer(not_log, RevInsertComponentNew(inner), caller)
+                    entity.redo_and_queue(not_log, RevInsertComponentNew(inner), caller)
                 }
             }
         }
@@ -183,7 +183,7 @@ impl<C: Component> RevBundle<[C; 1]> for C {
 
     fn rev_remove(not_log: NotLog, entity: &mut EntityWorldMut, caller: MaybeLocation) {
         if let Some(component) = entity.take::<C>() {
-            entity.buffer_undo_redo(
+            entity.queue_undo_redo(
                 not_log,
                 RevRemoveComponent(InnerComponentBuffer {
                     entity: entity.id(),
@@ -225,7 +225,7 @@ impl<R: Relationship, B: Bundle> RevBundle<[R; 2]> for SpawnOneRelated<R, B> {
             }
         });
         let id = entity.id();
-        entity.buffer_undo_redo(
+        entity.queue_undo_redo(
             not_log,
             AddRemoveRelated::<R, _, true>::new(id, [new_related], caller),
             caller,
@@ -262,7 +262,7 @@ impl<R: Relationship, L: SpawnableList<R> + Send + Sync + 'static> RevBundle<[R;
             mark_entities::<true>(not_log, world, &new_related, true, MaybeLocation::caller())
         });
         let id = entity.id();
-        entity.buffer_undo_redo(
+        entity.queue_undo_redo(
             not_log,
             AddRemoveRelated::<R, _, true>::new(id, new_related, caller),
             caller,

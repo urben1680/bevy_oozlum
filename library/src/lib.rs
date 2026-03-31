@@ -39,7 +39,7 @@
 //! # use bevy_oozlum::prelude::*;
 //! fn rev_system_1(not_log: NotLog, mut commands: Commands) {
 //!     println!("hello world!");
-//!     commands.buffer_undo_redo(not_log, |_: &mut World, direction| {
+//!     commands.queue_undo_redo(not_log, |_: &mut World, direction| {
 //!         match direction {
 //!             UndoRedoDirection::Undo => println!("!dlrow olleh (log)"),
 //!             UndoRedoDirection::Redo => println!("hello world! (log)"),

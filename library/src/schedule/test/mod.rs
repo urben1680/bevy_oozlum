@@ -184,7 +184,7 @@ fn non_exclusive_system_commands_only<const N: u8>(meta: Res<RevMeta>, mut comma
             .0
             .push(LogEntry::SysCmd((N, RevDirection::NOT_LOG_MIN)))
     });
-    commands.buffer_undo_redo(not_log, LogEntry::SysCmd(N));
+    commands.queue_undo_redo(not_log, LogEntry::SysCmd(N));
 }
 
 #[test]
