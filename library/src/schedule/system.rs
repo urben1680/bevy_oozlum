@@ -261,26 +261,26 @@ impl<T: System<In = (), Out = ()>, const FORWARD: bool> System for RevSystem<T, 
             self.skipped_with_deferred = false;
             return Ok(());
         }
-        let mut shared = self.shared.inner.try_lock().map_err(try_lock_system_err)?;
+        let mut inner = self.shared.inner.try_lock().map_err(try_lock_system_err)?;
         // SAFETY: Self::initialize called T::initialize to register all access of T
-        unsafe { shared.system.run_unsafe(input, world) }
+        unsafe { inner.system.run_unsafe(input, world) }
     }
     #[cfg(feature = "hotpatching")]
     fn refresh_hotpatch(&mut self) {
         match self.shared.inner.try_lock() {
-            Ok(mut shared) => shared.system.refresh_hotpatch(),
+            Ok(mut inner) => inner.system.refresh_hotpatch(),
             Err(err) => error!("could not hotpatch system {}: {err}", self.name),
         }
     }
     fn apply_deferred(&mut self, world: &mut World) {
         let mut result = || -> Result<(), BevyError> {
-            let mut shared = self
+            let mut inner = self
                 .shared
                 .inner
                 .try_lock()
                 .map_err(|err| err.to_string())?;
 
-            shared.system.apply_deferred(world);
+            inner.system.apply_deferred(world);
 
             if !FORWARD {
                 // `BackwardDeferred` is doing the backward log traversal
@@ -288,7 +288,7 @@ impl<T: System<In = (), Out = ()>, const FORWARD: bool> System for RevSystem<T, 
             }
 
             // reverisble commands are now in the queue resource so commands_log can take them
-            shared.deferred_log.forward(world).map_err(Into::into)
+            inner.deferred_log.forward(world).map_err(Into::into)
         };
 
         if let Err(err) = result() {

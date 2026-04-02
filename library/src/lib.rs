@@ -6,13 +6,14 @@
 //!
 //! **This crate is experimential and may be discontinued at any time.**
 //!
-//! ## Features
+//! ## Overview
 //!
 //! This crate offers additional APIs for reversible schedules and reversible (entity) commands.
 //!
-//! Systems in these schedules run as usual, but also when undoing and redoing their effect. When
-//! undoing them, the systems in the schedule are run in reverse order. Reversible commands are also
-//! undone in reverse order before the system that originally queued them will run:
+//! When systems are added to schedules with the reversible API, then their order depends on the
+//! direction the schedule is currently running: forward or backward. Going forward results in the
+//! usual order just as known from bevy. Going backward reverses this order and reversible commands
+//! will undo their effect before the system runs that originally queued them.
 //!
 //! - **forward**: (re)do system1 -> (re)do system1 commands -> (re)do system2
 //! - **backward**: undo system2 -> undo system1 commands -> undo system1
@@ -21,9 +22,8 @@
 //! crates is most likely not enough. The same is true with commands and schedules that use bevy's
 //! vanilla API.
 //!
-//! One exception are **run conditions**, those will work generally and can be written as usual.
-//! Though an exception to the exception are conditions based on change ticks. These are
-//! unsupported, see _Limitations_ below.
+//! One exception are **run conditions**, those work unchanged. Though an exception to the exception
+//! are conditions based on change ticks. These are unsupported, see _Limitations_ below.
 //!
 //! **Hooks and observers** may or may not additionally run at log directions depending on how they
 //! are triggered. Still they can be written to issue reversible commands which will work just fine.
@@ -48,8 +48,13 @@
 //! }
 //! ```
 //!
-//! If the system itself should handle the undo/redo logic directly and not in a command, this can
-//! be done with the [`RevMeta`] resource to check in which direction the schedule is running.
+//! [`queue_undo_redo`] takes types implementing [`UndoRedo`], the backbone of all reversible
+//! commands. Closures as the one above can be passed in too. Besides that method there are also
+//! many reversible variants of usual commands available, like [`rev_spawn`].
+//!
+//! If the system itself should handle the undo/redo logic directly and not a command, this can be
+//! done with the [`RevMeta`] resource to check in which direction the schedule is currently
+//! running.
 //!
 //! ```
 //! # use bevy::prelude::*;
@@ -72,9 +77,7 @@
 //! and set configurations is also supported. All new APIs have a `rev_` prefix and otherwise mimic
 //! the known methods of bevy.
 //!
-//! The main schedule for reversible systems is [`RevUpdate`]. One can populate other schedules with
-//! reversible systems as well and call them via [`rev_run_schedule`] but should never mix
-//! reversible and conventional systems in the same schedule.
+//! The main schedule for reversible systems is [`RevUpdate`].
 //!
 //! ```
 //! # use bevy::prelude::*;
@@ -87,6 +90,14 @@
 //!     (rev_system_1, rev_system_2).rev_chain()
 //! );
 //! ```
+//!
+//! If systems are not added with the new `rev_add_systems` but the usual `add_systems`, this may
+//! result in random orderings. One should never add non-reversible systems this way _unless_ they
+//! are ordered relatively to [`RevSystems`], a set containing all systems added via
+//! `rev_add_systems`.
+//!
+//! One can populate other schedules with reversible systems as well and call them with the
+//! [`rev_run_schedule`] command.
 //!
 //! To revert or advance the world in the log of already ran frames, or in other words, to set the
 //! [`RevDirection`] as seen in `rev_system_2`, the [`RevMeta`] resource is offering a [`set_queue`]
@@ -134,23 +145,27 @@
 //!
 //! The plugin does the following things:
 //!
-//! 1. **Constructs and inserts [`RevMeta`]**, by default unpaused with keeping the the log for one
-//!    frame. Both can be adjusted at the plugin.
-//! 2. **Adds the [`run_rev_update`] system** which runs [`RevUpdate`], by default in
-//!    [`FixedUpdate`]. A different schedule and optionally a system set can be specified at the
-//!    plugin.
+//! 1. **Constructs and inserts [`RevMeta`]**, which by default is unpaused and keeps track of one
+//!    logged frame. This amount is often called the "(maximum) past length" in various parts of the
+//!    API. The initial pause state and amount of logged frames can be configured at the plugin but
+//!    also be changed after that.
+//! 2. **Adds the [`run_rev_update`] system** which runs [`RevUpdate`], by default from
+//!    [`FixedUpdate`]. A different schedule other than `FixedUpdate` and optionally a system set
+//!    can be specified at the plugin.
 //! 3. **Registers [`RevDespawned`] as a disabling component**, this is needed for reversibly
 //!    (de)spawning entities which are only disabled at first. See the [`undo_redo`] module
 //!    documentation for more information.
 //!
-//! One usually at least want to specify the maximum past length. The insertion of `RevMeta` and
-//! `run_rev_update` can be suppressed entirely at the plugin as well for more custom setups.
+//! Usually one wants to specify the maximum past length at least. The insertion of `RevMeta` and
+//! `run_rev_update` can be suppressed entirely at the plugin as well for a more custom setup.
 //!
 //! ## Cargo Features
 //!
-//! - `app`: default feature that includes the [`app`] module
+//! - `app`: default feature that includes the [`app`] module, useful when using `bevy` or
+//!   `bevy_app` and not just `bevy_ecs`
 //! - `reflect`: default feature that derives [`Reflect`] on components and resources
-//! - `hotpatching`: Makes this crate compile while using hotpatching, not a default feature
+//! - `hotpatching`: Makes this crate compile while using bevy's hotpatching feature, not a default
+//!   feature
 //!
 //! `std` is not used in this crate so it is `no_std` compatible, to the extend of bevy's support.
 //!
@@ -160,14 +175,15 @@
 //! the following is a not exhaustive list of such limitations.
 //!
 //! - Attempting to use **change detection** in queries, resources, run conditions or other APIs
-//!   that expose or work with [`Tick`]s will not work here. The mechanism behind them will be
+//!   that expose or work with [`Tick`]s will not be compatible. The mechanism behind them will be
 //!   unable to differentiate between changes at non-log and log phases. Because of this it would
-//!   not behave determistically.
+//!   not behave deterministically.
 //! - As supporting reversible **exclusive systems** would come with some footguns that are hard to
 //!   detect and prevent, they are not supported and will cause panics.
 //! - Reversible (entity) commands lack some methods that are available in vanilla bevy, most
 //!   prominently those based on **dynamic components** or **entity cloning**. Supporting them is
-//!   past the scope of this crate.
+//!   past the scope of this crate. One has to implement [`UndoRedo`] types on their own if these
+//!   are needed.
 //! - Reversible commands working with **relationships** are generally available. If custom types
 //!   are used that also contain other data next to the entity collections however, some APIs in
 //!   this crate will not compile in the best case or will silently make that data unrecoverable at
@@ -176,15 +192,18 @@
 //!   reversible schedules with **[`ScheduleBuildSettings::auto_insert_apply_deferred`] set to
 //!   `false`**. Suppress them individually when configuring systems and sets.
 //! - The `hotpatching` feature enables **hotpatching** reversible systems, but this will not be
-//!   reversible automatically. One either has to manually patch to the previous/next fn pointer
-//!   when undoing/redoing the frame the patch happened or clear the log while patching.
+//!   reversible itself automatically. One either has to manually patch to the previous/next fn
+//!   pointer when undoing/redoing the frame the patch happened or [clear the log] while patching.
 //!
 //! [`bevy`]: https://bevy.org/
 //! [`NotLog`]: crate::meta::NotLog
 //! [`RevMeta`]: crate::meta::RevMeta
+//! [`queue_undo_redo`]: crate::undo_redo::commands::RevCommands::queue_undo_redo
+//! [`rev_spawn`]: crate::undo_redo::commands::RevCommands::rev_spawn
 //! [`RevDirection::NotLog`]: crate::meta::RevDirection::NotLog
 //! [`rev_add_systems`]: crate::app::RevApp::rev_add_systems
 //! [`RevUpdate`]: crate::schedule::RevUpdate
+//! [`RevSystems`]: crate::schedule::RevSystems
 //! [`rev_run_schedule`]: crate::undo_redo::commands::RevCommands::rev_run_schedule
 //! [`RevDirection`]: crate::meta::RevDirection
 //! [`set_queue`]: crate::meta::RevMeta::set_queue
@@ -201,7 +220,9 @@
 //! [`is_rev_despawned`]: crate::undo_redo::IsRevDespawned::is_rev_despawned
 //! [`Reflect`]: bevy_reflect::Reflect
 //! [`Tick`]: bevy_ecs::change_detection::Tick
+//! [`UndoRedo`]: crate::undo_redo::UndoRedo
 //! [`ScheduleBuildSettings::auto_insert_apply_deferred`]: bevy_ecs::schedule::ScheduleBuildSettings::auto_insert_apply_deferred
+//! [clear the log]: crate::meta::RevQueue::ClearThenRunForward
 
 #![no_std]
 #![allow(internal_features)]
