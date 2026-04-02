@@ -134,12 +134,12 @@
 //!
 //! The plugin does the following things:
 //!
-//! 1. **Construct and insert [`RevMeta`]**, by default unpaused with keeping the the log for one
+//! 1. **Constructs and inserts [`RevMeta`]**, by default unpaused with keeping the the log for one
 //!    frame. Both can be adjusted at the plugin.
 //! 2. **Adds the [`run_rev_update`] system** which runs [`RevUpdate`], by default in
 //!    [`FixedUpdate`]. A different schedule and optionally a system set can be specified at the
 //!    plugin.
-//! 3. **Register [`RevDespawned`] as a disabling component**, this is needed for reversibly
+//! 3. **Registers [`RevDespawned`] as a disabling component**, this is needed for reversibly
 //!    (de)spawning entities which are only disabled at first. See the [`undo_redo`] module
 //!    documentation for more information.
 //!
