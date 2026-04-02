@@ -17,7 +17,7 @@ use bevy_ecs::{
 use bevy_log::{error, info, warn};
 use core::{any::type_name, error::Error, marker::PhantomData, mem::swap};
 
-use crate::{prelude::UndoRedo, undo_redo::LOCATION_PREFIX};
+use crate::undo_redo::{LOCATION_PREFIX, UndoRedo};
 
 mod bundle;
 #[cfg(test)]

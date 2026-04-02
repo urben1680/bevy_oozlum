@@ -4,7 +4,7 @@
 
 use crate::{
     log::{PreUpdateKind, UpdateLogLimits, UpdateLogMissed, UpdateLogState},
-    prelude::RevUpdate,
+    schedule::RevUpdate,
     undo_redo::{DespawnFinalizerErr, UndoRedoQueue, finalize_despawns},
 };
 use alloc::{borrow::Cow, boxed::Box, format, string::ToString, vec::Vec};
@@ -16,7 +16,7 @@ use bevy_ecs::{
 };
 use bevy_log::info;
 #[cfg(feature = "bevy_reflect")]
-use bevy_reflect::prelude::ReflectDefault;
+use bevy_reflect::std_traits::ReflectDefault;
 use core::{fmt::Debug, num::NonZeroU64, panic::Location};
 
 mod direction;

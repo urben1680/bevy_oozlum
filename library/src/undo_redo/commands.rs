@@ -11,8 +11,7 @@ use bevy_ecs::{
 
 use crate::{
     meta::NotLog,
-    prelude::UndoRedo,
-    undo_redo::{RevBundle, RevEntityWorld, RevWorld, mark_spawn_empty},
+    undo_redo::{RevBundle, RevEntityWorld, RevWorld, UndoRedo, mark_spawn_empty},
 };
 
 /// Extension trait for [`Commands`] with reversible variants of various methods.

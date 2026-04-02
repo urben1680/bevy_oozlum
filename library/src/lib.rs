@@ -122,69 +122,62 @@
 //!
 //! The [`RevPlugin`] plugin is used to set everything up:
 //!
-//! ### Construct and insert [`RevMeta`]
+//! ```
+//! # use bevy::prelude::*;
+//! # use bevy_oozlum::prelude::*;
+//! # let mut app = App::new();
+//! app.add_plugins(
+//!     RevPlugin.set_max_past_len(42)
+//! )
 //!
-//! Per default `RevMeta` is unpaused and will keep a maximum log length of 1 frame. Both can be
-//! modified at the plugin, just as it can be set to not insert the resource at all. The maximum log
-//! length can be set to a higher number via a plugin method, but also at any time when the app is
-//! running using [`set_max_past_len`]. The minimum is 1.
+//! ```
 //!
-//! ### Add the system that runs [`RevUpdate`]
+//! The plugin does the following things:
 //!
-//! Per default this system, namely [`run_rev_update`], is added to [`FixedUpdate`]. This can be
-//! changed or suppressed entirely at the plugin. One can also define a set the system is put into.
+//! 1. **Construct and insert [`RevMeta`]**, by default unpaused with keeping the the log for one
+//!    frame. Both can be adjusted at the plugin.
+//! 2. **Adds the [`run_rev_update`] system** which runs [`RevUpdate`], by default in
+//!    [`FixedUpdate`]. A different schedule and optionally a system set can be specified at the
+//!    plugin.
+//! 3. **Register [`RevDespawned`] as a disabling component**, this is needed for reversibly
+//!    (de)spawning entities which are only disabled at first. See the [`undo_redo`] module
+//!    documentation for more information.
 //!
-//! ### Register [`RevDespawned`] as a disabling component
-//!
-//! This is needed to make entities [not show up in queries] when they were [reversibly despawned]
-//! but cannot be actually despawned yet as long undoing that is still possible. They can still be
-//! accessed via entity pointers though, so make sure to use the [`RevFetch`] wrapper at fetching
-//! or, if that is not possible, use the [`is_rev_despawned`] method.
-//!
-//! Reversible commands on such entities will fail.
-//!
-//! See the [`undo_redo`] module documentation for more information.
+//! One usually at least want to specify the maximum past length. The insertion of `RevMeta` and
+//! `run_rev_update` can be suppressed entirely at the plugin as well for more custom setups.
 //!
 //! ## Cargo Features
 //!
 //! - `bevy_app`: default feature that includes the [`app`] module
 //! - `bevy_reflect`: default feature that derives [`Reflect`] on components and resources
+//! - `hotpatching`: Makes this crate compile while using hotpatching, not a default feature
 //!
 //! `std` is not used in this crate so it is `no_std` compatible, to the extend of bevy's support.
 //!
 //! ## Limitations
 //!
-//! Not everything one can do in bevy is also possible in a reversible manner with this crate.
+//! Not everything one can do in bevy is also possible in a reversible manner with this crate. In
+//! the following is a not exhaustive list of such limitations.
 //!
-//! ### Change detection
-//!
-//! Attempting to use change detection in queries, resources, run conditions or other APIs that
-//! expose or work with [`Tick`]s will not work here. The mechanism behind them will be unable to
-//! differentiate between changes at non-log and log phases. Because of this it would not behave
-//! determistically.
-//!
-//! ### Exclusive systems
-//!
-//! As supporting reversible exclusive systems would come with some footguns that are hard to detect
-//! and prevent, they are not supported and will cause panics.
-//!
-//! ### Untyped/dynamic commands
-//!
-//! Reversible (entity) commands lack some methods that are available in vanilla bevy, most
-//! prominently those that are based on `ComponentId` or entity cloning. Supporting them is past the
-//! scope of this crate.
-//!
-//! ### [Relationships] with extra data
-//!
-//! Reversible commands working with relationships are generally available. If custom types are used
-//! that also contain other data next to the entity collections however, some APIs in this crate
-//! will not compile in the best case or will silently make that data unrecoverable at the worst
-//! case. This has to do with the lack of untyped API support as pointed out above.
-//!
-//! ### Manual sync point configurations
-//!
-//! The behavior of reversible sync points is tightly embedded in this crate. APIs such as
-//! [`auto_insert_apply_deferred`] must not be used on reversible schedules.
+//! - Attempting to use **change detection** in queries, resources, run conditions or other APIs
+//!   that expose or work with [`Tick`]s will not work here. The mechanism behind them will be
+//!   unable to differentiate between changes at non-log and log phases. Because of this it would
+//!   not behave determistically.
+//! - As supporting reversible **exclusive systems** would come with some footguns that are hard to
+//!   detect and prevent, they are not supported and will cause panics.
+//! - Reversible (entity) commands lack some methods that are available in vanilla bevy, most
+//!   prominently those based on **dynamic components** or **entity cloning**. Supporting them is
+//!   past the scope of this crate.
+//! - Reversible commands working with **[relationships]** are generally available. If custom types
+//!   are used that also contain other data next to the entity collections however, some APIs in
+//!   this crate will not compile in the best case or will silently make that data unrecoverable at
+//!   the worst case. This has to do with the lack of untyped API support as pointed out above.
+//! - The behavior of reversible sync points is tightly embedded in this crate. Never build
+//!   reversible schedules with **[`ScheduleBuildSettings::auto_insert_apply_deferred`] set to
+//!   `false`**. Suppress them individually when configuring systems and sets.
+//! - The `hotpatching` feature enables **hotpatching reversible systems**, but this will not be
+//!   reversible automatically. One either has to manually patch to the previous/next fn pointer
+//!   when undoing/redoing the frame the patch happened or clear the log while patching.
 //!
 //! [`bevy`]: https://bevy.org/
 //! [`NotLog`]: crate::meta::NotLog
@@ -208,8 +201,8 @@
 //! [`is_rev_despawned`]: crate::undo_redo::IsRevDespawned::is_rev_despawned
 //! [`Reflect`]: bevy_reflect::Reflect
 //! [`Tick`]: bevy_ecs::change_detection::Tick
-//! [Relationships]: bevy_ecs::relationship
-//! [`auto_insert_apply_deferred`]: bevy_ecs::schedule::ScheduleBuildSettings::auto_insert_apply_deferred
+//! [relationships]: bevy_ecs::relationship
+//! [`ScheduleBuildSettings::auto_insert_apply_deferred`]: bevy_ecs::schedule::ScheduleBuildSettings::auto_insert_apply_deferred
 
 #![no_std]
 #![allow(internal_features)]
@@ -219,7 +212,6 @@ extern crate alloc;
 /*
 ISSUES/DISCUSSIONS:
 - feature track_update_logs to opt-out
-- hotpatch
 - crate::schedule::set_base_sets should not need to chain forward/backward configs
 - benchmarks
 - set MaybeLocation of component meta, https://github.com/bevyengine/bevy/issues/20494
@@ -242,7 +234,7 @@ pub mod prelude {
         IntoRevScheduleConfigs as _, RevSchedule as _, RevSystems, RevUpdate,
     };
     pub use crate::undo_redo::{
-        IsRevDespawned as _, RevFetch, UndoRedo, UndoRedoDirection,
+        IsRevDespawned as _, RevFetch, UndoRedoDirection,
         commands::RevCommands as _,
         entity_commands::{
             RevEntityCommands as _, RevEntityEntryCommands as _, RevRelatedSpawnerCommands as _,

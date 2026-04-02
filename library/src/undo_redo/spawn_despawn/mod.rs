@@ -15,8 +15,7 @@ use bevy_platform::sync::Arc;
 use crate::{
     log::{OutOfLog, TransitionsLog},
     meta::{NotLog, RevDirection, RevMeta},
-    prelude::UndoRedo,
-    undo_redo::{LOCATION_PREFIX, RevWorld, add_children, undo_redo_str},
+    undo_redo::{LOCATION_PREFIX, RevWorld, UndoRedo, add_children, undo_redo_str},
 };
 
 #[cfg(test)]

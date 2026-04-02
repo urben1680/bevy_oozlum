@@ -265,6 +265,13 @@ impl<T: System<In = (), Out = ()>, const FORWARD: bool> System for RevSystem<T, 
         // SAFETY: Self::initialize called T::initialize to register all access of T
         unsafe { shared.system.run_unsafe(input, world) }
     }
+    #[cfg(feature = "hotpatching")]
+    fn refresh_hotpatch(&mut self) {
+        match self.shared.inner.try_lock() {
+            Ok(mut shared) => shared.system.refresh_hotpatch(),
+            Err(err) => error!("could not hotpatch system {}: {err}", self.name),
+        }
+    }
     fn apply_deferred(&mut self, world: &mut World) {
         let mut result = || -> Result<(), BevyError> {
             let mut shared = self
@@ -384,6 +391,8 @@ impl<T: System> System for BackwardDeferred<T> {
         self.tick = world.increment_change_tick();
         Ok(())
     }
+    #[cfg(feature = "hotpatching")]
+    fn refresh_hotpatch(&mut self) {}
     fn apply_deferred(&mut self, world: &mut World) {
         let mut result = || -> Result<(), BevyError> {
             self.shared

@@ -174,7 +174,11 @@ struct BackwardDeferredAndSystemSet(InternedSystemSet);
 /// only common source of error is doing mistakes at updating [`UpdateLog`]s at the expected
 /// frames in the expected amounts.
 ///
+/// Replacing it with a custom runner is possible, use [`RevMeta::update`] and [`finalize_despawns`]
+/// in its closure for that.
+///
 /// [`UpdateLog`]: crate::log::UpdateLog
+/// [`finalize_despawns`]: crate::undo_redo::finalize_despawns
 pub fn run_rev_update(world: &mut World) -> Result<(), RunSystemError> {
     RevMeta::run_rev_update(world)
 }

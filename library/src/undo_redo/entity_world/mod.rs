@@ -9,10 +9,9 @@ use bevy_ecs::{
 
 use crate::{
     meta::NotLog,
-    prelude::UndoRedo,
     undo_redo::{
         AddRemoveRelated, EntityRevDespawnedError, IsRevDespawned, RevBundle, RevDespawned,
-        RevWorld, get_new_related, mark_entity,
+        RevWorld, UndoRedo, get_new_related, mark_entity,
     },
 };
 

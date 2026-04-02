@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use bevy_oozlum::prelude::*;
+use bevy_oozlum::{prelude::*, undo_redo::UndoRedo};
 
 use crate::{Waste, control::JustPressed};
 
@@ -20,7 +20,7 @@ fn system<const ROW: u64>(input: Res<JustPressed>, meta: Res<RevMeta>, mut comma
         // becomes unreachable for RevDirection::BackwardLog.
         let entity = commands.rev_spawn_empty(not_log).id();
 
-        // There are two methods to know: buffer_undo_redo and redo_and_buffer.
+        // There are two methods to know: queue_undo_redo and redo_and_queue.
         //
         // The first is used to define undo/redo logic to happen and store it in the system state so
         // it can queue the undo or redo logic, depending on the current RevDirection.
@@ -28,7 +28,7 @@ fn system<const ROW: u64>(input: Res<JustPressed>, meta: Res<RevMeta>, mut comma
         // The second does the same, but also immediately applies the redo logic at the next
         // sync-point. This is useful when this does the same as what we would need to do via a
         // command ourselves here. And as that is the case (we want to insert the Waste component)
-        // we use redo_and_buffer.
+        // we use redo_and_queue.
         commands.redo_and_queue(
             not_log,
             InsertRemoveWaste {

@@ -124,6 +124,10 @@ impl<T: ReadOnlySystem<In = (), Out = bool>> System for RevCondition<T> {
             RevDirection::BackwardLog => self.logs.get(meta, false),
         }
     }
+    #[cfg(feature = "hotpatching")]
+    fn refresh_hotpatch(&mut self) {
+        self.condition.refresh_hotpatch();
+    }
     fn apply_deferred(&mut self, _world: &mut World) {
         unreachable!() // reversible conditions do not get their deferred parameters applied
     }

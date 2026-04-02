@@ -20,7 +20,7 @@ rustdoc-args = [
   "--html-after-content",
   "docs-rs/trait-tags.html",
 ]
-features = ["bevy_app", "bevy_reflect"] # all but ci-mode
+features = ["bevy_app", "bevy_reflect", "hotpatching"] # all but ci-mode
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(docsrs_dep)'] }
@@ -47,4 +47,5 @@ doc-scrape-examples = true
 default = ["bevy_app", "bevy_reflect"]
 bevy_app = ["dep:bevy_app"]
 bevy_reflect = ["dep:bevy_reflect"]
+hotpatching = ["bevy_ecs/hotpatching"]
 ci-mode = []

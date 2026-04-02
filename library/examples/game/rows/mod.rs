@@ -12,10 +12,10 @@ mod rev_command; // reversible command from a simple system
 mod rev_config; // reversible schedule configuration
 mod rev_hook; // reversible command from hook
 mod rev_logs_drain; // reversible logic using log types, utilizes drain to clean up
-mod rev_logs_mut;
+mod rev_logs_mut; // reversible logic using log types, utilizes mutation of log entries
 mod rev_observer; // reversible command from observer
-mod rev_queue_undo_redo; // manual UndoRedo implementation and buffering
-mod rev_schedule; // running other schedules during RevUpdate // reversible logic using log types, utilizes mutation of log entries
+mod rev_queue_undo_redo; // manual UndoRedo implementation and queuing
+mod rev_schedule; // running other schedules during RevUpdate
 
 pub fn plugin(app: &mut App) {
     app.add_plugins((
