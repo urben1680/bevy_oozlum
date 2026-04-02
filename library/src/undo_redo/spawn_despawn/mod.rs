@@ -22,7 +22,7 @@ use crate::{
 mod test;
 
 #[derive(Component, Debug, Clone, Copy)]
-#[cfg_attr(feature = "bevy_reflect", derive(bevy_reflect::Reflect))]
+#[cfg_attr(feature = "reflect", derive(bevy_reflect::Reflect))]
 #[component(immutable)]
 /// Marker component for entities that were marked as despawned but the actual despawn is delayed
 /// so this can be reversed if needed.
@@ -35,7 +35,6 @@ mod test;
 ///
 /// Manually inserting it is discouraged because no finalized despawn will take place in these
 /// cases. Manually removing it will also not prevent the despawn.
-// todo: store MaybeLocation in component change meta instead of here, https://github.com/bevyengine/bevy/issues/20494
 pub struct RevDespawned(pub MaybeLocation);
 
 /// Despawn entities that are currently considered reversibly despawned and their relevant operation

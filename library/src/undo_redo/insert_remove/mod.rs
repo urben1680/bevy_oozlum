@@ -28,7 +28,7 @@ pub(super) use bundle::*; // do not make pub to keep RevBundle sealed
 struct InnerComponentBuffer<C> {
     entity: Entity,
     buffer: Option<C>,
-    caller: MaybeLocation, // todo https://github.com/bevyengine/bevy/issues/20494
+    caller: MaybeLocation,
 }
 
 impl<C> InnerComponentBuffer<C> {
@@ -74,7 +74,7 @@ fn entity_err<C>(undo_redo: &str, op: &str, caller: MaybeLocation, err: impl Err
 
 struct InnerResourceBuffer<R> {
     buffer: Option<R>,
-    caller: MaybeLocation, // todo https://github.com/bevyengine/bevy/issues/20494
+    caller: MaybeLocation,
 }
 
 impl<R> InnerResourceBuffer<R> {

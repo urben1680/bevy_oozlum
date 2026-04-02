@@ -44,8 +44,8 @@ name = "game"
 doc-scrape-examples = true
 
 [features]
-default = ["bevy_app", "bevy_reflect"]
-bevy_app = ["dep:bevy_app"]
-bevy_reflect = ["dep:bevy_reflect"]
+default = ["app", "reflect"]
+app = ["dep:bevy_app"]
+reflect = ["dep:bevy_reflect"]
 hotpatching = ["bevy_ecs/hotpatching"]
 ci-mode = []

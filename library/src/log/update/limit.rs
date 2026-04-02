@@ -19,7 +19,7 @@ use nonmax::NonMaxU32;
 /// Part of [`RevMeta`](crate::meta::RevMeta) that keeps track of [`UpdateLog`](super::UpdateLog)
 /// updates and reports when such an update was expected for a present frame but did not happen.
 #[derive(Default)]
-#[cfg_attr(feature = "bevy_reflect", derive(bevy_reflect::Reflect))]
+#[cfg_attr(feature = "reflect", derive(bevy_reflect::Reflect))]
 pub(crate) struct UpdateLogLimits {
     /// Amount of [`UpdateLog`](super::UpdateLog) currently known to this struct
     past_len_count: AtomicU32,
@@ -35,7 +35,7 @@ pub(crate) struct UpdateLogLimits {
     /// - the [`NonMaxU32`] value contains the id of the limit this log is associated with, the
     ///   draining order will ensure only the last limit of a specific log is stored in
     ///   [`Self::update_log_limits`].
-    #[cfg_attr(feature = "bevy_reflect", reflect(ignore))]
+    #[cfg_attr(feature = "reflect", reflect(ignore))]
     #[allow(clippy::type_complexity)]
     update_log_updates: Box<Parallel<Vec<Vec<(NonMaxU32, UpdateLogLimit)>>>>,
 
@@ -329,7 +329,7 @@ impl Debug for UpdateLogId {
 /// A limit for [`RevMeta::now`](crate::meta::RevMeta::now) that, if breached, indicates that a
 /// [`UpdateLog`](super::UpdateLog) unexpectedly did not update.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "bevy_reflect", derive(bevy_reflect::Reflect))]
+#[cfg_attr(feature = "reflect", derive(bevy_reflect::Reflect))]
 pub(crate) struct UpdateLogLimit {
     /// The minimum value for [`RevMeta::now`](crate::meta::RevMeta::now). At the next lower value
     /// the [`UpdateLog`](super::UpdateLog) should update and send a new, lower limit to

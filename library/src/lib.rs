@@ -148,8 +148,8 @@
 //!
 //! ## Cargo Features
 //!
-//! - `bevy_app`: default feature that includes the [`app`] module
-//! - `bevy_reflect`: default feature that derives [`Reflect`] on components and resources
+//! - `app`: default feature that includes the [`app`] module
+//! - `reflect`: default feature that derives [`Reflect`] on components and resources
 //! - `hotpatching`: Makes this crate compile while using hotpatching, not a default feature
 //!
 //! `std` is not used in this crate so it is `no_std` compatible, to the extend of bevy's support.
@@ -168,14 +168,14 @@
 //! - Reversible (entity) commands lack some methods that are available in vanilla bevy, most
 //!   prominently those based on **dynamic components** or **entity cloning**. Supporting them is
 //!   past the scope of this crate.
-//! - Reversible commands working with **[relationships]** are generally available. If custom types
+//! - Reversible commands working with **relationships** are generally available. If custom types
 //!   are used that also contain other data next to the entity collections however, some APIs in
 //!   this crate will not compile in the best case or will silently make that data unrecoverable at
 //!   the worst case. This has to do with the lack of untyped API support as pointed out above.
-//! - The behavior of reversible sync points is tightly embedded in this crate. Never build
+//! - The behavior of reversible sync points is deeply embedded in this crate. Never build
 //!   reversible schedules with **[`ScheduleBuildSettings::auto_insert_apply_deferred`] set to
 //!   `false`**. Suppress them individually when configuring systems and sets.
-//! - The `hotpatching` feature enables **hotpatching reversible systems**, but this will not be
+//! - The `hotpatching` feature enables **hotpatching** reversible systems, but this will not be
 //!   reversible automatically. One either has to manually patch to the previous/next fn pointer
 //!   when undoing/redoing the frame the patch happened or clear the log while patching.
 //!
@@ -201,7 +201,6 @@
 //! [`is_rev_despawned`]: crate::undo_redo::IsRevDespawned::is_rev_despawned
 //! [`Reflect`]: bevy_reflect::Reflect
 //! [`Tick`]: bevy_ecs::change_detection::Tick
-//! [relationships]: bevy_ecs::relationship
 //! [`ScheduleBuildSettings::auto_insert_apply_deferred`]: bevy_ecs::schedule::ScheduleBuildSettings::auto_insert_apply_deferred
 
 #![no_std]
@@ -214,10 +213,9 @@ ISSUES/DISCUSSIONS:
 - feature track_update_logs to opt-out
 - crate::schedule::set_base_sets should not need to chain forward/backward configs
 - benchmarks
-- set MaybeLocation of component meta, https://github.com/bevyengine/bevy/issues/20494
 */
 
-#[cfg(feature = "bevy_app")]
+#[cfg(feature = "app")]
 pub mod app;
 pub mod log;
 pub mod meta;
@@ -226,7 +224,7 @@ pub mod undo_redo;
 
 /// Contains common types and all extension traits `as _`.
 pub mod prelude {
-    #[cfg(feature = "bevy_app")]
+    #[cfg(feature = "app")]
     pub use crate::app::{RevApp as _, RevPlugin};
     pub use crate::log::{TransitionLog, TransitionsLog, UpdateLog};
     pub use crate::meta::{NotLog, RevDirection, RevMeta, RevQueue};

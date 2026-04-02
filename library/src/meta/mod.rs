@@ -15,7 +15,7 @@ use bevy_ecs::{
     world::World,
 };
 use bevy_log::info;
-#[cfg(feature = "bevy_reflect")]
+#[cfg(feature = "reflect")]
 use bevy_reflect::std_traits::ReflectDefault;
 use core::{fmt::Debug, num::NonZeroU64, panic::Location};
 
@@ -42,11 +42,7 @@ pub use direction::*;
 /// [`set_max_past_len`]: Self::set_max_past_len
 /// [`now`]: Self::now
 #[derive(Resource, Debug)]
-#[cfg_attr(
-    feature = "bevy_reflect",
-    derive(bevy_reflect::Reflect),
-    reflect(Default)
-)]
+#[cfg_attr(feature = "reflect", derive(bevy_reflect::Reflect), reflect(Default))]
 pub struct RevMeta {
     past_end: u64,
     now: u64,

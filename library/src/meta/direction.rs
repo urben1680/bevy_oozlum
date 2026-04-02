@@ -14,7 +14,7 @@ use crate::meta::RevMeta;
 /// The direction [`RevUpdate`](crate::schedule::RevUpdate) is currently running at. Reversible
 /// systems should mind this value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "bevy_reflect", derive(bevy_reflect::Reflect))]
+#[cfg_attr(feature = "reflect", derive(bevy_reflect::Reflect))]
 pub enum RevDirection {
     /// The world is updated for a new reversible frame. If [this particular frame] or
     /// [any future frame] existed in the log, they will be truncated and replaced from now on.
@@ -96,7 +96,7 @@ impl Display for RevDirection {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "bevy_reflect", derive(bevy_reflect::Reflect))]
+#[cfg_attr(feature = "reflect", derive(bevy_reflect::Reflect))]
 pub(super) enum RunningOrRan {
     Running(RevDirection),
     Ran(RevDirection),
@@ -112,7 +112,7 @@ pub(super) enum RunningOrRan {
 /// [`run_rev_update`]: crate::schedule::run_rev_update
 /// [unset]: RevMeta::unset_queue
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "bevy_reflect", derive(bevy_reflect::Reflect))]
+#[cfg_attr(feature = "reflect", derive(bevy_reflect::Reflect))]
 pub enum RevQueue {
     /// Run in [`RevDirection::NotLog`] next.
     ///
@@ -190,7 +190,7 @@ impl Command<BevyResult> for RevQueue {
 /// [`TransitionsLog::forward_extend`]: crate::log::TransitionsLog::forward_extend
 /// [`UpdateLog::forward_past_len`]: crate::log::UpdateLog::forward_past_len`
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "bevy_reflect", derive(bevy_reflect::Reflect))]
+#[cfg_attr(feature = "reflect", derive(bevy_reflect::Reflect))]
 pub struct NotLog(pub(super) NonZeroU64);
 
 impl From<NotLog> for NonZeroU64 {
