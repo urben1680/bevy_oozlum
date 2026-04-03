@@ -172,13 +172,13 @@
 //! ## Limitations
 //!
 //! Not everything one can do in bevy is also possible in a reversible manner with this crate. In
-//! the following is a not exhaustive list of such limitations.
+//! the following is a non-exhaustive list of such limitations.
 //!
 //! - Attempting to use **change detection** in queries, resources, run conditions or other APIs
 //!   that expose or work with [`Tick`]s will not be compatible. The mechanism behind them will be
 //!   unable to differentiate between changes at non-log and log phases. Because of this it would
 //!   not behave deterministically.
-//! - As supporting reversible **exclusive systems** would come with some footguns that are hard to
+//! - As using reversible **exclusive systems** would come with some footguns that are hard to
 //!   detect and prevent, they are not supported and will cause panics.
 //! - Reversible (entity) commands lack some methods that are available in vanilla bevy, most
 //!   prominently those based on **dynamic components** or **entity cloning**. Supporting them is

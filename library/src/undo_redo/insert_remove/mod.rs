@@ -32,7 +32,6 @@ struct InnerComponentBuffer<C> {
 }
 
 impl<C> InnerComponentBuffer<C> {
-    #[inline(never)]
     fn unexpected_swap(&self, undo_redo: &str, op: &str) {
         warn!(
             "{undo_redo} reversible {op} of {} for {}{LOCATION_PREFIX}{} succeeded but encountered unexpected value in entity that was not present initially which was now swapped with",
@@ -41,7 +40,6 @@ impl<C> InnerComponentBuffer<C> {
             self.caller
         );
     }
-    #[inline(never)]
     fn error(&self, undo_redo: &str, op: &str, msg: &str) {
         error!(
             "{undo_redo} reversible {op} of component {} for {}{LOCATION_PREFIX}{} {msg}, this may also have been in an invalid state from earlier error before",
@@ -50,7 +48,6 @@ impl<C> InnerComponentBuffer<C> {
             self.caller
         );
     }
-    #[inline(never)]
     fn follow_up_error(&self, undo_redo: &str, op: &str) {
         info!(
             "{undo_redo} reversible {op} of component {} for {}{LOCATION_PREFIX}{} was applied but was in invalid state from an earlier error",
@@ -59,7 +56,6 @@ impl<C> InnerComponentBuffer<C> {
             self.caller
         );
     }
-    #[inline(never)]
     fn entity_err(&self, undo_redo: &str, op: &str, err: EntityMutableFetchError) {
         entity_err::<C>(undo_redo, op, self.caller, err);
     }
@@ -78,7 +74,6 @@ struct InnerResourceBuffer<R> {
 }
 
 impl<R> InnerResourceBuffer<R> {
-    #[inline(never)]
     fn unexpected_swap(&self, undo_redo: &str, op: &str) {
         warn!(
             "{undo_redo} reversible {op} of resource {} {LOCATION_PREFIX}{} succeeded but encountered unexpected value in world that was not present initially which was now swapped with",
@@ -86,7 +81,6 @@ impl<R> InnerResourceBuffer<R> {
             self.caller
         );
     }
-    #[inline(never)]
     fn error(&self, undo_redo: &str, op: &str, msg: &str) {
         error!(
             "{undo_redo} reversible {op} of resource {} {LOCATION_PREFIX}{} {msg}, this may also have been in an invalid state from earlier error before",
@@ -94,7 +88,6 @@ impl<R> InnerResourceBuffer<R> {
             self.caller
         );
     }
-    #[inline(never)]
     fn follow_up_error(&self, undo_redo: &str, op: &str) {
         info!(
             "{undo_redo} reversible {op} of resource {} {LOCATION_PREFIX}{} was applied but was in invalid state from an earlier error",

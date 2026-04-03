@@ -27,6 +27,7 @@ use crate::{
 /// components and common bundle effects like [`children!`] returns.
 ///
 /// [`children!`]: bevy_ecs::children
+// keep this trait sealed in this non-pub module
 pub trait RevBundle<Marker>: Bundle {
     /// Inserts `self` into `entity` depending on `mode`.
     ///
@@ -44,7 +45,6 @@ pub trait RevBundle<Marker>: Bundle {
 
     /// This is called within [`RevBundle::rev_insert`] and should not be called elsewhere as this
     /// alone will not make the insertion of required components reversible.
-    #[doc(hidden)]
     fn rev_insert_inner(
         self,
         not_log: NotLog,
