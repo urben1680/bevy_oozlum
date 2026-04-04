@@ -26,6 +26,9 @@ pub trait RevEntityCommands<'w> {
     /// command to ensure the order of operations is correctly reversed at undo.
     ///
     /// ```
+    /// # use bevy::prelude::*;
+    /// # use bevy_oozlum::prelude::*;
+    /// # fn system(mut commands: Comands) {
     /// // Wrong: having the non-log operation happen in the system
     /// // println!("hello world!")
     ///
@@ -37,6 +40,7 @@ pub trait RevEntityCommands<'w> {
     ///         UndoRedoDirection::Redo => println!("hello world! (log)"),
     ///     }
     /// });
+    /// # }
     /// ```
     #[track_caller]
     fn queue_undo_redo(&mut self, not_log: NotLog, undo_redo: impl UndoRedo) -> &mut Self {
