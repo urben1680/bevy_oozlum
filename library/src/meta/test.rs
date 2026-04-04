@@ -25,7 +25,7 @@ impl RevMeta {
             None => assert_eq!(self.get_queue(), None),
             Some(queue) => self.set_queue(queue),
         }
-        self.update_ref(Ok(values.is_some()), |meta, direction| {
+        self.update_ref(values.is_some(), |meta, direction| {
             let values = values.unwrap();
             assert_eq!(meta.past_end(), values.past_end);
             assert_eq!(meta.now(), values.now);

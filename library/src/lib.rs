@@ -38,7 +38,7 @@
 //! # use bevy::prelude::*;
 //! # use bevy_oozlum::prelude::*;
 //! fn rev_system_1(not_log: NotLog, mut commands: Commands) {
-//!     println!("hello world!");
+//!     commands.queue(|_: &mut World| println!("hello world!"));
 //!     commands.queue_undo_redo(not_log, |_: &mut World, direction| {
 //!         match direction {
 //!             UndoRedoDirection::Undo => println!("!dlrow olleh (log)"),
@@ -139,7 +139,7 @@
 //! # let mut app = App::new();
 //! app.add_plugins(
 //!     RevPlugin.set_max_past_len(42)
-//! )
+//! );
 //!
 //! ```
 //!
@@ -161,11 +161,12 @@
 //!
 //! ## Cargo Features
 //!
-//! - `app`: default feature that includes the [`app`] module, useful when using `bevy` or
-//!   `bevy_app` and not just `bevy_ecs`
-//! - `reflect`: default feature that derives [`Reflect`] on components and resources
-//! - `hotpatching`: Makes this crate compile while using bevy's hotpatching feature, not a default
-//!   feature
+//! | Feature | Description | Default |
+//! | - | - | - |
+//! | `app` | Includes the [`app`] module, useful when using `bevy` or `bevy_app` and not just `bevy_ecs` | Yes |
+//! | `reflect` | Derives [`Reflect`] on some of the types of this crate | Yes |
+//! | `track-update-logs` | Asserts after each [`RevUpdate`] that all [`UpdateLog`]s ran the expected amount of times | No |
+//! | `hotpatching` | Makes this crate compile while using bevy's hotpatching feature | No |
 //!
 //! `std` is not used in this crate so it is `no_std` compatible, to the extend of bevy's support.
 //!
@@ -219,6 +220,7 @@
 //! [`RevFetch`]: crate::undo_redo::RevFetch
 //! [`is_rev_despawned`]: crate::undo_redo::IsRevDespawned::is_rev_despawned
 //! [`Reflect`]: bevy_reflect::Reflect
+//! [`UpdateLog`]: crate::log::UpdateLog
 //! [`Tick`]: bevy_ecs::change_detection::Tick
 //! [`UndoRedo`]: crate::undo_redo::UndoRedo
 //! [`ScheduleBuildSettings::auto_insert_apply_deferred`]: bevy_ecs::schedule::ScheduleBuildSettings::auto_insert_apply_deferred
@@ -231,7 +233,6 @@
 extern crate alloc;
 /*
 ISSUES/DISCUSSIONS:
-- feature track_update_logs to opt-out
 - crate::schedule::set_base_sets should not need to chain forward/backward configs
 - benchmarks
 */

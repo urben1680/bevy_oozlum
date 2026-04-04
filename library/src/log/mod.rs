@@ -45,19 +45,21 @@
 //! be detected when a [`UpdateLog`] did not update at the correct frame in the correct amount of
 //! times.
 //!
-//! Whenever that log is updated, the information about which closest past and future frames it
-//! expects to be updated again is stored in [`RevMeta`]. If at these frames the log is not updated,
-//! [`RevMeta::update`] will report that via the [`RevMetaUpdateErr::UpdateLogsMissed`] error that
-//! contains a list of [`UpdateLogMissed`]. [`UpdateLogMissed::id`] contains the
-//! [id of the `UpdateLog` instance] that was missed. This id is also logged at the INFO level when
-//! it is set for an individual `UpdateLog`.
+//! **For the following to be checked the `track-update-logs` feature must be used.**
+//!
+//! Whenever an `UpdateLog` is updated, the information about which closest past and future frames
+//! it expects to be updated again is stored in [`RevMeta`]. If at these frames the log is not
+//! updated, [`RevMeta::update`] will report that via the [`RevMetaUpdateErr::UpdateLogsMissed`]
+//! error that contains a list of [`UpdateLogMissed`]. The [`UpdateLogMissed::index`] was logged at
+//! the INFO level when it is set for an individual `UpdateLog`.
 //!
 //! When bevy's `track_location` cargo feature is active, [`UpdateLogMissed::last_update`] also
-//! contains the location where the [`UpdateLog`] was updated the last time.
+//! contains the location where the `UpdateLog` was updated the last time.
 //!
 //! Note however that when a [`RevQueue::ClearThenRunForward`]/[`RevQueue::ClearThenPause`] is
-//! applied, all ids until then become invalid. This event is logged at the INFO level as well.
-//! Every `UpdateLog` that updates after that will get new ids which is then logged again.
+//! applied, all INFO logged `UpdateLog` indices until then become invalid. This event is logged at
+//! the INFO level as well. Every `UpdateLog` that updates after that will get new ids which is then
+//! logged again. This is important to know because indices get reused.
 //!
 //! Log clears happen not when the queue above is applied but at the first next update of each log
 //! after that.
@@ -70,7 +72,6 @@
 //!
 //! [`forward_push`]: TransitionLog::forward_push
 //! [`forward_extend`]: TransitionsLog::forward_extend
-//! [id of the `UpdateLog` instance]: UpdateLog::id
 //! [`NonZeroU64::MAX`]: core::num::NonZeroU64::MAX
 //! [`RevMeta`]: crate::meta::RevMeta
 //! [`NotLog`]: crate::meta::NotLog
@@ -83,6 +84,7 @@
 //! [`UpdateLogsMissed`]: crate::meta::RevMetaUpdateErr::UpdateLogsMissed
 //! [reversible scheduling]: crate::schedule::RevSchedule
 //! [reversible commands]: crate::undo_redo::commands::RevCommands
+
 use alloc::{
     boxed::Box,
     collections::{VecDeque, vec_deque::Drain},
@@ -94,11 +96,13 @@ use core::{
     iter::FusedIterator,
 };
 
-pub(crate) use update::{
-    PreUpdateKind,
-    limit::{UpdateLogLimits, UpdateLogState},
-};
-pub use update::{UpdateLog, limit::UpdateLogId, limit::UpdateLogMissed};
+#[cfg(feature = "track-update-logs")]
+pub(crate) use update::limit::UpdateLogLimits;
+
+#[cfg(feature = "track-update-logs")]
+pub use update::limit::UpdateLogMissed;
+
+pub use update::UpdateLog;
 
 pub use transition::{TransitionDrain, TransitionLog};
 pub use transitions::{

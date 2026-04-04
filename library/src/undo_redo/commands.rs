@@ -18,6 +18,23 @@ use crate::{
 pub trait RevCommands {
     /// Queues an [`UndoRedo`] implementor in a resource to be collected by the reversible system's
     /// state.
+    ///
+    /// **Note** that the non-log operation that is related to this should also be done in a
+    /// command to ensure the order of operations is correctly reversed at undo.
+    ///
+    /// ```
+    /// // Wrong: having the non-log operation happen in the system
+    /// // println!("hello world!")
+    ///
+    /// // Correct: having the non-log operation happen in a command, just like the undo/redo
+    /// commands.queue(|_: &mut World| println!("hello world!"));
+    /// commands.queue_undo_redo(not_log, |_: &mut World, direction| {
+    ///     match direction {
+    ///         UndoRedoDirection::Undo => println!("!dlrow olleh (log)"),
+    ///         UndoRedoDirection::Redo => println!("hello world! (log)"),
+    ///     }
+    /// });
+    /// ```
     #[track_caller]
     fn queue_undo_redo(&mut self, not_log: NotLog, undo_redo: impl UndoRedo) -> &mut Self {
         self.queue_undo_redo_with_caller(not_log, undo_redo, MaybeLocation::caller())

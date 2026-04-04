@@ -423,7 +423,7 @@ mod test {
                 RevQueue::RunForward
             };
             self.meta.set_queue(queue);
-            self.meta.update_ref(Ok(true), |meta, direction| {
+            self.meta.update_ref(true, |meta, direction| {
                 let RevDirection::NotLog(not_log) = direction else {
                     unreachable!()
                 };
@@ -438,28 +438,28 @@ mod test {
         }
         fn noop_forward_backward_log(&mut self) {
             self.meta.set_queue(RevQueue::RunForward);
-            self.meta.update_ref(Ok(true), |_, _| ());
+            self.meta.update_ref(true, |_, _| ());
             self.meta.set_queue(RevQueue::RunBackwardLog);
-            self.meta.update_ref(Ok(true), |_, _| ());
+            self.meta.update_ref(true, |_, _| ());
         }
         #[track_caller]
         fn forward_log(&mut self, expected: Result<char, ()>) {
             self.meta.set_queue(RevQueue::RunForwardLog);
             match expected {
                 Ok(_) => {
-                    self.meta.update_ref(Ok(true), |meta, _| {
+                    self.meta.update_ref(true, |meta, _| {
                         self.logs.assert_forward_log_transition(meta, expected);
                     });
                 }
                 Err(()) => {
-                    self.meta.update_ref(Ok(false), |_, _| ());
+                    self.meta.update_ref(false, |_, _| ());
                     self.logs
                         .assert_forward_log_transition(&self.meta, expected);
                 }
             }
         }
         fn forward_log_err_in_global_log(&mut self) {
-            self.meta.update_ref(Ok(true), |meta, _| {
+            self.meta.update_ref(true, |meta, _| {
                 self.logs.assert_forward_log_transition(meta, Err(()));
             });
         }
@@ -468,12 +468,12 @@ mod test {
             self.meta.set_queue(RevQueue::RunBackwardLog);
             match expected {
                 Ok(_) => {
-                    self.meta.update_ref(Ok(true), |meta, _| {
+                    self.meta.update_ref(true, |meta, _| {
                         self.logs.assert_backward_log_transition(meta, expected);
                     });
                 }
                 Err(()) => {
-                    self.meta.update_ref(Ok(false), |_, _| ());
+                    self.meta.update_ref(false, |_, _| ());
                     self.logs
                         .assert_backward_log_transition(&self.meta, expected);
                 }

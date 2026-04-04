@@ -1,17 +1,15 @@
 use crate::{log::update::offset::OffsetLog, meta::RevMeta};
 use alloc::collections::TryReserveError;
 use bevy_ecs::change_detection::MaybeLocation;
-use core::{
-    fmt::{Debug, Display},
-    num::NonZeroU64,
-    panic::Location,
-};
+use core::{fmt::Debug, num::NonZeroU64, panic::Location};
 
-pub use limit::UpdateLogId;
-use limit::*;
-
-pub(super) mod limit;
 mod offset;
+
+#[cfg(feature = "track-update-logs")]
+pub(super) mod limit;
+
+#[cfg(feature = "track-update-logs")]
+use limit::*;
 
 /// A log that keeps track when it was updated and provides the value for the `past_len` argument of
 /// [`TransitionLog::forward_push`]/[`TransitionsLog::forward_extend`]. This is useful for when
@@ -102,18 +100,20 @@ pub struct UpdateLog {
     /// The length of the log which is what this log is keeping track of.
     past_len: u64,
 
+    /// Contains the most recent global count of log exits that was witnessed..
+    ///
+    /// See [`RevMeta::log_exits`](crate::meta::RevMeta::log_exits).
+    witnessed_log_exits: u64,
+
+    /// Contains the most recent global count of log clears that was witnessed.
+    ///
+    /// See [`RevMeta::log_clears`](crate::meta::RevMeta::log_clears).
+    witnessed_log_clears: u64,
+
     /// The state that is needed to clean up the log at [`Self::pre_update_to_clear`] and to push
     /// new limits to [`UpdateLogLimits`].
+    #[cfg(feature = "track-update-logs")]
     update_state: Option<UpdateLogState>,
-}
-
-impl Display for UpdateLog {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self.id() {
-            None => Display::fmt(UpdateLogId::UNINIT, f),
-            Some(id) => Display::fmt(&id, f),
-        }
-    }
 }
 
 impl UpdateLog {
@@ -124,6 +124,9 @@ impl UpdateLog {
             log_start: 0,
             last_update: 0,
             past_len: 0,
+            witnessed_log_exits: 0,
+            witnessed_log_clears: 0,
+            #[cfg(feature = "track-update-logs")]
             update_state: None,
         }
     }
@@ -221,21 +224,6 @@ impl UpdateLog {
         self.offsets.get_bytes_mut().shrink_to_fit()
     }
 
-    /// The internal id of this log, which is only `Some` after the first update. The id will change
-    /// when [`RevQueue::ClearThenRunForward`](crate::meta::RevQueue::ClearThenRunForward) /
-    /// [`RevQueue::ClearThenPause`](crate::meta::RevQueue::ClearThenPause) is queued and applied.
-    ///
-    /// When this id changes, an info log with the id is written.
-    ///
-    /// The [`Display`] implemention of `UpdateLog` solely contains this id.
-    ///
-    /// This id is useful to identify missed updates from [`RevMeta::update`]. If
-    /// [`run_rev_update`](crate::schedule::run_rev_update) is used, such errors are handled by the
-    /// default error handler.
-    pub fn id(&self) -> Option<UpdateLogId> {
-        self.update_state.map(|update_state| update_state.id())
-    }
-
     /// Update the log and return the updated length of the log as an alternative to
     /// [`RevMeta::past_len`].
     ///
@@ -269,6 +257,7 @@ impl UpdateLog {
             self.past_len += 1;
         }
 
+        #[cfg(feature = "track-update-logs")]
         meta.update_log_limits().push_limit(
             self.update_state.as_mut().unwrap(), // set by not_log_should_clear
             UpdateLogLimit::new_forward(
@@ -343,12 +332,12 @@ impl UpdateLog {
         self.last_update -= iter.next().unwrap(); // must be Some because self.past_len != 0
         iter.sync();
         self.past_len -= 1;
-        let backward_limit = iter.next().map_or(0, |_| self.last_update);
 
+        #[cfg(feature = "track-update-logs")]
         meta.update_log_limits().push_limit(
             self.update_state.as_mut().unwrap(), // set by pre_update_to_clear
             UpdateLogLimit::new_log(
-                backward_limit,
+                iter.next().map_or(0, |_| self.last_update),
                 meta.now() - 1,
                 caller.map(|caller| caller.unwrap_or(DEFAULT_LOCATION)),
             ),
@@ -399,17 +388,17 @@ impl UpdateLog {
         }
 
         iter.sync();
-        let forward_limit = iter.next().map_or(u64::MAX, |offset| {
-            // order is important, offset may be 0 but now() is never 0 during ForwardLog
-            meta.now() + offset - 1
-        });
         self.past_len += 1;
 
+        #[cfg(feature = "track-update-logs")]
         meta.update_log_limits().push_limit(
             self.update_state.as_mut().unwrap(), // set by pre_update_to_clear
             UpdateLogLimit::new_log(
                 meta.now(),
-                forward_limit,
+                iter.next().map_or(u64::MAX, |offset| {
+                    // order is important, offset may be 0 but now() is never 0 during ForwardLog
+                    meta.now() + offset - 1
+                }),
                 caller.map(|caller| caller.unwrap_or(DEFAULT_LOCATION)),
             ),
         );
@@ -423,21 +412,36 @@ impl UpdateLog {
     fn pre_update_to_clear(
         &mut self,
         meta: &RevMeta,
-        caller: MaybeLocation<Option<&'static Location>>,
+        _caller: MaybeLocation<Option<&'static Location>>,
     ) -> bool {
-        match meta.set_update_state(&mut self.update_state, caller) {
-            PreUpdateKind::RemoveLog => true,
-            PreUpdateKind::RemoveFuture => {
-                self.offsets.truncate_future();
-                if self.bytes_is_empty() {
-                    self.log_start = 0;
-                    self.last_update = 0;
-                    self.past_len = 0;
-                }
-                false
+        let mut clear = false;
+
+        if self.witnessed_log_clears < meta.log_clears() {
+            // meta was cleared in the meantime
+            self.witnessed_log_clears = meta.log_clears();
+            self.witnessed_log_exits = meta.log_exits();
+            clear = true;
+
+            #[cfg(feature = "track-update-logs")]
+            {
+                self.update_state = None;
             }
-            PreUpdateKind::Nothing => false,
+        } else if self.witnessed_log_exits < meta.log_exits() {
+            // meta ran at not-log in the meantime
+            self.witnessed_log_exits = meta.log_exits();
+            self.offsets.truncate_future();
+            if self.bytes_is_empty() {
+                self.log_start = 0;
+                self.last_update = 0;
+                self.past_len = 0;
+            }
         }
+
+        #[cfg(feature = "track-update-logs")]
+        meta.update_log_limits()
+            .set_update_state(&mut self.update_state, _caller);
+
+        clear
     }
 
     /// Clear the log to be in the state of construction except of [`Self::update_state`] which is
@@ -452,22 +456,10 @@ impl UpdateLog {
 
 // Reversible systems should never miss to run at the expected frame.
 // If you followed an error to this line, you may have encountered a bug, please report it.
+#[cfg(feature = "track-update-logs")]
 const DEFAULT_LOCATION: &Location = Location::caller();
 
-/// Defines in which way a log has to be adjusted to reflect new changes to
-/// [`RevMeta`](crate::meta::RevMeta) since the last time the log was updated.
-pub(crate) enum PreUpdateKind {
-    /// Keep the log unchanged
-    Nothing,
-
-    /// Remove log entries that are in the future
-    RemoveFuture,
-
-    /// Remove all log entries.
-    RemoveLog,
-}
-
-#[cfg(test)]
+#[cfg(all(test, feature = "track-update-logs"))]
 mod test {
     use crate::meta::RevQueue;
 
@@ -497,7 +489,7 @@ mod test {
                 RevQueue::RunForward
             };
             self.meta.set_queue(queue);
-            self.meta.update_ref(Ok(true), |meta, _| {
+            self.meta.update_ref_or_missed(Ok(true), |meta, _| {
                 for past_len in past_lens {
                     let past_len = NonZeroU64::new(past_len).unwrap();
                     let actual = self
@@ -521,7 +513,7 @@ mod test {
                         missed.last_update = caller;
                     }
                     self.meta.set_queue(RevQueue::RunForwardLog);
-                    self.meta.update_ref(Err(missed), |meta, _| {
+                    self.meta.update_ref_or_missed(Err(missed), |meta, _| {
                         for _ in 0..insufficient_updates {
                             assert!(
                                 self.update_log
@@ -535,7 +527,7 @@ mod test {
 
             // test where all updates ran
             self.meta.set_queue(RevQueue::RunForwardLog);
-            self.meta.update_ref(Ok(true), |meta, _| {
+            self.meta.update_ref_or_missed(Ok(true), |meta, _| {
                 for _ in 0..updates {
                     assert!(
                         self.update_log
@@ -563,7 +555,7 @@ mod test {
                         missed.last_update = caller;
                     }
                     self.meta.set_queue(RevQueue::RunBackwardLog);
-                    self.meta.update_ref(Err(missed), |meta, _| {
+                    self.meta.update_ref_or_missed(Err(missed), |meta, _| {
                         for _ in 0..insufficient_updates {
                             assert!(
                                 self.update_log
@@ -577,7 +569,7 @@ mod test {
 
             // test where all updates ran
             self.meta.set_queue(RevQueue::RunBackwardLog);
-            self.meta.update_ref(Ok(true), |meta, _| {
+            self.meta.update_ref_or_missed(Ok(true), |meta, _| {
                 for _ in 0..updates {
                     assert!(
                         self.update_log
@@ -594,7 +586,7 @@ mod test {
         }
         fn new_missed(&self) -> UpdateLogMissed {
             UpdateLogMissed {
-                id: self.update_log.id().unwrap(),
+                index: self.update_log.update_state.unwrap().index.get() as usize,
                 last_update: self.last_update,
             }
         }
@@ -605,7 +597,7 @@ mod test {
                 RevQueue::RunBackwardLog
             };
             self.meta.set_queue(queue);
-            self.meta.update_ref(Ok(true), |meta, _| {
+            self.meta.update_ref_or_missed(Ok(true), |meta, _| {
                 if forward {
                     for _ in 0..updates {
                         assert!(

@@ -570,7 +570,7 @@ impl MetaAndLogs {
             RevQueue::RunForward
         };
         self.meta.set_queue(queue);
-        self.meta.update_ref(Ok(true), |meta, _| {
+        self.meta.update_ref(true, |meta, _| {
             for Entries {
                 past_drain,
                 future_drain,
@@ -605,7 +605,7 @@ impl MetaAndLogs {
     }
     fn forward_log<const N: usize>(&mut self, entries: [(&'static str, char); N]) {
         self.meta.set_queue(RevQueue::RunForwardLog);
-        self.meta.update_ref(Ok(true), |meta, _| {
+        self.meta.update_ref(true, |meta, _| {
             let mut entries = entries.into_iter();
             while self.updates.forward_log(meta) {
                 let entry = entries.by_ref().next().unwrap();
@@ -619,7 +619,7 @@ impl MetaAndLogs {
     }
     fn backward_log<const N: usize>(&mut self, entries: [(&'static str, char); N]) {
         self.meta.set_queue(RevQueue::RunBackwardLog);
-        self.meta.update_ref(Ok(true), |meta, _| {
+        self.meta.update_ref(true, |meta, _| {
             let mut entries = entries.into_iter();
             while self.updates.backward_log(meta) {
                 let entry = entries.by_ref().next().unwrap();

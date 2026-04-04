@@ -311,13 +311,13 @@ mod test {
         }
         fn forward(&mut self, result: Result<bool, RunSystemError>) {
             self.meta.set_queue(RevQueue::RunForward);
-            self.meta.update_ref(Ok(true), |meta, _| {
+            self.meta.update_ref(true, |meta, _| {
                 self.logs.insert(meta, &result).unwrap();
             });
         }
         fn noop_forward(&mut self) {
             self.meta.set_queue(RevQueue::RunForward);
-            self.meta.update_ref(Ok(true), |_, _| ());
+            self.meta.update_ref(true, |_, _| ());
         }
         fn forward_log(&mut self, expected: Result<bool, &str>) {
             self.meta.set_queue(RevQueue::RunForwardLog);
@@ -328,7 +328,7 @@ mod test {
             self.log(false, expected);
         }
         fn log(&mut self, forward: bool, expected: Result<bool, &str>) {
-            self.meta.update_ref(Ok(true), |meta, _| {
+            self.meta.update_ref(true, |meta, _| {
                 match (self.logs.get(meta, forward), expected) {
                     (Ok(actual), Ok(expected)) => assert_eq!(actual, expected),
                     (Err(RunSystemError::Failed(actual)), Err(expected)) => {
@@ -348,7 +348,7 @@ mod test {
                     .is_some_and(|failed_logs| failed_logs.failed_cache.0.len() > 1)
             );
             self.meta.set_queue(RevQueue::ClearThenRunForward);
-            self.meta.update_ref(Ok(true), |meta, _| {
+            self.meta.update_ref(true, |meta, _| {
                 self.logs
                     .insert(meta, &Err(RunSystemError::Failed(err.into())))
                     .unwrap();
