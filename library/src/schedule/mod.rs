@@ -1,5 +1,5 @@
-//! This module contains extension traits and accompanying types to add reversible systems, regular
-//! conditions and system set configurations to schedule to make their effect reversible.
+//! Contains extension traits and accompanying types to add reversible systems, regular conditions
+//! and system set configurations to schedule to make their effect reversible.
 //!
 //! The main reversible schedule that is run by [`run_rev_update`] is [`RevUpdate`].
 //!

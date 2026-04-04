@@ -3,6 +3,9 @@ use alloc::collections::TryReserveError;
 use bevy_ecs::change_detection::MaybeLocation;
 use core::{fmt::Debug, num::NonZeroU64, panic::Location};
 
+#[cfg(not(feature = "track-update-logs"))]
+use bevy_log::{error, error_once};
+
 mod offset;
 
 #[cfg(feature = "track-update-logs")]
@@ -224,6 +227,20 @@ impl UpdateLog {
         self.offsets.get_bytes_mut().shrink_to_fit()
     }
 
+    /// Returns the most recent global count of log exits that was witnessed or `0`.
+    ///
+    /// See [`RevMeta::log_exits`].
+    pub fn witnessed_log_exits(&self) -> u64 {
+        self.witnessed_log_exits
+    }
+
+    /// Returns the most recent global count of log clears that was witnessed or `0`.
+    ///
+    /// See [`RevMeta::log_clears`].
+    pub fn witnessed_log_clears(&self) -> u64 {
+        self.witnessed_log_clears
+    }
+
     /// Update the log and return the updated length of the log as an alternative to
     /// [`RevMeta::past_len`].
     ///
@@ -325,6 +342,11 @@ impl UpdateLog {
         if self.last_update != meta.now() {
             // if last_update is larger than now, an update was missed but it is up to the RevMeta
             // update to report on that
+            #[cfg(not(feature = "track-update-logs"))]
+            if self.last_update > meta.now() {
+                update_missed(caller);
+            }
+
             return false;
         }
 
@@ -378,8 +400,13 @@ impl UpdateLog {
             Some(offset) => {
                 let frame = self.last_update + offset;
                 if frame != meta.now() {
-                    // if log_start is less than now, an update was missed but it is up to the
+                    // if frame is less than now, an update was missed but it is up to the
                     // RevMeta update to report on that
+                    #[cfg(not(feature = "track-update-logs"))]
+                    if frame < meta.now() {
+                        update_missed(caller);
+                    }
+
                     return false;
                 }
                 self.last_update = frame;
@@ -451,6 +478,25 @@ impl UpdateLog {
         self.log_start = 0;
         self.last_update = 0;
         self.past_len = 0;
+    }
+}
+
+#[cfg(not(feature = "track-update-logs"))]
+fn update_missed(_caller: MaybeLocation<Option<&'static Location>>) {
+    match _caller.into_option() {
+        None => error_once!(
+            "an UpdateLog update was missed, activate the `track-update-logs` feature to get \
+            more information and bevy's `track_location` feature to contain the `UpdateLog`'s \
+            last modification in the code within the error"
+        ),
+        Some(None) => error_once!(
+            "an UpdateLog update of a reversible system state was missed, please fill a bug issue \
+            at the bevy_oozlum crate with a reproducing example"
+        ),
+        Some(Some(caller)) => error!(
+            "the UpdateLog at {caller} missed an update at an earlier point, activate the
+            `track-update-logs` feature to get more information."
+        ),
     }
 }
 

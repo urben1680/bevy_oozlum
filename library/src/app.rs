@@ -1,5 +1,5 @@
-//! This module contains [`RevPlugin`] and an extension trait to add reversible systems and
-//! configure system sets at the app level.
+//! Contains [`RevPlugin`] and an extension trait to add reversible systems and configure system
+//! sets at the app level.
 
 use bevy_app::{App, FixedUpdate, Plugin};
 use bevy_ecs::{

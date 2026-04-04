@@ -1,4 +1,4 @@
-//! This module contains additional API for reversible commands for bevy.
+//! Contains additional API for reversible commands for bevy.
 //!
 //! Generally all reversible commands use [`UndoRedo`] internally. With this trait, along the
 //! immediate effect of commands, additional values to undo and redo these effects are generated and

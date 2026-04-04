@@ -28,7 +28,7 @@ pub trait RevEntityCommands<'w> {
     /// ```
     /// # use bevy::prelude::*;
     /// # use bevy_oozlum::prelude::*;
-    /// # fn system(mut commands: Comands) {
+    /// # fn system(not_log: NotLog, mut commands: Commands) {
     /// // Wrong: having the non-log operation happen in the system
     /// // println!("hello world!")
     ///

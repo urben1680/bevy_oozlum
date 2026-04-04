@@ -52,6 +52,9 @@ jobs:
       - name: Tests
         run: cargo test --all-targets --all-features
 
+      - name: Tests (docs)
+        run: cargo test --doc --all-features
+
       - name: Documentation
         run: cargo doc --all-features --no-deps
 

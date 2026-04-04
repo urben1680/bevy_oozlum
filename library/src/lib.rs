@@ -38,6 +38,7 @@
 //! # use bevy::prelude::*;
 //! # use bevy_oozlum::prelude::*;
 //! fn rev_system_1(not_log: NotLog, mut commands: Commands) {
+//!     // all happens in a command
 //!     commands.queue(|_: &mut World| println!("hello world!"));
 //!     commands.queue_undo_redo(not_log, |_: &mut World, direction| {
 //!         match direction {
@@ -60,6 +61,7 @@
 //! # use bevy::prelude::*;
 //! # use bevy_oozlum::prelude::*;
 //! fn rev_system_2(meta: Res<RevMeta>) {
+//!     // all happens in the system
 //!     match meta.running_direction() {
 //!         RevDirection::NotLog(_) => println!("hello world!"),
 //!         RevDirection::BackwardLog => println!("!dlrow olleh (log)"),
@@ -71,7 +73,9 @@
 //! If there is the need to maintain logs of changes inside the system, check the [`log`] module.
 //!
 //! Both system variants can be combined, [`RevDirection::NotLog`] contains the [`NotLog`] value
-//! needed for reversible commands.
+//! needed for reversible commands. Still there should be a clean separation of commands
+//! do/undo/redo and system do/undo/redo. Do not use [`queue_undo_redo`] to make operations
+//! reversible that happen directly inside the system.
 //!
 //! Reversible systems are added to the app using [`rev_add_systems`]. Defining reversible orderings
 //! and set configurations is also supported. All new APIs have a `rev_` prefix and otherwise mimic
@@ -92,9 +96,24 @@
 //! ```
 //!
 //! If systems are not added with the new `rev_add_systems` but the usual `add_systems`, this may
-//! result in random orderings. One should never add non-reversible systems this way _unless_ they
-//! are ordered relatively to [`RevSystems`], a set containing all systems added via
-//! `rev_add_systems`.
+//! result in random orderings to reversible systems. One should never add non-reversible systems
+//! this way _unless_ they are ordered relatively to [`RevSystems`], a set containing all systems
+//! added via `rev_add_systems`.
+//!
+//! ```
+//! # use bevy::prelude::*;
+//! # use bevy_oozlum::prelude::*;
+//! # fn rev_system_1() {}
+//! # fn regular_system() {}
+//! # let mut app = App::new();
+//! app.rev_add_systems(RevUpdate, rev_system_1) // implicitly in the RevSystems set
+//!     .add_systems(
+//!         RevUpdate,
+//!         regular_system
+//!          // .after(rev_system_1) // wrong
+//!             .after(RevSystems) // correct
+//!     );
+//! ```
 //!
 //! One can populate other schedules with reversible systems as well and call them with the
 //! [`rev_run_schedule`] command.
@@ -112,7 +131,7 @@
 //! ) {
 //!     if keyboard_input.pressed(KeyCode::ArrowUp) {
 //!         meta.set_queue(RevQueue::RunForward);
-//!         println!("queue forward, truncates past frames that get too old and all future frames");
+//!         println!("queue forward, truncates too-old past frames and all future frames");
 //!     } else if keyboard_input.pressed(KeyCode::ArrowDown) {
 //!         meta.set_queue(RevQueue::Pause);
 //!         println!("queue pause, will not run RevUpdate until unpaused");
@@ -127,19 +146,23 @@
 //! ```
 //!
 //! If one wants to jump to a specific frame in the log, the system also has to check [`now`] to
-//! queue [`Pause`] when desired. These frames are enumerated in `u64`.
+//! queue [`RevQueue::Pause`] when desired. These frames are enumerated in `u64`. It is adviced to
+//! have two systems in that case, one before [`rev_run_schedule`] to queue
+//! [`RevQueue::RunForwardLog`]/[`RunBackwardLog`] and one after [`rev_run_schedule`] to pause if
+//! the desired frame is reached.
 //!
 //! ## Setup
 //!
 //! The [`RevPlugin`] plugin is used to set everything up:
 //!
 //! ```
-//! # use bevy::prelude::*;
-//! # use bevy_oozlum::prelude::*;
+//! use bevy::prelude::*;
+//! use bevy_oozlum::prelude::*;
+//!
 //! # let mut app = App::new();
-//! app.add_plugins(
+//! app.add_plugins((
 //!     RevPlugin.set_max_past_len(42)
-//! );
+//! ));
 //!
 //! ```
 //!
@@ -158,6 +181,9 @@
 //!
 //! Usually one wants to specify the maximum past length at least. The insertion of `RevMeta` and
 //! `run_rev_update` can be suppressed entirely at the plugin as well for a more custom setup.
+//!
+//! Along the plugin, more setup might be needed, like adding `MinimalPlugins` to get `FixedUpdate`
+//! running.
 //!
 //! ## Cargo Features
 //!
@@ -209,7 +235,9 @@
 //! [`RevDirection`]: crate::meta::RevDirection
 //! [`set_queue`]: crate::meta::RevMeta::set_queue
 //! [`now`]: crate::meta::RevMeta::now
-//! [`Pause`]: crate::meta::RevQueue::Pause
+//! [`RevQueue::Pause`]: crate::meta::RevQueue::Pause
+//! [`RevQueue::RunForwardLog`]: crate::meta::RevQueue::RunForwardLog
+//! [`RunBackwardLog`]: crate::meta::RevQueue::RunBackwardLog
 //! [`RevPlugin`]: crate::app::RevPlugin
 //! [`set_max_past_len`]: crate::meta::RevMeta::set_max_past_len
 //! [`run_rev_update`]: crate::schedule::run_rev_update

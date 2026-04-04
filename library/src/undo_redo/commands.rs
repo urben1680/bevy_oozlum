@@ -25,7 +25,7 @@ pub trait RevCommands {
     /// ```
     /// # use bevy::prelude::*;
     /// # use bevy_oozlum::prelude::*;
-    /// # fn system(mut commands: Comands) {
+    /// # fn system(not_log: NotLog, mut commands: Commands) {
     /// // Wrong: having the non-log operation happen in the system
     /// // println!("hello world!")
     ///
@@ -132,14 +132,23 @@ pub trait RevCommands {
     );
 
     /// Reversible version of [`Commands::spawn`].
+    ///
+    /// See the [`undo_redo`](crate::undo_redo) module documentation to understand the mechanics of
+    /// reversible spawn/despawn.
     fn rev_spawn<T: Bundle>(&mut self, not_log: NotLog, bundle: T) -> EntityCommands<'_>;
 
     /// Reversible version of [`Commands::spawn_batch`].
+    ///
+    /// See the [`undo_redo`](crate::undo_redo) module documentation to understand the mechanics of
+    /// reversible spawn/despawn.
     fn rev_spawn_batch<I>(&mut self, not_log: NotLog, batch: I)
     where
         I: IntoIterator<Item: Bundle<Effect: NoBundleEffect>> + Send + 'static;
 
     /// Reversible version of [`Commands::spawn_empty`].
+    ///
+    /// See the [`undo_redo`](crate::undo_redo) module documentation to understand the mechanics of
+    /// reversible spawn/despawn.
     fn rev_spawn_empty(&mut self, not_log: NotLog) -> EntityCommands<'_>;
 
     /// Reversible version of [`Commands::insert_batch`].

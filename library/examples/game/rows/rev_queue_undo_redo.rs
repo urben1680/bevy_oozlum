@@ -20,15 +20,16 @@ fn system<const ROW: u64>(input: Res<JustPressed>, meta: Res<RevMeta>, mut comma
         // becomes unreachable for RevDirection::BackwardLog.
         let entity = commands.rev_spawn_empty(not_log).id();
 
-        // There are two methods to know: queue_undo_redo and redo_and_queue.
+        // There are two methods to know to queue custom undo-redo logic:
+        // queue_undo_redo and redo_and_queue.
         //
         // The first is used to define undo/redo logic to happen and store it in the system state so
-        // it can queue the undo or redo logic, depending on the current RevDirection.
+        // it can queue them, depending on the current RevDirection. Though also the actual
+        // operation that these are undoing/redoing should be in a command.
         //
-        // The second does the same, but also immediately applies the redo logic at the next
-        // sync-point. This is useful when this does the same as what we would need to do via a
-        // command ourselves here. And as that is the case (we want to insert the Waste component)
-        // we use redo_and_queue.
+        // The second does that already by simply applying the redo logic. This is useful when this
+        // does the same as what we would need to do via a command ourselves here. And as that is
+        // the case (we want to insert the Waste component) we use redo_and_queue.
         commands.redo_and_queue(
             not_log,
             InsertRemoveWaste {

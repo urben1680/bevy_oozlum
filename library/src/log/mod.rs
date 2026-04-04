@@ -1,4 +1,4 @@
-//! This module contains log variants and types around them that can be used in reversible systems.
+//! Contains log variants and types around them that can be used in reversible systems.
 //!
 //! ## Log variants
 //!
@@ -122,8 +122,9 @@ mod test;
 ///
 /// This error indicates the continuity of the global state was broken and should not be ignored.
 /// Instead, consider to pair the log with an [`UpdateLog`] that prevents this error. If then there
-/// still is an error, it will be because an update was missed and `UpdateLog` will cause that to be
-/// reported at the end of the schedule.
+/// still is an error, it will be because an update was missed. In that case activate the
+/// `track-update-logs` feature to get more information at which frame the update was expected to
+/// happen.
 ///
 /// See the [module level documentation](crate::log) for more information.
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]

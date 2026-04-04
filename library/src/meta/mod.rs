@@ -1,6 +1,6 @@
-//! This module contains [`RevMeta`], the crate's central resource to manage reversible schedules
-//! and to provide additional context to reversible systems. Multiple other types around it are also
-//! contained here.
+//! Contains [`RevMeta`], the crate's central resource to manage reversible schedules and to provide
+//! additional context to reversible systems. Multiple other types around it are also contained
+//! here.
 
 #[cfg(feature = "track-update-logs")]
 use crate::log::{UpdateLogLimits, UpdateLogMissed};
