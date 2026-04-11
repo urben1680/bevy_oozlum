@@ -45,7 +45,7 @@
 //! be detected when a [`UpdateLog`] did not update at the correct frame in the correct amount of
 //! times.
 //!
-//! **For the following to be checked the `track-update-logs` feature must be used.**
+//! **For the following to be checked the `track_update_logs` feature must be used.**
 //!
 //! Whenever an `UpdateLog` is updated, the information about which closest past and future frames
 //! it expects to be updated again is stored in [`RevMeta`]. If at these frames the log is not
@@ -96,10 +96,10 @@ use core::{
     iter::FusedIterator,
 };
 
-#[cfg(feature = "track-update-logs")]
+#[cfg(feature = "track_update_logs")]
 pub(crate) use update::limit::UpdateLogLimits;
 
-#[cfg(feature = "track-update-logs")]
+#[cfg(feature = "track_update_logs")]
 pub use update::limit::UpdateLogMissed;
 
 pub use update::UpdateLog;
@@ -123,7 +123,7 @@ mod test;
 /// This error indicates the continuity of the global state was broken and should not be ignored.
 /// Instead, consider to pair the log with an [`UpdateLog`] that prevents this error. If then there
 /// still is an error, it will be because an update was missed. In that case activate the
-/// `track-update-logs` feature to get more information at which frame the update was expected to
+/// `track_update_logs` feature to get more information at which frame the update was expected to
 /// happen.
 ///
 /// See the [module level documentation](crate::log) for more information.

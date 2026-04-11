@@ -295,7 +295,7 @@ impl From<ApplyDeferred> for RevScheduleConfigs<ScheduleSystem> {
 /// Reversible variant of [`IntoScheduleConfigs`].
 #[diagnostic::on_unimplemented(
     message = "`{Self}` does not describe a valid reversible system configuration. Make sure to use
-    the `rev_*` prefixed methods, **not** the regular bevy methods.",
+    the `rev_*` prefixed methods, **not** the regular bevy methods",
     label = "invalid reversible system configuration"
 )]
 pub trait IntoRevScheduleConfigs<

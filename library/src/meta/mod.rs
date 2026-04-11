@@ -2,14 +2,14 @@
 //! additional context to reversible systems. Multiple other types around it are also contained
 //! here.
 
-#[cfg(feature = "track-update-logs")]
+#[cfg(feature = "track_update_logs")]
 use crate::log::{UpdateLogLimits, UpdateLogMissed};
 use crate::{
     schedule::RevUpdate,
     undo_redo::{DespawnFinalizerErr, UndoRedoQueue, finalize_despawns},
 };
 use alloc::{borrow::Cow, boxed::Box, format};
-#[cfg(feature = "track-update-logs")]
+#[cfg(feature = "track_update_logs")]
 use alloc::{string::ToString, vec::Vec};
 use bevy_ecs::{
     resource::Resource,
@@ -54,7 +54,7 @@ pub struct RevMeta {
     log_exits: u64,
     log_clears: u64,
 
-    #[cfg(feature = "track-update-logs")]
+    #[cfg(feature = "track_update_logs")]
     update_log_limits: UpdateLogLimits,
 }
 
@@ -92,7 +92,7 @@ impl RevMeta {
             queue: (!paused).then_some(RevQueue::RunForward),
             log_exits: 0,
             log_clears: 0,
-            #[cfg(feature = "track-update-logs")]
+            #[cfg(feature = "track_update_logs")]
             update_log_limits: UpdateLogLimits::default(),
         }
     }
@@ -415,7 +415,7 @@ impl RevMeta {
         }
         meta.direction = RunningOrRan::Ran(direction);
 
-        #[cfg(feature = "track-update-logs")]
+        #[cfg(feature = "track_update_logs")]
         {
             // check for `UpdateLog` instances that were missed being updated
             let now = meta.now;
@@ -428,7 +428,7 @@ impl RevMeta {
             }
         }
 
-        #[cfg(not(feature = "track-update-logs"))]
+        #[cfg(not(feature = "track_update_logs"))]
         Ok(meta)
     }
 
@@ -439,7 +439,7 @@ impl RevMeta {
         self.log_clears = self.log_clears.checked_add(1).unwrap(); // overflow not supported
         self.log_exits = 0;
 
-        #[cfg(feature = "track-update-logs")]
+        #[cfg(feature = "track_update_logs")]
         {
             self.update_log_limits.clear();
             bevy_log::info!(
@@ -482,7 +482,7 @@ impl RevMeta {
         assert_eq!(ran, !self.paused());
     }
 
-    #[cfg(all(test, feature = "track-update-logs"))]
+    #[cfg(all(test, feature = "track_update_logs"))]
     pub(crate) fn update_ref_or_missed(
         &mut self,
         should_run: Result<bool, UpdateLogMissed>,
@@ -516,7 +516,7 @@ impl RevMeta {
     }
 
     /// Gets [`UpdateLogLimits`].
-    #[cfg(feature = "track-update-logs")]
+    #[cfg(feature = "track_update_logs")]
     pub(super) fn update_log_limits(&self) -> &UpdateLogLimits {
         &self.update_log_limits
     }
@@ -613,7 +613,7 @@ impl RevMeta {
                         world.insert_resource(*meta);
                         err
                     }
-                    #[cfg(feature = "track-update-logs")]
+                    #[cfg(feature = "track_update_logs")]
                     Err(RevMetaUpdateErr::UpdateLogsMissed {
                         meta,
                         update_logs_missed,
@@ -681,11 +681,11 @@ pub enum RevMetaUpdateErr {
         meta: Box<RevMeta>,
     },
 
-    #[cfg(feature = "track-update-logs")]
+    #[cfg(feature = "track_update_logs")]
     /// One or mote [`UpdateLog`]s did not update when they were expected to, in the amount they
     /// were expected to. This may only happen during [log directions].
     ///
-    /// This variant is only part of this enum when the `track-update-logs` feature is used.
+    /// This variant is only part of this enum when the `track_update_logs` feature is used.
     ///
     /// [`UpdateLog`]: crate::log::UpdateLog
     /// [log directions]: RevDirection::is_log

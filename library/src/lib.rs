@@ -191,7 +191,7 @@
 //! | - | - | - |
 //! | `app` | Includes the [`app`] module, useful when using `bevy` or `bevy_app` and not just `bevy_ecs` | Yes |
 //! | `reflect` | Derives [`Reflect`] on some of the types of this crate | Yes |
-//! | `track-update-logs` | Asserts after each [`RevUpdate`] that all [`UpdateLog`]s ran the expected amount of times | No |
+//! | `track_update_logs` | Asserts after each [`RevUpdate`] that all [`UpdateLog`]s ran the expected amount of times | No |
 //! | `hotpatching` | Makes this crate compile while using bevy's hotpatching feature | No |
 //!
 //! `std` is not used in this crate so it is `no_std` compatible, to the extend of bevy's support.
@@ -263,6 +263,9 @@ extern crate alloc;
 ISSUES/DISCUSSIONS:
 - crate::schedule::set_base_sets should not need to chain forward/backward configs
 - benchmarks
+TODO 0.19
+- replace log macros with world error handler, remove panic_on_error_events
+- UpdateMissed error, contains empty enum if track_update_logs
 */
 
 #[cfg(feature = "app")]

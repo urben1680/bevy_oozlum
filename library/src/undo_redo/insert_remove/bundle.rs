@@ -216,7 +216,8 @@ impl<R: Relationship, B: Bundle> RevBundle<[R; 2]> for SpawnOneRelated<R, B> {
         _mode: InsertMode,
         caller: MaybeLocation,
     ) {
-        let Some(new_related) = get_new_related::<R>(entity, |entity| entity.insert(self)) else {
+        let Some(new_related) = get_new_related::<R>(entity, |entity| entity.insert(self), caller)
+        else {
             return;
         };
         entity.world_scope(|world| {
@@ -257,7 +258,8 @@ impl<R: Relationship, L: SpawnableList<R> + Send + Sync + 'static> RevBundle<[R;
         _mode: InsertMode,
         caller: MaybeLocation,
     ) {
-        let new_related = get_new_related_entities::<R>(entity, |entity| entity.insert(self));
+        let new_related =
+            get_new_related_entities::<R>(entity, |entity| entity.insert(self), caller);
         entity.world_scope(|world| {
             mark_entities::<true>(not_log, world, &new_related, true, MaybeLocation::caller())
         });

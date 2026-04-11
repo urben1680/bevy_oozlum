@@ -3,15 +3,12 @@ use alloc::collections::TryReserveError;
 use bevy_ecs::change_detection::MaybeLocation;
 use core::{fmt::Debug, num::NonZeroU64, panic::Location};
 
-#[cfg(not(feature = "track-update-logs"))]
-use bevy_log::{error, error_once};
-
 mod offset;
 
-#[cfg(feature = "track-update-logs")]
+#[cfg(feature = "track_update_logs")]
 pub(super) mod limit;
 
-#[cfg(feature = "track-update-logs")]
+#[cfg(feature = "track_update_logs")]
 use limit::*;
 
 /// A log that keeps track when it was updated and provides the value for the `past_len` argument of
@@ -115,7 +112,7 @@ pub struct UpdateLog {
 
     /// The state that is needed to clean up the log at [`Self::pre_update_to_clear`] and to push
     /// new limits to [`UpdateLogLimits`].
-    #[cfg(feature = "track-update-logs")]
+    #[cfg(feature = "track_update_logs")]
     update_state: Option<UpdateLogState>,
 }
 
@@ -129,7 +126,7 @@ impl UpdateLog {
             past_len: 0,
             witnessed_log_exits: 0,
             witnessed_log_clears: 0,
-            #[cfg(feature = "track-update-logs")]
+            #[cfg(feature = "track_update_logs")]
             update_state: None,
         }
     }
@@ -255,7 +252,7 @@ impl UpdateLog {
     pub(crate) fn forward_past_len_with_caller(
         &mut self,
         meta: &RevMeta,
-        caller: MaybeLocation<Option<&'static Location>>,
+        caller: UpdateLocation,
     ) -> NonZeroU64 {
         if self.not_log_should_clear(meta, caller) {
             // log is empty or all updates are out of log
@@ -274,13 +271,10 @@ impl UpdateLog {
             self.past_len += 1;
         }
 
-        #[cfg(feature = "track-update-logs")]
+        #[cfg(feature = "track_update_logs")]
         meta.update_log_limits().push_limit(
             self.update_state.as_mut().unwrap(), // set by not_log_should_clear
-            UpdateLogLimit::new_forward(
-                meta.now(),
-                caller.map(|caller| caller.unwrap_or(DEFAULT_LOCATION)),
-            ),
+            UpdateLogLimit::new_forward(meta.now(), caller),
         );
 
         // past_len is either set to 1 or increased above, overflow is unexpected
@@ -291,11 +285,7 @@ impl UpdateLog {
     ///
     /// If this method returns `true`, call [`Self::clear`] or do comparable operations.
     #[track_caller]
-    fn not_log_should_clear(
-        &mut self,
-        meta: &RevMeta,
-        caller: MaybeLocation<Option<&'static Location>>,
-    ) -> bool {
+    fn not_log_should_clear(&mut self, meta: &RevMeta, caller: UpdateLocation) -> bool {
         self.pre_update_to_clear(meta, caller) || self.last_update < meta.past_end() || {
             if self.log_start <= meta.past_end() {
                 let mut minus = meta.past_end() - self.log_start;
@@ -323,11 +313,11 @@ impl UpdateLog {
         self.backward_log_with_caller(meta, caller)
     }
 
-    #[track_caller]
+    /// See [`Self::backward_log`]. Set `caller` to `None` for crate-internal logs.
     pub(crate) fn backward_log_with_caller(
         &mut self,
         meta: &RevMeta,
-        caller: MaybeLocation<Option<&'static Location>>,
+        caller: UpdateLocation,
     ) -> bool {
         if self.pre_update_to_clear(meta, caller) {
             self.clear();
@@ -340,9 +330,7 @@ impl UpdateLog {
         };
 
         if self.last_update != meta.now() {
-            // if last_update is larger than now, an update was missed but it is up to the RevMeta
-            // update to report on that
-            #[cfg(not(feature = "track-update-logs"))]
+            #[cfg(not(feature = "track_update_logs"))]
             if self.last_update > meta.now() {
                 update_missed(caller);
             }
@@ -355,13 +343,13 @@ impl UpdateLog {
         iter.sync();
         self.past_len -= 1;
 
-        #[cfg(feature = "track-update-logs")]
+        #[cfg(feature = "track_update_logs")]
         meta.update_log_limits().push_limit(
             self.update_state.as_mut().unwrap(), // set by pre_update_to_clear
             UpdateLogLimit::new_log(
                 iter.next().map_or(0, |_| self.last_update),
                 meta.now() - 1,
-                caller.map(|caller| caller.unwrap_or(DEFAULT_LOCATION)),
+                caller,
             ),
         );
 
@@ -385,10 +373,11 @@ impl UpdateLog {
         self.forward_log_with_caller(meta, caller)
     }
 
+    /// See [`Self::forward_log`]. Set `caller` to `None` for crate-internal logs.
     pub(crate) fn forward_log_with_caller(
         &mut self,
         meta: &RevMeta,
-        caller: MaybeLocation<Option<&'static Location>>,
+        caller: UpdateLocation,
     ) -> bool {
         if self.pre_update_to_clear(meta, caller) {
             self.clear();
@@ -400,9 +389,7 @@ impl UpdateLog {
             Some(offset) => {
                 let frame = self.last_update + offset;
                 if frame != meta.now() {
-                    // if frame is less than now, an update was missed but it is up to the
-                    // RevMeta update to report on that
-                    #[cfg(not(feature = "track-update-logs"))]
+                    #[cfg(not(feature = "track_update_logs"))]
                     if frame < meta.now() {
                         update_missed(caller);
                     }
@@ -417,7 +404,7 @@ impl UpdateLog {
         iter.sync();
         self.past_len += 1;
 
-        #[cfg(feature = "track-update-logs")]
+        #[cfg(feature = "track_update_logs")]
         meta.update_log_limits().push_limit(
             self.update_state.as_mut().unwrap(), // set by pre_update_to_clear
             UpdateLogLimit::new_log(
@@ -426,7 +413,7 @@ impl UpdateLog {
                     // order is important, offset may be 0 but now() is never 0 during ForwardLog
                     meta.now() + offset - 1
                 }),
-                caller.map(|caller| caller.unwrap_or(DEFAULT_LOCATION)),
+                caller,
             ),
         );
 
@@ -436,11 +423,7 @@ impl UpdateLog {
     /// Shorten the log when log exits or clears were missed.
     ///
     /// If this method returns `true`, call [`Self::clear`] or do comparable operations.
-    fn pre_update_to_clear(
-        &mut self,
-        meta: &RevMeta,
-        _caller: MaybeLocation<Option<&'static Location>>,
-    ) -> bool {
+    fn pre_update_to_clear(&mut self, meta: &RevMeta, _caller: UpdateLocation) -> bool {
         let mut clear = false;
 
         if self.witnessed_log_clears < meta.log_clears() {
@@ -449,7 +432,7 @@ impl UpdateLog {
             self.witnessed_log_exits = meta.log_exits();
             clear = true;
 
-            #[cfg(feature = "track-update-logs")]
+            #[cfg(feature = "track_update_logs")]
             {
                 self.update_state = None;
             }
@@ -464,7 +447,7 @@ impl UpdateLog {
             }
         }
 
-        #[cfg(feature = "track-update-logs")]
+        #[cfg(feature = "track_update_logs")]
         meta.update_log_limits()
             .set_update_state(&mut self.update_state, _caller);
 
@@ -481,31 +464,28 @@ impl UpdateLog {
     }
 }
 
-#[cfg(not(feature = "track-update-logs"))]
-fn update_missed(_caller: MaybeLocation<Option<&'static Location>>) {
-    match _caller.into_option() {
-        None => error_once!(
-            "an UpdateLog update was missed, activate the `track-update-logs` feature to get \
+#[cfg(not(feature = "track_update_logs"))]
+fn update_missed(caller: UpdateLocation) {
+    match caller.into_option() {
+        None => bevy_log::error_once!(
+            "an UpdateLog update was missed, activate the `track_update_logs` feature to get \
             more information and bevy's `track_location` feature to contain the `UpdateLog`'s \
             last modification in the code within the error"
         ),
-        Some(None) => error_once!(
-            "an UpdateLog update of a reversible system state was missed, please fill a bug issue \
-            at the bevy_oozlum crate with a reproducing example"
+        Some(None) => bevy_log::error_once!(
+            "an UpdateLog update of a `bevy_oozlum` internal log was missed, please fill a bug \
+            issue with a minimal reproducing example"
         ),
-        Some(Some(caller)) => error!(
+        Some(Some(caller)) => bevy_log::error!(
             "the UpdateLog at {caller} missed an update at an earlier point, activate the
-            `track-update-logs` feature to get more information."
+            `track_update_logs` feature to get more information"
         ),
     }
 }
 
-// Reversible systems should never miss to run at the expected frame.
-// If you followed an error to this line, you may have encountered a bug, please report it.
-#[cfg(feature = "track-update-logs")]
-const DEFAULT_LOCATION: &Location = Location::caller();
+type UpdateLocation = MaybeLocation<Option<&'static Location<'static>>>;
 
-#[cfg(all(test, feature = "track-update-logs"))]
+#[cfg(all(test, feature = "track_update_logs"))]
 mod test {
     use crate::meta::RevQueue;
 
@@ -515,7 +495,7 @@ mod test {
     struct MetaAndLog {
         meta: RevMeta,
         update_log: UpdateLog,
-        last_update: MaybeLocation,
+        last_update: UpdateLocation,
     }
 
     impl MetaAndLog {
@@ -523,12 +503,12 @@ mod test {
             Self {
                 meta: RevMeta::new(max_past_len, false),
                 update_log: UpdateLog::new(),
-                last_update: MaybeLocation::caller(),
+                last_update: MaybeLocation::caller().map(Some),
             }
         }
         #[track_caller]
         fn forward<const N: usize>(&mut self, past_lens: [u64; N], clear: bool) {
-            let caller = MaybeLocation::caller();
+            let caller = MaybeLocation::caller().map(Some);
             let queue = if clear {
                 RevQueue::ClearThenRunForward
             } else {
@@ -538,9 +518,7 @@ mod test {
             self.meta.update_ref_or_missed(Ok(true), |meta, _| {
                 for past_len in past_lens {
                     let past_len = NonZeroU64::new(past_len).unwrap();
-                    let actual = self
-                        .update_log
-                        .forward_past_len_with_caller(meta, caller.map(Some));
+                    let actual = self.update_log.forward_past_len_with_caller(meta, caller);
                     assert_eq!(actual, past_len);
                     self.last_update = caller;
                 }
@@ -548,7 +526,7 @@ mod test {
         }
         #[track_caller]
         fn forward_log(&mut self, updates: u64) {
-            let caller = MaybeLocation::caller();
+            let caller = MaybeLocation::caller().map(Some);
 
             // test cases where not all updates ran
             if updates > 0 {
@@ -561,10 +539,7 @@ mod test {
                     self.meta.set_queue(RevQueue::RunForwardLog);
                     self.meta.update_ref_or_missed(Err(missed), |meta, _| {
                         for _ in 0..insufficient_updates {
-                            assert!(
-                                self.update_log
-                                    .forward_log_with_caller(meta, caller.map(Some)),
-                            );
+                            assert!(self.update_log.forward_log_with_caller(meta, caller),);
                         }
                     });
                     self.revert(insufficient_updates, false);
@@ -575,10 +550,7 @@ mod test {
             self.meta.set_queue(RevQueue::RunForwardLog);
             self.meta.update_ref_or_missed(Ok(true), |meta, _| {
                 for _ in 0..updates {
-                    assert!(
-                        self.update_log
-                            .forward_log_with_caller(meta, caller.map(Some))
-                    );
+                    assert!(self.update_log.forward_log_with_caller(meta, caller));
                 }
                 // assert no more updates would run
                 assert!(!self.update_log.forward_log(meta));
@@ -590,7 +562,7 @@ mod test {
         }
         #[track_caller]
         fn backward_log(&mut self, updates: u64) {
-            let caller = MaybeLocation::caller();
+            let caller = MaybeLocation::caller().map(Some);
 
             // test cases where not all updates ran
             if updates > 0 {
@@ -603,10 +575,7 @@ mod test {
                     self.meta.set_queue(RevQueue::RunBackwardLog);
                     self.meta.update_ref_or_missed(Err(missed), |meta, _| {
                         for _ in 0..insufficient_updates {
-                            assert!(
-                                self.update_log
-                                    .backward_log_with_caller(meta, caller.map(Some))
-                            );
+                            assert!(self.update_log.backward_log_with_caller(meta, caller));
                         }
                     });
                     self.revert(insufficient_updates, true);
@@ -617,10 +586,7 @@ mod test {
             self.meta.set_queue(RevQueue::RunBackwardLog);
             self.meta.update_ref_or_missed(Ok(true), |meta, _| {
                 for _ in 0..updates {
-                    assert!(
-                        self.update_log
-                            .backward_log_with_caller(meta, caller.map(Some))
-                    );
+                    assert!(self.update_log.backward_log_with_caller(meta, caller));
                 }
                 // assert no more updates would run
                 assert!(!self.update_log.backward_log(meta));
@@ -648,14 +614,14 @@ mod test {
                     for _ in 0..updates {
                         assert!(
                             self.update_log
-                                .forward_log_with_caller(meta, self.last_update.map(Some)),
+                                .forward_log_with_caller(meta, self.last_update),
                         );
                     }
                 } else {
                     for _ in 0..updates {
                         assert!(
                             self.update_log
-                                .backward_log_with_caller(meta, self.last_update.map(Some)),
+                                .backward_log_with_caller(meta, self.last_update),
                         );
                     }
                 }

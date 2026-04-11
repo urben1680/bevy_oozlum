@@ -4,7 +4,6 @@
 //! errors if it did not update at the current frame as it did during
 //! [`RevDirection::NotLog`](crate::meta::RevDirection::NotLog).
 
-use crate::log::update::DEFAULT_LOCATION;
 use alloc::{boxed::Box, vec::Vec};
 use bevy_ecs::change_detection::MaybeLocation;
 use bevy_utils::Parallel;
@@ -14,6 +13,8 @@ use core::{
     sync::atomic::AtomicU32,
 };
 use nonmax::NonMaxU32;
+
+use crate::log::update::UpdateLocation;
 
 /// Part of [`RevMeta`](crate::meta::RevMeta) that keeps track of [`UpdateLog`](super::UpdateLog)
 /// updates and reports when such an update was expected for a present frame but did not happen.
@@ -124,7 +125,7 @@ impl UpdateLogLimits {
                 future: u64::MAX,
 
                 // if an error points to this, something went wrong internally
-                last_update: MaybeLocation::caller(),
+                last_update: MaybeLocation::new(None),
             },
         );
 
@@ -244,14 +245,14 @@ pub(crate) struct UpdateLogLimit {
 
     /// The last location where [`UpdateLog`](super::UpdateLog) was updated. Is empty if bevy's
     /// `track_location` cargo feature is not used.
-    last_update: MaybeLocation,
+    last_update: UpdateLocation,
 }
 
 impl UpdateLogLimit {
     /// A new limit during an [`RevDirection::NotLog`](crate::meta::RevDirection::NotLog) update.
     ///
     /// Restricts [`RevMeta::now`](crate::meta::RevMeta::now) to not go below `now`.
-    pub(crate) fn new_forward(now: u64, caller: MaybeLocation) -> Self {
+    pub(crate) fn new_forward(now: u64, caller: UpdateLocation) -> Self {
         Self {
             past: now,
             future: u64::MAX,
@@ -264,7 +265,7 @@ impl UpdateLogLimit {
     ///
     /// Restricts [`RevMeta::now`](crate::meta::RevMeta::now) to not go below `past` or above
     /// `future`, except during [`RevDirection::NotLog`](crate::meta::RevDirection::NotLog).
-    pub(crate) fn new_log(past: u64, future: u64, caller: MaybeLocation) -> Self {
+    pub(crate) fn new_log(past: u64, future: u64, caller: UpdateLocation) -> Self {
         Self {
             past,
             future,
@@ -338,18 +339,19 @@ pub struct UpdateLogMissed {
 
     /// The last location in the code where the [`UpdateLog`](super::UpdateLog) was updated.
     ///
+    /// If this is `None`, the error is cause by a `bevy_oozlum` internal log. In that case please
+    /// report a bug with a minimal reproducing example.
+    ///
     /// Requires to use bevy's `track_location` feature.
-    pub last_update: MaybeLocation,
+    pub last_update: UpdateLocation,
 }
 
 impl Debug for UpdateLogMissed {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
-        if size_of::<MaybeLocation>() == 0 {
-            write!(f, "{}", self.index)
-        } else if self.last_update == MaybeLocation::new(DEFAULT_LOCATION) {
-            write!(f, "{} (bevy_oozlum bug)", self.index)
-        } else {
-            write!(f, "{} (modified {})", self.index, self.last_update)
+        match self.last_update.into_option() {
+            None => write!(f, "{}", self.index),
+            Some(None) => write!(f, "{} (bevy_oozlum bug)", self.index),
+            Some(Some(location)) => write!(f, "{} (modified {location})", self.index),
         }
     }
 }
@@ -364,7 +366,7 @@ mod test {
     fn updates_state() {
         let mut limits = UpdateLogLimits::default();
         let mut state = None;
-        let caller = MaybeLocation::caller();
+        let caller = MaybeLocation::new(None);
         let no_caller = MaybeLocation::new(None);
 
         // initial set gives Nothing variant
@@ -480,13 +482,13 @@ mod test {
 
         // add a past limit of 1
         let mut past_state = None;
-        let past_limit = UpdateLogLimit::new_log(1, u64::MAX, MaybeLocation::caller());
+        let past_limit = UpdateLogLimit::new_log(1, u64::MAX, MaybeLocation::caller().map(Some));
         limits.set_update_state(&mut past_state, no_caller);
         limits.push_limit(past_state.as_mut().unwrap(), past_limit);
 
         // add a future limit of 1
         let mut future_state = None;
-        let future_limit = UpdateLogLimit::new_log(u64::MIN, 1, MaybeLocation::caller());
+        let future_limit = UpdateLogLimit::new_log(u64::MIN, 1, MaybeLocation::caller().map(Some));
         limits.set_update_state(&mut future_state, no_caller);
         limits.push_limit(future_state.as_mut().unwrap(), future_limit);
 

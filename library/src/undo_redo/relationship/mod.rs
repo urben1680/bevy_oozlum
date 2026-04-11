@@ -77,7 +77,7 @@ pub(super) trait SlimRelationship: Relationship {
             panic!(
                 "rev_* methods that handle relationships are not supported when extra data in any \
                 of the two types is stored. Note that this limitiation is also present for rev_* \
-                methods for component insertion/removal even though this cannot always be detected."
+                methods for component insertion/removal even though this cannot always be detected"
             )
         }
     };
@@ -201,7 +201,9 @@ impl<R: Relationship, E: AsRef<[Entity]> + Send + 'static, const ADD: bool> Undo
 pub(super) fn get_new_related_entities<R: Relationship>(
     entity: &mut EntityWorldMut,
     c: impl for<'a, 'w> FnOnce(&'a mut EntityWorldMut<'w>) -> &'a mut EntityWorldMut<'w>,
+    caller: MaybeLocation,
 ) -> Vec<Entity> {
+    let id = entity.id();
     let children = match entity.get::<R::RelationshipTarget>() {
         Some(target) => {
             let existing_children: EntityHashSet = target.collection().iter().collect();
@@ -214,8 +216,9 @@ pub(super) fn get_new_related_entities<R: Relationship>(
                 None if existing_children.is_empty() => Vec::new(),
                 None => {
                     error!(
-                        "reversible spawning of multiple children resulted in the loss of existing \
-                        children {existing_children:?}, these are unrecoverable"
+                        "reversible spawning of multiple children of {id}{LOCATION_PREFIX}{caller} \
+                        resulted in the loss of existing children {existing_children:?}, these are \
+                        unrecoverable"
                     );
                     return Vec::new();
                 }
@@ -229,8 +232,9 @@ pub(super) fn get_new_related_entities<R: Relationship>(
 
     if children.is_empty() {
         info!(
-            "reversible spawning of multiple children did not result in any, it cannot be determined
-            if this was just an empty list of spawns or if new children were immediately despawned"
+            "reversible spawning of multiple children of {id}{LOCATION_PREFIX}{caller} did not \
+            result in any, it cannot be determined if this was just an empty list of spawns or if \
+            new children were immediately despawned"
         )
     }
 
@@ -243,7 +247,9 @@ pub(super) fn get_new_related_entities<R: Relationship>(
 pub(super) fn get_new_related<R: Relationship>(
     entity: &mut EntityWorldMut,
     c: impl for<'a, 'w> FnOnce(&'a mut EntityWorldMut<'w>) -> &'a mut EntityWorldMut<'w>,
+    caller: MaybeLocation,
 ) -> Option<Entity> {
+    let id = entity.id();
     let child = match entity.get::<R::RelationshipTarget>() {
         Some(target) => {
             let existing_children: EntityHashSet = target.collection().iter().collect();
@@ -255,8 +261,9 @@ pub(super) fn get_new_related<R: Relationship>(
                 None if existing_children.is_empty() => None,
                 None => {
                     error!(
-                        "reversible spawning of a single child resulted in the loss of existing \
-                        children {existing_children:?}, these are unrecoverable"
+                        "reversible spawning of a single child of {id}{LOCATION_PREFIX}{caller} \
+                        resulted in the loss of existing children {existing_children:?}, these are \
+                        unrecoverable"
                     );
                     return None;
                 }
@@ -269,8 +276,8 @@ pub(super) fn get_new_related<R: Relationship>(
 
     if child.is_none() {
         warn!(
-            "reversible spawning of a single child did not result in a new child, it may have
-            been immediately despawned"
+            "reversible spawning of a single child of {id}{LOCATION_PREFIX}{caller} did not result \
+            in a new child, it may have been immediately despawned"
         );
     }
 

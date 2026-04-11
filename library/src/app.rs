@@ -9,7 +9,7 @@ use bevy_ecs::{
     },
     system::ScheduleSystem,
 };
-use bevy_log::warn;
+use bevy_log::warn_once;
 
 use crate::{
     meta::RevMeta,
@@ -136,7 +136,7 @@ impl ModifiedRevPlugin {
     /// Unsets [`RevMeta`] insertion. With this the insertion needs to be done manually.
     pub fn unset_meta(mut self) -> ModifiedRevPlugin {
         if self.meta.is_some_and(|meta| meta != Self::META_DEFAULT) {
-            warn!("overwrote plugin change with RevUpdate::unset_meta");
+            warn_once!("overwrote plugin change with RevUpdate::unset_meta");
         }
         self.meta = None;
         self
@@ -152,12 +152,12 @@ impl ModifiedRevPlugin {
         match self.meta.as_mut() {
             Some((max_past_len_mut, _)) => {
                 if *max_past_len_mut != RevMeta::DEFAULT_MAX_PAST_LEN {
-                    warn!("overwrote plugin change with RevUpdate::set_max_past_len");
+                    warn_once!("overwrote plugin change with RevUpdate::set_max_past_len");
                 }
                 *max_past_len_mut = max_past_len;
             }
             None => {
-                warn!("overwrote plugin change with RevUpdate::set_max_past_len");
+                warn_once!("overwrote plugin change with RevUpdate::set_max_past_len");
                 self.meta = Some((max_past_len, RevMeta::DEFAULT_PAUSED));
             }
         }
@@ -174,7 +174,7 @@ impl ModifiedRevPlugin {
                 *paused_mut = false;
             }
             None => {
-                warn!("overwrote plugin change with RevUpdate::set_paused");
+                warn_once!("overwrote plugin change with RevUpdate::set_paused");
                 self.meta = Some((RevMeta::DEFAULT_MAX_PAST_LEN, false));
             }
         }
@@ -192,7 +192,7 @@ impl ModifiedRevPlugin {
             .runner
             .is_some_and(|(schedule, set)| schedule != FixedUpdate.intern() || set.is_some())
         {
-            warn!("overwrote plugin change with RevUpdate::unset_runner");
+            warn_once!("overwrote plugin change with RevUpdate::unset_runner");
         }
         self.runner = None;
         self
@@ -206,12 +206,12 @@ impl ModifiedRevPlugin {
         match self.runner.as_mut() {
             Some((schedule_mut, _)) => {
                 if *schedule_mut != FixedUpdate.intern() {
-                    warn!("overwrote plugin change with RevUpdate::set_runner_in_schedule");
+                    warn_once!("overwrote plugin change with RevUpdate::set_runner_in_schedule");
                 }
                 *schedule_mut = schedule.intern();
             }
             None => {
-                warn!("overwrote plugin change with RevUpdate::set_runner_in_schedule");
+                warn_once!("overwrote plugin change with RevUpdate::set_runner_in_schedule");
                 self.runner = Some((schedule.intern(), None));
             }
         }
@@ -225,14 +225,14 @@ impl ModifiedRevPlugin {
     pub fn set_runner_in_set(mut self, set: impl SystemSet) -> ModifiedRevPlugin {
         match self.runner.as_mut() {
             Some((_, Some(set_mut))) => {
-                warn!("overwrote plugin change with RevUpdate::set_runner_in_set");
+                warn_once!("overwrote plugin change with RevUpdate::set_runner_in_set");
                 *set_mut = set.intern();
             }
             Some((_, set_mut)) => {
                 *set_mut = Some(set.intern());
             }
             None => {
-                warn!("overwrote plugin change with RevUpdate::set_runner_in_set");
+                warn_once!("overwrote plugin change with RevUpdate::set_runner_in_set");
                 self.runner = Some((FixedUpdate.intern(), Some(set.intern())));
             }
         }

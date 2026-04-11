@@ -185,7 +185,7 @@ impl<'w> RevEntityWorld for EntityWorldMut<'w> {
     ) -> Result<&mut Self, EntityRevDespawnedError> {
         self.assert_not_rev_despawned()?;
         let Some(new_related) =
-            get_new_related::<R>(self, |entity| entity.with_related::<R>(bundle))
+            get_new_related::<R>(self, |entity| entity.with_related::<R>(bundle), caller)
         else {
             return Ok(self);
         };

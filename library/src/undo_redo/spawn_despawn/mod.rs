@@ -9,7 +9,7 @@ use bevy_ecs::{
         error::EntityMutableFetchError, unsafe_world_cell::UnsafeWorldCell,
     },
 };
-use bevy_log::error;
+use bevy_log::{error, error_once};
 use bevy_platform::sync::Arc;
 
 use crate::{
@@ -325,7 +325,7 @@ impl FromWorld for DespawnFinalizer {
             })
             .map(|meta| meta.now())
             .unwrap_or_else(|| {
-                error!(
+                error_once!(
                     "a reversible spawn, despawn or marking an entity as such was attempted \
                     outside RevDirection::NotLog, this may cause an out-of-log error when \
                     attempting to undo this, do not store NotLog to do reversible operations"
