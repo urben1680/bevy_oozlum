@@ -265,7 +265,7 @@ ISSUES/DISCUSSIONS:
 - benchmarks
 TODO 0.19
 - replace log macros with world error handler, remove panic_on_error_events
-- UpdateMissed error, contains empty enum if track_update_logs
+- UpdateMissed error
 */
 
 #[cfg(feature = "app")]

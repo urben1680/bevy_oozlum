@@ -584,4 +584,34 @@ mod test {
         app.update();
         assert_eq!(app.world().resource::<Counter>().0, 9);
     }
+
+    #[test]
+    fn queue_undo_redo_in_sync_works() {
+        #[derive(Resource)]
+        struct Done;
+
+        fn system(not_log: NotLog, mut commands: Commands) {
+            commands.queue(move |world: &mut World| {
+                // this should be supported so users can write custom reversible commands where
+                // the queues UndoRedo depends on what happens in the command
+                world.commands().as_rev(not_log).rev_insert_resource(Done);
+            });
+        }
+
+        panic_on_error_events();
+        let mut app = App::new();
+        app.add_plugins(RevPlugin.set_runner_in_schedule(Update))
+            .rev_add_systems(RevUpdate, system);
+
+        app.update();
+        assert!(app.world().contains_resource::<Done>());
+
+        RevQueue::RunBackwardLog.apply(app.world_mut()).unwrap();
+        app.update();
+        assert!(!app.world().contains_resource::<Done>());
+
+        RevQueue::RunForwardLog.apply(app.world_mut()).unwrap();
+        app.update();
+        assert!(app.world().contains_resource::<Done>());
+    }
 }
