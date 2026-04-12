@@ -17,7 +17,7 @@ fn system1<const ROW: u64>(not_log: NotLog, input: Res<JustPressed>, mut command
         // NotLog is like a token to prove that methods needing it are called during
         // RevDirection::NotLog. Because of this it should not be stored past that.
 
-        commands.rev_run_schedule(not_log, RevUpdateInner);
+        commands.as_rev(not_log).rev_run_schedule(RevUpdateInner);
     }
 }
 
@@ -26,12 +26,9 @@ fn system2<const ROW: u64>(meta: Res<RevMeta>, mut commands: Commands) {
         // As Commands::spawn, this spawns an entity.
         // If this is undone, the entity is at first disabled and later fully despawned if the redo
         // becomes unreachable for RevDirection::BackwardLog.
-        commands.rev_spawn(
-            not_log,
-            Waste {
-                row: ROW,
-                tossed_at: meta.now(),
-            },
-        );
+        commands.as_rev(not_log).rev_spawn(Waste {
+            row: ROW,
+            tossed_at: meta.now(),
+        });
     }
 }

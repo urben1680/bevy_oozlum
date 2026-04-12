@@ -38,7 +38,7 @@ mod test;
 ///
 /// fn system(meta: Res<RevMeta>, mut commands: Commands) {
 ///     if let Some(not_log) = meta.get_not_log() {
-///         commands.spawn_empty().rev_detach_all_related::<SlimChildOf>(not_log);
+///         commands.spawn_empty().as_rev(not_log).rev_detach_all_related::<SlimChildOf>();
 ///     }
 /// }
 /// ```
@@ -62,7 +62,7 @@ mod test;
 ///
 /// fn system(meta: Res<RevMeta>, mut commands: Commands) {
 ///     if let Some(not_log) = meta.get_not_log() {
-///         commands.spawn_empty().rev_detach_all_related::<FatChildOf>(not_log);
+///         commands.spawn_empty().as_rev(not_log).rev_detach_all_related::<FatChildOf>();
 ///     }
 /// }
 /// ```

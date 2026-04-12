@@ -12,13 +12,14 @@ fn system<const ROW: u64>(input: Res<JustPressed>, meta: Res<RevMeta>, mut comma
     if input.get(ROW)
         && let Some(not_log) = meta.get_not_log()
     {
+        let mut commands = commands.as_rev(not_log);
         // NotLog is like a token to prove that methods needing it are called during
         // RevDirection::NotLog. Because of this it should not be stored past that.
 
         // As Commands::spawn_empty, this spawns an empty entity.
         // If this is undone, the entity is at first disabled and later fully despawned if the redo
         // becomes unreachable for RevDirection::BackwardLog.
-        let entity = commands.rev_spawn_empty(not_log).id();
+        let entity = commands.rev_spawn_empty().id();
 
         // There are two methods to know to queue custom undo-redo logic:
         // queue_undo_redo and redo_and_queue.
@@ -30,16 +31,13 @@ fn system<const ROW: u64>(input: Res<JustPressed>, meta: Res<RevMeta>, mut comma
         // The second does that already by simply applying the redo logic. This is useful when this
         // does the same as what we would need to do via a command ourselves here. And as that is
         // the case (we want to insert the Waste component) we use redo_and_queue.
-        commands.redo_and_queue(
-            not_log,
-            InsertRemoveWaste {
-                entity,
-                waste: Waste {
-                    row: ROW,
-                    tossed_at: meta.now(),
-                },
+        commands.redo_and_queue(InsertRemoveWaste {
+            entity,
+            waste: Waste {
+                row: ROW,
+                tossed_at: meta.now(),
             },
-        );
+        });
     }
 }
 

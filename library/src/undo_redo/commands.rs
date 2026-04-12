@@ -1,3 +1,5 @@
+use core::ops::{Deref, DerefMut};
+
 use bevy_ecs::{
     bundle::{Bundle, InsertMode, NoBundleEffect},
     change_detection::MaybeLocation,
@@ -5,17 +7,62 @@ use bevy_ecs::{
     error::{HandleError, Result, warn},
     resource::Resource,
     schedule::ScheduleLabel,
-    system::{Command, Commands, EntityCommands},
+    system::{Command, Commands},
     world::{EntityWorldMut, FromWorld, World},
 };
 
 use crate::{
     meta::NotLog,
-    undo_redo::{RevBundle, RevEntityWorld, RevWorld, UndoRedo, mark_spawn_empty},
+    undo_redo::{
+        AsRev, RevBundle, RevEntityWorld, RevWorld, UndoRedo, entity_commands::RevEntityCommands,
+        mark_spawn_empty,
+    },
 };
 
-/// Extension trait for [`Commands`] with reversible variants of various methods.
-pub trait RevCommands {
+pub struct RevCommands<'a>(pub(super) Commands<'a, 'a>);
+
+impl<'a> From<RevCommands<'a>> for Commands<'a, 'a> {
+    fn from(value: RevCommands<'a>) -> Self {
+        value.0
+    }
+}
+
+impl AsRev for Commands<'_, '_> {
+    type Out<'a>
+        = RevCommands<'a>
+    where
+        Self: 'a;
+    fn as_rev(&mut self, not_log: NotLog) -> Self::Out<'_> {
+        RevCommands::new(not_log, self)
+    }
+}
+
+impl<'a> Deref for RevCommands<'a> {
+    type Target = Commands<'a, 'a>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<'a> DerefMut for RevCommands<'a> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl<'a> RevCommands<'a> {
+    /// Construct `RevCommands` during [`RevDirection::NotLog`](super::RevDirection::NotLog).
+    pub fn new(_: NotLog, commands: &'a mut Commands) -> Self {
+        Self(commands.reborrow())
+    }
+
+    /// Returns a [`RevCommands`] with a smaller lifetime.
+    ///
+    /// This is useful if you have `&mut RevCommands` but need `RevCommands`.
+    pub fn reborrow(&mut self) -> RevCommands<'_> {
+        RevCommands(self.0.reborrow())
+    }
+
     /// Queues an [`UndoRedo`] implementor in a resource to be collected by the reversible system's
     /// state.
     ///
@@ -31,7 +78,7 @@ pub trait RevCommands {
     ///
     /// // Correct: having the non-log operation happen in a command, just like the undo/redo
     /// commands.queue(|_: &mut World| println!("hello world!"));
-    /// commands.queue_undo_redo(not_log, |_: &mut World, direction| {
+    /// commands.as_rev(not_log).queue_undo_redo(|_: &mut World, direction| {
     ///     match direction {
     ///         UndoRedoDirection::Undo => println!("!dlrow olleh (log)"),
     ///         UndoRedoDirection::Redo => println!("hello world! (log)"),
@@ -40,8 +87,23 @@ pub trait RevCommands {
     /// # }
     /// ```
     #[track_caller]
-    fn queue_undo_redo(&mut self, not_log: NotLog, undo_redo: impl UndoRedo) -> &mut Self {
-        self.queue_undo_redo_with_caller(not_log, undo_redo, MaybeLocation::caller())
+    pub fn queue_undo_redo(&mut self, undo_redo: impl UndoRedo) -> &mut Self {
+        self.queue_undo_redo_with_caller(undo_redo, MaybeLocation::caller())
+    }
+
+    /// As [`queue_undo_redo`](Self::queue_undo_redo) but with explicit [`MaybeLocation`].
+    ///
+    /// The location can be helpful for identifying non-reversible systems using reversible API.
+    /// [`run_rev_update`](crate::schedule::run_rev_update) may return the relevant error in that case.
+    pub fn queue_undo_redo_with_caller(
+        &mut self,
+        undo_redo: impl UndoRedo,
+        caller: MaybeLocation,
+    ) -> &mut Self {
+        self.0.queue(move |world: &mut World| {
+            world.queue_undo_redo(undo_redo, caller);
+        });
+        self
     }
 
     /// Queues an [`UndoRedo`] implementor in a resource to be collected by the reversible system's
@@ -54,310 +116,199 @@ pub trait RevCommands {
     ///
     /// [redo logic]: UndoRedo::redo
     #[track_caller]
-    fn redo_and_queue(&mut self, not_log: NotLog, undo_redo: impl UndoRedo) -> &mut Self {
-        self.redo_and_queue_with_caller(not_log, undo_redo, MaybeLocation::caller())
+    pub fn redo_and_queue(&mut self, undo_redo: impl UndoRedo) -> &mut Self {
+        self.redo_and_queue_with_caller(undo_redo, MaybeLocation::caller())
     }
-
-    /// As [`queue_undo_redo`](Self::queue_undo_redo) but with explicit [`MaybeLocation`].
-    ///
-    /// The location can be helpful for identifying non-reversible systems using reversible API.
-    /// [`run_rev_update`](crate::schedule::run_rev_update) may return the relevant error in that case.
-    fn queue_undo_redo_with_caller(
-        &mut self,
-        not_log: NotLog,
-        undo_redo: impl UndoRedo,
-        caller: MaybeLocation,
-    ) -> &mut Self;
 
     /// As [`redo_and_queue`](Self::redo_and_queue) but with explicit [`MaybeLocation`].
     ///
     /// The location can be helpful for identifying non-reversible systems using reversible API.
     /// [`run_rev_update`](crate::schedule::run_rev_update) may return the relevant error in that case.
-    fn redo_and_queue_with_caller(
+    pub fn redo_and_queue_with_caller(
         &mut self,
-        not_log: NotLog,
         undo_redo: impl UndoRedo,
         caller: MaybeLocation,
-    ) -> &mut Self;
+    ) -> &mut Self {
+        self.0.queue(move |world: &mut World| {
+            world.redo_and_queue(undo_redo, caller);
+        });
+        self
+    }
 
     /// Reversible version of [`Commands::run_schedule`].
-    fn rev_run_schedule(&mut self, not_log: NotLog, label: impl ScheduleLabel);
+    #[track_caller]
+    pub fn rev_run_schedule(&mut self, label: impl ScheduleLabel) {
+        self.0
+            .queue(rev_run_schedule_inner(label, MaybeLocation::caller()).handle_error_with(warn));
+    }
 
     /// Reversible version of [`Commands::init_resource`].
-    fn rev_init_resource<R: Resource + FromWorld>(&mut self, not_log: NotLog);
+    #[track_caller]
+    pub fn rev_init_resource<R: Resource + FromWorld>(&mut self) {
+        self.0
+            .queue(rev_init_resource_inner::<R>(MaybeLocation::caller()))
+    }
 
     /// Reversible version of [`Commands::insert_resource`].
-    fn rev_insert_resource<R: Resource>(&mut self, not_log: NotLog, resource: R);
+    #[track_caller]
+    pub fn rev_insert_resource<R: Resource>(&mut self, resource: R) {
+        self.0
+            .queue(rev_insert_resource_inner(resource, MaybeLocation::caller()))
+    }
 
     /// Reversible version of [`Commands::remove_resource`].
-    fn rev_remove_resource<R: Resource>(&mut self, not_log: NotLog);
+    #[track_caller]
+    pub fn rev_remove_resource<R: Resource>(&mut self) {
+        self.0
+            .queue(rev_remove_resource_inner::<R>(MaybeLocation::caller()))
+    }
 
     /// Helper method to mark an entity as reversibly spawned. Useful when the actual spawn is
-    /// hidden and cannot be done with [`Commands::rev_spawn`].
+    /// hidden and cannot be done with [`RevCommands::rev_spawn`].
     ///
     /// When possible, use `Commands::rev_spawn` instead.
     ///
     /// See the [`undo_redo`](crate::undo_redo) module documentation to understand the mechanics of
     /// reversible spawn/despawn.
-    fn rev_mark_spawned(&mut self, not_log: NotLog, entity: Entity, include_unlinked_related: bool);
+    #[track_caller]
+    pub fn rev_mark_spawned(&mut self, entity: Entity, include_unlinked_related: bool) {
+        let caller = MaybeLocation::caller();
+        self.0.queue(move |world: &mut World| {
+            world.rev_mark_spawned(entity, include_unlinked_related, caller);
+        });
+    }
 
     /// Helper method to mark a spawned batch as reversibly spawned. Useful when the actual spawn is
-    /// hidden and cannot be done with [`Commands::rev_spawn_batch`].
+    /// hidden and cannot be done with [`RevCommands::rev_spawn_batch`].
     ///
     /// When possible, use `Commands::rev_spawn_batch` instead.
     ///
     /// See the [`undo_redo`](crate::undo_redo) module documentation to understand the mechanics of
     /// reversible spawn/despawn.
-    fn rev_mark_spawned_batch(
+    #[track_caller]
+    pub fn rev_mark_spawned_batch(
         &mut self,
-        not_log: NotLog,
         entities: impl AsRef<[Entity]> + Send + 'static,
         include_unlinked_related: bool,
-    );
+    ) {
+        let caller = MaybeLocation::caller();
+        self.0.queue(move |world: &mut World| {
+            world.rev_mark_spawned_batch(entities.as_ref(), include_unlinked_related, caller);
+        });
+    }
 
     /// Command to reversibly despawn an entity.
     ///
     /// See the [`undo_redo`](crate::undo_redo) module documentation to understand the mechanics of
     /// reversible spawn/despawn.
-    fn rev_despawn(&mut self, not_log: NotLog, entity: Entity);
+    #[track_caller]
+    pub fn rev_despawn(&mut self, entity: Entity) {
+        let caller = MaybeLocation::caller();
+        self.0.queue(move |world: &mut World| {
+            world.rev_despawn(entity, caller);
+        });
+    }
 
     /// Command to reversibly despawn multiple entities.
     ///
     /// See the [`undo_redo`](crate::undo_redo) module documentation to understand the mechanics of
     /// reversible spawn/despawn.
-    fn rev_despawn_batch(
-        &mut self,
-        not_log: NotLog,
-        entities: impl AsRef<[Entity]> + Send + 'static,
-    );
+    #[track_caller]
+    pub fn rev_despawn_batch(&mut self, entities: impl AsRef<[Entity]> + Send + 'static) {
+        let caller = MaybeLocation::caller();
+        self.0.queue(move |world: &mut World| {
+            world.rev_despawn_batch(entities.as_ref(), caller);
+        });
+    }
 
     /// Reversible version of [`Commands::spawn`].
     ///
     /// See the [`undo_redo`](crate::undo_redo) module documentation to understand the mechanics of
     /// reversible spawn/despawn.
-    fn rev_spawn<T: Bundle>(&mut self, not_log: NotLog, bundle: T) -> EntityCommands<'_>;
-
-    /// Reversible version of [`Commands::spawn_batch`].
-    ///
-    /// See the [`undo_redo`](crate::undo_redo) module documentation to understand the mechanics of
-    /// reversible spawn/despawn.
-    fn rev_spawn_batch<I>(&mut self, not_log: NotLog, batch: I)
-    where
-        I: IntoIterator<Item: Bundle<Effect: NoBundleEffect>> + Send + 'static;
+    #[track_caller]
+    pub fn rev_spawn<T: Bundle>(&mut self, bundle: T) -> RevEntityCommands<'_> {
+        rev_spawn_inner(&mut self.0, bundle, MaybeLocation::caller())
+    }
 
     /// Reversible version of [`Commands::spawn_empty`].
     ///
     /// See the [`undo_redo`](crate::undo_redo) module documentation to understand the mechanics of
     /// reversible spawn/despawn.
-    fn rev_spawn_empty(&mut self, not_log: NotLog) -> EntityCommands<'_>;
-
-    /// Reversible version of [`Commands::insert_batch`].
-    fn rev_insert_batch<I, B, Marker>(&mut self, not_log: NotLog, iter: I)
-    where
-        I: IntoIterator<Item = (Entity, B)> + Send + Sync + 'static,
-        B: RevBundle<Marker>;
-
-    /// Reversible version of [`Commands::insert_batch_if_new`].
-    fn rev_insert_batch_if_new<I, B, Marker>(&mut self, not_log: NotLog, iter: I)
-    where
-        I: IntoIterator<Item = (Entity, B)> + Send + Sync + 'static,
-        B: RevBundle<Marker>;
-
-    /// Reversible version of [`Commands::try_insert_batch`].
-    fn rev_try_insert_batch<I, B, Marker>(&mut self, not_log: NotLog, iter: I)
-    where
-        I: IntoIterator<Item = (Entity, B)> + Send + Sync + 'static,
-        B: RevBundle<Marker>;
-
-    /// Reversible version of [`Commands::try_insert_batch_if_new`].
-    fn rev_try_insert_batch_if_new<I, B, Marker>(&mut self, not_log: NotLog, iter: I)
-    where
-        I: IntoIterator<Item = (Entity, B)> + Send + Sync + 'static,
-        B: RevBundle<Marker>;
-}
-
-impl RevCommands for Commands<'_, '_> {
-    fn queue_undo_redo_with_caller(
-        &mut self,
-        not_log: NotLog,
-        undo_redo: impl UndoRedo,
-        caller: MaybeLocation,
-    ) -> &mut Self {
-        self.queue(move |world: &mut World| {
-            world.queue_undo_redo(not_log, undo_redo, caller);
-        });
-        self
-    }
-
-    fn redo_and_queue_with_caller(
-        &mut self,
-        not_log: NotLog,
-        undo_redo: impl UndoRedo,
-        caller: MaybeLocation,
-    ) -> &mut Self {
-        self.queue(move |world: &mut World| {
-            world.redo_and_queue(not_log, undo_redo, caller);
-        });
-        self
-    }
-
     #[track_caller]
-    fn rev_run_schedule(&mut self, not_log: NotLog, label: impl ScheduleLabel) {
-        self.queue(rev_run_schedule(not_log, label).handle_error_with(warn));
-    }
-
-    #[track_caller]
-    fn rev_init_resource<R: Resource + FromWorld>(&mut self, not_log: NotLog) {
-        self.queue(rev_init_resource::<R>(not_log))
-    }
-
-    #[track_caller]
-    fn rev_insert_resource<R: Resource>(&mut self, not_log: NotLog, resource: R) {
-        self.queue(rev_insert_resource(not_log, resource))
-    }
-
-    #[track_caller]
-    fn rev_remove_resource<R: Resource>(&mut self, not_log: NotLog) {
-        self.queue(rev_remove_resource::<R>(not_log))
-    }
-
-    #[track_caller]
-    fn rev_spawn<T: Bundle>(&mut self, not_log: NotLog, bundle: T) -> EntityCommands<'_> {
+    pub fn rev_spawn_empty(&mut self) -> RevEntityCommands<'_> {
         let caller = MaybeLocation::caller();
-        let mut entity_cmds = self.spawn(bundle);
+        let mut entity_cmds = self.0.spawn_empty();
         entity_cmds.queue(move |mut entity_mut: EntityWorldMut| {
-            entity_mut
-                .rev_mark_spawned(not_log, true, caller)
-                .map(|_| ())
+            mark_spawn_empty(&mut entity_mut, caller);
         });
-        entity_cmds
+        RevEntityCommands(entity_cmds)
     }
 
+    /// Reversible version of [`Commands::spawn_batch`].
+    ///
+    /// See the [`undo_redo`](crate::undo_redo) module documentation to understand the mechanics of
+    /// reversible spawn/despawn.
     #[track_caller]
-    fn rev_mark_spawned(
-        &mut self,
-        not_log: NotLog,
-        entity: Entity,
-        include_unlinked_related: bool,
-    ) {
-        let caller = MaybeLocation::caller();
-        self.queue(move |world: &mut World| {
-            world.rev_mark_spawned(not_log, entity, include_unlinked_related, caller);
-        });
-    }
-
-    #[track_caller]
-    fn rev_mark_spawned_batch(
-        &mut self,
-        not_log: NotLog,
-        entities: impl AsRef<[Entity]> + Send + 'static,
-        include_unlinked_related: bool,
-    ) {
-        let caller = MaybeLocation::caller();
-        self.queue(move |world: &mut World| {
-            world.rev_mark_spawned_batch(
-                not_log,
-                entities.as_ref(),
-                include_unlinked_related,
-                caller,
-            );
-        });
-    }
-
-    #[track_caller]
-    fn rev_despawn(&mut self, not_log: NotLog, entity: Entity) {
-        let caller = MaybeLocation::caller();
-        self.queue(move |world: &mut World| {
-            world.rev_despawn(not_log, entity, caller);
-        });
-    }
-
-    #[track_caller]
-    fn rev_despawn_batch(
-        &mut self,
-        not_log: NotLog,
-        entities: impl AsRef<[Entity]> + Send + 'static,
-    ) {
-        let caller = MaybeLocation::caller();
-        self.queue(move |world: &mut World| {
-            world.rev_despawn_batch(not_log, entities.as_ref(), caller);
-        });
-    }
-
-    #[track_caller]
-    fn rev_spawn_empty(&mut self, not_log: NotLog) -> EntityCommands<'_> {
-        let caller = MaybeLocation::caller();
-        let mut entity_cmds = self.spawn_empty();
-        entity_cmds.queue(move |mut entity_mut: EntityWorldMut| {
-            mark_spawn_empty(not_log, &mut entity_mut, caller);
-        });
-        entity_cmds
-    }
-
-    #[track_caller]
-    fn rev_spawn_batch<I>(&mut self, not_log: NotLog, batch: I)
+    pub fn rev_spawn_batch<I>(&mut self, batch: I)
     where
         I: IntoIterator<Item: Bundle<Effect: NoBundleEffect>> + Send + 'static,
     {
-        self.queue(rev_spawn_batch(not_log, batch));
+        self.0
+            .queue(rev_spawn_batch_inner(batch, MaybeLocation::caller()));
     }
 
+    /// Reversible version of [`Commands::insert_batch`].
     #[track_caller]
-    fn rev_insert_batch<I, B, Marker>(&mut self, not_log: NotLog, iter: I)
+    pub fn rev_insert_batch<I, B, Marker>(&mut self, iter: I)
     where
         I: IntoIterator<Item = (Entity, B)> + Send + Sync + 'static,
         B: RevBundle<Marker>,
     {
-        self.queue(rev_insert_batch(not_log, iter, InsertMode::Replace));
+        self.0.queue(rev_insert_batch_inner(
+            iter,
+            InsertMode::Replace,
+            MaybeLocation::caller(),
+        ));
     }
 
+    /// Reversible version of [`Commands::insert_batch_if_new`].
     #[track_caller]
-    fn rev_insert_batch_if_new<I, B, Marker>(&mut self, not_log: NotLog, iter: I)
+    pub fn rev_insert_batch_if_new<I, B, Marker>(&mut self, iter: I)
     where
         I: IntoIterator<Item = (Entity, B)> + Send + Sync + 'static,
         B: RevBundle<Marker>,
     {
-        self.queue(rev_insert_batch(not_log, iter, InsertMode::Keep));
+        self.0.queue(rev_insert_batch_inner(
+            iter,
+            InsertMode::Keep,
+            MaybeLocation::caller(),
+        ));
     }
 
+    /// Reversible version of [`Commands::try_insert_batch`].
     #[track_caller]
-    fn rev_try_insert_batch<I, B, Marker>(&mut self, not_log: NotLog, iter: I)
+    pub fn rev_try_insert_batch<I, B, Marker>(&mut self, iter: I)
     where
         I: IntoIterator<Item = (Entity, B)> + Send + Sync + 'static,
         B: RevBundle<Marker>,
     {
-        self.queue_handled(rev_insert_batch(not_log, iter, InsertMode::Replace), warn);
+        self.0.queue_handled(
+            rev_insert_batch_inner(iter, InsertMode::Replace, MaybeLocation::caller()),
+            warn,
+        );
     }
 
+    /// Reversible version of [`Commands::try_insert_batch_if_new`].
     #[track_caller]
-    fn rev_try_insert_batch_if_new<I, B, Marker>(&mut self, not_log: NotLog, iter: I)
+    pub fn rev_try_insert_batch_if_new<I, B, Marker>(&mut self, iter: I)
     where
         I: IntoIterator<Item = (Entity, B)> + Send + Sync + 'static,
         B: RevBundle<Marker>,
     {
-        self.queue_handled(rev_insert_batch(not_log, iter, InsertMode::Keep), warn);
-    }
-}
-
-/// Reversible version of [`run_schedule`](bevy_ecs::system::command::run_schedule).
-#[track_caller]
-pub fn rev_run_schedule(not_log: NotLog, label: impl ScheduleLabel) -> impl Command<Result> {
-    let caller = MaybeLocation::caller();
-    move |world: &mut World| -> Result {
-        world.rev_try_run_schedule(not_log, label, caller)?;
-        Ok(())
-    }
-}
-
-/// Reversible version of [`spawn_batch`](bevy_ecs::system::command::spawn_batch).
-#[track_caller]
-pub fn rev_spawn_batch<I>(not_log: NotLog, bundles_iter: I) -> impl Command
-where
-    I: IntoIterator<Item: Bundle<Effect: NoBundleEffect>> + Send + 'static,
-{
-    let caller = MaybeLocation::caller();
-    move |world: &mut World| {
-        world.rev_spawn_batch(not_log, bundles_iter, caller);
+        self.0.queue_handled(
+            rev_insert_batch_inner(iter, InsertMode::Keep, MaybeLocation::caller()),
+            warn,
+        );
     }
 }
 
@@ -370,7 +321,7 @@ where
 /// reversible spawn/despawn.
 #[track_caller]
 pub fn rev_insert_batch<I, B, Marker>(
-    not_log: NotLog,
+    _: NotLog,
     iter: I,
     insert_mode: InsertMode,
 ) -> impl Command<Result>
@@ -378,13 +329,24 @@ where
     I: IntoIterator<Item = (Entity, B)> + Send + Sync + 'static,
     B: RevBundle<Marker>,
 {
-    let caller = MaybeLocation::caller();
+    rev_insert_batch_inner(iter, insert_mode, MaybeLocation::caller())
+}
+
+fn rev_insert_batch_inner<I, B, Marker>(
+    iter: I,
+    insert_mode: InsertMode,
+    caller: MaybeLocation,
+) -> impl Command<Result>
+where
+    I: IntoIterator<Item = (Entity, B)> + Send + Sync + 'static,
+    B: RevBundle<Marker>,
+{
     move |world: &mut World| {
         world
             .rev_try_insert_batch_inner(iter, |mut entity_mut, bundle| {
                 match insert_mode {
-                    InsertMode::Replace => entity_mut.rev_insert(not_log, bundle, caller),
-                    InsertMode::Keep => entity_mut.rev_insert_if_new(not_log, bundle, caller),
+                    InsertMode::Replace => entity_mut.rev_insert(bundle, caller),
+                    InsertMode::Keep => entity_mut.rev_insert_if_new(bundle, caller),
                 }
                 .map(|_| ())
             })
@@ -394,26 +356,80 @@ where
 
 /// Reversible version of [`init_resource`](bevy_ecs::system::command::init_resource).
 #[track_caller]
-pub fn rev_init_resource<R: Resource + FromWorld>(not_log: NotLog) -> impl Command {
-    let caller = MaybeLocation::caller();
+pub fn rev_init_resource<R: Resource + FromWorld>(_: NotLog) -> impl Command {
+    rev_init_resource_inner::<R>(MaybeLocation::caller())
+}
+
+fn rev_init_resource_inner<R: Resource + FromWorld>(caller: MaybeLocation) -> impl Command {
     move |world: &mut World| {
-        world.rev_init_resource::<R>(not_log, caller);
+        world.rev_init_resource::<R>(caller);
     }
 }
 
 /// Reversible version of [`insert_resource`](bevy_ecs::system::command::insert_resource).
 #[track_caller]
-pub fn rev_insert_resource<R: Resource>(not_log: NotLog, resource: R) -> impl Command {
-    let caller = MaybeLocation::caller();
+pub fn rev_insert_resource<R: Resource>(_: NotLog, resource: R) -> impl Command {
+    rev_insert_resource_inner(resource, MaybeLocation::caller())
+}
+
+fn rev_insert_resource_inner<R: Resource>(resource: R, caller: MaybeLocation) -> impl Command {
     move |world: &mut World| {
-        world.rev_insert_resource(not_log, resource, caller);
+        world.rev_insert_resource(resource, caller);
     }
 }
 
 /// Reversible version of [`remove_resource`](bevy_ecs::system::command::remove_resource).
-pub fn rev_remove_resource<R: Resource>(not_log: NotLog) -> impl Command {
-    let caller = MaybeLocation::caller();
+#[track_caller]
+pub fn rev_remove_resource<R: Resource>(_: NotLog) -> impl Command {
+    rev_remove_resource_inner::<R>(MaybeLocation::caller())
+}
+
+fn rev_remove_resource_inner<R: Resource>(caller: MaybeLocation) -> impl Command {
     move |world: &mut World| {
-        world.rev_remove_resource::<R, _>(not_log, |_| (), caller);
+        world.rev_remove_resource::<R, _>(|_| (), caller);
     }
+}
+
+/// Reversible version of [`spawn_batch`](bevy_ecs::system::command::spawn_batch).
+pub fn rev_spawn_batch<I>(_: NotLog, bundles_iter: I) -> impl Command
+where
+    I: IntoIterator<Item: Bundle<Effect: NoBundleEffect>> + Send + 'static,
+{
+    rev_spawn_batch_inner(bundles_iter, MaybeLocation::caller())
+}
+
+fn rev_spawn_batch_inner<I>(bundles_iter: I, caller: MaybeLocation) -> impl Command
+where
+    I: IntoIterator<Item: Bundle<Effect: NoBundleEffect>> + Send + 'static,
+{
+    move |world: &mut World| {
+        world.rev_spawn_batch(bundles_iter, caller);
+    }
+}
+
+/// Reversible version of [`run_schedule`](bevy_ecs::system::command::run_schedule).
+pub fn rev_run_schedule(_: NotLog, label: impl ScheduleLabel) -> impl Command<Result> {
+    rev_run_schedule_inner(label, MaybeLocation::caller())
+}
+
+fn rev_run_schedule_inner(
+    label: impl ScheduleLabel,
+    caller: MaybeLocation,
+) -> impl Command<Result> {
+    move |world: &mut World| -> Result {
+        world.rev_try_run_schedule(label, caller)?;
+        Ok(())
+    }
+}
+
+pub(super) fn rev_spawn_inner<'a, T: Bundle>(
+    commands: &'a mut Commands,
+    bundle: T,
+    caller: MaybeLocation,
+) -> RevEntityCommands<'a> {
+    let mut entity_cmds = commands.spawn(bundle);
+    entity_cmds.queue(move |mut entity_mut: EntityWorldMut| {
+        entity_mut.rev_mark_spawned(true, caller).map(|_| ())
+    });
+    RevEntityCommands(entity_cmds)
 }

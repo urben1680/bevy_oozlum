@@ -17,7 +17,7 @@ use crate::{
     meta::{RevDirection, RevQueue},
     panic_on_error_events,
     schedule::RevUpdate,
-    undo_redo::{UndoRedo, commands::RevCommands},
+    undo_redo::{AsRev, UndoRedo},
 };
 
 use super::*;
@@ -184,7 +184,9 @@ fn non_exclusive_system_commands_only<const N: u8>(meta: Res<RevMeta>, mut comma
             .0
             .push(LogEntry::SysCmd((N, RevDirection::NOT_LOG_MIN)))
     });
-    commands.queue_undo_redo(not_log, LogEntry::SysCmd(N));
+    commands
+        .as_rev(not_log)
+        .queue_undo_redo(LogEntry::SysCmd(N));
 }
 
 #[test]
@@ -283,7 +285,7 @@ fn truncates_future_command_log() {
             && let Some(RevDirection::NotLog(not_log)) = meta.get_running_direction()
             && meta.now() == 2
         {
-            commands.rev_spawn_empty(not_log);
+            commands.as_rev(not_log).rev_spawn_empty();
             *command_queued = true;
         }
     }

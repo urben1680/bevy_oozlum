@@ -14,29 +14,24 @@ use bevy_ecs::{
 use bevy_utils::prelude::DebugName;
 use core::{error::Error, fmt::Display};
 
-use crate::{
-    meta::{NotLog, RevDirection, RevMeta},
-    undo_redo::{
-        EntityRevDespawnedError, RevBundle, RevInsertResourceNew, RevInsertResourceOverwrite,
-        RevRemoveResource, UndoRedo, UndoRedoQueue, mark_entities, mark_entity,
-    },
+use crate::undo_redo::{
+    EntityRevDespawnedError, RevBundle, RevInsertResourceNew, RevInsertResourceOverwrite,
+    RevRemoveResource, UndoRedo, UndoRedoQueue, mark_entities, mark_entity,
 };
 
 pub(super) trait RevWorld {
-    fn queue_undo_redo(&mut self, not_log: NotLog, undo_redo: impl UndoRedo, caller: MaybeLocation);
+    fn queue_undo_redo(&mut self, undo_redo: impl UndoRedo, caller: MaybeLocation);
 
-    fn redo_and_queue(&mut self, not_log: NotLog, undo_redo: impl UndoRedo, caller: MaybeLocation);
+    fn redo_and_queue(&mut self, undo_redo: impl UndoRedo, caller: MaybeLocation);
 
     fn rev_try_run_schedule(
         &mut self,
-        not_log: NotLog,
         label: impl ScheduleLabel,
         caller: MaybeLocation,
     ) -> Result<(), TryRunScheduleError>;
 
     fn rev_mark_spawned(
         &mut self,
-        not_log: NotLog,
         entity: Entity,
         include_unlinked_related: bool,
         caller: MaybeLocation,
@@ -44,22 +39,16 @@ pub(super) trait RevWorld {
 
     fn rev_mark_spawned_batch(
         &mut self,
-        not_log: NotLog,
         entities: &[Entity],
         include_unlinked_related: bool,
         caller: MaybeLocation,
     );
 
-    fn rev_despawn(&mut self, not_log: NotLog, entity: Entity, caller: MaybeLocation) -> bool;
+    fn rev_despawn(&mut self, entity: Entity, caller: MaybeLocation) -> bool;
 
-    fn rev_despawn_batch(&mut self, not_log: NotLog, entities: &[Entity], caller: MaybeLocation);
+    fn rev_despawn_batch(&mut self, entities: &[Entity], caller: MaybeLocation);
 
-    fn rev_spawn_batch<I>(
-        &mut self,
-        not_log: NotLog,
-        iter: I,
-        caller: MaybeLocation,
-    ) -> Vec<Entity>
+    fn rev_spawn_batch<I>(&mut self, iter: I, caller: MaybeLocation) -> Vec<Entity>
     where
         I: IntoIterator<Item: Bundle<Effect: NoBundleEffect>>;
 
@@ -72,70 +61,41 @@ pub(super) trait RevWorld {
         I: IntoIterator<IntoIter: Iterator<Item = (Entity, B)>>,
         B: RevBundle<Marker>;
 
-    fn rev_init_resource<R: Resource + FromWorld>(
-        &mut self,
-        not_log: NotLog,
-        caller: MaybeLocation,
-    ) -> ComponentId;
+    fn rev_init_resource<R: Resource + FromWorld>(&mut self, caller: MaybeLocation) -> ComponentId;
 
-    fn rev_insert_resource<R: Resource>(
-        &mut self,
-        not_log: NotLog,
-        resource: R,
-        caller: MaybeLocation,
-    );
+    fn rev_insert_resource<R: Resource>(&mut self, resource: R, caller: MaybeLocation);
 
     fn rev_remove_resource<R: Resource, Out>(
         &mut self,
-        not_log: NotLog,
         c: impl FnOnce(&R) -> Out,
         caller: MaybeLocation,
     ) -> Option<Out>;
 }
 
 impl RevWorld for World {
-    fn queue_undo_redo(
-        &mut self,
-        not_log: NotLog,
-        undo_redo: impl UndoRedo,
-        caller: MaybeLocation,
-    ) {
-        debug_assert!(self.get_resource::<RevMeta>().is_some_and(|meta| {
-            meta.get_running_direction()
-                .is_some_and(|direction| match direction {
-                    RevDirection::NotLog(actual) => actual == not_log,
-                    _ => false,
-                })
-        }));
+    fn queue_undo_redo(&mut self, undo_redo: impl UndoRedo, caller: MaybeLocation) {
         self.get_resource_or_init::<UndoRedoQueue>()
-            .queue_undo_redo(not_log, caller, undo_redo);
+            .queue_undo_redo(caller, undo_redo);
     }
 
-    fn redo_and_queue(
-        &mut self,
-        not_log: NotLog,
-        mut undo_redo: impl UndoRedo,
-        caller: MaybeLocation,
-    ) {
+    fn redo_and_queue(&mut self, mut undo_redo: impl UndoRedo, caller: MaybeLocation) {
         undo_redo.redo(self);
-        self.queue_undo_redo(not_log, undo_redo, caller);
+        self.queue_undo_redo(undo_redo, caller);
     }
 
     fn rev_try_run_schedule(
         &mut self,
-        not_log: NotLog,
         label: impl ScheduleLabel,
         caller: MaybeLocation,
     ) -> Result<(), TryRunScheduleError> {
         let label = label.intern();
         self.try_run_schedule(label).inspect(move |()| {
-            self.queue_undo_redo(not_log, RevRunSchedule(label), caller);
+            self.queue_undo_redo(RevRunSchedule(label), caller);
         })
     }
 
     fn rev_mark_spawned(
         &mut self,
-        not_log: NotLog,
         entity: Entity,
         include_unlinked_related: bool,
         caller: MaybeLocation,
@@ -143,77 +103,64 @@ impl RevWorld for World {
         let Ok(mut entity) = self.get_entity_mut(entity) else {
             return false;
         };
-        mark_entity::<true>(not_log, &mut entity, include_unlinked_related, caller)
+        mark_entity::<true>(&mut entity, include_unlinked_related, caller)
     }
 
     fn rev_mark_spawned_batch(
         &mut self,
-        not_log: NotLog,
         entities: &[Entity],
         include_unlinked_related: bool,
         caller: MaybeLocation,
     ) {
-        mark_entities::<true>(not_log, self, entities, include_unlinked_related, caller);
+        mark_entities::<true>(self, entities, include_unlinked_related, caller);
     }
 
-    fn rev_despawn(&mut self, not_log: NotLog, entity: Entity, caller: MaybeLocation) -> bool {
+    fn rev_despawn(&mut self, entity: Entity, caller: MaybeLocation) -> bool {
         let Ok(mut entity) = self.get_entity_mut(entity) else {
             return false;
         };
-        mark_entity::<false>(not_log, &mut entity, false, caller)
+        mark_entity::<false>(&mut entity, false, caller)
     }
 
-    fn rev_despawn_batch(&mut self, not_log: NotLog, entities: &[Entity], caller: MaybeLocation) {
-        mark_entities::<false>(not_log, self, entities, false, caller);
+    fn rev_despawn_batch(&mut self, entities: &[Entity], caller: MaybeLocation) {
+        mark_entities::<false>(self, entities, false, caller);
     }
 
-    fn rev_init_resource<R: Resource + FromWorld>(
-        &mut self,
-        not_log: NotLog,
-        caller: MaybeLocation,
-    ) -> ComponentId {
+    fn rev_init_resource<R: Resource + FromWorld>(&mut self, caller: MaybeLocation) -> ComponentId {
         if !self.contains_resource::<R>() {
-            self.queue_undo_redo(not_log, RevInsertResourceNew::<R>::new(caller), caller);
+            self.queue_undo_redo(RevInsertResourceNew::<R>::new(caller), caller);
         }
         self.init_resource::<R>()
     }
 
-    fn rev_insert_resource<R: Resource>(
-        &mut self,
-        not_log: NotLog,
-        resource: R,
-        caller: MaybeLocation,
-    ) {
+    fn rev_insert_resource<R: Resource>(&mut self, resource: R, caller: MaybeLocation) {
         match self.remove_resource::<R>() {
-            Some(resource) => self.queue_undo_redo(
-                not_log,
-                RevInsertResourceOverwrite::new(resource, caller),
-                caller,
-            ),
-            None => self.queue_undo_redo(not_log, RevInsertResourceNew::<R>::new(caller), caller),
+            Some(resource) => {
+                self.queue_undo_redo(RevInsertResourceOverwrite::new(resource, caller), caller)
+            }
+            None => self.queue_undo_redo(RevInsertResourceNew::<R>::new(caller), caller),
         }
         self.insert_resource(resource);
     }
 
     fn rev_remove_resource<R: Resource, Out>(
         &mut self,
-        not_log: NotLog,
         c: impl FnOnce(&R) -> Out,
         caller: MaybeLocation,
     ) -> Option<Out> {
         self.remove_resource::<R>().map(|resource| {
             let out = c(&resource);
-            self.queue_undo_redo(not_log, RevRemoveResource::new(resource, caller), caller);
+            self.queue_undo_redo(RevRemoveResource::new(resource, caller), caller);
             out
         })
     }
 
-    fn rev_spawn_batch<I>(&mut self, not_log: NotLog, iter: I, caller: MaybeLocation) -> Vec<Entity>
+    fn rev_spawn_batch<I>(&mut self, iter: I, caller: MaybeLocation) -> Vec<Entity>
     where
         I: IntoIterator<Item: Bundle<Effect: NoBundleEffect>>,
     {
         let entities = self.spawn_batch(iter).collect::<Vec<_>>();
-        mark_entities::<true>(not_log, self, &entities, true, caller);
+        mark_entities::<true>(self, &entities, true, caller);
         entities
     }
 

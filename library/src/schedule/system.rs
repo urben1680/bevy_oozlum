@@ -477,7 +477,8 @@ mod test {
         let not_log = world.resource::<RevMeta>().not_log();
         world
             .commands()
-            .queue_undo_redo(not_log, blank_undo_redo)
+            .as_rev(not_log)
+            .queue_undo_redo(blank_undo_redo)
             .spawn(EmptyOnAdd);
     }
 
@@ -485,7 +486,10 @@ mod test {
     struct EmptyObserver;
     fn empty_observer(_: On<Observer>, mut world: DeferredWorld) {
         let not_log = world.resource::<RevMeta>().not_log();
-        world.commands().queue_undo_redo(not_log, blank_undo_redo);
+        world
+            .commands()
+            .as_rev(not_log)
+            .queue_undo_redo(blank_undo_redo);
     }
 
     #[derive(Component)]
@@ -495,7 +499,8 @@ mod test {
         let not_log = world.resource::<RevMeta>().not_log();
         world
             .commands()
-            .queue_undo_redo(not_log, blank_undo_redo)
+            .as_rev(not_log)
+            .queue_undo_redo(blank_undo_redo)
             .trigger(EmptyObserver);
     }
 
@@ -504,14 +509,17 @@ mod test {
     struct EmptyOnAdd;
     fn empty_on_add(mut world: DeferredWorld, _: HookContext) {
         let not_log = world.resource::<RevMeta>().not_log();
-        world.commands().queue_undo_redo(not_log, blank_undo_redo);
+        world
+            .commands()
+            .as_rev(not_log)
+            .queue_undo_redo(blank_undo_redo);
     }
 
     #[test]
     fn non_exclusive_system_drains_all_undo_redo() {
         fn system(meta: Res<RevMeta>, mut commands: Commands) {
             let not_log = meta.not_log();
-            commands.queue_undo_redo(not_log, blank_undo_redo);
+            commands.as_rev(not_log).queue_undo_redo(blank_undo_redo);
             commands.queue(|world: &mut World| {
                 world.trigger(Observer);
                 world.spawn(OnAdd);
@@ -537,9 +545,11 @@ mod test {
         struct Counter(u8);
 
         fn system1(not_log: NotLog, mut commands: Commands) {
-            commands.redo_and_queue(not_log, |world: &mut World, _: UndoRedoDirection| {
-                world.get_resource_or_init::<Counter>().0 += 1;
-            });
+            commands
+                .as_rev(not_log)
+                .redo_and_queue(|world: &mut World, _: UndoRedoDirection| {
+                    world.get_resource_or_init::<Counter>().0 += 1;
+                });
         }
 
         fn system2(not_log: NotLog, commands: Commands) -> Result<(), RunSystemError> {

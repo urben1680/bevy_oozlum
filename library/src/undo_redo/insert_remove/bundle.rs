@@ -10,17 +10,13 @@ use bevy_ecs::{
 use core::{any::TypeId, marker::PhantomData, mem::swap};
 use variadics_please::all_tuples;
 
-use crate::{
-    meta::NotLog,
-    undo_redo::{
-        AddRemoveRelated, RevEntityWorld, SlimRelationship, get_new_related,
-        get_new_related_entities,
-        insert_remove::{
-            InnerComponentBuffer, RevInsertComponentNew, RevInsertComponentOverwrite,
-            RevNewRequired, RevRemoveComponent,
-        },
-        mark_entities, mark_entity,
+use crate::undo_redo::{
+    AddRemoveRelated, RevEntityWorld, SlimRelationship, get_new_related, get_new_related_entities,
+    insert_remove::{
+        InnerComponentBuffer, RevInsertComponentNew, RevInsertComponentOverwrite, RevNewRequired,
+        RevRemoveComponent,
     },
+    mark_entities, mark_entity,
 };
 
 /// Adapter trait for [`Bundle`] implementors to enable reversible insert/remove of the contained
@@ -35,36 +31,20 @@ pub trait RevBundle<Marker>: Bundle {
     /// components, if there were any and [`InsertMode::Replace`] was picked. When redone, the
     /// components are returned to `entity` again, potentially overwriting existing components
     /// again.
-    fn rev_insert(
-        self,
-        not_log: NotLog,
-        entity: &mut EntityWorldMut,
-        mode: InsertMode,
-        caller: MaybeLocation,
-    );
+    fn rev_insert(self, entity: &mut EntityWorldMut, mode: InsertMode, caller: MaybeLocation);
 
     /// This is called within [`RevBundle::rev_insert`] and should not be called elsewhere as this
     /// alone will not make the insertion of required components reversible.
-    fn rev_insert_inner(
-        self,
-        not_log: NotLog,
-        entity: &mut EntityWorldMut,
-        mode: InsertMode,
-        caller: MaybeLocation,
-    );
+    fn rev_insert_inner(self, entity: &mut EntityWorldMut, mode: InsertMode, caller: MaybeLocation);
 
     /// Removes `Self` from `entity`.
     ///
     /// When undone, the removed components are returned to `entity`. When redone, they are removed
     /// from `entity` again.
-    fn rev_remove(not_log: NotLog, entity: &mut EntityWorldMut, caller: MaybeLocation);
+    fn rev_remove(entity: &mut EntityWorldMut, caller: MaybeLocation);
 }
 
-fn required_of_component<C: Component>(
-    not_log: NotLog,
-    entity: &mut EntityWorldMut,
-    caller: MaybeLocation,
-) {
+fn required_of_component<C: Component>(entity: &mut EntityWorldMut, caller: MaybeLocation) {
     let component_id = entity
         .world()
         .component_id::<C>()
@@ -76,14 +56,10 @@ fn required_of_component<C: Component>(
         .iter_ids()
         .filter(|&component_id| !entity.contains_id(component_id))
         .collect();
-    required_inner::<C>(not_log, entity, caller, new_required)
+    required_inner::<C>(entity, caller, new_required)
 }
 
-fn required_of_bundle<B: Bundle>(
-    not_log: NotLog,
-    entity: &mut EntityWorldMut,
-    caller: MaybeLocation,
-) {
+fn required_of_bundle<B: Bundle>(entity: &mut EntityWorldMut, caller: MaybeLocation) {
     let bundle_id = entity
         .world()
         .bundles()
@@ -99,18 +75,16 @@ fn required_of_bundle<B: Bundle>(
         .copied()
         .filter(|&component_id| !entity.contains_id(component_id))
         .collect();
-    required_inner::<B>(not_log, entity, caller, new_required)
+    required_inner::<B>(entity, caller, new_required)
 }
 
 fn required_inner<T: Send + 'static>(
-    not_log: NotLog,
     entity: &mut EntityWorldMut,
     caller: MaybeLocation,
     new_required: Vec<ComponentId>,
 ) {
     if !new_required.is_empty() {
         entity.queue_undo_redo(
-            not_log,
             RevNewRequired::<T> {
                 entity: entity.id(),
                 new_required,
@@ -123,28 +97,21 @@ fn required_inner<T: Send + 'static>(
 }
 
 impl RevBundle<()> for () {
-    fn rev_insert(self, _: NotLog, _: &mut EntityWorldMut, _: InsertMode, _: MaybeLocation) {}
+    fn rev_insert(self, _: &mut EntityWorldMut, _: InsertMode, _: MaybeLocation) {}
 
-    fn rev_insert_inner(self, _: NotLog, _: &mut EntityWorldMut, _: InsertMode, _: MaybeLocation) {}
+    fn rev_insert_inner(self, _: &mut EntityWorldMut, _: InsertMode, _: MaybeLocation) {}
 
-    fn rev_remove(_: NotLog, _: &mut EntityWorldMut, _: MaybeLocation) {}
+    fn rev_remove(_: &mut EntityWorldMut, _: MaybeLocation) {}
 }
 
 impl<C: Component> RevBundle<[C; 1]> for C {
-    fn rev_insert(
-        self,
-        not_log: NotLog,
-        entity: &mut EntityWorldMut,
-        mode: InsertMode,
-        caller: MaybeLocation,
-    ) {
-        required_of_component::<C>(not_log, entity, caller);
-        self.rev_insert_inner(not_log, entity, mode, caller);
+    fn rev_insert(self, entity: &mut EntityWorldMut, mode: InsertMode, caller: MaybeLocation) {
+        required_of_component::<C>(entity, caller);
+        self.rev_insert_inner(entity, mode, caller);
     }
 
     fn rev_insert_inner(
         mut self,
-        not_log: NotLog,
         entity: &mut EntityWorldMut,
         mode: InsertMode,
         caller: MaybeLocation,
@@ -153,7 +120,6 @@ impl<C: Component> RevBundle<[C; 1]> for C {
             InsertMode::Keep => {
                 if !entity.contains::<C>() {
                     entity.redo_and_queue(
-                        not_log,
                         RevInsertComponentNew::<_>(InnerComponentBuffer {
                             entity: entity.id(),
                             buffer: Some(self),
@@ -173,18 +139,17 @@ impl<C: Component> RevBundle<[C; 1]> for C {
                     caller,
                 };
                 if swapped {
-                    entity.queue_undo_redo(not_log, RevInsertComponentOverwrite(inner), caller);
+                    entity.queue_undo_redo(RevInsertComponentOverwrite(inner), caller);
                 } else {
-                    entity.redo_and_queue(not_log, RevInsertComponentNew(inner), caller)
+                    entity.redo_and_queue(RevInsertComponentNew(inner), caller)
                 }
             }
         }
     }
 
-    fn rev_remove(not_log: NotLog, entity: &mut EntityWorldMut, caller: MaybeLocation) {
+    fn rev_remove(entity: &mut EntityWorldMut, caller: MaybeLocation) {
         if let Some(component) = entity.take::<C>() {
             entity.queue_undo_redo(
-                not_log,
                 RevRemoveComponent(InnerComponentBuffer {
                     entity: entity.id(),
                     buffer: Some(component),
@@ -197,21 +162,14 @@ impl<C: Component> RevBundle<[C; 1]> for C {
 }
 
 impl<R: Relationship, B: Bundle> RevBundle<[R; 2]> for SpawnOneRelated<R, B> {
-    fn rev_insert(
-        self,
-        not_log: NotLog,
-        entity: &mut EntityWorldMut,
-        mode: InsertMode,
-        caller: MaybeLocation,
-    ) {
+    fn rev_insert(self, entity: &mut EntityWorldMut, mode: InsertMode, caller: MaybeLocation) {
         #[allow(clippy::let_unit_value)]
         let _ = <R as SlimRelationship>::ASSERT;
-        self.rev_insert_inner(not_log, entity, mode, caller);
+        self.rev_insert_inner(entity, mode, caller);
     }
 
     fn rev_insert_inner(
         self,
-        not_log: NotLog,
         entity: &mut EntityWorldMut,
         _mode: InsertMode,
         caller: MaybeLocation,
@@ -222,38 +180,30 @@ impl<R: Relationship, B: Bundle> RevBundle<[R; 2]> for SpawnOneRelated<R, B> {
         };
         entity.world_scope(|world| {
             if let Ok(mut new_related) = world.get_entity_mut(new_related) {
-                mark_entity::<true>(not_log, &mut new_related, true, caller);
+                mark_entity::<true>(&mut new_related, true, caller);
             }
         });
         let id = entity.id();
         entity.queue_undo_redo(
-            not_log,
             AddRemoveRelated::<R, _, true>::new(id, [new_related], caller),
             caller,
         );
     }
 
-    fn rev_remove(_: NotLog, _: &mut EntityWorldMut, _: MaybeLocation) {}
+    fn rev_remove(_: &mut EntityWorldMut, _: MaybeLocation) {}
 }
 
 impl<R: Relationship, L: SpawnableList<R> + Send + Sync + 'static> RevBundle<[R; 3]>
     for SpawnRelatedBundle<R, L>
 {
-    fn rev_insert(
-        self,
-        not_log: NotLog,
-        entity: &mut EntityWorldMut,
-        mode: InsertMode,
-        caller: MaybeLocation,
-    ) {
+    fn rev_insert(self, entity: &mut EntityWorldMut, mode: InsertMode, caller: MaybeLocation) {
         #[allow(clippy::let_unit_value)]
         let _ = <R as SlimRelationship>::ASSERT;
-        self.rev_insert_inner(not_log, entity, mode, caller);
+        self.rev_insert_inner(entity, mode, caller);
     }
 
     fn rev_insert_inner(
         self,
-        not_log: NotLog,
         entity: &mut EntityWorldMut,
         _mode: InsertMode,
         caller: MaybeLocation,
@@ -261,17 +211,16 @@ impl<R: Relationship, L: SpawnableList<R> + Send + Sync + 'static> RevBundle<[R;
         let new_related =
             get_new_related_entities::<R>(entity, |entity| entity.insert(self), caller);
         entity.world_scope(|world| {
-            mark_entities::<true>(not_log, world, &new_related, true, MaybeLocation::caller())
+            mark_entities::<true>(world, &new_related, true, MaybeLocation::caller())
         });
         let id = entity.id();
         entity.queue_undo_redo(
-            not_log,
             AddRemoveRelated::<R, _, true>::new(id, new_related, caller),
             caller,
         );
     }
 
-    fn rev_remove(_: NotLog, _: &mut EntityWorldMut, _: MaybeLocation) {}
+    fn rev_remove(_: &mut EntityWorldMut, _: MaybeLocation) {}
 }
 
 macro_rules! impl_buffer_bundle {
@@ -283,32 +232,26 @@ macro_rules! impl_buffer_bundle {
         {
             fn rev_insert(
                 self,
-                not_log: NotLog,
                 entity: &mut EntityWorldMut,
                 mode: InsertMode,
                 caller: MaybeLocation,
             ) {
-                required_of_bundle::<Self>(not_log, entity, caller);
-                self.rev_insert_inner(not_log, entity, mode, caller);
+                required_of_bundle::<Self>(entity, caller);
+                self.rev_insert_inner(entity, mode, caller);
             }
 
             fn rev_insert_inner(
                 self,
-                not_log: NotLog,
                 entity: &mut EntityWorldMut,
                 mode: InsertMode,
                 caller: MaybeLocation,
             ) {
                 let ($($var,)*) = self;
-                ($($var.rev_insert_inner(not_log, entity, mode, caller),)*);
+                ($($var.rev_insert_inner(entity, mode, caller),)*);
             }
 
-            fn rev_remove(
-                not_log: NotLog,
-                entity: &mut EntityWorldMut,
-                caller: MaybeLocation
-            ) {
-                ($(<$T as RevBundle::<$M>>::rev_remove(not_log, entity, caller),)*);
+            fn rev_remove(entity: &mut EntityWorldMut, caller: MaybeLocation) {
+                ($(<$T as RevBundle::<$M>>::rev_remove(entity, caller),)*);
             }
         }
     };

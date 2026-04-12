@@ -12,6 +12,7 @@ use crate::{
     meta::RevDirection,
     panic_on_error_events,
     schedule::{RevUpdate, run_rev_update},
+    undo_redo::AsRev,
 };
 
 pub(super) fn test_run<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
@@ -78,7 +79,7 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
                 .push(LogEntry::SysObsvCmd((n, RevDirection::NOT_LOG_MIN)));
         });
         let test = LogEntry::SysObsvCmd(n);
-        world.commands().queue_undo_redo(not_log, test);
+        world.commands().as_rev(not_log).queue_undo_redo(test);
     });
 
     // set up hooks
@@ -97,7 +98,7 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
                     .push(LogEntry::SysHookCmd((n, RevDirection::NOT_LOG_MIN)));
             });
             let test = LogEntry::SysHookCmd(n);
-            world.commands().queue_undo_redo(not_log, test);
+            world.commands().as_rev(not_log).queue_undo_redo(test);
         });
 
     // run tests forward

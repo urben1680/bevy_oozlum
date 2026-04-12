@@ -40,7 +40,7 @@
 //! fn rev_system_1(not_log: NotLog, mut commands: Commands) {
 //!     // all happens in a command
 //!     commands.queue(|_: &mut World| println!("hello world!"));
-//!     commands.queue_undo_redo(not_log, |_: &mut World, direction| {
+//!     commands.as_rev(not_log).queue_undo_redo(|_: &mut World, direction| {
 //!         match direction {
 //!             UndoRedoDirection::Undo => println!("!dlrow olleh (log)"),
 //!             UndoRedoDirection::Redo => println!("hello world! (log)"),
@@ -284,13 +284,7 @@ pub mod prelude {
     pub use crate::schedule::{
         IntoRevScheduleConfigs as _, RevSchedule as _, RevSystems, RevUpdate,
     };
-    pub use crate::undo_redo::{
-        IsRevDespawned as _, RevFetch, UndoRedoDirection,
-        commands::RevCommands as _,
-        entity_commands::{
-            RevEntityCommands as _, RevEntityEntryCommands as _, RevRelatedSpawnerCommands as _,
-        },
-    };
+    pub use crate::undo_redo::{AsRev as _, IsRevDespawned as _, RevFetch, UndoRedoDirection};
 }
 
 /// Make `error!` and `error_once!` cause panics.

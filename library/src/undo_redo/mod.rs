@@ -7,8 +7,8 @@
 //!
 //! ## Reversible spawn
 //!
-//! Entities that are spawned with [`Commands::rev_spawn`] or marked with
-//! [`EntityCommands::rev_mark_spawned`] (or variants) will ...
+//! Entities that are spawned with [`RevCommands::rev_spawn`] or marked with
+//! [`RevEntityCommands::rev_mark_spawned`] (or variants) will ...
 //!
 //! - ... receive [`RevDespawned`] when the above actions are **undone** and should be treated as
 //!   despawned.
@@ -19,8 +19,8 @@
 //!
 //! ## Reversible despawn
 //!
-//! Entities that are despawned with [`Commands::rev_despawn`] or [`EntityCommands::rev_despawn`]
-//! (or variants) will ...
+//! Entities that are despawned with [`RevCommands::rev_despawn`] or
+//! [`RevEntityCommands::rev_despawn`] (or variants) will ...
 //!
 //! - ... receive [`RevDespawned`] **immediately** at the next sync point and should be treated as
 //!   despawned.
@@ -39,10 +39,10 @@
 //!   place in these cases. Manually removing it will also not prevent the despawn.
 //!
 //! [log directions]: RevDirection::is_log
-//! [`Commands::rev_spawn`]: crate::undo_redo::commands::RevCommands::rev_spawn
-//! [`EntityCommands::rev_mark_spawned`]: crate::undo_redo::entity_commands::RevEntityCommands::rev_mark_spawned
-//! [`Commands::rev_despawn`]: crate::undo_redo::commands::RevCommands::rev_despawn
-//! [`EntityCommands::rev_despawn`]: crate::undo_redo::entity_commands::RevEntityCommands::rev_despawn
+//! [`RevCommands::rev_spawn`]: crate::undo_redo::commands::RevCommands::rev_spawn
+//! [`RevEntityCommands::rev_mark_spawned`]: crate::undo_redo::entity_commands::RevEntityCommands::rev_mark_spawned
+//! [`RevCommands::rev_despawn`]: crate::undo_redo::commands::RevCommands::rev_despawn
+//! [`RevEntityCommands::rev_despawn`]: crate::undo_redo::entity_commands::RevEntityCommands::rev_despawn
 //! [`RelationshipTarget::LINKED_SPAWN`]: bevy_ecs::relationship::RelationshipTarget::LINKED_SPAWN
 
 use alloc::{boxed::Box, format, string::ToString, vec::Vec};
@@ -84,6 +84,18 @@ const fn undo_redo_str<const UNDO: bool>() -> &'static str {
     if UNDO { "undo" } else { "redo" }
 }
 
+/// Extension trait to unlock reversible API for [`Commands`](bevy_ecs::system::Commands) and its
+/// variations during [`RevDirection::NotLog`].
+pub trait AsRev {
+    /// Wrapper type for reversible API.
+    type Out<'a>
+    where
+        Self: 'a;
+
+    /// Unlock reversible API during [`RevDirection::NotLog`].
+    fn as_rev(&mut self, not_log: NotLog) -> Self::Out<'_>;
+}
+
 /// Error type that multiple reversible APIs may return.
 #[derive(Copy, Clone, Debug)]
 pub struct EntityRevDespawnedError {
@@ -119,12 +131,7 @@ impl UndoRedoQueue {
         self.0.is_empty()
     }
     #[track_caller]
-    pub(crate) fn queue_undo_redo<T: UndoRedo>(
-        &mut self,
-        _: NotLog,
-        caller: MaybeLocation,
-        undo_redo: T,
-    ) {
+    pub(crate) fn queue_undo_redo<T: UndoRedo>(&mut self, caller: MaybeLocation, undo_redo: T) {
         let name = type_name_of_val(&undo_redo);
         let boxed = BoxedUndoRedo {
             undo_redo: SyncCell::new(Box::new(undo_redo)),
@@ -214,7 +221,7 @@ pub trait UndoRedo: Send + 'static {
 /// # };
 /// # let mut world = World::new();
 /// # let mut commands = world.commands();
-/// commands.queue_undo_redo(not_log, |world: &mut World, direction| {
+/// commands.as_rev(not_log).queue_undo_redo(|world: &mut World, direction| {
 ///     match direction {
 ///         UndoRedoDirection::Undo => {
 ///             // undo logic

@@ -46,5 +46,6 @@ fn on_insert<const ROW: u64>(mut world: DeferredWorld, context: HookContext) {
     // along it.
     world
         .commands()
-        .rev_mark_spawned(not_log, context.entity, false);
+        .as_rev(not_log)
+        .rev_mark_spawned(context.entity, false);
 }

@@ -25,11 +25,10 @@ fn rev_with_child_or_children(forward_finalize: bool) {
 
     assert_undo_redo_finalize(
         &mut world,
-        |world, not_log| {
+        |world, _| {
             let mut parent_mut = world.entity_mut(parent);
             parent_mut
                 .rev_with_related::<ChildOf>(
-                    not_log,
                     related!(UnlinkedChildren[()]),
                     MaybeLocation::caller(),
                 )
@@ -76,16 +75,16 @@ fn rev_add_child_or_children(one: bool) {
 
     assert_undo_redo(
         &mut world,
-        |world, not_log| {
+        |world, _| {
             let new_child = world.spawn_empty().id();
             let mut parent_mut = world.entity_mut(parent);
             if one {
                 parent_mut
-                    .rev_add_one_related::<ChildOf>(not_log, new_child, MaybeLocation::caller())
+                    .rev_add_one_related::<ChildOf>(new_child, MaybeLocation::caller())
                     .unwrap();
             } else {
                 parent_mut
-                    .rev_add_related::<ChildOf>(not_log, [new_child], MaybeLocation::caller())
+                    .rev_add_related::<ChildOf>([new_child], MaybeLocation::caller())
                     .unwrap();
             }
             new_child
@@ -119,10 +118,10 @@ fn rev_detach_all_children() {
 
     assert_undo_redo(
         &mut world,
-        |world, not_log| {
+        |world, _| {
             let mut parent_mut = world.entity_mut(parent);
             parent_mut
-                .rev_detach_all_related::<ChildOf>(not_log, MaybeLocation::caller())
+                .rev_detach_all_related::<ChildOf>(MaybeLocation::caller())
                 .unwrap();
         },
         |world, _| {
@@ -148,10 +147,10 @@ fn rev_detach_child() {
 
     assert_undo_redo(
         &mut world,
-        |world, not_log| {
+        |world, _| {
             let mut parent_mut = world.entity_mut(parent);
             parent_mut
-                .rev_remove_related::<ChildOf>(not_log, [child2], MaybeLocation::caller())
+                .rev_remove_related::<ChildOf>([child2], MaybeLocation::caller())
                 .unwrap();
         },
         |world, _| {
@@ -176,10 +175,10 @@ fn rev_despawn_children(forward_finalize: bool) {
 
     assert_undo_redo_finalize(
         &mut world,
-        |world, not_log| {
+        |world, _| {
             world
                 .entity_mut(parent)
-                .rev_despawn_related::<Children>(not_log, MaybeLocation::caller())
+                .rev_despawn_related::<Children>(MaybeLocation::caller())
                 .unwrap();
         },
         backward_assert,

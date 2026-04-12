@@ -14,7 +14,7 @@ use bevy_platform::sync::Arc;
 
 use crate::{
     log::{OutOfLog, TransitionsLog},
-    meta::{NotLog, RevDirection, RevMeta},
+    meta::{RevDirection, RevMeta},
     undo_redo::{LOCATION_PREFIX, RevWorld, UndoRedo, add_children, undo_redo_str},
 };
 
@@ -131,7 +131,6 @@ impl From<OutOfLog> for DespawnFinalizerErr {
 
 /// Mark multiple entities and their children as spawned/despawned.
 pub(super) fn mark_entities<const SPAWN: bool>(
-    not_log: NotLog,
     world: &mut World,
     entities: &[Entity],
     include_unlinked_related: bool,
@@ -159,13 +158,12 @@ pub(super) fn mark_entities<const SPAWN: bool>(
     }
 
     if !entities_set.is_empty() {
-        mark_inner::<SPAWN>(not_log, world, entities_set, caller);
+        mark_inner::<SPAWN>(world, entities_set, caller);
     }
 }
 
 /// Mark a single entity and its children as spawned/despawned.
 pub(super) fn mark_entity<const SPAWN: bool>(
-    not_log: NotLog,
     entity: &mut EntityWorldMut,
     include_unlinked_related: bool,
     caller: MaybeLocation,
@@ -183,17 +181,13 @@ pub(super) fn mark_entity<const SPAWN: bool>(
         include_unlinked_related,
     );
 
-    entity.world_scope(|world| mark_inner::<SPAWN>(not_log, world, entities_set, caller));
+    entity.world_scope(|world| mark_inner::<SPAWN>(world, entities_set, caller));
 
     true
 }
 
 /// Mark a single empty entity as spawned.
-pub(super) fn mark_spawn_empty(
-    not_log: NotLog,
-    entity: &mut EntityWorldMut,
-    caller: MaybeLocation,
-) {
+pub(super) fn mark_spawn_empty(entity: &mut EntityWorldMut, caller: MaybeLocation) {
     let id = entity.id();
     let spawn_despawn = RevSpawnDespawn::<_, true> {
         entities: id,
@@ -205,13 +199,12 @@ pub(super) fn mark_spawn_empty(
             .get_resource_or_init::<DespawnFinalizer>()
             .spawn_queue
             .push((id, caller));
-        world.queue_undo_redo(not_log, spawn_despawn, caller);
+        world.queue_undo_redo(spawn_despawn, caller);
     })
 }
 
 /// Mark multiple entities as spawned/despawned.
 fn mark_inner<const SPAWN: bool>(
-    not_log: NotLog,
     world: &mut World,
     entities: EntityHashSet,
     caller: MaybeLocation,
@@ -227,10 +220,10 @@ fn mark_inner<const SPAWN: bool>(
 
     if SPAWN {
         resource.spawn_queue.extend(iter);
-        world.queue_undo_redo(not_log, spawn_despawn, caller);
+        world.queue_undo_redo(spawn_despawn, caller);
     } else {
         resource.despawn_queue.extend(iter);
-        world.redo_and_queue(not_log, spawn_despawn, caller);
+        world.redo_and_queue(spawn_despawn, caller);
     }
 }
 

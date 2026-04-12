@@ -132,10 +132,9 @@ fn insert(mode: InsertMode) {
 
     assert_undo_redo(
         &mut world,
-        |world, not_log| {
+        |world, _| {
             let mut entity = world.entity_mut(entity);
             (PlainComponent(1), RequiringComponent(1)).rev_insert(
-                not_log,
                 &mut entity,
                 mode,
                 MaybeLocation::caller(),
@@ -200,10 +199,9 @@ fn remove() {
 
     assert_undo_redo(
         &mut world,
-        |world, not_log| {
+        |world, _| {
             let mut entity = world.entity_mut(entity);
             <(PlainComponent, RequiringComponent)>::rev_remove(
-                not_log,
                 &mut entity,
                 MaybeLocation::caller(),
             );
@@ -227,18 +225,16 @@ fn insert_related(one: bool) {
 
     assert_undo_redo(
         &mut world,
-        |world, not_log| {
+        |world, _| {
             let mut parent_mut = world.entity_mut(parent);
             if one {
                 Children::spawn_one(()).rev_insert(
-                    not_log,
                     &mut parent_mut,
                     InsertMode::Replace,
                     MaybeLocation::caller(),
                 );
             } else {
                 Children::spawn(vec![()]).rev_insert(
-                    not_log,
                     &mut parent_mut,
                     InsertMode::Replace,
                     MaybeLocation::caller(),
