@@ -86,6 +86,25 @@ const fn undo_redo_str<const UNDO: bool>() -> &'static str {
 
 /// Extension trait to unlock reversible API for [`Commands`](bevy_ecs::system::Commands) and its
 /// variations during [`RevDirection::NotLog`].
+/// 
+/// # Example
+/// 
+/// ```
+/// # use bevy_ecs::prelude::*;
+/// # use bevy_oozlum::prelude::*;
+/// fn system(not_log: NotLog, mut commands: Commands) {
+///     // this is not reversible
+///     commands
+///         .spawn_empty()
+///         .insert(Name::from("Alice"));
+/// 
+///     // this is reversible
+///     commands
+///         .as_rev(not_log)
+///         .rev_spawn_empty()
+///         .rev_insert(Name::from("Bob"));
+/// }
+/// ```
 pub trait AsRev {
     /// Wrapper type for reversible API.
     type Out<'a>
