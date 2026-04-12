@@ -162,14 +162,11 @@ impl Command<BevyResult> for RevQueue {
     }
 }
 
-/// A type for when [`RevUpdate`] is currently running at [`RevDirection::NotLog`]. This is used as
-/// an argument for:
+/// A type for when [`RevUpdate`] is currently running at [`RevDirection::NotLog`].
 ///
-/// - [`RevCommands`]
-/// - [`RevEntityCommands`]
-///
-/// ... to ensure these are only queued at that direction. Because of this, this type must not be
-/// stored past the frame it is accessed from.
+/// This is used for unlocking reversible APIs to queue reversible commands to ensure these are only
+/// queued at that direction. See [`CommandsAsRev`]. Because of this, this type must not be stored
+/// past the frame it is accessed from.
 ///
 /// It is also a newtyped value of [`RevMeta::past_len`] which, during this direction, can never be
 /// zero. As this, [`TransitionLog::forward_push`]/[`TransitionsLog::forward_extend`] can use it for
@@ -184,8 +181,7 @@ impl Command<BevyResult> for RevQueue {
 /// reversible commands.
 ///
 /// [`RevUpdate`]: crate::schedule::RevUpdate
-/// [`RevCommands`]: crate::undo_redo::commands::RevCommands
-/// [`RevEntityCommands`]: crate::undo_redo::entity_commands::RevEntityCommands
+/// [`CommandsAsRev`]: crate::undo_redo::CommandsAsRev
 /// [`TransitionLog::forward_push`]: crate::log::TransitionLog::forward_push
 /// [`TransitionsLog::forward_extend`]: crate::log::TransitionsLog::forward_extend
 /// [`UpdateLog::forward_past_len`]: crate::log::UpdateLog::forward_past_len`
