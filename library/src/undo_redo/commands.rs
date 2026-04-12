@@ -14,7 +14,7 @@ use bevy_ecs::{
 use crate::{
     meta::NotLog,
     undo_redo::{
-        AsRev, RevBundle, RevEntityWorld, RevWorld, UndoRedo, entity_commands::RevEntityCommands,
+        CommandsAsRev, RevBundle, RevEntityWorld, RevWorld, UndoRedo, entity_commands::RevEntityCommands,
         mark_spawn_empty,
     },
 };
@@ -27,7 +27,7 @@ impl<'a> From<RevCommands<'a>> for Commands<'a, 'a> {
     }
 }
 
-impl AsRev for Commands<'_, '_> {
+impl CommandsAsRev for Commands<'_, '_> {
     type Out<'a>
         = RevCommands<'a>
     where

@@ -14,7 +14,7 @@ use bevy_ecs::{
 use crate::{
     meta::NotLog,
     undo_redo::{
-        AsRev, EntityRevDespawnedError, RevBundle, RevEntityWorld, RevWorld, UndoRedo,
+        CommandsAsRev, EntityRevDespawnedError, RevBundle, RevEntityWorld, RevWorld, UndoRedo,
         commands::rev_spawn_inner, relationship::SlimRelationship,
     },
 };
@@ -42,7 +42,7 @@ impl DerefMut for RevEntityCommands<'_> {
     }
 }
 
-impl AsRev for EntityCommands<'_> {
+impl CommandsAsRev for EntityCommands<'_> {
     type Out<'a>
         = RevEntityCommands<'a>
     where
@@ -529,7 +529,7 @@ impl<T> DerefMut for RevEntityEntryCommands<'_, T> {
     }
 }
 
-impl<T: Component> AsRev for EntityEntryCommands<'_, T> {
+impl<T: Component> CommandsAsRev for EntityEntryCommands<'_, T> {
     type Out<'a>
         = RevEntityEntryCommands<'a, T>
     where
@@ -631,7 +631,7 @@ impl<R: Relationship> DerefMut for RevRelatedSpawnerCommands<'_, R> {
     }
 }
 
-impl<R: Relationship> AsRev for RelatedSpawnerCommands<'_, R> {
+impl<R: Relationship> CommandsAsRev for RelatedSpawnerCommands<'_, R> {
     type Out<'a>
         = RevRelatedSpawnerCommands<'a, R>
     where

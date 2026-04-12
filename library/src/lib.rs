@@ -284,7 +284,7 @@ pub mod prelude {
     pub use crate::schedule::{
         IntoRevScheduleConfigs as _, RevSchedule as _, RevSystems, RevUpdate,
     };
-    pub use crate::undo_redo::{AsRev as _, IsRevDespawned as _, RevFetch, UndoRedoDirection};
+    pub use crate::undo_redo::{CommandsAsRev as _, IsRevDespawned as _, RevFetch, UndoRedoDirection};
 }
 
 /// Make `error!` and `error_once!` cause panics.

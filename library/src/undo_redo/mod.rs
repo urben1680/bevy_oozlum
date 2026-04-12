@@ -105,7 +105,7 @@ const fn undo_redo_str<const UNDO: bool>() -> &'static str {
 ///         .rev_insert(Name::from("Bob"));
 /// }
 /// ```
-pub trait AsRev {
+pub trait CommandsAsRev {
     /// Wrapper type for reversible API.
     type Out<'a>
     where
