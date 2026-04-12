@@ -219,6 +219,7 @@
 //! - The `hotpatching` feature enables **hotpatching** reversible systems, but this will not be
 //!   reversible itself automatically. One either has to manually patch to the previous/next fn
 //!   pointer when undoing/redoing the frame the patch happened or [clear the log] while patching.
+//!   Systems that mutate the world only via reversible commands can be patched without extra care.
 //!
 //! [`bevy`]: https://bevy.org/
 //! [`NotLog`]: crate::meta::NotLog
