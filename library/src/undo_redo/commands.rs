@@ -14,8 +14,8 @@ use bevy_ecs::{
 use crate::{
     meta::NotLog,
     undo_redo::{
-        CommandsAsRev, RevBundle, RevEntityWorld, RevWorld, UndoRedo, entity_commands::RevEntityCommands,
-        mark_spawn_empty,
+        CommandsAsRev, RevBundle, RevEntityWorld, RevWorld, UndoRedo,
+        entity_commands::RevEntityCommands, mark_spawn_empty,
     },
 };
 
@@ -138,29 +138,32 @@ impl<'a> RevCommands<'a> {
     /// Reversible version of [`Commands::run_schedule`].
     #[track_caller]
     pub fn rev_run_schedule(&mut self, label: impl ScheduleLabel) {
-        self.0
-            .queue(rev_run_schedule_inner(label, MaybeLocation::caller()).handle_error_with(warn));
+        self.0.queue(
+            rev_run_schedule_with_caller(label, MaybeLocation::caller()).handle_error_with(warn),
+        );
     }
 
     /// Reversible version of [`Commands::init_resource`].
     #[track_caller]
     pub fn rev_init_resource<R: Resource + FromWorld>(&mut self) {
         self.0
-            .queue(rev_init_resource_inner::<R>(MaybeLocation::caller()))
+            .queue(rev_init_resource_with_caller::<R>(MaybeLocation::caller()))
     }
 
     /// Reversible version of [`Commands::insert_resource`].
     #[track_caller]
     pub fn rev_insert_resource<R: Resource>(&mut self, resource: R) {
-        self.0
-            .queue(rev_insert_resource_inner(resource, MaybeLocation::caller()))
+        self.0.queue(rev_insert_resource_with_caller(
+            resource,
+            MaybeLocation::caller(),
+        ))
     }
 
     /// Reversible version of [`Commands::remove_resource`].
     #[track_caller]
     pub fn rev_remove_resource<R: Resource>(&mut self) {
         self.0
-            .queue(rev_remove_resource_inner::<R>(MaybeLocation::caller()))
+            .queue(rev_remove_resource_with_caller::<R>(MaybeLocation::caller()))
     }
 
     /// Helper method to mark an entity as reversibly spawned. Useful when the actual spawn is
@@ -227,7 +230,7 @@ impl<'a> RevCommands<'a> {
     /// reversible spawn/despawn.
     #[track_caller]
     pub fn rev_spawn<T: Bundle>(&mut self, bundle: T) -> RevEntityCommands<'_> {
-        rev_spawn_inner(&mut self.0, bundle, MaybeLocation::caller())
+        rev_spawn_with_caller(&mut self.0, bundle, MaybeLocation::caller())
     }
 
     /// Reversible version of [`Commands::spawn_empty`].
@@ -254,7 +257,7 @@ impl<'a> RevCommands<'a> {
         I: IntoIterator<Item: Bundle<Effect: NoBundleEffect>> + Send + 'static,
     {
         self.0
-            .queue(rev_spawn_batch_inner(batch, MaybeLocation::caller()));
+            .queue(rev_spawn_batch_with_caller(batch, MaybeLocation::caller()));
     }
 
     /// Reversible version of [`Commands::insert_batch`].
@@ -264,7 +267,7 @@ impl<'a> RevCommands<'a> {
         I: IntoIterator<Item = (Entity, B)> + Send + Sync + 'static,
         B: RevBundle<Marker>,
     {
-        self.0.queue(rev_insert_batch_inner(
+        self.0.queue(rev_insert_batch_with_caller(
             iter,
             InsertMode::Replace,
             MaybeLocation::caller(),
@@ -278,7 +281,7 @@ impl<'a> RevCommands<'a> {
         I: IntoIterator<Item = (Entity, B)> + Send + Sync + 'static,
         B: RevBundle<Marker>,
     {
-        self.0.queue(rev_insert_batch_inner(
+        self.0.queue(rev_insert_batch_with_caller(
             iter,
             InsertMode::Keep,
             MaybeLocation::caller(),
@@ -293,7 +296,7 @@ impl<'a> RevCommands<'a> {
         B: RevBundle<Marker>,
     {
         self.0.queue_handled(
-            rev_insert_batch_inner(iter, InsertMode::Replace, MaybeLocation::caller()),
+            rev_insert_batch_with_caller(iter, InsertMode::Replace, MaybeLocation::caller()),
             warn,
         );
     }
@@ -306,7 +309,7 @@ impl<'a> RevCommands<'a> {
         B: RevBundle<Marker>,
     {
         self.0.queue_handled(
-            rev_insert_batch_inner(iter, InsertMode::Keep, MaybeLocation::caller()),
+            rev_insert_batch_with_caller(iter, InsertMode::Keep, MaybeLocation::caller()),
             warn,
         );
     }
@@ -329,10 +332,10 @@ where
     I: IntoIterator<Item = (Entity, B)> + Send + Sync + 'static,
     B: RevBundle<Marker>,
 {
-    rev_insert_batch_inner(iter, insert_mode, MaybeLocation::caller())
+    rev_insert_batch_with_caller(iter, insert_mode, MaybeLocation::caller())
 }
 
-fn rev_insert_batch_inner<I, B, Marker>(
+fn rev_insert_batch_with_caller<I, B, Marker>(
     iter: I,
     insert_mode: InsertMode,
     caller: MaybeLocation,
@@ -357,10 +360,10 @@ where
 /// Reversible version of [`init_resource`](bevy_ecs::system::command::init_resource).
 #[track_caller]
 pub fn rev_init_resource<R: Resource + FromWorld>(_: NotLog) -> impl Command {
-    rev_init_resource_inner::<R>(MaybeLocation::caller())
+    rev_init_resource_with_caller::<R>(MaybeLocation::caller())
 }
 
-fn rev_init_resource_inner<R: Resource + FromWorld>(caller: MaybeLocation) -> impl Command {
+fn rev_init_resource_with_caller<R: Resource + FromWorld>(caller: MaybeLocation) -> impl Command {
     move |world: &mut World| {
         world.rev_init_resource::<R>(caller);
     }
@@ -369,10 +372,13 @@ fn rev_init_resource_inner<R: Resource + FromWorld>(caller: MaybeLocation) -> im
 /// Reversible version of [`insert_resource`](bevy_ecs::system::command::insert_resource).
 #[track_caller]
 pub fn rev_insert_resource<R: Resource>(_: NotLog, resource: R) -> impl Command {
-    rev_insert_resource_inner(resource, MaybeLocation::caller())
+    rev_insert_resource_with_caller(resource, MaybeLocation::caller())
 }
 
-fn rev_insert_resource_inner<R: Resource>(resource: R, caller: MaybeLocation) -> impl Command {
+fn rev_insert_resource_with_caller<R: Resource>(
+    resource: R,
+    caller: MaybeLocation,
+) -> impl Command {
     move |world: &mut World| {
         world.rev_insert_resource(resource, caller);
     }
@@ -381,10 +387,10 @@ fn rev_insert_resource_inner<R: Resource>(resource: R, caller: MaybeLocation) ->
 /// Reversible version of [`remove_resource`](bevy_ecs::system::command::remove_resource).
 #[track_caller]
 pub fn rev_remove_resource<R: Resource>(_: NotLog) -> impl Command {
-    rev_remove_resource_inner::<R>(MaybeLocation::caller())
+    rev_remove_resource_with_caller::<R>(MaybeLocation::caller())
 }
 
-fn rev_remove_resource_inner<R: Resource>(caller: MaybeLocation) -> impl Command {
+fn rev_remove_resource_with_caller<R: Resource>(caller: MaybeLocation) -> impl Command {
     move |world: &mut World| {
         world.rev_remove_resource::<R, _>(|_| (), caller);
     }
@@ -395,10 +401,10 @@ pub fn rev_spawn_batch<I>(_: NotLog, bundles_iter: I) -> impl Command
 where
     I: IntoIterator<Item: Bundle<Effect: NoBundleEffect>> + Send + 'static,
 {
-    rev_spawn_batch_inner(bundles_iter, MaybeLocation::caller())
+    rev_spawn_batch_with_caller(bundles_iter, MaybeLocation::caller())
 }
 
-fn rev_spawn_batch_inner<I>(bundles_iter: I, caller: MaybeLocation) -> impl Command
+fn rev_spawn_batch_with_caller<I>(bundles_iter: I, caller: MaybeLocation) -> impl Command
 where
     I: IntoIterator<Item: Bundle<Effect: NoBundleEffect>> + Send + 'static,
 {
@@ -409,10 +415,10 @@ where
 
 /// Reversible version of [`run_schedule`](bevy_ecs::system::command::run_schedule).
 pub fn rev_run_schedule(_: NotLog, label: impl ScheduleLabel) -> impl Command<Result> {
-    rev_run_schedule_inner(label, MaybeLocation::caller())
+    rev_run_schedule_with_caller(label, MaybeLocation::caller())
 }
 
-fn rev_run_schedule_inner(
+fn rev_run_schedule_with_caller(
     label: impl ScheduleLabel,
     caller: MaybeLocation,
 ) -> impl Command<Result> {
@@ -422,7 +428,7 @@ fn rev_run_schedule_inner(
     }
 }
 
-pub(super) fn rev_spawn_inner<'a, T: Bundle>(
+pub(super) fn rev_spawn_with_caller<'a, T: Bundle>(
     commands: &'a mut Commands,
     bundle: T,
     caller: MaybeLocation,

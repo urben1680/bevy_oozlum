@@ -15,7 +15,7 @@ use crate::{
     meta::NotLog,
     undo_redo::{
         CommandsAsRev, EntityRevDespawnedError, RevBundle, RevEntityWorld, RevWorld, UndoRedo,
-        commands::rev_spawn_inner, relationship::SlimRelationship,
+        commands::rev_spawn_with_caller, relationship::SlimRelationship,
     },
 };
 
@@ -361,7 +361,7 @@ impl<'a> RevEntityCommands<'a> {
     /// Reversible version of [`EntityCommands::insert`].
     #[track_caller]
     pub fn rev_insert<Marker>(&mut self, bundle: impl RevBundle<Marker>) -> &mut Self {
-        self.queue(rev_insert_inner(
+        self.queue(rev_insert_with_caller(
             bundle,
             InsertMode::Replace,
             MaybeLocation::caller(),
@@ -386,7 +386,7 @@ impl<'a> RevEntityCommands<'a> {
     /// Reversible version of [`EntityCommands::insert_if_new`].
     #[track_caller]
     pub fn rev_insert_if_new<Marker>(&mut self, bundle: impl RevBundle<Marker>) -> &mut Self {
-        self.queue(rev_insert_inner(
+        self.queue(rev_insert_with_caller(
             bundle,
             InsertMode::Keep,
             MaybeLocation::caller(),
@@ -411,7 +411,7 @@ impl<'a> RevEntityCommands<'a> {
     /// Reversible version of [`EntityCommands::remove`]. Let the second generic be inferred as `_`.
     #[track_caller]
     pub fn rev_remove<B: RevBundle<Marker>, Marker>(&mut self) -> &mut Self {
-        self.queue(rev_remove_inner::<B, _>(MaybeLocation::caller()));
+        self.queue(rev_remove_with_caller::<B, _>(MaybeLocation::caller()));
         self
     }
 
@@ -432,13 +432,13 @@ impl<'a> RevEntityCommands<'a> {
     /// Reversible version of [`EntityCommands::try_despawn`].
     #[track_caller]
     pub fn rev_try_despawn(&mut self) {
-        self.queue_silenced(rev_despawn_inner(MaybeLocation::caller()));
+        self.queue_silenced(rev_despawn_with_caller(MaybeLocation::caller()));
     }
 
     /// Reversible version of [`EntityCommands::try_insert`].
     #[track_caller]
     pub fn rev_try_insert<Marker>(&mut self, bundle: impl RevBundle<Marker>) -> &mut Self {
-        self.queue_silenced(rev_insert_inner(
+        self.queue_silenced(rev_insert_with_caller(
             bundle,
             InsertMode::Replace,
             MaybeLocation::caller(),
@@ -463,7 +463,7 @@ impl<'a> RevEntityCommands<'a> {
     /// Reversible version of [`EntityCommands::try_insert_if_new`].
     #[track_caller]
     pub fn rev_try_insert_if_new<Marker>(&mut self, bundle: impl RevBundle<Marker>) -> &mut Self {
-        self.queue_silenced(rev_insert_inner(
+        self.queue_silenced(rev_insert_with_caller(
             bundle,
             InsertMode::Keep,
             MaybeLocation::caller(),
@@ -489,7 +489,7 @@ impl<'a> RevEntityCommands<'a> {
     /// `_`.
     #[track_caller]
     pub fn rev_try_remove<B: RevBundle<Marker>, Marker>(&mut self) -> &mut Self {
-        self.queue_silenced(rev_remove_inner::<B, _>(MaybeLocation::caller()));
+        self.queue_silenced(rev_remove_with_caller::<B, _>(MaybeLocation::caller()));
         self
     }
 
@@ -568,7 +568,7 @@ impl<'a, T: Component> RevEntityEntryCommands<'a, T> {
     where
         T: FromWorld,
     {
-        self.entity().queue(rev_insert_from_world_inner::<T>(
+        self.entity().queue(rev_insert_from_world_with_caller::<T>(
             InsertMode::Keep,
             MaybeLocation::caller(),
         ));
@@ -578,7 +578,7 @@ impl<'a, T: Component> RevEntityEntryCommands<'a, T> {
     /// Reversible version of [`EntityEntryCommands::or_insert`].
     #[track_caller]
     pub fn rev_or_insert(&mut self, default: T) -> &mut Self {
-        self.entity().queue(rev_insert_inner(
+        self.entity().queue(rev_insert_with_caller(
             default,
             InsertMode::Keep,
             MaybeLocation::caller(),
@@ -595,7 +595,7 @@ impl<'a, T: Component> RevEntityEntryCommands<'a, T> {
     /// Reversible version of [`EntityEntryCommands::or_try_insert`].
     #[track_caller]
     pub fn rev_or_try_insert(&mut self, default: T) -> &mut Self {
-        self.entity().queue_silenced(rev_insert_inner(
+        self.entity().queue_silenced(rev_insert_with_caller(
             default,
             InsertMode::Keep,
             MaybeLocation::caller(),
@@ -663,7 +663,7 @@ impl<'a, R: Relationship> RevRelatedSpawnerCommands<'a, R> {
     #[track_caller]
     pub fn rev_spawn(&mut self, bundle: impl Bundle) -> RevEntityCommands<'_> {
         let target = self.target_entity();
-        rev_spawn_inner(
+        rev_spawn_with_caller(
             self.commands_mut(),
             (R::from(target), bundle),
             MaybeLocation::caller(),
@@ -677,7 +677,7 @@ impl<'a, R: Relationship> RevRelatedSpawnerCommands<'a, R> {
     #[track_caller]
     pub fn rev_spawn_empty(&mut self) -> RevEntityCommands<'_> {
         let target = self.target_entity();
-        rev_spawn_inner(
+        rev_spawn_with_caller(
             self.commands_mut(),
             R::from(target),
             MaybeLocation::caller(),
@@ -692,10 +692,10 @@ pub fn rev_insert<Marker>(
     bundle: impl RevBundle<Marker>,
     mode: InsertMode,
 ) -> impl EntityCommand<CmdOut> {
-    rev_insert_inner(bundle, mode, MaybeLocation::caller())
+    rev_insert_with_caller(bundle, mode, MaybeLocation::caller())
 }
 
-fn rev_insert_inner<Marker>(
+fn rev_insert_with_caller<Marker>(
     bundle: impl RevBundle<Marker>,
     mode: InsertMode,
     caller: MaybeLocation,
@@ -713,10 +713,10 @@ pub fn rev_insert_from_world<T: Component + FromWorld>(
     _: NotLog,
     mode: InsertMode,
 ) -> impl EntityCommand<CmdOut> {
-    rev_insert_from_world_inner::<T>(mode, MaybeLocation::caller())
+    rev_insert_from_world_with_caller::<T>(mode, MaybeLocation::caller())
 }
 
-fn rev_insert_from_world_inner<T: Component + FromWorld>(
+fn rev_insert_from_world_with_caller<T: Component + FromWorld>(
     mode: InsertMode,
     caller: MaybeLocation,
 ) -> impl EntityCommand<CmdOut> {
@@ -740,10 +740,10 @@ pub fn rev_insert_with<T: Component, F>(
 where
     F: FnOnce() -> T + Send + 'static,
 {
-    rev_insert_with_inner(component_fn, mode, MaybeLocation::caller())
+    rev_insert_with_with_caller(component_fn, mode, MaybeLocation::caller())
 }
 
-fn rev_insert_with_inner<T: Component, F>(
+fn rev_insert_with_with_caller<T: Component, F>(
     component_fn: F,
     mode: InsertMode,
     caller: MaybeLocation,
@@ -765,10 +765,10 @@ where
 /// generic be inferred as `_`.
 #[track_caller]
 pub fn rev_remove<T: RevBundle<Marker>, Marker>(_: NotLog) -> impl EntityCommand<CmdOut> {
-    rev_remove_inner::<T, _>(MaybeLocation::caller())
+    rev_remove_with_caller::<T, _>(MaybeLocation::caller())
 }
 
-fn rev_remove_inner<T: RevBundle<Marker>, Marker>(
+fn rev_remove_with_caller<T: RevBundle<Marker>, Marker>(
     caller: MaybeLocation,
 ) -> impl EntityCommand<CmdOut> {
     move |mut entity_mut: EntityWorldMut| entity_mut.rev_remove::<T, Marker>(caller).map(|_| ())
@@ -780,9 +780,9 @@ fn rev_remove_inner<T: RevBundle<Marker>, Marker>(
 /// reversible spawn/despawn.
 #[track_caller]
 pub fn rev_despawn(_: NotLog) -> impl EntityCommand<CmdOut> {
-    rev_despawn_inner(MaybeLocation::caller())
+    rev_despawn_with_caller(MaybeLocation::caller())
 }
 
-fn rev_despawn_inner(caller: MaybeLocation) -> impl EntityCommand<CmdOut> {
+fn rev_despawn_with_caller(caller: MaybeLocation) -> impl EntityCommand<CmdOut> {
     move |entity_mut: EntityWorldMut| entity_mut.rev_despawn(caller)
 }
