@@ -38,7 +38,7 @@
 //! # use bevy::prelude::*;
 //! # use bevy_oozlum::prelude::*;
 //! fn rev_system_1(not_log: NotLog, mut commands: Commands) {
-//!     // all happens in a command
+//!     // all happens in commands
 //!     commands.queue(|_: &mut World| println!("hello world!"));
 //!     commands.as_rev(not_log).queue_undo_redo(|_: &mut World, direction| {
 //!         match direction {
