@@ -160,9 +160,7 @@
 //! use bevy_oozlum::prelude::*;
 //!
 //! # let mut app = App::new();
-//! app.add_plugins((
-//!     RevPlugin.set_max_past_len(42)
-//! ));
+//! app.add_plugins(RevPlugin.set_max_past_len(42));
 //!
 //! ```
 //!
