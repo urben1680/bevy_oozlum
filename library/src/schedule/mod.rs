@@ -83,6 +83,7 @@ use bevy_ecs::{
     system::{IntoSystem, RunSystemError, ScheduleSystem},
     world::World,
 };
+use bevy_log::info;
 use core::{fmt::Debug, hash::Hash};
 use variadics_please::all_tuples;
 
@@ -108,6 +109,26 @@ pub struct RevUpdate;
 
 /// A system set that contains a forward and a backward set that run depending on the current
 /// [`RevMeta::running_direction`].
+///
+/// If systems are not added with the new `rev_add_systems` but the usual `add_systems`, this may
+/// result in random orderings to reversible systems. One should never add non-reversible systems
+/// this way _unless_ they are ordered relatively to [`RevSystems`], a set containing all systems
+/// added via `rev_add_systems`.
+///
+/// ```
+/// # use bevy::prelude::*;
+/// # use bevy_oozlum::prelude::*;
+/// # fn rev_system() {}
+/// # fn regular_system() {}
+/// # let mut app = App::new();
+/// app.rev_add_systems(RevUpdate, rev_system) // implicitly in the RevSystems set
+///     .add_systems(
+///         RevUpdate,
+///         regular_system
+///          // .after(rev_system) // wrong
+///             .after(RevSystems) // correct
+///     );
+/// ```
 pub struct RevSystems;
 
 /// [`RevSystems`] does not implement [`SystemSet`] because it is not meant to be configured but
@@ -241,6 +262,15 @@ fn set_base_sets(schedule: &mut Schedule) {
 
     // check needs to be on a non-pub set so user code cannot make this unreliable
     if !schedule.graph().system_sets.contains(ForwardSystems) {
+        let mut settings = schedule.get_build_settings();
+        if !settings.auto_insert_apply_deferred {
+            info!(
+                "reversible schedule {:?} has its `auto_insert_apply_deferred` value reset to `true`",
+                schedule.label()
+            );
+            settings.auto_insert_apply_deferred = true;
+            schedule.set_build_settings(settings);
+        }
         schedule.configure_sets(
             (
                 ForwardSystems.run_if(is_forward::<true>),
