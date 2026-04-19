@@ -24,7 +24,7 @@ rustdoc-args = [
   "--html-after-content",
   "docs-rs/trait-tags.html",
 ]
-features = ["app", "reflect", "hotpatching", "track-update-logs"] # all but ci_mode
+features = ["app", "reflect", "hotpatching", "track_update_logs"] # all but ci_mode
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(docsrs_dep)'] }

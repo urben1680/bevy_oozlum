@@ -59,4 +59,4 @@ jobs:
         run: cargo doc --all-features --no-deps
 
       - name: Example game (CI mode)
-        run: cargo run --example game --features ci-mode,track_update_logs
+        run: cargo run --example game --features ci_mode,track_update_logs
