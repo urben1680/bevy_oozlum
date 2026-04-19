@@ -7,9 +7,9 @@ use bevy_oozlum::prelude::*;
 use crate::{GameState, MAX_PAST_LEN, ROWS};
 
 pub fn plugin(app: &mut App) {
-    #[cfg(feature = "ci-mode")]
+    #[cfg(feature = "ci_mode")]
     let system = system.before(InputSystems);
-    #[cfg(not(feature = "ci-mode"))]
+    #[cfg(not(feature = "ci_mode"))]
     let system = system.after(InputSystems);
 
     app.add_systems(

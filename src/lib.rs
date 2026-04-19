@@ -289,7 +289,7 @@ pub mod prelude {
 }
 
 /// Make `error!` and `error_once!` cause panics.
-#[cfg(any(test, feature = "ci-mode"))]
+#[cfg(any(test, feature = "ci_mode"))]
 #[doc(hidden)]
 pub fn panic_on_error_events() {
     use bevy_log::{

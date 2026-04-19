@@ -27,7 +27,7 @@ mod rows;
 // And in this how to control the global reversible progression
 mod control;
 
-#[cfg(not(feature = "ci-mode"))]
+#[cfg(not(feature = "ci_mode"))]
 fn main() {
     App::new()
         .add_plugins((
@@ -155,13 +155,13 @@ fn despawn_lost_waste(
     }
 }
 
-#[cfg(not(feature = "ci-mode"))]
+#[cfg(not(feature = "ci_mode"))]
 mod render;
 
-#[cfg(feature = "ci-mode")]
+#[cfg(feature = "ci_mode")]
 mod test;
 
-#[cfg(feature = "ci-mode")]
+#[cfg(feature = "ci_mode")]
 fn main() {
     test::main()
 }
