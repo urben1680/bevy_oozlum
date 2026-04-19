@@ -29,42 +29,36 @@ mod control;
 
 #[cfg(not(feature = "ci-mode"))]
 fn main() {
-    let mut app = App::new();
-
-    app.add_plugins((
-        // Add the RevPlugin to your application.
-        //
-        // The plugin adds an unpaused RevMeta with a max past length of 1 frame and the
-        // run_rev_update system to FixedUpdate. We modify the max past len here. The Plugin also
-        // registers a disabling component: RevDespawned.
-        //
-        // General order of systems:
-        // 1. run_rev_update runs in the specified schedule (here FixedUpdate)
-        // 2. RevUpdate schedule runs unless paused
-        // 3. Reversible systems and sync points, all in the RevSystems set, run in normal or
-        //    reversed order, depending on the current RevDirection
-        RevPlugin.set_max_past_len(MAX_PAST_LEN),
-        rows::plugin,
-        control::plugin,
-        render::plugin,
-        DefaultPlugins.set(render::window_plugin()),
-    ))
-    .add_systems(
-        // You can add regular, non-reversible systems to RevUpdate using the vanilla
-        // add_systems API, though in that case they should be ordered relative to the
-        // RevSystems set
-        RevUpdate,
-        despawn_lost_waste.after(RevSystems),
-    )
-    .init_state::<GameState>()
-    .init_resource::<Stats>()
-    .insert_resource(Time::<Fixed>::from_hz(FRAMERATE_MIN));
-
-    #[cfg(not(feature = "ci-mode"))]
-    app.run();
-
-    #[cfg(feature = "ci-mode")]
-    test::test(app);
+    App::new()
+        .add_plugins((
+            // Add the RevPlugin to your application.
+            //
+            // The plugin adds an unpaused RevMeta with a max past length of 1 frame and the
+            // run_rev_update system to FixedUpdate. We modify the max past len here. The Plugin also
+            // registers a disabling component: RevDespawned.
+            //
+            // General order of systems:
+            // 1. run_rev_update runs in the specified schedule (here FixedUpdate)
+            // 2. RevUpdate schedule runs unless paused
+            // 3. Reversible systems and sync points, all in the RevSystems set, run in normal or
+            //    reversed order, depending on the current RevDirection
+            RevPlugin.set_max_past_len(MAX_PAST_LEN),
+            rows::plugin,
+            control::plugin,
+            render::plugin,
+            DefaultPlugins.set(render::window_plugin()),
+        ))
+        .add_systems(
+            // You can add regular, non-reversible systems to RevUpdate using the vanilla
+            // add_systems API, though in that case they should be ordered relative to the
+            // RevSystems set
+            RevUpdate,
+            despawn_lost_waste.after(RevSystems),
+        )
+        .init_state::<GameState>()
+        .init_resource::<Stats>()
+        .insert_resource(Time::<Fixed>::from_hz(FRAMERATE_MIN))
+        .run();
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default, States)]

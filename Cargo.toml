@@ -10,6 +10,10 @@ readme = "README.md"
 keywords = ["bevy", "gamedev"]
 categories = ["game-development"]
 
+exclude = [
+  "logo_white_outline.png"
+]
+
 [package.metadata.docs.rs]
 rustc-args = ["--cfg", "docsrs_dep"]
 cargo-args = ["-Zunstable-options", "-Zrustdoc-scrape-examples"]
