@@ -10,7 +10,6 @@ use bevy_ecs::{
     },
 };
 use bevy_log::{error, error_once};
-use bevy_platform::sync::Arc;
 
 use crate::{
     log::{OutOfLog, TransitionsLog},
@@ -282,12 +281,6 @@ pub(super) trait EntityCollection: Send + Sync + 'static {
 }
 
 impl EntityCollection for EntityHashSet {
-    fn iter_entities(&self) -> impl Iterator<Item = Entity> {
-        self.iter().copied()
-    }
-}
-
-impl EntityCollection for Arc<[Entity]> {
     fn iter_entities(&self) -> impl Iterator<Item = Entity> {
         self.iter().copied()
     }

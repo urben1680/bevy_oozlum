@@ -261,25 +261,27 @@ fn set_base_sets(schedule: &mut Schedule) {
     }
 
     // check needs to be on a non-pub set so user code cannot make this unreliable
-    if !schedule.graph().system_sets.contains(ForwardSystems) {
-        let mut settings = schedule.get_build_settings();
-        if !settings.auto_insert_apply_deferred {
-            info!(
-                "reversible schedule {:?} has its `auto_insert_apply_deferred` value reset to `true`",
-                schedule.label()
-            );
-            settings.auto_insert_apply_deferred = true;
-            schedule.set_build_settings(settings);
-        }
-        schedule.configure_sets(
-            (
-                ForwardSystems.run_if(is_forward::<true>),
-                BackwardSystems.run_if(is_forward::<false>),
-            )
-                .chain() // todo: remove chain to reduce sync points
-                .in_set(RevSystemsSet(())),
-        );
+    if schedule.graph().system_sets.contains(ForwardSystems) {
+        return;
     }
+
+    let mut settings = schedule.get_build_settings();
+    if !settings.auto_insert_apply_deferred {
+        info!(
+            "reversible schedule {:?} has its `auto_insert_apply_deferred` value reset to `true`",
+            schedule.label()
+        );
+        settings.auto_insert_apply_deferred = true;
+        schedule.set_build_settings(settings);
+    }
+    schedule.configure_sets(
+        (
+            ForwardSystems.run_if(is_forward::<true>),
+            BackwardSystems.run_if(is_forward::<false>),
+        )
+            .chain_ignore_deferred() // todo: remove chain to reduce sync points
+            .in_set(RevSystemsSet(())),
+    );
 }
 
 /// Reversible variant of [`ScheduleConfigs<T>`].

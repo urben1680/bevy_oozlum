@@ -314,7 +314,7 @@ impl RevMeta {
     /// - If `RevMeta` was replaced in `c`, this will return [`RevMetaUpdateErr::RevMetaReplaced`].
     /// - If any [`UpdateLog`] did not update when it was expected to, in the amount it was expected
     ///   to, this will return [`RevMetaUpdateErr::UpdateLogsMissed`]. This may only happen during
-    ///   [log directions].
+    ///   [log directions] with the `track_update_logs` feature activated.
     ///
     /// [`run_rev_update`]: crate::schedule::run_rev_update
     /// [in a running state]: Self::running_direction

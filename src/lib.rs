@@ -27,6 +27,7 @@
 //!
 //! **Hooks and observers** may or may not additionally run at log directions depending on how they
 //! are triggered. Still they can be written to issue reversible commands which will work just fine.
+//! This includes observers with run conditions.
 //!
 //! ## Examples
 //!
