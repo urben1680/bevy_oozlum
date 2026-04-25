@@ -76,7 +76,7 @@ impl RevMeta {
     /// - `paused` defines if after inserting this `RevMeta` it will be attempted to run
     ///   [`RevUpdate`] right away. For this that schedule and the [`run_rev_update`] system
     ///   must have been added to the app. If it is inserted in the paused state, it can be unpaused
-    ///   via [`set_queue`] with [`RevQueue::RunForward`].
+    ///   via [`set_queue`] with [`RevQueue::RunNotLog`].
     ///
     /// [`run_rev_update`]: crate::schedule::run_rev_update
     /// [`RevPlugin`]: crate::app::RevPlugin
@@ -89,7 +89,7 @@ impl RevMeta {
             future_end: 0,
             max_past_len: NonZeroU64::new(max_past_len).unwrap_or(NonZeroU64::MIN),
             direction: RunningOrRan::Pause { after_log: false },
-            queue: (!paused).then_some(RevQueue::RunForward),
+            queue: (!paused).then_some(RevQueue::RunNotLog),
             log_exits: 0,
             log_clears: 0,
             #[cfg(feature = "track_update_logs")]
@@ -275,7 +275,7 @@ impl RevMeta {
         self.log_exits
     }
 
-    /// Returns the total amount of times [`RevQueue::ClearThenRunForward`] or
+    /// Returns the total amount of times [`RevQueue::ClearThenRunNotLog`] or
     /// [`RevQueue::ClearThenPause`] were applied since this `RevMeta` was constructed.
     pub fn log_clears(&self) -> u64 {
         self.log_clears
@@ -347,7 +347,7 @@ impl RevMeta {
         // get queued direction
         let queue = match self.queue.take() {
             None => None,
-            Some(RevQueue::RunForward) => {
+            Some(RevQueue::RunNotLog) => {
                 if after_log {
                     self.log_exits += 1;
                 }
@@ -359,7 +359,7 @@ impl RevMeta {
             Some(RevQueue::RunBackwardLog) if self.now != self.past_end => {
                 Some(RevDirection::BackwardLog)
             }
-            Some(RevQueue::ClearThenRunForward) => {
+            Some(RevQueue::ClearThenRunNotLog) => {
                 self.clear();
                 Some(RevDirection::NOT_LOG_MIN) // gets updated below
             }
@@ -618,31 +618,32 @@ impl RevMeta {
                         meta,
                         update_logs_missed,
                     }) => {
-                        // todo: use fmt::from_fn instead of format! when bevy switches to 1.93
-                        let err = format!(
+                        let err = core::fmt::from_fn(|f| write!(f,
                             "UpdateLog instances did not run when they were expected \
-                        to:\n{update_logs_missed:?}\n{meta:?}"
-                        );
+                            to:\n{update_logs_missed:?}\n{meta:?}"
+                        ));
+
+                        let err = Err(RunSystemError::Failed(
+                            match despawn_finalizer_result {
+                                Ok(()) => err.to_string(),
+                                Err(DespawnFinalizerErr::OutOfLog) => format!(
+                                    "the resource that finally despawns entities that were reversibly \
+                                marked for spawn or despawn went out-of-log, additionally {err:?}"
+                                ),
+                                Err(DespawnFinalizerErr::MetaNotRunning) => format!(
+                                    "RevMeta stopped running early, it may have been replaced, \
+                                additionally {err:?}"
+                                ),
+                                // update_spawn_despawn would skip all logic without RevMeta,
+                                // nothing could return it to be present again here
+                                Err(DespawnFinalizerErr::MetaMissing) => unreachable!(),
+                            }
+                            .into()
+                        ));
 
                         world.insert_resource(*meta);
 
-                        Err(RunSystemError::Failed(
-                        match despawn_finalizer_result {
-                            Ok(()) => err.to_string(),
-                            Err(DespawnFinalizerErr::OutOfLog) => format!(
-                                "the resource that finally despawns entities that were reversibly \
-                            marked for spawn or despawn went out-of-log, additionally {err:?}"
-                            ),
-                            Err(DespawnFinalizerErr::MetaNotRunning) => format!(
-                                "RevMeta stopped running early, it may have been replaced, \
-                            additionally {err:?}"
-                            ),
-                            // update_spawn_despawn would skip all logic without RevMeta, nothing
-                            // could return it to be present again here
-                            Err(DespawnFinalizerErr::MetaMissing) => unreachable!(),
-                        }
-                        .into(),
-                    ))
+                        err
                     }
                 }
             })
@@ -651,7 +652,7 @@ impl RevMeta {
                     "schedule RevUpdate does not exist, it will not be run until it is inserted"
                 } else {
                     "schedule RevUpdate and resource RevMeta do not exist, the schedule will not \
-                be run until both are inserted"
+                    be run until both are inserted"
                 };
                 Err(RunSystemError::Skipped(
                     SystemParamValidationError::skipped::<RevMeta>(Cow::Borrowed(err)),

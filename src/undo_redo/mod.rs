@@ -538,7 +538,7 @@ mod test {
                 let queue = if forward_log.is_some() {
                     RevQueue::RunForwardLog
                 } else {
-                    RevQueue::RunForward
+                    RevQueue::RunNotLog
                 };
                 meta.set_queue(queue);
                 world.insert_resource(meta);
@@ -554,7 +554,7 @@ mod test {
             meta = meta
                 .update(|mut meta, direction| {
                     assert_eq!(direction, RevDirection::ForwardLog);
-                    meta.set_queue(RevQueue::RunForward);
+                    meta.set_queue(RevQueue::RunNotLog);
                     world.insert_resource(meta);
                     world.resource_scope::<UndoRedoQueue, _>(|world, mut queue| queue.redo(world));
                     finalize_despawns(world).unwrap();

@@ -3,16 +3,13 @@ name = "bevy_oozlum"
 version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
-rust-version = "1.92.0" # keep in sync with bevy
+rust-version = "1.95.0" # keep in sync with bevy
 description = "Write reversible systems, commands and schedules in bevy"
 repository = "https://github.com/urben1680/bevy_oozlum"
 readme = "README.md"
 keywords = ["bevy", "gamedev"]
 categories = ["game-development"]
-
-exclude = [
-  "logo_white_outline.png"
-]
+exclude = ["logo.png"]
 
 [package.metadata.docs.rs]
 rustc-args = ["--cfg", "docsrs_dep"]

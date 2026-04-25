@@ -201,7 +201,7 @@ impl UpdateLogLimits {
 pub(crate) struct UpdateLogState {
     /// Unique index of a [`UpdateLog`](super::UpdateLog) to keep track how many logs are out there
     /// to reserve them space in [`UpdateLogLimits::update_log_limits`]. May change when
-    /// [`RevMeta`](crate::meta::RevMeta) is [cleared](crate::meta::RevQueue::ClearThenRunForward).
+    /// [`RevMeta`](crate::meta::RevMeta) is [cleared](crate::meta::RevQueue::ClearThenRunNotLog).
     ///
     /// Is `NonMax` to offer a niche since `Self` is stored in an `Option` at `UpdateLog`.
     pub(super) index: NonMaxU32,

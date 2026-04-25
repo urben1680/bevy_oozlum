@@ -724,9 +724,9 @@ mod test {
             clear: bool,
         ) {
             let queue = if clear {
-                RevQueue::ClearThenRunForward
+                RevQueue::ClearThenRunNotLog
             } else {
-                RevQueue::RunForward
+                RevQueue::RunNotLog
             };
             self.meta.set_queue(queue);
             self.meta.update_ref(true, |meta, direction| {
@@ -743,7 +743,7 @@ mod test {
             });
         }
         fn noop_forward_backward_log(&mut self) {
-            self.meta.set_queue(RevQueue::RunForward);
+            self.meta.set_queue(RevQueue::RunNotLog);
             self.meta.update_ref(true, |_, _| ());
             self.meta.set_queue(RevQueue::RunBackwardLog);
             self.meta.update_ref(true, |_, _| ());

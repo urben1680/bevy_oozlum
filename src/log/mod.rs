@@ -56,7 +56,7 @@
 //! When bevy's `track_location` cargo feature is active, [`UpdateLogMissed::last_update`] also
 //! contains the location where the `UpdateLog` was updated the last time.
 //!
-//! Note however that when a [`RevQueue::ClearThenRunForward`]/[`RevQueue::ClearThenPause`] is
+//! Note however that when a [`RevQueue::ClearThenRunNotLog`]/[`RevQueue::ClearThenPause`] is
 //! applied, all INFO logged `UpdateLog` indices until then become invalid. This event is logged at
 //! the INFO level as well. Every `UpdateLog` that updates after that will get new ids which is then
 //! logged again. This is important to know because indices get reused.
@@ -78,7 +78,7 @@
 //! [`RevMeta::update`]: crate::meta::RevMeta::update
 //! [global log range]: crate::meta::RevMeta::contains
 //! [log directions]: crate::meta::RevDirection::is_log
-//! [`RevQueue::ClearThenRunForward`]: crate::meta::RevQueue::ClearThenRunForward
+//! [`RevQueue::ClearThenRunNotLog`]: crate::meta::RevQueue::ClearThenRunNotLog
 //! [`RevQueue::ClearThenPause`]: crate::meta::RevQueue::ClearThenPause
 //! [`RevMetaUpdateErr::UpdateLogsMissed`]: crate::meta::RevMetaUpdateErr::UpdateLogsMissed
 //! [`UpdateLogsMissed`]: crate::meta::RevMetaUpdateErr::UpdateLogsMissed

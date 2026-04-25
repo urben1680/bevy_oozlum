@@ -510,9 +510,9 @@ mod test {
         fn forward<const N: usize>(&mut self, past_lens: [u64; N], clear: bool) {
             let caller = MaybeLocation::caller().map(Some);
             let queue = if clear {
-                RevQueue::ClearThenRunForward
+                RevQueue::ClearThenRunNotLog
             } else {
-                RevQueue::RunForward
+                RevQueue::RunNotLog
             };
             self.meta.set_queue(queue);
             self.meta.update_ref_or_missed(Ok(true), |meta, _| {

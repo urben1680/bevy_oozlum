@@ -565,9 +565,9 @@ impl MetaAndLogs {
     }
     fn forward<const N: usize>(&mut self, entries: [Entries; N], clear: bool) {
         let queue = if clear {
-            RevQueue::ClearThenRunForward
+            RevQueue::ClearThenRunNotLog
         } else {
-            RevQueue::RunForward
+            RevQueue::RunNotLog
         };
         self.meta.set_queue(queue);
         self.meta.update_ref(true, |meta, _| {

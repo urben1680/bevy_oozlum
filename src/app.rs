@@ -4,8 +4,8 @@
 use bevy_app::{App, FixedUpdate, Plugin};
 use bevy_ecs::{
     schedule::{
-        InternedScheduleLabel, InternedSystemSet, IntoScheduleConfigs, ScheduleLabel, Schedules,
-        SystemSet,
+        InternedScheduleLabel, InternedSystemSet, IntoScheduleConfigs, IntoSystemSet,
+        ScheduleCleanupPolicy, ScheduleError, ScheduleLabel, Schedules, SystemSet,
     },
     system::ScheduleSystem,
 };
@@ -35,6 +35,14 @@ pub trait RevApp {
         schedule: impl ScheduleLabel,
         sets: impl IntoRevScheduleConfigs<InternedSystemSet, Marker>,
     ) -> &mut Self;
+
+    /// Reversible version of [`App::remove_systems_in_set`].
+    fn rev_remove_systems_in_set<Marker>(
+        &mut self,
+        schedule: impl ScheduleLabel,
+        set: impl IntoSystemSet<Marker>,
+        policy: ScheduleCleanupPolicy,
+    ) -> Result<usize, ScheduleError>;
 }
 
 impl RevApp for App {
@@ -59,6 +67,17 @@ impl RevApp for App {
             .entry(schedule)
             .rev_configure_sets(sets);
         self
+    }
+    fn rev_remove_systems_in_set<Marker>(
+        &mut self,
+        schedule: impl ScheduleLabel,
+        set: impl IntoSystemSet<Marker>,
+        policy: ScheduleCleanupPolicy,
+    ) -> Result<usize, ScheduleError> {
+        self.world_mut()
+            .schedule_scope(schedule, |world, schedule| {
+                schedule.rev_remove_systems_in_set(set, world, policy)
+            })
     }
 }
 

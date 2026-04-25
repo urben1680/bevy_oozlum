@@ -131,7 +131,7 @@
 //!     mut meta: ResMut<RevMeta>
 //! ) {
 //!     if keyboard_input.pressed(KeyCode::ArrowUp) {
-//!         meta.set_queue(RevQueue::RunForward);
+//!         meta.set_queue(RevQueue::RunNotLog);
 //!         println!("queue forward, truncates too-old past frames and all future frames");
 //!     } else if keyboard_input.pressed(KeyCode::ArrowDown) {
 //!         meta.set_queue(RevQueue::Pause);
@@ -252,21 +252,13 @@
 //! [`Tick`]: bevy_ecs::change_detection::Tick
 //! [`UndoRedo`]: crate::undo_redo::UndoRedo
 //! [`ScheduleBuildSettings::auto_insert_apply_deferred`]: bevy_ecs::schedule::ScheduleBuildSettings::auto_insert_apply_deferred
-//! [clear the log]: crate::meta::RevQueue::ClearThenRunForward
+//! [clear the log]: crate::meta::RevQueue::ClearThenRunNotLog
 
 #![no_std]
 #![allow(internal_features)]
 #![cfg_attr(any(docsrs, docsrs_dep), feature(rustdoc_internals))]
 
 extern crate alloc;
-/*
-ISSUES/DISCUSSIONS:
-- crate::schedule::set_base_sets should not need to chain forward/backward configs
-- benchmarks
-TODO 0.19
-- replace log macros with world error handler, remove panic_on_error_events
-- UpdateMissed error
-*/
 
 #[cfg(feature = "app")]
 pub mod app;

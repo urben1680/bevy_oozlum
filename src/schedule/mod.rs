@@ -77,8 +77,8 @@ use bevy_ecs::{
     change_detection::Res,
     schedule::{
         ApplyDeferred, Chain, InternedSystemSet, IntoScheduleConfigs, IntoSystemSet, Schedulable,
-        Schedule, ScheduleConfigTupleMarker, ScheduleConfigs, ScheduleLabel, SystemCondition,
-        SystemSet, graph::GraphInfo,
+        Schedule, ScheduleCleanupPolicy, ScheduleConfigTupleMarker, ScheduleConfigs, ScheduleError,
+        ScheduleLabel, SystemCondition, SystemSet, graph::GraphInfo,
     },
     system::{IntoSystem, RunSystemError, ScheduleSystem},
     world::World,
@@ -220,6 +220,14 @@ pub trait RevSchedule {
         &mut self,
         sets: impl IntoRevScheduleConfigs<InternedSystemSet, Marker>,
     ) -> &mut Self;
+
+    /// Reversible version of [`Schedule::remove_systems_in_set`].
+    fn rev_remove_systems_in_set<Marker>(
+        &mut self,
+        set: impl IntoSystemSet<Marker>,
+        world: &mut World,
+        policy: ScheduleCleanupPolicy,
+    ) -> Result<usize, ScheduleError>;
 }
 
 impl RevSchedule for Schedule {
@@ -252,6 +260,33 @@ impl RevSchedule for Schedule {
         ));
         self
     }
+    fn rev_remove_systems_in_set<Marker>(
+        &mut self,
+        set: impl IntoSystemSet<Marker>,
+        world: &mut World,
+        policy: ScheduleCleanupPolicy,
+    ) -> Result<usize, ScheduleError> {
+        // todo: upstream Copy
+        let policy = || match policy {
+            ScheduleCleanupPolicy::RemoveSetAndSystems => {
+                ScheduleCleanupPolicy::RemoveSetAndSystems
+            }
+            ScheduleCleanupPolicy::RemoveSetAndSystemsAllowBreakages => {
+                ScheduleCleanupPolicy::RemoveSetAndSystemsAllowBreakages
+            }
+            ScheduleCleanupPolicy::RemoveSystemsOnly => ScheduleCleanupPolicy::RemoveSystemsOnly,
+            ScheduleCleanupPolicy::RemoveSystemsOnlyAllowBreakages => {
+                ScheduleCleanupPolicy::RemoveSystemsOnlyAllowBreakages
+            }
+        };
+        let set = set.into_system_set().intern();
+        Ok(
+            self.remove_systems_in_set(ForwardSystemSet(set), world, policy())?
+                + self.remove_systems_in_set(BackwardDeferredSet(set), world, policy())?
+                + self.remove_systems_in_set(BackwardSystemSet(set), world, policy())?
+                + self.remove_systems_in_set(BackwardDeferredAndSystemSet(set), world, policy())?,
+        )
+    }
 }
 
 fn set_base_sets(schedule: &mut Schedule) {
@@ -274,12 +309,13 @@ fn set_base_sets(schedule: &mut Schedule) {
         settings.auto_insert_apply_deferred = true;
         schedule.set_build_settings(settings);
     }
+
     schedule.configure_sets(
         (
             ForwardSystems.run_if(is_forward::<true>),
             BackwardSystems.run_if(is_forward::<false>),
         )
-            .chain_ignore_deferred() // todo: remove chain to reduce sync points
+            .chain_ignore_deferred() // todo: remove to reduce sync points
             .in_set(RevSystemsSet(())),
     );
 }

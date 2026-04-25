@@ -21,7 +21,7 @@ struct RunValues {
 impl RevMeta {
     fn update_assert(&mut self, queue: Option<RevQueue>, values: Option<RunValues>) {
         match queue {
-            None if self.now == 0 => assert_eq!(self.get_queue(), Some(RevQueue::RunForward)),
+            None if self.now == 0 => assert_eq!(self.get_queue(), Some(RevQueue::RunNotLog)),
             None => assert_eq!(self.get_queue(), None),
             Some(queue) => self.set_queue(queue),
         }
@@ -52,7 +52,7 @@ fn traverses_log() {
         }),
     );
     meta.update_assert(
-        Some(RevQueue::RunForward),
+        Some(RevQueue::RunNotLog),
         Some(RunValues {
             past_end: 0,
             now: 2,
@@ -211,7 +211,7 @@ fn traverses_log() {
     );
     meta.update_assert(Some(RevQueue::Pause), None);
     meta.update_assert(
-        Some(RevQueue::RunForward),
+        Some(RevQueue::RunNotLog),
         Some(RunValues {
             past_end: 1,
             now: 4,
@@ -245,7 +245,7 @@ fn traverses_log() {
     );
     meta.update_assert(Some(RevQueue::ClearThenPause), None);
     meta.update_assert(
-        Some(RevQueue::RunForward),
+        Some(RevQueue::RunNotLog),
         Some(RunValues {
             past_end: 2,
             now: 3,
@@ -300,7 +300,7 @@ fn traverses_log() {
         }),
     );
     meta.update_assert(
-        Some(RevQueue::ClearThenRunForward),
+        Some(RevQueue::ClearThenRunNotLog),
         Some(RunValues {
             past_end: 3,
             now: 4,

@@ -310,13 +310,13 @@ mod test {
             }
         }
         fn forward(&mut self, result: Result<bool, RunSystemError>) {
-            self.meta.set_queue(RevQueue::RunForward);
+            self.meta.set_queue(RevQueue::RunNotLog);
             self.meta.update_ref(true, |meta, _| {
                 self.logs.insert(meta, &result).unwrap();
             });
         }
         fn noop_forward(&mut self) {
-            self.meta.set_queue(RevQueue::RunForward);
+            self.meta.set_queue(RevQueue::RunNotLog);
             self.meta.update_ref(true, |_, _| ());
         }
         fn forward_log(&mut self, expected: Result<bool, &str>) {
@@ -347,7 +347,7 @@ mod test {
                     .as_ref()
                     .is_some_and(|failed_logs| failed_logs.failed_cache.0.len() > 1)
             );
-            self.meta.set_queue(RevQueue::ClearThenRunForward);
+            self.meta.set_queue(RevQueue::ClearThenRunNotLog);
             self.meta.update_ref(true, |meta, _| {
                 self.logs
                     .insert(meta, &Err(RunSystemError::Failed(err.into())))

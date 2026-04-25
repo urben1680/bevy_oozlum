@@ -273,9 +273,52 @@ fn run_if() {
 
 #[test]
 fn duplicate_system_chain_builds() {
-    let mut schedule = Schedule::new(RevUpdate);
+    let mut schedule = Schedule::default();
     schedule.rev_add_systems((non_exclusive_system::<1>, non_exclusive_system::<1>).rev_chain());
     schedule.initialize(&mut World::new()).unwrap();
+}
+
+fn remove_rev_systems_inner(remove_by_system: bool) {
+    fn to_remove() {}
+    fn to_keep() {}
+
+    let mut world = World::new();
+
+    let policies = [
+        ScheduleCleanupPolicy::RemoveSetAndSystems,
+        ScheduleCleanupPolicy::RemoveSetAndSystemsAllowBreakages,
+        ScheduleCleanupPolicy::RemoveSystemsOnly,
+        ScheduleCleanupPolicy::RemoveSystemsOnlyAllowBreakages,
+    ];
+
+    let set = if remove_by_system {
+        to_remove.into_system_set().intern()
+    } else {
+        TestSet(0).into_system_set().intern()
+    };
+
+    for policy in policies {
+        let mut schedule = Schedule::default();
+        schedule
+            .add_systems(to_keep.in_set(TestSet(0)))
+            .rev_add_systems(to_remove.rev_in_set(TestSet(0)));
+        assert_eq!(
+            schedule
+                .rev_remove_systems_in_set(set, &mut world, policy)
+                .ok(),
+            Some(3)
+        )
+    }
+}
+
+#[test]
+fn remove_rev_systems() {
+    remove_rev_systems_inner(true);
+}
+
+#[test]
+fn remove_rev_systems_in_set() {
+    remove_rev_systems_inner(false);
 }
 
 #[test]

@@ -54,7 +54,7 @@ fn system(
 
     // RevMeta::set_queue is used to control how RevUpdate is run
     if input.just_pressed(KeyCode::ArrowUp) {
-        meta.set_queue(RevQueue::RunForward);
+        meta.set_queue(RevQueue::RunNotLog);
     } else if input.just_pressed(KeyCode::ArrowDown) {
         meta.set_queue(RevQueue::Pause);
     } else if input.just_pressed(KeyCode::ArrowLeft) {
@@ -64,7 +64,7 @@ fn system(
     } else if input.just_pressed(KeyCode::Backspace) {
         // One can also pause after clearing with RevQueue::ClearThenPause.
         // Beware that this instantly loses all tossed waste that was not undone yet.
-        meta.set_queue(RevQueue::ClearThenRunForward);
+        meta.set_queue(RevQueue::ClearThenRunNotLog);
     }
 
     // The maximum past length can be adjusted at any time and has an effect the next time RevUpdate

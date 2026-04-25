@@ -124,7 +124,7 @@ pub enum RevQueue {
     /// [future segment]: RevMeta::future_len
     /// [past segment]: RevMeta::past_len
     /// [the maximum]: RevMeta::get_max_past_len
-    RunForward,
+    RunNotLog,
 
     /// Run in [`RevDirection::ForwardLog`] next until the [future end] is reached, then `RevMeta`
     /// will be paused. If it is already at that, this will pause directly.
@@ -144,7 +144,7 @@ pub enum RevQueue {
     /// Globally truncate the full [log], then run [`RevDirection::NotLog`] next.
     ///
     /// [log]: RevMeta::len
-    ClearThenRunForward,
+    ClearThenRunNotLog,
 
     /// Globally truncate the full [log], then pause `RevMeta`.
     ///
