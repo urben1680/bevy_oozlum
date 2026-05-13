@@ -15,7 +15,7 @@ use bevy_platform::sync::{
     Arc, Mutex, MutexGuard, TryLockError,
     atomic::{AtomicU32, Ordering},
 };
-use bevy_utils::prelude::DebugName;
+use bevy_utils::DebugName;
 use core::{
     any::TypeId,
     fmt::Debug,

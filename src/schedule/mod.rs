@@ -266,25 +266,12 @@ impl RevSchedule for Schedule {
         world: &mut World,
         policy: ScheduleCleanupPolicy,
     ) -> Result<usize, ScheduleError> {
-        // todo: upstream Copy
-        let policy = || match policy {
-            ScheduleCleanupPolicy::RemoveSetAndSystems => {
-                ScheduleCleanupPolicy::RemoveSetAndSystems
-            }
-            ScheduleCleanupPolicy::RemoveSetAndSystemsAllowBreakages => {
-                ScheduleCleanupPolicy::RemoveSetAndSystemsAllowBreakages
-            }
-            ScheduleCleanupPolicy::RemoveSystemsOnly => ScheduleCleanupPolicy::RemoveSystemsOnly,
-            ScheduleCleanupPolicy::RemoveSystemsOnlyAllowBreakages => {
-                ScheduleCleanupPolicy::RemoveSystemsOnlyAllowBreakages
-            }
-        };
         let set = set.into_system_set().intern();
         Ok(
-            self.remove_systems_in_set(ForwardSystemSet(set), world, policy())?
-                + self.remove_systems_in_set(BackwardDeferredSet(set), world, policy())?
-                + self.remove_systems_in_set(BackwardSystemSet(set), world, policy())?
-                + self.remove_systems_in_set(BackwardDeferredAndSystemSet(set), world, policy())?,
+            self.remove_systems_in_set(ForwardSystemSet(set), world, policy)?
+                + self.remove_systems_in_set(BackwardDeferredSet(set), world, policy)?
+                + self.remove_systems_in_set(BackwardSystemSet(set), world, policy)?
+                + self.remove_systems_in_set(BackwardDeferredAndSystemSet(set), world, policy)?,
         )
     }
 }

@@ -19,7 +19,7 @@ use bevy_platform::{
     },
     hash::{FixedState, PassHash},
 };
-use bevy_utils::prelude::DebugName;
+use bevy_utils::DebugName;
 use core::{any::TypeId, hash::BuildHasher};
 
 use crate::{
