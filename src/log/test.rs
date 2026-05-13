@@ -116,9 +116,9 @@ fn drain_all_iterator_works() {
 
         let drain_all = DrainAll::new(&mut deque, &mut gap_range, &mut gap_buffer);
 
-        let drained = drain_all.collect::<Vec<_>>();
+        let drained = drain_all.collect::<Vec<char>>();
         assert_eq!(deque, test.kept, "#{i}");
-        assert_eq!(drained, [], "#{i}");
+        assert_eq!(drained, [] as [char; 0], "#{i}");
         assert_eq!(&*gap_buffer, test.buffer, "#{i}");
 
         assert_eq!(gap_range.start, updated_gap.start, "#{i}");

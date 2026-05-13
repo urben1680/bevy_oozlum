@@ -9,10 +9,7 @@ use bevy_ecs::{
     error::BevyError,
     query::FilteredAccessSet,
     schedule::{BoxedCondition, InternedSystemSet, SystemCondition},
-    system::{
-        IntoSystem, ReadOnlySystem, RunSystemError, System, SystemIn, SystemParamValidationError,
-        SystemStateFlags,
-    },
+    system::{IntoSystem, ReadOnlySystem, RunSystemError, System, SystemIn, SystemStateFlags},
     world::{DeferredWorld, World, unsafe_world_cell::UnsafeWorldCell},
 };
 use bevy_platform::{
@@ -63,28 +60,18 @@ impl<T: ReadOnlySystem<In = (), Out = bool>> System for RevCondition<T> {
     fn name(&self) -> DebugName {
         self.condition.name()
     }
-    fn type_id(&self) -> TypeId {
-        self.condition.type_id()
+    fn system_type(&self) -> TypeId {
+        self.condition.system_type()
     }
     fn flags(&self) -> SystemStateFlags {
         self.condition.flags()
     }
     fn initialize(&mut self, world: &mut World) -> FilteredAccessSet {
         let mut access = self.condition.initialize(world);
-        let meta_id = world.register_resource::<RevMeta>();
+        let meta_id = world.register_component::<RevMeta>();
         self.meta_id = Some(meta_id);
-        access.add_unfiltered_resource_read(meta_id);
+        access.add_resource_read(meta_id);
         access
-    }
-    unsafe fn validate_param_unsafe(
-        &mut self,
-        world: UnsafeWorldCell,
-    ) -> Result<(), SystemParamValidationError> {
-        // RevMeta validation happens in run_unsafe as its failing verification is never a skipping
-        // error but an error that must be handled
-
-        // SAFETY: in `initialize` T returned the required access to make this safe
-        unsafe { self.condition.validate_param_unsafe(world) }
     }
     unsafe fn run_unsafe(
         &mut self,
@@ -293,6 +280,8 @@ struct Failed {
 
 #[cfg(test)]
 mod test {
+    use bevy_ecs::system::SystemParamValidationError;
+
     use crate::meta::RevQueue;
 
     use super::*;

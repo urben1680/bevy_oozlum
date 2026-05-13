@@ -4,7 +4,7 @@ use bevy_ecs::{
     bundle::{Bundle, InsertMode, NoBundleEffect},
     change_detection::MaybeLocation,
     entity::Entity,
-    error::{HandleError, Result, warn},
+    error::{Result, warn},
     resource::Resource,
     schedule::ScheduleLabel,
     system::{Command, Commands},
@@ -327,7 +327,7 @@ pub fn rev_insert_batch<I, B, Marker>(
     _: NotLog,
     iter: I,
     insert_mode: InsertMode,
-) -> impl Command<Result>
+) -> impl Command<Out = Result>
 where
     I: IntoIterator<Item = (Entity, B)> + Send + Sync + 'static,
     B: RevBundle<Marker>,
@@ -339,7 +339,7 @@ fn rev_insert_batch_with_caller<I, B, Marker>(
     iter: I,
     insert_mode: InsertMode,
     caller: MaybeLocation,
-) -> impl Command<Result>
+) -> impl Command<Out = Result>
 where
     I: IntoIterator<Item = (Entity, B)> + Send + Sync + 'static,
     B: RevBundle<Marker>,
@@ -414,14 +414,14 @@ where
 }
 
 /// Reversible version of [`run_schedule`](bevy_ecs::system::command::run_schedule).
-pub fn rev_run_schedule(_: NotLog, label: impl ScheduleLabel) -> impl Command<Result> {
+pub fn rev_run_schedule(_: NotLog, label: impl ScheduleLabel) -> impl Command<Out = Result> {
     rev_run_schedule_with_caller(label, MaybeLocation::caller())
 }
 
 fn rev_run_schedule_with_caller(
     label: impl ScheduleLabel,
     caller: MaybeLocation,
-) -> impl Command<Result> {
+) -> impl Command<Out = Result> {
     move |world: &mut World| -> Result {
         world.rev_try_run_schedule(label, caller)?;
         Ok(())

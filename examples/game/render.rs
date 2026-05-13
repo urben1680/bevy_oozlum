@@ -41,7 +41,7 @@ fn setup(mut commands: Commands) {
     commands.spawn(Camera2d);
     commands.spawn((
         Text(String::with_capacity(73 * 23)),
-        TextLayout::new_with_no_wrap(),
+        TextLayout::no_wrap(),
         Node {
             flex_direction: FlexDirection::Column,
             align_self: AlignSelf::Center,

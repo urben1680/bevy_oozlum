@@ -1,4 +1,4 @@
-use alloc::{format, string::ToString, vec::Vec};
+use alloc::{borrow::Cow, format, string::ToString, vec::Vec};
 use bevy_ecs::{
     change_detection::{CheckChangeTicks, Tick},
     error::BevyError,
@@ -40,7 +40,7 @@ where
 {
     let system = IntoSystem::into_system(system);
 
-    if system.type_id() == TypeId::of::<ApplyDeferred>() {
+    if system.system_type() == TypeId::of::<ApplyDeferred>() {
         // ApplyDeferred has special handling at the scheduler so this is not wrapped in RevSystems
         return RevScheduleConfigs::from(ApplyDeferred);
     }
@@ -167,9 +167,6 @@ pub(super) struct RevSystem<T, const FORWARD: bool> {
     shared: Arc<Shared<T>>,
     name: DebugName,
     flags: SystemStateFlags,
-
-    // todo: depcrecate with bevy 0.19, check run_unsafe err instead if needed
-    skipped_with_deferred: bool,
 }
 
 impl<T, const FORWARD: bool> RevSystem<T, FORWARD> {
@@ -178,7 +175,6 @@ impl<T, const FORWARD: bool> RevSystem<T, FORWARD> {
             shared,
             name,
             flags: SystemStateFlags::empty(),
-            skipped_with_deferred: false,
         }
     }
 }
@@ -219,51 +215,35 @@ impl<T: System<In = (), Out = ()>, const FORWARD: bool> System for RevSystem<T, 
     fn name(&self) -> DebugName {
         self.name.clone()
     }
-    fn type_id(&self) -> TypeId {
+    fn system_type(&self) -> TypeId {
         TypeId::of::<Self>()
     }
     fn flags(&self) -> SystemStateFlags {
         self.flags
-    }
-    unsafe fn validate_param_unsafe(
-        &mut self,
-        world: UnsafeWorldCell,
-    ) -> Result<(), SystemParamValidationError> {
-        if FORWARD && self.skipped_with_deferred {
-            return Err(SystemParamValidationError::invalid::<Self>(
-                "a previous call of validate_param_unsafe that returned Ok(()) had to be \
-                followed by a system run",
-            ));
-        }
-
-        let system = &mut self
-            .shared
-            .inner
-            .try_lock()
-            .map_err(try_lock_validation_err(&self.name))?
-            .system;
-        // SAFETY: Self::initialize called T::initialize to register all access of T
-        let result = unsafe { system.validate_param_unsafe(world) };
-
-        debug_assert!(!FORWARD || !self.skipped_with_deferred);
-        if FORWARD && self.has_deferred() && result.as_ref().is_err_and(|err| err.skipped) {
-            self.skipped_with_deferred = true;
-            return Ok(());
-        }
-        result
     }
     unsafe fn run_unsafe(
         &mut self,
         input: SystemIn<'_, Self>,
         world: UnsafeWorldCell,
     ) -> Result<(), RunSystemError> {
-        if FORWARD && self.skipped_with_deferred {
-            self.skipped_with_deferred = false;
+        let system = &mut self
+            .shared
+            .inner
+            .try_lock()
+            .map_err(try_lock_validation_err(&self.name))?
+            .system;
+
+        // SAFETY: Self::initialize called T::initialize to register all access of T
+        let result = unsafe { system.run_unsafe(input, world) };
+
+        if FORWARD && self.has_deferred() && matches!(result, Err(RunSystemError::Skipped(_))) {
+            // if this system is skipped during ForwardLog, there may be reversible commands to be
+            // redone, but the scheduler will not call System::apply_deferred if this does not
+            // return Ok
             return Ok(());
         }
-        let mut inner = self.shared.inner.try_lock().map_err(try_lock_system_err)?;
-        // SAFETY: Self::initialize called T::initialize to register all access of T
-        unsafe { inner.system.run_unsafe(input, world) }
+
+        result
     }
     #[cfg(feature = "hotpatching")]
     fn refresh_hotpatch(&mut self) {
@@ -368,26 +348,18 @@ impl<T: System> System for BackwardDeferred<T> {
     fn has_deferred(&self) -> bool {
         self.has_deferred
     }
-    unsafe fn validate_param_unsafe(
-        &mut self,
-        _world: UnsafeWorldCell,
-    ) -> Result<(), SystemParamValidationError> {
-        // noop if has no deferred
-        if !self.has_deferred {
-            return Err(SystemParamValidationError::skipped::<T>(
-                "reversible system has no deferred parameters",
-            ));
-        }
-
-        // If T skipped this frame, then this does not need to be detected and mirrored here as
-        // UndoRedoLog keeps track itself if it needs to run without getting out of sync
-        Ok(())
-    }
     unsafe fn run_unsafe(
         &mut self,
         _input: (),
         world: UnsafeWorldCell,
     ) -> Result<(), RunSystemError> {
+        if !self.has_deferred {
+            return Err(RunSystemError::Skipped(
+                SystemParamValidationError::skipped::<T>(Cow::Borrowed(
+                    "reversible system has no deferred parameters",
+                )),
+            ));
+        }
         self.tick = world.increment_change_tick();
         Ok(())
     }
@@ -434,10 +406,6 @@ impl<T: System> System for BackwardDeferred<T> {
     fn set_last_run(&mut self, last_run: Tick) {
         self.tick = last_run;
     }
-}
-
-fn try_lock_system_err<T>(err: TryLockError<T>) -> RunSystemError {
-    RunSystemError::Failed(err.to_string().into())
 }
 
 fn try_lock_validation_err<'a, T>(

@@ -110,55 +110,54 @@ impl<C: Component> InnerComponentBuffer<C> {
         &mut self,
         world: &mut World,
     ) -> Result<ToggleResult, EntityMutableFetchError> {
-        world.get_entity_mut(self.entity).map(|mut entity| {
-            match self.buffer.as_mut() {
-                None => {
-                    self.buffer = entity.take::<C>();
-                    match self.buffer {
-                        Some(_) => ToggleResult::Taken,
-                        None => ToggleResult::Noop,
-                    }
-                }
-                Some(c1) => entity
-                    .modify_component(|c2| {
-                        swap(c1, c2);
-                        ToggleResult::Swapped
-                    })
-                    .unwrap_or_else(|| {
-                        // SAFETY: Some branch ensures successful unwrap
-                        let c = unsafe { self.buffer.take().unwrap_unchecked() };
-                        entity.insert(c);
-                        ToggleResult::Inserted
-                    }),
-            }
-        })
+        toggle_component::<C>(self.entity, &mut self.buffer, world)
     }
 }
 
 impl<R: Resource> InnerResourceBuffer<R> {
     fn toggle_resource(&mut self, world: &mut World) -> ToggleResult {
-        match self.buffer.as_mut() {
+        let comonent_id = world.register_component::<R>();
+        world
+            .resource_entities()
+            .get(comonent_id)
+            .and_then(|entity| toggle_component::<R>(entity, &mut self.buffer, world).ok())
+            .unwrap_or_else(|| match self.buffer.take() {
+                Some(resource) => {
+                    world.insert_resource(resource);
+                    ToggleResult::Inserted
+                }
+                None => ToggleResult::Noop,
+            })
+    }
+}
+
+fn toggle_component<C: Component>(
+    entity: Entity,
+    buffer: &mut Option<C>,
+    world: &mut World,
+) -> Result<ToggleResult, EntityMutableFetchError> {
+    world.get_entity_mut(entity).map(|mut entity| {
+        match buffer.as_mut() {
             None => {
-                self.buffer = world.remove_resource::<R>();
-                match self.buffer {
+                *buffer = entity.take::<C>();
+                match buffer {
                     Some(_) => ToggleResult::Taken,
                     None => ToggleResult::Noop,
                 }
             }
-            Some(r1) => world
-                .get_resource_mut::<R>()
-                .map(|mut r2| {
-                    swap(r1, &mut *r2);
+            Some(c1) => entity
+                .modify_component(|c2| {
+                    swap(c1, c2);
                     ToggleResult::Swapped
                 })
                 .unwrap_or_else(|| {
                     // SAFETY: Some branch ensures successful unwrap
-                    let r = unsafe { self.buffer.take().unwrap_unchecked() };
-                    world.insert_resource(r);
+                    let c = unsafe { buffer.take().unwrap_unchecked() };
+                    entity.insert(c);
                     ToggleResult::Inserted
                 }),
         }
-    }
+    })
 }
 
 const UNDO: &str = "undo";

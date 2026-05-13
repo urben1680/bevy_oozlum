@@ -691,7 +691,7 @@ pub fn rev_insert<Marker>(
     _: NotLog,
     bundle: impl RevBundle<Marker>,
     mode: InsertMode,
-) -> impl EntityCommand<CmdOut> {
+) -> impl EntityCommand<Out = CmdOut> {
     rev_insert_with_caller(bundle, mode, MaybeLocation::caller())
 }
 
@@ -699,7 +699,7 @@ fn rev_insert_with_caller<Marker>(
     bundle: impl RevBundle<Marker>,
     mode: InsertMode,
     caller: MaybeLocation,
-) -> impl EntityCommand<CmdOut> {
+) -> impl EntityCommand<Out = CmdOut> {
     move |mut entity_mut: EntityWorldMut| {
         entity_mut.assert_not_rev_despawned()?;
         bundle.rev_insert(&mut entity_mut, mode, caller);
@@ -712,14 +712,14 @@ fn rev_insert_with_caller<Marker>(
 pub fn rev_insert_from_world<T: Component + FromWorld>(
     _: NotLog,
     mode: InsertMode,
-) -> impl EntityCommand<CmdOut> {
+) -> impl EntityCommand<Out = CmdOut> {
     rev_insert_from_world_with_caller::<T>(mode, MaybeLocation::caller())
 }
 
 fn rev_insert_from_world_with_caller<T: Component + FromWorld>(
     mode: InsertMode,
     caller: MaybeLocation,
-) -> impl EntityCommand<CmdOut> {
+) -> impl EntityCommand<Out = CmdOut> {
     move |mut entity_mut: EntityWorldMut| {
         if !(mode == InsertMode::Keep && entity_mut.contains::<T>()) {
             let value = entity_mut.world_scope(|world| T::from_world(world));
@@ -736,7 +736,7 @@ pub fn rev_insert_with<T: Component, F>(
     _: NotLog,
     component_fn: F,
     mode: InsertMode,
-) -> impl EntityCommand<CmdOut>
+) -> impl EntityCommand<Out = CmdOut>
 where
     F: FnOnce() -> T + Send + 'static,
 {
@@ -747,7 +747,7 @@ fn rev_insert_with_with_caller<T: Component, F>(
     component_fn: F,
     mode: InsertMode,
     caller: MaybeLocation,
-) -> impl EntityCommand<CmdOut>
+) -> impl EntityCommand<Out = CmdOut>
 where
     F: FnOnce() -> T + Send + 'static,
 {
@@ -764,13 +764,13 @@ where
 /// Reversible version of [`remove`](bevy_ecs::system::entity_command::remove). Let the second
 /// generic be inferred as `_`.
 #[track_caller]
-pub fn rev_remove<T: RevBundle<Marker>, Marker>(_: NotLog) -> impl EntityCommand<CmdOut> {
+pub fn rev_remove<T: RevBundle<Marker>, Marker>(_: NotLog) -> impl EntityCommand<Out = CmdOut> {
     rev_remove_with_caller::<T, _>(MaybeLocation::caller())
 }
 
 fn rev_remove_with_caller<T: RevBundle<Marker>, Marker>(
     caller: MaybeLocation,
-) -> impl EntityCommand<CmdOut> {
+) -> impl EntityCommand<Out = CmdOut> {
     move |mut entity_mut: EntityWorldMut| entity_mut.rev_remove::<T, Marker>(caller).map(|_| ())
 }
 
@@ -779,10 +779,10 @@ fn rev_remove_with_caller<T: RevBundle<Marker>, Marker>(
 /// See the [`undo_redo`](crate::undo_redo) module documentation to understand the mechanics of
 /// reversible spawn/despawn.
 #[track_caller]
-pub fn rev_despawn(_: NotLog) -> impl EntityCommand<CmdOut> {
+pub fn rev_despawn(_: NotLog) -> impl EntityCommand<Out = CmdOut> {
     rev_despawn_with_caller(MaybeLocation::caller())
 }
 
-fn rev_despawn_with_caller(caller: MaybeLocation) -> impl EntityCommand<CmdOut> {
+fn rev_despawn_with_caller(caller: MaybeLocation) -> impl EntityCommand<Out = CmdOut> {
     move |entity_mut: EntityWorldMut| entity_mut.rev_despawn(caller)
 }

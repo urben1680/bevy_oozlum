@@ -106,9 +106,9 @@ pub(super) fn add_children(
                 .unwrap() // listed component id should be known to the world
                 .relationship_accessor()
                 .and_then(|relationship| match *relationship {
-                    RelationshipAccessor::RelationshipTarget { iter, linked_spawn }
-                        if include_unlinked_related || linked_spawn =>
-                    {
+                    RelationshipAccessor::RelationshipTarget {
+                        iter, linked_spawn, ..
+                    } if include_unlinked_related || linked_spawn => {
                         // should not panic as parent's archetype lists this component id
                         let ptr = parent.get_by_id(component_id).unwrap();
                         // SAFETY: given ComponentId matches the RelationshipAccessor of the

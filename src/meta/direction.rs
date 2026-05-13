@@ -1,4 +1,4 @@
-use alloc::format;
+use alloc::{borrow::Cow, format};
 use bevy_ecs::{
     change_detection::Tick,
     component::ComponentId,
@@ -152,7 +152,8 @@ pub enum RevQueue {
     ClearThenPause,
 }
 
-impl Command<BevyResult> for RevQueue {
+impl Command for RevQueue {
+    type Out = BevyResult;
     fn apply(self, world: &mut World) -> BevyResult {
         world
             .get_resource_mut::<RevMeta>()
@@ -203,7 +204,7 @@ unsafe impl SystemParam for NotLog {
     fn init_state(world: &mut World) -> Self::State {
         world
             .components_registrator()
-            .register_resource::<RevMeta>()
+            .register_component::<RevMeta>()
     }
 
     fn init_access(
@@ -214,54 +215,34 @@ unsafe impl SystemParam for NotLog {
     ) {
         let combined_access = component_access_set.combined_access();
         assert!(
-            !combined_access.has_resource_write(component_id),
+            !combined_access.has_write(component_id),
             "error[B0002]: NotLog in system {} conflicts with a previous ResMut<RevMeta> access. Consider removing the duplicate access. See: https://bevy.org/learn/errors/b0002",
             system_meta.name(),
         );
 
-        component_access_set.add_unfiltered_resource_read(component_id);
-    }
-
-    #[inline]
-    unsafe fn validate_param(
-        &mut component_id: &mut Self::State,
-        _system_meta: &SystemMeta,
-        world: UnsafeWorldCell,
-    ) -> Result<(), SystemParamValidationError> {
-        // SAFETY: Read-only access to resource metadata.
-        let meta = unsafe {
-            world
-                .get_resource_by_id(component_id)
-                .map(|ptr| ptr.deref())
-        };
-        if meta.and_then(RevMeta::get_not_log).is_some() {
-            Ok(())
-        } else {
-            Err(SystemParamValidationError::skipped::<Self>(
-                "RevMeta does not exist or RevUpdate is not running or is running in log",
-            ))
-        }
+        component_access_set.add_resource_read(component_id);
     }
 
     #[inline]
     unsafe fn get_param<'w, 's>(
         &mut component_id: &'s mut Self::State,
-        system_meta: &SystemMeta,
+        _system_meta: &SystemMeta,
         world: UnsafeWorldCell<'w>,
         _change_tick: Tick,
-    ) -> NotLog {
+    ) -> Result<NotLog, SystemParamValidationError> {
         // SAFETY: Read-only access to resource metadata.
         let meta = unsafe {
             world
                 .get_resource_by_id(component_id)
-                .map(|ptr| ptr.deref())
+                .map(|ptr| ptr.deref::<RevMeta>())
         };
-        meta.and_then(RevMeta::get_not_log).unwrap_or_else(|| {
-            panic!(
-                "RevMeta requested by {} does not exist or RevUpdate is not running or is running in log",
-                system_meta.name()
-            );
-        })
+        meta.ok_or(SystemParamValidationError::skipped::<Self>(Cow::Borrowed(
+            "RevMeta does not exist",
+        )))?
+        .get_not_log()
+        .ok_or(SystemParamValidationError::skipped::<Self>(Cow::Borrowed(
+            "RevUpdate is not running at NotLog",
+        )))
     }
 }
 
