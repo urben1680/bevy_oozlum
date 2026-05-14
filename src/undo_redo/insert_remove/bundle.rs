@@ -3,10 +3,12 @@ use bevy_ecs::{
     bundle::{Bundle, InsertMode},
     change_detection::MaybeLocation,
     component::{Component, ComponentId},
+    entity::Entity,
     relationship::Relationship,
     spawn::{SpawnOneRelated, SpawnRelatedBundle, SpawnableList},
     world::EntityWorldMut,
 };
+use bevy_utils::DebugName;
 use core::{any::TypeId, marker::PhantomData, mem::swap};
 use variadics_please::all_tuples;
 
@@ -174,8 +176,12 @@ impl<R: Relationship, B: Bundle> RevBundle<[R; 2]> for SpawnOneRelated<R, B> {
         _mode: InsertMode,
         caller: MaybeLocation,
     ) {
-        let Some(new_related) = get_new_related::<R>(entity, |entity| entity.insert(self), caller)
-        else {
+        let Some(new_related) = get_new_related::<R>(
+            entity,
+            |entity| entity.insert(self),
+            DebugName::type_name::<AddRemoveRelated<R, [Entity; 1], true>>(),
+            caller,
+        ) else {
             return;
         };
         entity.world_scope(|world| {
@@ -208,8 +214,12 @@ impl<R: Relationship, L: SpawnableList<R> + Send + Sync + 'static> RevBundle<[R;
         _mode: InsertMode,
         caller: MaybeLocation,
     ) {
-        let new_related =
-            get_new_related_entities::<R>(entity, |entity| entity.insert(self), caller);
+        let new_related = get_new_related_entities::<R>(
+            entity,
+            |entity| entity.insert(self),
+            DebugName::type_name::<AddRemoveRelated<R, Vec<Entity>, true>>(),
+            caller,
+        );
         entity.world_scope(|world| {
             mark_entities::<true>(world, &new_related, true, MaybeLocation::caller())
         });

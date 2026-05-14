@@ -1,3 +1,5 @@
+//! Contains reversible [`Commands`] methods and reversible standalone command fns.
+
 use core::ops::{Deref, DerefMut};
 
 use bevy_ecs::{
@@ -19,6 +21,11 @@ use crate::{
     },
 };
 
+/// [`Commands`] wrapper for reversible commands. Constructed with
+/// [`Commands.as_rev`](CommandsAsRev::as_rev).
+///
+/// Incompatible with [delayed commands](bevy::time::DelayedCommandsExt) which will cause runtime
+/// errors.
 pub struct RevCommands<'a>(pub(super) Commands<'a, 'a>);
 
 impl<'a> From<RevCommands<'a>> for Commands<'a, 'a> {

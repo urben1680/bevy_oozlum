@@ -50,4 +50,4 @@ app = ["dep:bevy_app"]
 reflect = ["dep:bevy_reflect"]
 track_update_logs = ["dep:nonmax"]
 hotpatching = ["bevy_ecs/hotpatching"]
-ci_mode = []
+ci_mode = [] # examples test mode

@@ -50,7 +50,7 @@ fn system<const ROW: u64>(
                 commands.entity(entity).despawn();
             }
         }
-        RevDirection::BackwardLog if pressed_log.backward_log(&meta) => {
+        RevDirection::BackwardLog if pressed_log.backward_log(&meta)? => {
             // At undo the spawned entity gets disabled so it does not get rendered.
             // The more common rev_spawn does it the same way, though with the RevDespawned
             // component to not collide with other code that uses Disabled.
@@ -64,7 +64,7 @@ fn system<const ROW: u64>(
             // this should instead modify existing components or resources at most, not using
             // commands.
         }
-        RevDirection::ForwardLog if pressed_log.forward_log(&meta) => {
+        RevDirection::ForwardLog if pressed_log.forward_log(&meta)? => {
             // At redo the entity gets enabled again.
             let entity = spawn_log.forward_log(&meta)?;
             commands.entity(*entity).remove::<Disabled>();

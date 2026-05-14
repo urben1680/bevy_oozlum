@@ -1,15 +1,16 @@
 use crate::undo_redo::{IsRevDespawned, LOCATION_PREFIX, UndoRedo, undo_redo_str};
-use alloc::vec::Vec;
+use alloc::{format, vec::Vec};
 use bevy_ecs::{
     change_detection::MaybeLocation,
     entity::{Entity, EntityHashSet},
+    error::{BevyError, ErrorContext},
     relationship::{
         Relationship, RelationshipAccessor, RelationshipSourceCollection, RelationshipTarget,
     },
     world::{EntityRef, EntityWorldMut, World, error::EntityMutableFetchError},
 };
-use bevy_log::{error, info, warn};
-use core::{any::type_name, marker::PhantomData};
+use bevy_utils::DebugName;
+use core::marker::PhantomData;
 
 #[cfg(test)]
 mod test;
@@ -173,11 +174,16 @@ impl<R: Relationship, E: AsRef<[Entity]> + Send + 'static, const ADD: bool>
                 }
             }
             Err(EntityMutableFetchError::NotSpawned(err)) => {
-                error!(
-                    "{} reversible relationship of {}{LOCATION_PREFIX}{} failed, {err}",
-                    undo_redo_str::<UNDO>(),
-                    type_name::<R>(),
-                    self.caller
+                world.fallback_error_handler()(
+                    BevyError::error(format!(
+                        "{} reversible relationship of {}{LOCATION_PREFIX}{} failed, {err}",
+                        undo_redo_str::<UNDO>(),
+                        DebugName::type_name::<R>(),
+                        self.caller
+                    )),
+                    ErrorContext::Command {
+                        name: DebugName::type_name::<Self>(),
+                    },
                 );
             }
             // only one entity is fetched
@@ -201,6 +207,7 @@ impl<R: Relationship, E: AsRef<[Entity]> + Send + 'static, const ADD: bool> Undo
 pub(super) fn get_new_related_entities<R: Relationship>(
     entity: &mut EntityWorldMut,
     c: impl for<'a, 'w> FnOnce(&'a mut EntityWorldMut<'w>) -> &'a mut EntityWorldMut<'w>,
+    name: DebugName,
     caller: MaybeLocation,
 ) -> Vec<Entity> {
     let id = entity.id();
@@ -215,10 +222,13 @@ pub(super) fn get_new_related_entities<R: Relationship>(
                     .collect(),
                 None if existing_children.is_empty() => Vec::new(),
                 None => {
-                    error!(
-                        "reversible spawning of multiple children of {id}{LOCATION_PREFIX}{caller} \
-                        resulted in the loss of existing children {existing_children:?}, these are \
-                        unrecoverable"
+                    entity.world().fallback_error_handler()(
+                        BevyError::error(format!(
+                            "reversible spawning of multiple children of \
+                            {id}{LOCATION_PREFIX}{caller} resulted in the loss of existing \
+                            children {existing_children:?}, these are unrecoverable"
+                        )),
+                        ErrorContext::Command { name },
                     );
                     return Vec::new();
                 }
@@ -231,11 +241,14 @@ pub(super) fn get_new_related_entities<R: Relationship>(
     };
 
     if children.is_empty() {
-        info!(
-            "reversible spawning of multiple children of {id}{LOCATION_PREFIX}{caller} did not \
-            result in any, it cannot be determined if this was just an empty list of spawns or if \
-            new children were immediately despawned"
-        )
+        entity.world().fallback_error_handler()(
+            BevyError::info(format!(
+                "reversible spawning of multiple children of {id}{LOCATION_PREFIX}{caller} did not \
+                result in any, it cannot be determined if this was just an empty list of spawns or \
+                if new children were immediately despawned"
+            )),
+            ErrorContext::Command { name },
+        );
     }
 
     children
@@ -247,6 +260,7 @@ pub(super) fn get_new_related_entities<R: Relationship>(
 pub(super) fn get_new_related<R: Relationship>(
     entity: &mut EntityWorldMut,
     c: impl for<'a, 'w> FnOnce(&'a mut EntityWorldMut<'w>) -> &'a mut EntityWorldMut<'w>,
+    name: DebugName,
     caller: MaybeLocation,
 ) -> Option<Entity> {
     let id = entity.id();
@@ -260,10 +274,13 @@ pub(super) fn get_new_related<R: Relationship>(
                     .find(|child| !existing_children.contains(child)),
                 None if existing_children.is_empty() => None,
                 None => {
-                    error!(
-                        "reversible spawning of a single child of {id}{LOCATION_PREFIX}{caller} \
-                        resulted in the loss of existing children {existing_children:?}, these are \
-                        unrecoverable"
+                    entity.world().fallback_error_handler()(
+                        BevyError::error(format!(
+                            "reversible spawning of a single child of \
+                            {id}{LOCATION_PREFIX}{caller} resulted in the loss of existing \
+                            children {existing_children:?}, these are unrecoverable"
+                        )),
+                        ErrorContext::Command { name },
                     );
                     return None;
                 }
@@ -275,9 +292,12 @@ pub(super) fn get_new_related<R: Relationship>(
     };
 
     if child.is_none() {
-        warn!(
-            "reversible spawning of a single child of {id}{LOCATION_PREFIX}{caller} did not result \
-            in a new child, it may have been immediately despawned"
+        entity.world().fallback_error_handler()(
+            BevyError::warning(format!(
+                "reversible spawning of a single child of {id}{LOCATION_PREFIX}{caller} did not \
+                result in a new child, it may have been immediately despawned"
+            )),
+            ErrorContext::Command { name },
         );
     }
 

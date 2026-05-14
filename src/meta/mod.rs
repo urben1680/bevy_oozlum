@@ -530,7 +530,7 @@ impl RevMeta {
                     return Err(RunSystemError::Skipped(
                         SystemParamValidationError::skipped::<RevMeta>(Cow::Borrowed(
                             "resource RevMeta does not exist, schedule RevUpdate will not be run \
-                        until it is inserted",
+                            until it is inserted",
                         )),
                     ));
                 };
@@ -540,8 +540,9 @@ impl RevMeta {
                 {
                     let err = Err(RunSystemError::Skipped(
                         SystemParamValidationError::invalid::<RevMeta>(format!(
-                            "the resource containing queued UndoRedo implementors was not \
-                        empty, it contained the following types:\n{queue:?}\n{meta:?}"
+                            "the resource containing queued UndoRedo implementors was not empty, \
+                            it contained the following types:\n{queue:?}\n{meta:?}, do not use \
+                            delayed reversible commands as this is not supported"
                         )),
                     ));
                     world.insert_resource(meta);
@@ -568,7 +569,7 @@ impl RevMeta {
                         match err {
                             DespawnFinalizerErr::OutOfLog => format!(
                                 "the resource that finally despawns entities that were reversibly \
-                            marked for spawn or despawn went out-of-log\n{meta:?}"
+                                marked for spawn or despawn went out-of-log\n{meta:?}"
                             ),
                             DespawnFinalizerErr::MetaNotRunning => format!(
                                 "RevMeta stopped running early, it may have been replaced\n{meta:?}"
@@ -592,19 +593,24 @@ impl RevMeta {
                         err
                     }
                     Err(RevMetaUpdateErr::RevMetaNotReturned) => {
-                        Err(RunSystemError::Failed(match despawn_finalizer_result {
-                            Ok(()) => "RevMeta was removed during RevUpdate, possible in hooks or \
-                            observers related to despawns"
-                                .into(),
-                            Err(DespawnFinalizerErr::MetaMissing) => "RevMeta was removed during \
-                            RevUpdate"
-                                .into(),
-                            // when update_spawn_despawn returns any of those errors, then only when
-                            // RevMeta existed at that point, but then nothing is executed that
-                            // could have removed RevMeta here
-                            Err(DespawnFinalizerErr::OutOfLog)
-                            | Err(DespawnFinalizerErr::MetaNotRunning) => unreachable!(),
-                        }))
+                        Err(RunSystemError::Failed(
+                            Cow::Borrowed(match despawn_finalizer_result {
+                                Ok(()) => {
+                                    "RevMeta was removed during RevUpdate, possible in hooks \
+                                    or observers related to despawns"
+                                }
+                                Err(DespawnFinalizerErr::MetaMissing) => {
+                                    "RevMeta was removed during \
+                                    RevUpdate"
+                                }
+                                // when update_spawn_despawn returns any of those errors, then only when
+                                // RevMeta existed at that point, but then nothing is executed that
+                                // could have removed RevMeta here
+                                Err(DespawnFinalizerErr::OutOfLog)
+                                | Err(DespawnFinalizerErr::MetaNotRunning) => unreachable!(),
+                            })
+                            .into(),
+                        ))
                     }
                     Err(RevMetaUpdateErr::RevMetaReplaced { meta }) => {
                         let err = Err(RunSystemError::Failed(
@@ -618,27 +624,31 @@ impl RevMeta {
                         meta,
                         update_logs_missed,
                     }) => {
-                        let err = core::fmt::from_fn(|f| write!(f,
-                            "UpdateLog instances did not run when they were expected \
-                            to:\n{update_logs_missed:?}\n{meta:?}"
-                        ));
+                        let err = core::fmt::from_fn(|f| {
+                            write!(
+                                f,
+                                "UpdateLog instances did not run when they were expected \
+                                to:\n{update_logs_missed:?}\n{meta:?}"
+                            )
+                        });
 
                         let err = Err(RunSystemError::Failed(
                             match despawn_finalizer_result {
                                 Ok(()) => err.to_string(),
                                 Err(DespawnFinalizerErr::OutOfLog) => format!(
-                                    "the resource that finally despawns entities that were reversibly \
-                                marked for spawn or despawn went out-of-log, additionally {err:?}"
+                                    "the resource that finally despawns entities that were \
+                                    reversibly marked for spawn or despawn went out-of-log, \
+                                    additionally {err:?}"
                                 ),
                                 Err(DespawnFinalizerErr::MetaNotRunning) => format!(
                                     "RevMeta stopped running early, it may have been replaced, \
-                                additionally {err:?}"
+                                    additionally {err:?}"
                                 ),
                                 // update_spawn_despawn would skip all logic without RevMeta,
                                 // nothing could return it to be present again here
                                 Err(DespawnFinalizerErr::MetaMissing) => unreachable!(),
                             }
-                            .into()
+                            .into(),
                         ));
 
                         world.insert_resource(*meta);

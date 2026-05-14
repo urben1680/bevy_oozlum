@@ -1,7 +1,7 @@
 use alloc::{borrow::Cow, format, string::ToString, vec::Vec};
 use bevy_ecs::{
     change_detection::{CheckChangeTicks, Tick},
-    error::BevyError,
+    error::{BevyError, ErrorContext},
     query::FilteredAccessSet,
     schedule::{ApplyDeferred, InternedSystemSet, IntoScheduleConfigs, SystemSet},
     system::{
@@ -253,12 +253,16 @@ impl<T: System<In = (), Out = ()>, const FORWARD: bool> System for RevSystem<T, 
         }
     }
     fn apply_deferred(&mut self, world: &mut World) {
+        let mut last_run = Tick::new(0);
+
         let mut result = || -> Result<(), BevyError> {
             let mut inner = self
                 .shared
                 .inner
                 .try_lock()
                 .map_err(|err| err.to_string())?;
+
+            last_run = inner.system.get_last_run();
 
             inner.system.apply_deferred(world);
 
@@ -272,9 +276,15 @@ impl<T: System<In = (), Out = ()>, const FORWARD: bool> System for RevSystem<T, 
         };
 
         if let Err(err) = result() {
-            error!(
-                "apply_deferred of reversible system {} failed: {err}",
-                self.name
+            world.fallback_error_handler()(
+                BevyError::error(format!(
+                    "apply_deferred of reversible system {} failed: {err}",
+                    self.name
+                )),
+                ErrorContext::System {
+                    name: self.name.clone(),
+                    last_run,
+                },
             );
         }
     }
@@ -366,20 +376,30 @@ impl<T: System> System for BackwardDeferred<T> {
     #[cfg(feature = "hotpatching")]
     fn refresh_hotpatch(&mut self) {}
     fn apply_deferred(&mut self, world: &mut World) {
+        let mut last_run = Tick::new(0);
+
         let mut result = || -> Result<(), BevyError> {
-            self.shared
+            let mut inner = self
+                .shared
                 .inner
                 .try_lock()
-                .map_err(|err| err.to_string())?
-                .deferred_log
-                .backward(world)
-                .map_err(Into::into)
+                .map_err(|err| err.to_string())?;
+
+            last_run = inner.system.get_last_run();
+
+            inner.deferred_log.backward(world).map_err(Into::into)
         };
 
         if let Err(err) = result() {
-            error!(
-                "deferred actions of reversible system {} could not be undone: {err}",
-                self.name
+            world.fallback_error_handler()(
+                BevyError::error(format!(
+                    "deferred actions of reversible system {} could not be undone: {err}",
+                    self.name
+                )),
+                ErrorContext::System {
+                    name: self.name.clone(),
+                    last_run,
+                },
             );
         }
     }
@@ -494,15 +514,15 @@ mod test {
             });
         }
 
-        panic_on_error_events();
         let mut app = App::new();
         app.add_plugins(RevPlugin.set_runner_in_schedule(Update))
             // non-reversible systems should leak undo_redo into the next reversible system
             .add_systems(RevUpdate, system.before(RevSystems))
             .rev_add_systems(RevUpdate, system)
             .add_observer(observer)
-            .add_observer(empty_observer)
-            .update();
+            .add_observer(empty_observer);
+        panic_on_error_events(app.world_mut());
+        app.update();
         let queue = app.world().resource::<UndoRedoQueue>();
         assert!(queue.is_empty(), "{queue:?}");
     }
@@ -536,10 +556,10 @@ mod test {
             ))
         }
 
-        panic_on_error_events();
         let mut app = App::new();
         app.add_plugins(RevPlugin.set_runner_in_schedule(Update))
             .rev_add_systems(RevUpdate, (system1, system2, system3));
+        panic_on_error_events(app.world_mut());
 
         app.update();
         assert_eq!(app.world().resource::<Counter>().0, 3);
@@ -566,10 +586,10 @@ mod test {
             });
         }
 
-        panic_on_error_events();
         let mut app = App::new();
         app.add_plugins(RevPlugin.set_runner_in_schedule(Update))
             .rev_add_systems(RevUpdate, system);
+        panic_on_error_events(app.world_mut());
 
         app.update();
         assert!(app.world().contains_resource::<Done>());

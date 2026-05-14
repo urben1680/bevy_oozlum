@@ -1,12 +1,10 @@
 use bevy::{
+    ecs::error::{FallbackErrorHandler, Severity},
     input::{InputPlugin, keyboard::Key},
     prelude::*,
     state::app::StatesPlugin,
 };
-use bevy_oozlum::{
-    meta::{RevDirection, RevMeta},
-    panic_on_error_events,
-};
+use bevy_oozlum::meta::{RevDirection, RevMeta};
 use core::panic::Location;
 
 use super::*;
@@ -34,7 +32,12 @@ pub fn main() {
 }
 
 fn test(mut app: App) {
-    panic_on_error_events();
+    app.world_mut()
+        .insert_resource(FallbackErrorHandler(|err, _| {
+            if err.severity() >= Severity::Error {
+                panic!("{err}");
+            }
+        }));
 
     app.update();
     assert_ran_not_log(&app);

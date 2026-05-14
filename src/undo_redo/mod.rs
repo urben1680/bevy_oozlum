@@ -50,7 +50,6 @@ use bevy_ecs::{change_detection::MaybeLocation, entity::Entity, resource::Resour
 use bevy_platform::cell::SyncCell;
 use bevy_utils::prelude::DebugName;
 use core::{
-    any::type_name_of_val,
     error::Error,
     fmt::{Debug, Display},
 };
@@ -151,10 +150,9 @@ impl UndoRedoQueue {
     }
     #[track_caller]
     pub(crate) fn queue_undo_redo<T: UndoRedo>(&mut self, caller: MaybeLocation, undo_redo: T) {
-        let name = type_name_of_val(&undo_redo);
         let boxed = BoxedUndoRedo {
             undo_redo: SyncCell::new(Box::new(undo_redo)),
-            name: DebugName::borrowed(name),
+            name: DebugName::type_name::<T>(),
             caller,
         };
         self.0.push(boxed);
@@ -336,6 +334,11 @@ pub(crate) enum UndoRedoLogError {
         direction: RevDirection,
         err: OutOfLog,
     },
+    UpdateMissed {
+        now: u64,
+        missed: u64,
+        direction: RevDirection,
+    },
 }
 
 impl Display for UndoRedoLogError {
@@ -375,6 +378,14 @@ impl Display for UndoRedoLogError {
                     "UndoRedo log is in an invalid state at frame {now} during {direction} at {location}"
                 ),
             },
+            Self::UpdateMissed {
+                now,
+                missed,
+                direction,
+            } => write!(
+                f,
+                "UndoRedo log was expected to update at {missed} but with {now} during {direction} this was missed"
+            ),
         }
     }
 }
@@ -411,6 +422,11 @@ impl UndoRedoLog {
                 if self
                     .update_log
                     .forward_log_with_caller(meta, MaybeLocation::new(None))
+                    .map_err(|err| UndoRedoLogError::UpdateMissed {
+                        now,
+                        missed: err.missed,
+                        direction: RevDirection::ForwardLog,
+                    })?
                 {
                     let iter = self
                         .undo_redo_log
@@ -454,6 +470,11 @@ impl UndoRedoLog {
         if self
             .update_log
             .backward_log_with_caller(meta, MaybeLocation::new(None))
+            .map_err(|err| UndoRedoLogError::UpdateMissed {
+                now,
+                missed: err.missed,
+                direction: RevDirection::BackwardLog,
+            })?
         {
             let iter = self
                 .undo_redo_log
@@ -514,7 +535,7 @@ mod test {
     ) {
         use crate::meta::RevQueue;
 
-        crate::panic_on_error_events();
+        crate::panic_on_error_events(world);
         world.register_disabling_component::<RevDespawned>();
         let mut meta = RevMeta::default();
         let mut state = None;

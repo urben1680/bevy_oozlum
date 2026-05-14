@@ -6,6 +6,7 @@ use bevy_ecs::{
     relationship::{Relationship, RelationshipSourceCollection, RelationshipTarget},
     world::EntityWorldMut,
 };
+use bevy_utils::DebugName;
 
 use crate::undo_redo::{
     AddRemoveRelated, EntityRevDespawnedError, IsRevDespawned, RevBundle, RevDespawned, RevWorld,
@@ -31,6 +32,7 @@ pub(super) trait RevEntityWorld {
     fn rev_with_related<R: Relationship>(
         &mut self,
         bundle: impl Bundle,
+        name: DebugName,
         caller: MaybeLocation,
     ) -> Result<&mut Self, EntityRevDespawnedError>;
 
@@ -149,12 +151,16 @@ impl<'w> RevEntityWorld for EntityWorldMut<'w> {
     fn rev_with_related<R: Relationship>(
         &mut self,
         bundle: impl Bundle,
+        name: DebugName,
         caller: MaybeLocation,
     ) -> Result<&mut Self, EntityRevDespawnedError> {
         self.assert_not_rev_despawned()?;
-        let Some(new_related) =
-            get_new_related::<R>(self, |entity| entity.with_related::<R>(bundle), caller)
-        else {
+        let Some(new_related) = get_new_related::<R>(
+            self,
+            |entity| entity.with_related::<R>(bundle),
+            name,
+            caller,
+        ) else {
             return Ok(self);
         };
         let id = self.id();

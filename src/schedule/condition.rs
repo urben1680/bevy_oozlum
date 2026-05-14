@@ -168,12 +168,14 @@ impl ConditionLogs {
     }
     fn get(&mut self, meta: &RevMeta, forward: bool) -> Result<bool, RunSystemError> {
         match self.failed_log.as_mut() {
-            None if forward => Ok(self
+            None if forward => self
                 .ok_true_log
-                .forward_log_with_caller(meta, MaybeLocation::new(None))),
-            None => Ok(self
+                .forward_log_with_caller(meta, MaybeLocation::new(None))
+                .map_err(Into::into),
+            None => self
                 .ok_true_log
-                .backward_log_with_caller(meta, MaybeLocation::new(None))),
+                .backward_log_with_caller(meta, MaybeLocation::new(None))
+                .map_err(Into::into),
             Some(failed_log) => failed_log.get(&mut self.ok_true_log, meta, forward),
         }
     }
@@ -219,18 +221,18 @@ impl FailedLogs {
         forward: bool,
     ) -> Result<bool, RunSystemError> {
         let failed_log_result = if forward {
-            if ok_true_log.forward_log(meta) {
+            if ok_true_log.forward_log(meta)? {
                 return Ok(true);
             }
-            if !self.err_failed_log.forward_log(meta) {
+            if !self.err_failed_log.forward_log(meta)? {
                 return Ok(false);
             }
             self.failed_log.forward_log(meta)
         } else {
-            if ok_true_log.backward_log(meta) {
+            if ok_true_log.backward_log(meta)? {
                 return Ok(true);
             }
-            if !self.err_failed_log.backward_log(meta) {
+            if !self.err_failed_log.backward_log(meta)? {
                 return Ok(false);
             }
             self.failed_log.backward_log(meta)

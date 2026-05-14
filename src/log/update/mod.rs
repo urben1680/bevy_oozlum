@@ -1,7 +1,13 @@
 use crate::{log::update::offset::OffsetLog, meta::RevMeta};
 use alloc::collections::TryReserveError;
 use bevy_ecs::change_detection::MaybeLocation;
-use core::{fmt::Debug, num::NonZeroU64, panic::Location};
+use core::{
+    cmp::Ordering,
+    error::Error,
+    fmt::{Debug, Display},
+    num::NonZeroU64,
+    panic::Location,
+};
 
 mod offset;
 
@@ -56,14 +62,14 @@ use limit::*;
 ///             }
 ///         }
 ///         RevDirection::ForwardLog => {
-///             if update_log.forward_log(&meta) {
+///             if update_log.forward_log(&meta)? {
 ///                 for my_message in message_log.forward_log(&meta)? {
 ///                     // use message
 ///                 }
 ///             }
 ///         }
 ///         RevDirection::BackwardLog => {
-///             if update_log.backward_log(&meta) {
+///             if update_log.backward_log(&meta)? {
 ///                 for my_message in message_log.backward_log(&meta)? {
 ///                     // use message
 ///                 }
@@ -308,7 +314,7 @@ impl UpdateLog {
     /// [`RevDirection::BackwardLog`]: crate::meta::RevDirection::BackwardLog
     /// [`forward_past_len`]: Self::forward_past_len
     #[track_caller]
-    pub fn backward_log(&mut self, meta: &RevMeta) -> bool {
+    pub fn backward_log(&mut self, meta: &RevMeta) -> Result<bool, UpdateMissedAt> {
         let caller = MaybeLocation::caller().map(Some);
         self.backward_log_with_caller(meta, caller)
     }
@@ -318,24 +324,26 @@ impl UpdateLog {
         &mut self,
         meta: &RevMeta,
         caller: UpdateLocation,
-    ) -> bool {
+    ) -> Result<bool, UpdateMissedAt> {
         if self.pre_update_to_clear(meta, caller) {
             self.clear();
-            return false;
+            return Ok(false);
         }
 
         if self.past_len == 0 {
             // at the past end of the log
-            return false;
+            return Ok(false);
         };
 
-        if self.last_update != meta.now() {
-            #[cfg(not(feature = "track_update_logs"))]
-            if self.last_update > meta.now() {
-                update_missed(caller);
+        match self.last_update.cmp(&meta.now()) {
+            Ordering::Less => return Ok(false),
+            Ordering::Equal => {}
+            Ordering::Greater => {
+                return Err(UpdateMissedAt {
+                    now: meta.now(),
+                    missed: self.last_update,
+                });
             }
-
-            return false;
         }
 
         let mut iter = self.offsets.now_to_past();
@@ -353,7 +361,7 @@ impl UpdateLog {
             ),
         );
 
-        true
+        Ok(true)
     }
 
     /// Updates the log at [`RevDirection::ForwardLog`] if [`forward_past_len`] has been called at
@@ -368,7 +376,7 @@ impl UpdateLog {
     /// [`RevDirection::ForwardLog`]: crate::meta::RevDirection::ForwardLog
     /// [`forward_past_len`]: Self::forward_past_len
     #[track_caller]
-    pub fn forward_log(&mut self, meta: &RevMeta) -> bool {
+    pub fn forward_log(&mut self, meta: &RevMeta) -> Result<bool, UpdateMissedAt> {
         let caller = MaybeLocation::caller().map(Some);
         self.forward_log_with_caller(meta, caller)
     }
@@ -378,27 +386,28 @@ impl UpdateLog {
         &mut self,
         meta: &RevMeta,
         caller: UpdateLocation,
-    ) -> bool {
+    ) -> Result<bool, UpdateMissedAt> {
         if self.pre_update_to_clear(meta, caller) {
             self.clear();
-            return false;
+            return Ok(false);
         }
 
         let mut iter = self.offsets.now_to_future();
         match iter.next() {
             Some(offset) => {
                 let frame = self.last_update + offset;
-                if frame != meta.now() {
-                    #[cfg(not(feature = "track_update_logs"))]
-                    if frame < meta.now() {
-                        update_missed(caller);
+                match frame.cmp(&meta.now()) {
+                    Ordering::Greater => return Ok(false),
+                    Ordering::Equal => self.last_update = frame,
+                    Ordering::Less => {
+                        return Err(UpdateMissedAt {
+                            now: meta.now(),
+                            missed: frame,
+                        });
                     }
-
-                    return false;
                 }
-                self.last_update = frame;
             }
-            None => return false,
+            None => return Ok(false),
         }
 
         iter.sync();
@@ -417,7 +426,7 @@ impl UpdateLog {
             ),
         );
 
-        true
+        Ok(true)
     }
 
     /// Shorten the log when log exits or clears were missed.
@@ -464,24 +473,37 @@ impl UpdateLog {
     }
 }
 
-#[cfg(not(feature = "track_update_logs"))]
-fn update_missed(caller: UpdateLocation) {
-    match caller.into_option() {
-        None => bevy_log::error_once!(
-            "an UpdateLog update was missed, activate the `track_update_logs` feature to get \
-            more information and bevy's `track_location` feature to contain the `UpdateLog`'s \
-            last modification in the code within the error"
-        ),
-        Some(None) => bevy_log::error_once!(
-            "an UpdateLog update of a `bevy_oozlum` internal log was missed, please fill a bug \
-            issue with a minimal reproducing example"
-        ),
-        Some(Some(caller)) => bevy_log::error!(
-            "the UpdateLog at {caller} missed an update at an earlier point, activate the
-            `track_update_logs` feature to get more information"
-        ),
+/// An error type that may be returned by [`UpdateLog::forward_log`]/[`UpdateLog::backward_log`].
+///
+/// It may occur if a call to those methods was missed at a certain frame since the log was last
+/// updated. This error can only occur if the `track_update_logs` is _not_ used. If it is used, then
+/// an error is already issued earlier at [`RevMeta::update`] at the frame where the update was
+/// expected.
+///
+/// **Note** that the methods above may yield false negatives, not every error can be noticed this
+/// way. In most cases this error is returned when the world is already in an invalid state. Still,
+/// unless complicated, conditional logic involving `UpdateLog`s is used, the `track_update_logs` is
+/// needless but accurate in all cases.
+#[derive(Debug, Clone, Copy)]
+pub struct UpdateMissedAt {
+    /// The [current frame](RevMeta::now).
+    pub now: u64,
+
+    /// The frame this [`UpdateLog`] was expected to be updated when it was not.
+    pub missed: u64,
+}
+
+impl Display for UpdateMissedAt {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            f,
+            "UpdateLog expected to be updated at {} but with {} this was missed",
+            self.missed, self.now
+        )
     }
 }
+
+impl Error for UpdateMissedAt {}
 
 type UpdateLocation = MaybeLocation<Option<&'static Location<'static>>>;
 
@@ -539,7 +561,11 @@ mod test {
                     self.meta.set_queue(RevQueue::RunForwardLog);
                     self.meta.update_ref_or_missed(Err(missed), |meta, _| {
                         for _ in 0..insufficient_updates {
-                            assert!(self.update_log.forward_log_with_caller(meta, caller),);
+                            assert!(
+                                self.update_log
+                                    .forward_log_with_caller(meta, caller)
+                                    .unwrap()
+                            );
                         }
                     });
                     self.revert(insufficient_updates, false);
@@ -550,10 +576,14 @@ mod test {
             self.meta.set_queue(RevQueue::RunForwardLog);
             self.meta.update_ref_or_missed(Ok(true), |meta, _| {
                 for _ in 0..updates {
-                    assert!(self.update_log.forward_log_with_caller(meta, caller));
+                    assert!(
+                        self.update_log
+                            .forward_log_with_caller(meta, caller)
+                            .unwrap()
+                    );
                 }
                 // assert no more updates would run
-                assert!(!self.update_log.forward_log(meta));
+                assert!(!self.update_log.forward_log(meta).unwrap());
             });
 
             if updates != 0 {
@@ -575,7 +605,11 @@ mod test {
                     self.meta.set_queue(RevQueue::RunBackwardLog);
                     self.meta.update_ref_or_missed(Err(missed), |meta, _| {
                         for _ in 0..insufficient_updates {
-                            assert!(self.update_log.backward_log_with_caller(meta, caller));
+                            assert!(
+                                self.update_log
+                                    .backward_log_with_caller(meta, caller)
+                                    .unwrap()
+                            );
                         }
                     });
                     self.revert(insufficient_updates, true);
@@ -586,10 +620,14 @@ mod test {
             self.meta.set_queue(RevQueue::RunBackwardLog);
             self.meta.update_ref_or_missed(Ok(true), |meta, _| {
                 for _ in 0..updates {
-                    assert!(self.update_log.backward_log_with_caller(meta, caller));
+                    assert!(
+                        self.update_log
+                            .backward_log_with_caller(meta, caller)
+                            .unwrap()
+                    );
                 }
                 // assert no more updates would run
-                assert!(!self.update_log.backward_log(meta));
+                assert!(!self.update_log.backward_log(meta).unwrap());
             });
 
             if updates != 0 {
@@ -614,14 +652,16 @@ mod test {
                     for _ in 0..updates {
                         assert!(
                             self.update_log
-                                .forward_log_with_caller(meta, self.last_update),
+                                .forward_log_with_caller(meta, self.last_update)
+                                .unwrap(),
                         );
                     }
                 } else {
                     for _ in 0..updates {
                         assert!(
                             self.update_log
-                                .backward_log_with_caller(meta, self.last_update),
+                                .backward_log_with_caller(meta, self.last_update)
+                                .unwrap(),
                         );
                     }
                 }

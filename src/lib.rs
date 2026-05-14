@@ -214,6 +214,7 @@
 //!   are used that also contain other data next to the entity collections however, some APIs in
 //!   this crate will not compile in the best case or will silently make that data unrecoverable at
 //!   the worst case. This has to do with the lack of untyped API support as pointed out above.
+//! - Reversible commands cannot be [delayed], this will cause run-time errors.
 //! - The behavior of reversible sync points is deeply embedded in this crate. Never build
 //!   reversible schedules with **[`ScheduleBuildSettings::auto_insert_apply_deferred`] set to
 //!   `false`**. Suppress them individually when configuring systems and sets.
@@ -251,6 +252,7 @@
 //! [`UpdateLog`]: crate::log::UpdateLog
 //! [`Tick`]: bevy_ecs::change_detection::Tick
 //! [`UndoRedo`]: crate::undo_redo::UndoRedo
+//! [delayed]: bevy::time::DelayedCommandsExt
 //! [`ScheduleBuildSettings::auto_insert_apply_deferred`]: bevy_ecs::schedule::ScheduleBuildSettings::auto_insert_apply_deferred
 //! [clear the log]: crate::meta::RevQueue::ClearThenRunNotLog
 
@@ -281,34 +283,13 @@ pub mod prelude {
     };
 }
 
-/// Make `error!` and `error_once!` cause panics.
-#[cfg(any(test, feature = "ci_mode"))]
-#[doc(hidden)]
-pub fn panic_on_error_events() {
-    use bevy_log::{
-        Level,
-        tracing::{Event, Subscriber, dispatcher::get_default},
-        tracing_subscriber::{
-            Layer,
-            layer::{Context, SubscriberExt},
-            registry,
-            util::SubscriberInitExt,
-        },
-    };
+#[cfg(test)]
+fn panic_on_error_events(world: &mut bevy_ecs::world::World) {
+    use bevy_ecs::error::{FallbackErrorHandler, Severity};
 
-    struct PanicOnError;
-
-    impl<S: Subscriber> Layer<S> for PanicOnError {
-        fn on_event(&self, event: &Event, _ctx: Context<S>) {
-            if *event.metadata().level() == Level::ERROR {
-                panic!("{event:#?}")
-            }
+    world.insert_resource(FallbackErrorHandler(|err, _| {
+        if err.severity() >= Severity::Debug {
+            panic!("{err}");
         }
-    }
-
-    if registry().with(PanicOnError).try_init().is_err() {
-        get_default(|subscriber| {
-            assert!(subscriber.downcast_ref::<PanicOnError>().is_some());
-        })
-    }
+    }));
 }

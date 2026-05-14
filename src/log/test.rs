@@ -607,7 +607,7 @@ impl MetaAndLogs {
         self.meta.set_queue(RevQueue::RunForwardLog);
         self.meta.update_ref(true, |meta, _| {
             let mut entries = entries.into_iter();
-            while self.updates.forward_log(meta) {
+            while self.updates.forward_log(meta).unwrap() {
                 let entry = entries.by_ref().next().unwrap();
                 self.transition_logs
                     .assert_forward_log_transition(meta, Ok(entry.1));
@@ -621,7 +621,7 @@ impl MetaAndLogs {
         self.meta.set_queue(RevQueue::RunBackwardLog);
         self.meta.update_ref(true, |meta, _| {
             let mut entries = entries.into_iter();
-            while self.updates.backward_log(meta) {
+            while self.updates.backward_log(meta).unwrap() {
                 let entry = entries.by_ref().next().unwrap();
                 self.transition_logs
                     .assert_backward_log_transition(meta, Ok(entry.1));

@@ -6,6 +6,7 @@ use bevy_ecs::{
     relationship::RelationshipTarget,
     world::World,
 };
+use bevy_utils::DebugName;
 
 use crate::undo_redo::{
     IsRevDespawned, RevEntityWorld,
@@ -30,6 +31,7 @@ fn rev_with_child_or_children(forward_finalize: bool) {
             parent_mut
                 .rev_with_related::<ChildOf>(
                     related!(UnlinkedChildren[()]),
+                    DebugName::borrowed(""),
                     MaybeLocation::caller(),
                 )
                 .unwrap();

@@ -1,15 +1,16 @@
-use alloc::vec::Vec;
+use alloc::{borrow::Cow, format, vec::Vec};
 use bevy_ecs::{
     change_detection::MaybeLocation,
     component::Component,
     entity::{Entity, EntityHashSet, EntityNotSpawnedError, EntityValidButNotSpawnedError},
+    error::{BevyError, ErrorContext},
     resource::Resource,
     world::{
-        EntityMut, EntityRef, EntityWorldMut, FromWorld, World, WorldEntityFetch,
+        EntityMut, EntityRef, EntityWorldMut, World, WorldEntityFetch,
         error::EntityMutableFetchError, unsafe_world_cell::UnsafeWorldCell,
     },
 };
-use bevy_log::{error, error_once};
+use bevy_utils::DebugName;
 
 use crate::{
     log::{OutOfLog, TransitionsLog},
@@ -194,8 +195,8 @@ pub(super) fn mark_spawn_empty(entity: &mut EntityWorldMut, caller: MaybeLocatio
     };
 
     entity.world_scope(|world| {
-        world
-            .get_resource_or_init::<DespawnFinalizer>()
+        spawn_despawn
+            .finalizer(world)
             .spawn_queue
             .push((id, caller));
         world.queue_undo_redo(spawn_despawn, caller);
@@ -215,13 +216,11 @@ fn mark_inner<const SPAWN: bool>(
         .iter()
         .map(|&entity| (entity, caller));
 
-    let mut resource = world.get_resource_or_init::<DespawnFinalizer>();
-
     if SPAWN {
-        resource.spawn_queue.extend(iter);
+        spawn_despawn.finalizer(world).spawn_queue.extend(iter);
         world.queue_undo_redo(spawn_despawn, caller);
     } else {
-        resource.despawn_queue.extend(iter);
+        spawn_despawn.finalizer(world).despawn_queue.extend(iter);
         world.redo_and_queue(spawn_despawn, caller);
     }
 }
@@ -232,6 +231,41 @@ struct RevSpawnDespawn<E, const SPAWN: bool> {
 }
 
 impl<E: EntityCollection, const SPAWN: bool> RevSpawnDespawn<E, SPAWN> {
+    fn finalizer<'w>(&self, world: &'w mut World) -> &'w mut DespawnFinalizer {
+        if !world.contains_resource::<DespawnFinalizer>() {
+            let init_at = world
+                .get_resource::<RevMeta>()
+                .filter(|meta| {
+                    meta.get_running_direction()
+                        .is_some_and(RevDirection::is_not_log)
+                })
+                .map(|meta| meta.now())
+                .unwrap_or_else(|| {
+                    world.fallback_error_handler()(
+                        BevyError::error(Cow::Borrowed(
+                            "a reversible spawn, despawn or marking an entity as such was \
+                            attempted outside RevDirection::NotLog, this may cause an out-of-log \
+                            error when attempting to undo this, do not store NotLog to do \
+                            reversible operations and do not use delayed reversible commands as \
+                            this is not supported",
+                        )),
+                        ErrorContext::Command {
+                            name: DebugName::type_name::<Self>(),
+                        },
+                    );
+                    1 // 0 would be an invalid value for RevDirection::NotLog regardless of this error
+                });
+
+            world.insert_resource(DespawnFinalizer {
+                spawn_despawn: Default::default(),
+                spawn_queue: Default::default(),
+                despawn_queue: Default::default(),
+                init_at,
+            });
+        }
+
+        world.resource_mut::<DespawnFinalizer>().into_inner()
+    }
     fn undo_redo<const UNDO: bool>(&self, world: &mut World) {
         let spawn_despawn = if SPAWN { "spawn" } else { "despawn" };
         if SPAWN ^ UNDO {
@@ -241,11 +275,18 @@ impl<E: EntityCollection, const SPAWN: bool> RevSpawnDespawn<E, SPAWN> {
                     Ok(mut entity_mut) => {
                         entity_mut.remove::<RevDespawned>();
                     }
-                    Err(EntityMutableFetchError::NotSpawned(err)) => error!(
-                        "{} of reversible {spawn_despawn}{LOCATION_PREFIX}{} failed: {err}",
-                        undo_redo_str::<UNDO>(),
-                        self.caller
-                    ),
+                    Err(EntityMutableFetchError::NotSpawned(err)) => {
+                        world.fallback_error_handler()(
+                            BevyError::error(format!(
+                                "{} of reversible {spawn_despawn}{LOCATION_PREFIX}{} failed: {err}",
+                                undo_redo_str::<UNDO>(),
+                                self.caller
+                            )),
+                            ErrorContext::Command {
+                                name: DebugName::type_name::<Self>(),
+                            },
+                        );
+                    }
                     // only one entity is fetched
                     Err(EntityMutableFetchError::AliasedMutability(_)) => unreachable!(),
                 }
@@ -257,10 +298,16 @@ impl<E: EntityCollection, const SPAWN: bool> RevSpawnDespawn<E, SPAWN> {
                     .iter_entities()
                     .map(|entity| (entity, RevDespawned(self.caller))),
             ) {
-                error!(
-                    "{} of reversible {spawn_despawn}{LOCATION_PREFIX}{} (partially) failed: {err}",
-                    undo_redo_str::<UNDO>(),
-                    self.caller
+                world.fallback_error_handler()(
+                    BevyError::error(format!(
+                        "{} of reversible {spawn_despawn}{LOCATION_PREFIX}{} (partially) failed: \
+                        {err}",
+                        undo_redo_str::<UNDO>(),
+                        self.caller
+                    )),
+                    ErrorContext::Command {
+                        name: DebugName::type_name::<Self>(),
+                    },
                 );
             }
         }
@@ -299,32 +346,6 @@ struct DespawnFinalizer {
     spawn_queue: Vec<(Entity, MaybeLocation)>,
     despawn_queue: Vec<(Entity, MaybeLocation)>,
     init_at: u64,
-}
-
-impl FromWorld for DespawnFinalizer {
-    fn from_world(world: &mut World) -> Self {
-        let init_at = world
-            .get_resource::<RevMeta>()
-            .filter(|meta| {
-                meta.get_running_direction()
-                    .is_some_and(RevDirection::is_not_log)
-            })
-            .map(|meta| meta.now())
-            .unwrap_or_else(|| {
-                error_once!(
-                    "a reversible spawn, despawn or marking an entity as such was attempted \
-                    outside RevDirection::NotLog, this may cause an out-of-log error when \
-                    attempting to undo this, do not store NotLog to do reversible operations"
-                );
-                1 // 0 would be an invalid value for RevDirection::NotLog regardless of this error
-            });
-        Self {
-            spawn_despawn: Default::default(),
-            spawn_queue: Default::default(),
-            despawn_queue: Default::default(),
-            init_at,
-        }
-    }
 }
 
 /// Extension trait for entity pointers to check if an entity is reversibly despawned. Prefer to use

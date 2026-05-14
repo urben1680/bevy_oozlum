@@ -1,8 +1,14 @@
+use core::time::Duration;
+
 use alloc::{
     vec,
     vec::{IntoIter, Vec},
 };
-use bevy_app::{App, Update};
+use bevy::{
+    MinimalPlugins,
+    time::{DelayedCommandsExt, Time, Virtual},
+};
+use bevy_app::{App, PreUpdate, Update};
 use bevy_ecs::{
     change_detection::{Res, ResMut},
     component::Component,
@@ -14,7 +20,7 @@ use bevy_ecs::{
 
 use crate::{
     app::{RevApp, RevPlugin},
-    meta::{RevDirection, RevQueue},
+    meta::{NotLog, RevDirection, RevQueue},
     panic_on_error_events,
     schedule::RevUpdate,
     undo_redo::{CommandsAsRev, UndoRedo},
@@ -333,8 +339,6 @@ fn truncates_future_command_log() {
         }
     }
 
-    panic_on_error_events();
-
     let mut app = App::new();
     app.add_plugins(
         RevPlugin
@@ -342,6 +346,7 @@ fn truncates_future_command_log() {
             .set_runner_in_schedule(Update),
     )
     .rev_add_systems(RevUpdate, system);
+    panic_on_error_events(app.world_mut());
 
     app.update(); // do 1
     app.update(); // do 2, command queued
@@ -365,4 +370,33 @@ fn truncates_future_command_log() {
         .set_queue(RevQueue::RunForwardLog);
     app.update(); // redo 1
     app.update(); // redo 2, should not panic
+}
+
+#[test]
+#[should_panic = "a reversible spawn, despawn or marking an entity as such was attempted outside RevDirection::NotLog"]
+fn delayed_rev_command_errors() {
+    fn system(not_log: NotLog, mut commands: Commands) {
+        commands
+            .delayed()
+            .secs(1.0)
+            .as_rev(not_log)
+            .rev_spawn_empty();
+    }
+
+    let mut app = App::new();
+    app.add_plugins((
+        MinimalPlugins,
+        RevPlugin
+            .set_max_past_len(u64::MAX)
+            .set_runner_in_schedule(Update),
+    ))
+    .rev_add_systems(RevUpdate, system)
+    .rev_add_systems(PreUpdate, ApplyDeferred);
+    panic_on_error_events(app.world_mut());
+
+    app.update();
+    app.world_mut()
+        .resource_mut::<Time<Virtual>>()
+        .advance_by(Duration::from_secs(2));
+    app.update();
 }

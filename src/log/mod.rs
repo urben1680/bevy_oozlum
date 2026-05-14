@@ -102,7 +102,7 @@ pub(crate) use update::limit::UpdateLogLimits;
 #[cfg(feature = "track_update_logs")]
 pub use update::limit::UpdateLogMissed;
 
-pub use update::UpdateLog;
+pub use update::{UpdateLog, UpdateMissedAt};
 
 pub use transition::{TransitionDrain, TransitionLog};
 pub use transitions::{

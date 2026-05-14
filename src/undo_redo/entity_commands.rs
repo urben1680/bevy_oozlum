@@ -1,3 +1,5 @@
+//! Contains reversible [`EntityCommands`] methods and reversible standalone command fns.
+
 use core::ops::{Deref, DerefMut};
 
 use bevy_ecs::{
@@ -10,6 +12,7 @@ use bevy_ecs::{
     system::{EntityCommand, EntityCommands, EntityEntryCommands},
     world::{EntityWorldMut, FromWorld, World},
 };
+use bevy_utils::DebugName;
 
 use crate::{
     meta::NotLog,
@@ -21,6 +24,11 @@ use crate::{
 
 type CmdOut = Result<(), EntityRevDespawnedError>;
 
+/// [`EntityCommands`] wrapper for reversible commands. Constructed with
+/// [`EntityCommands.as_rev`](CommandsAsRev::as_rev).
+///
+/// Incompatible with [delayed commands](bevy::time::DelayedCommandsExt) which will cause runtime
+/// errors.
 pub struct RevEntityCommands<'a>(pub(super) EntityCommands<'a>);
 
 impl<'a> From<RevEntityCommands<'a>> for EntityCommands<'a> {
@@ -198,11 +206,17 @@ impl<'a> RevEntityCommands<'a> {
 
     /// Reversible version of [`EntityCommands::with_related`].
     #[track_caller]
-    pub fn rev_with_related<R: Relationship>(&mut self, bundle: impl Bundle) -> &mut Self {
+    pub fn rev_with_related<R: Relationship, B: Bundle>(&mut self, bundle: B) -> &mut Self {
         let caller = MaybeLocation::caller();
         self.queue(move |mut entity_world_mut: EntityWorldMut| {
             entity_world_mut
-                .rev_with_related::<R>(bundle, caller)
+                .rev_with_related::<R>(
+                    bundle,
+                    DebugName::borrowed(core::any::type_name_of_val(
+                        &RevEntityCommands::rev_with_related::<R, B>,
+                    )),
+                    caller,
+                )
                 .map(|_| ())
         });
         self
@@ -211,7 +225,7 @@ impl<'a> RevEntityCommands<'a> {
     /// Reversible version of [`EntityCommands::with_child`].
     #[track_caller]
     pub fn rev_with_child(&mut self, bundle: impl Bundle) -> &mut Self {
-        self.rev_with_related::<ChildOf>(bundle)
+        self.rev_with_related::<ChildOf, _>(bundle)
     }
 
     /// Reversible version of [`EntityCommands::add_related`].
@@ -409,6 +423,10 @@ impl<'a> RevEntityCommands<'a> {
     }
 
     /// Reversible version of [`EntityCommands::remove`]. Let the second generic be inferred as `_`.
+    ///
+    /// This should not be used with [`RelationshipTarget`] components, use
+    /// [`RevEntityCommands::rev_detach_all_related`]/[`RevEntityCommands::rev_detach_all_children`]
+    /// instead.
     #[track_caller]
     pub fn rev_remove<B: RevBundle<Marker>, Marker>(&mut self) -> &mut Self {
         self.queue(rev_remove_with_caller::<B, _>(MaybeLocation::caller()));
@@ -417,6 +435,10 @@ impl<'a> RevEntityCommands<'a> {
 
     /// Reversible version of [`EntityCommands::remove_if`]. Let the second generic be inferred as
     /// `_`.
+    ///
+    /// This should not be used with [`RelationshipTarget`] components, use
+    /// [`RevEntityCommands::rev_detach_all_related`]/[`RevEntityCommands::rev_detach_all_children`]
+    /// with a manual if check instead.
     #[track_caller]
     pub fn rev_remove_if<B: RevBundle<Marker>, Marker>(
         &mut self,
@@ -487,6 +509,10 @@ impl<'a> RevEntityCommands<'a> {
 
     /// Reversible version of [`EntityCommands::try_remove`]. Let the second generic be inferred as
     /// `_`.
+    ///
+    /// This should not be used with [`RelationshipTarget`] components, use
+    /// [`RevEntityCommands::rev_detach_all_related`]/[`RevEntityCommands::rev_detach_all_children`]
+    /// instead.
     #[track_caller]
     pub fn rev_try_remove<B: RevBundle<Marker>, Marker>(&mut self) -> &mut Self {
         self.queue_silenced(rev_remove_with_caller::<B, _>(MaybeLocation::caller()));
@@ -495,6 +521,10 @@ impl<'a> RevEntityCommands<'a> {
 
     /// Reversible version of [`EntityCommands::try_remove_if`]. Let the second generic be inferred
     /// as `_`.
+    ///
+    /// This should not be used with [`RelationshipTarget`] components, use
+    /// [`RevEntityCommands::rev_detach_all_related`]/[`RevEntityCommands::rev_detach_all_children`]
+    /// with a manual if check instead.
     #[track_caller]
     pub fn rev_try_remove_if<B: RevBundle<Marker>, Marker>(
         &mut self,
@@ -508,6 +538,11 @@ impl<'a> RevEntityCommands<'a> {
     }
 }
 
+/// [`EntityEntryCommands`] wrapper for reversible commands. Constructed with
+/// [`EntityEntryCommands.as_rev`](CommandsAsRev::as_rev).
+///
+/// Incompatible with [delayed commands](bevy::time::DelayedCommandsExt) which will cause runtime
+/// errors.
 pub struct RevEntityEntryCommands<'a, T>(EntityEntryCommands<'a, T>);
 
 impl<'a, T> From<RevEntityEntryCommands<'a, T>> for EntityEntryCommands<'a, T> {
@@ -542,15 +577,15 @@ impl<T: Component> CommandsAsRev for EntityEntryCommands<'_, T> {
 impl<'a, T: Component> RevEntityEntryCommands<'a, T> {
     /// Construct `RevEntityEntryCommands` during
     /// [`RevDirection::NotLog`](super::RevDirection::NotLog).
-    pub fn new(_: NotLog, _commands: &'a mut EntityEntryCommands<T>) -> Self {
-        todo!() // needs reborrow
+    pub fn new(_: NotLog, commands: &'a mut EntityEntryCommands<T>) -> Self {
+        Self(commands.reborrow())
     }
 
     /// Returns a [`RevEntityEntryCommands`] with a smaller lifetime.
     ///
     /// This is useful if you have `&mut RevEntityEntryCommands` but need `RevEntityEntryCommands`.
     pub fn reborrow(&mut self) -> RevEntityEntryCommands<'_, T> {
-        todo!() // needs reborrow
+        RevEntityEntryCommands(self.0.reborrow())
     }
 
     /// Reversible version of [`EntityEntryCommands::or_default`].
@@ -610,6 +645,11 @@ impl<'a, T: Component> RevEntityEntryCommands<'a, T> {
     }
 }
 
+/// [`RelatedSpawnerCommands`] wrapper for reversible commands. Constructed with
+/// [`RelatedSpawnerCommands.as_rev`](CommandsAsRev::as_rev).
+///
+/// Incompatible with [delayed commands](bevy::time::DelayedCommandsExt) which will cause runtime
+/// errors.
 pub struct RevRelatedSpawnerCommands<'a, R: Relationship>(RelatedSpawnerCommands<'a, R>);
 
 impl<'a, R: Relationship> From<RevRelatedSpawnerCommands<'a, R>> for RelatedSpawnerCommands<'a, R> {
@@ -644,8 +684,8 @@ impl<R: Relationship> CommandsAsRev for RelatedSpawnerCommands<'_, R> {
 impl<'a, R: Relationship> RevRelatedSpawnerCommands<'a, R> {
     /// Construct `RevRelatedSpawnerCommands` during
     /// [`RevDirection::NotLog`](super::RevDirection::NotLog).
-    pub fn new(_: NotLog, _commands: &'a mut RelatedSpawnerCommands<R>) -> Self {
-        todo!() // needs reborrow
+    pub fn new(_: NotLog, commands: &'a mut RelatedSpawnerCommands<R>) -> Self {
+        Self(commands.reborrow())
     }
 
     /// Returns a [`RevRelatedSpawnerCommands`] with a smaller lifetime.
@@ -653,7 +693,7 @@ impl<'a, R: Relationship> RevRelatedSpawnerCommands<'a, R> {
     /// This is useful if you have `&mut RevRelatedSpawnerCommands` but need
     /// `RevRelatedSpawnerCommands`.
     pub fn reborrow(&mut self) -> RevRelatedSpawnerCommands<'_, R> {
-        todo!() // needs reborrow
+        RevRelatedSpawnerCommands(self.0.reborrow())
     }
 
     /// Reversible version of [`RelatedSpawnerCommands::spawn`].
@@ -763,6 +803,10 @@ where
 
 /// Reversible version of [`remove`](bevy_ecs::system::entity_command::remove). Let the second
 /// generic be inferred as `_`.
+///
+/// This should not be used with [`RelationshipTarget`] components, use
+/// [`RevEntityCommands::rev_detach_all_related`]/[`RevEntityCommands::rev_detach_all_children`]
+/// instead.
 #[track_caller]
 pub fn rev_remove<T: RevBundle<Marker>, Marker>(_: NotLog) -> impl EntityCommand<Out = CmdOut> {
     rev_remove_with_caller::<T, _>(MaybeLocation::caller())

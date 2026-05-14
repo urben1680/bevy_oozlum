@@ -19,7 +19,6 @@ pub(super) fn test_run<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
     configs: Vec<C>,
     expected: Vec<Vec<Test>>,
 ) {
-    panic_on_error_events();
     for (variant, config) in configs.into_iter().enumerate() {
         for apply_final_deferred in [true, false] {
             test_run_variant(variant, &config, apply_final_deferred, &expected);
@@ -35,6 +34,7 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
 ) {
     // set up world
     let mut world = World::new();
+    panic_on_error_events(&mut world);
     world.init_resource::<TestLog>();
     world.insert_resource(RevMeta::new(u64::MAX, false));
 

@@ -38,7 +38,7 @@ fn system<const ROW: u64>(
             // The spawned entity is logged in TransitionLog.
             spawn_log.forward_push(&meta, past_len, entity);
         }
-        RevDirection::BackwardLog if pressed_log.backward_log(&meta) => {
+        RevDirection::BackwardLog if pressed_log.backward_log(&meta)? => {
             // At undo the spawned entity gets despawned.
             let entity = spawn_log.backward_log(&meta)?;
             commands.entity(*entity).despawn();
@@ -50,7 +50,7 @@ fn system<const ROW: u64>(
             // this should instead modify existing components or resources at most, not using
             // commands.
         }
-        RevDirection::ForwardLog if pressed_log.forward_log(&meta) => {
+        RevDirection::ForwardLog if pressed_log.forward_log(&meta)? => {
             // At redo a new entity with the Waste component is spawned.
             // This could be problematic if you expect the original Entity ID to become valid again.
             // Because of this the rev_spawn command is instead disabling the entity at undo and
