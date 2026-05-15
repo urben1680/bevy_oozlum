@@ -126,6 +126,8 @@ mod test;
 /// `track_update_logs` feature to get more information at which frame the update was expected to
 /// happen.
 ///
+/// This error indicated an invalid world state.
+///
 /// See the [module level documentation](crate::log) for more information.
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct OutOfLog(pub MaybeLocation);

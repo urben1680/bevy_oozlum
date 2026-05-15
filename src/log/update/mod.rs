@@ -475,15 +475,21 @@ impl UpdateLog {
 
 /// An error type that may be returned by [`UpdateLog::forward_log`]/[`UpdateLog::backward_log`].
 ///
-/// It may occur if a call to those methods was missed at a certain frame since the log was last
-/// updated. This error can only occur if the `track_update_logs` is _not_ used. If it is used, then
-/// an error is already issued earlier at [`RevMeta::update`] at the frame where the update was
-/// expected.
+/// This can occur if a call to those methods was missed at a certain frame since the log was last
+/// updated. Note however that this error is not 100% reliable, in some situations the above methods
+/// return `Ok` even though an update was missed. Still, using the more reliable `track_update_logs`
+/// feature is usually not needed in most cases unless [`UpdateLog`]s are used anywhere else than
+/// `Local` parameters of reversible systems.
 ///
-/// **Note** that the methods above may yield false negatives, not every error can be noticed this
-/// way. In most cases this error is returned when the world is already in an invalid state. Still,
-/// unless complicated, conditional logic involving `UpdateLog`s is used, the `track_update_logs` is
-/// needless but accurate in all cases.
+/// If `track_update_logs` is used, [`RevMeta::update`] (and thus the
+/// [`run_rev_update`](crate::schedule::run_rev_update) system) returns an error at the frame an
+/// update of any [`UpdateLog`] was missed. Because of this, issues are noticed before
+/// [`UpdateMissedAt`] errors could be returned at updates.
+///
+/// Regardless of which error detection approach is picked, missed updates just as
+/// [`OutOfLog`](super::OutOfLog) occurrences indicate an invalid world state.
+///
+/// See the [module level documentation](crate::log) for more information.
 #[derive(Debug, Clone, Copy)]
 pub struct UpdateMissedAt {
     /// The [current frame](RevMeta::now).

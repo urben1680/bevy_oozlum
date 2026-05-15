@@ -145,7 +145,7 @@ fn despawn_lost_waste(
             commands.entity(entity).despawn();
 
             if *this_state.get() == GameState::Running {
-                stats.lost = (stats.lost + 1).max(10);
+                stats.lost = (stats.lost + 1).min(10);
 
                 if stats.lost == 10 {
                     next_state.set(GameState::Lost);
