@@ -4,8 +4,9 @@
 
 # ![Bevy Oozlum](https://raw.githubusercontent.com/urben1680/bevy_oozlum/refs/heads/main/logo.png)
 
-Bevy Oozlum is a crate for [Bevy](https://bevy.org/) to write reversible systems, commands and schedules. It may be useful to implement rewind features in a game that run as smoothly as the 
-normal gameplay.
+Bevy Oozlum is a crate for [Bevy](https://bevy.org/) to write reversible systems, commands and schedules. It can be useful to implement rewind features in a game that run as smoothly as the normal gameplay.
+
+This crate does not work by doing world snapshots and instead reverts to a prior world state by running the backward logic of reversible systems and their commands in reverse order.
 
 "Oozlum" is a mythical bird that is able to fly backwards.
 
@@ -15,32 +16,28 @@ normal gameplay.
 use bevy::prelude::*;
 use bevy_oozlum::prelude::*;
 
-// reversible system where logic happens in commands
-fn rev_system_1(not_log: NotLog, mut commands: Commands) {
-    commands.queue(|_: &mut World| println!("hello world! (1)"));
-    commands.as_rev(not_log).queue_undo_redo(|_: &mut World, direction| {
-        match direction {
-            UndoRedoDirection::Undo => println!("!dlrow olleh (1, log)"),
-            UndoRedoDirection::Redo => println!("hello world! (1, log)"),
-        }
-    });
-}
-
-// reversible system where logic happens in system
-fn rev_system_2(meta: Res<RevMeta>) {
+// reversible system where logic happens in the system
+fn rev_system_1(meta: Res<RevMeta>) {
     match meta.running_direction() {
-        RevDirection::NotLog(_) => println!("hello world! (2)"),
-        RevDirection::BackwardLog => println!("!dlrow olleh (2, log)"),
-        RevDirection::ForwardLog => println!("hello world! (2, log)")
+        RevDirection::NotLog(_) => println!("hello world! (1)"),
+        RevDirection::BackwardLog => println!("!dlrow olleh (1, log)"),
+        RevDirection::ForwardLog => println!("hello world! (1, log)")
     }
 }
 
-// reversible rev_* variants of numerous bevy API
-// TODO: include input_system, full app example
-app.rev_add_systems(
-    RevUpdate, // main reversible schedule
-    (rev_system_1, rev_system_2).rev_chain() // reversed during RevDirection::BackwardLog
-);
+// reversible system where logic happens in commands
+fn rev_system_2(not_log: NotLog, mut commands: Commands) {
+    // NotLog system param makes this system only run during RevDirection::NotLog
+    commands.queue(|_: &mut World| println!("hello world! (2)"));
+    commands
+        .as_rev(not_log) // access reversible commands
+        .queue_undo_redo(|_: &mut World, direction| {
+            match direction {
+                UndoRedoDirection::Undo => println!("!dlrow olleh (2, log)"),
+                UndoRedoDirection::Redo => println!("hello world! (2, log)"),
+            }
+        });
+}
 
 // control how and if RevUpdate is ran
 fn input_system(
@@ -48,22 +45,34 @@ fn input_system(
     mut commands: Commands
 ) {
     if keyboard_input.pressed(KeyCode::ArrowUp) {
+        // truncates too-old past frames and all future frames
         commands.queue(RevQueue::RunNotLog);
-        println!("queue forward, truncates too-old past frames and all future frames");
-    } else if keyboard_input.pressed(KeyCode::ArrowDown) {
-        commands.queue(RevQueue::Pause);
-        println!("queue pause, will not run RevUpdate until unpaused");
     } else if keyboard_input.pressed(KeyCode::ArrowLeft) {
+        // reverts logged frames, pauses at past end
         commands.queue(RevQueue::RunBackwardLog);
-        println!("queue backward log, reverts logged frames, pauses at past end");
     } else if keyboard_input.pressed(KeyCode::ArrowRight) {
+        // advances logged frames, pauses at future end
         commands.queue(RevQueue::RunForwardLog);
-        println!("queue forward log, advances logged frames, pauses at future end");
     }
 }
+
+// reversible rev_* variants exist of numerous bevy APIs
+App::new()
+    .add_plugins((
+        DefaultPlugins,
+        RevPlugin.set_max_past_len(5) // set log length 
+    ))
+    .rev_add_systems(
+        RevUpdate, // main reversible schedule
+        // all orderings are reversed during RevDirection::BackwardLog
+        (rev_system_1, rev_system_2).rev_chain()
+    )
+    .add_systems(PreUpdate, input_system)
+    .insert_resource(Time::<Fixed>::from_seconds(0.5))
+    .run();
 ```
 
-An example game is available that showcases the most important API additions. See the documentation to learn more.
+A bigger example game is available that showcases the most important API additions. See the documentation to learn more.
 
 ## Warning
 
