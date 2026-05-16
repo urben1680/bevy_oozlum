@@ -15,27 +15,28 @@ normal gameplay.
 use bevy::prelude::*;
 use bevy_oozlum::prelude::*;
 
-// reversible logic happens in commands
+// reversible system where logic happens in commands
 fn rev_system_1(not_log: NotLog, mut commands: Commands) {
-    commands.queue(|_: &mut World| println!("hello world!"));
+    commands.queue(|_: &mut World| println!("hello world! (1)"));
     commands.as_rev(not_log).queue_undo_redo(|_: &mut World, direction| {
         match direction {
-            UndoRedoDirection::Undo => println!("!dlrow olleh (log)"),
-            UndoRedoDirection::Redo => println!("hello world! (log)"),
+            UndoRedoDirection::Undo => println!("(1) !dlrow olleh (log)"),
+            UndoRedoDirection::Redo => println!("hello world! (log) (1)"),
         }
     });
 }
 
-// reversible logic happens in system
+// reversible system where logic happens in system
 fn rev_system_2(meta: Res<RevMeta>) {
     match meta.running_direction() {
-        RevDirection::NotLog(_) => println!("hello world!"),
-        RevDirection::BackwardLog => println!("!dlrow olleh (log)"),
-        RevDirection::ForwardLog => println!("hello world! (log)")
+        RevDirection::NotLog(_) => println!("hello world! (2)"),
+        RevDirection::BackwardLog => println!("(2) !dlrow olleh (log)"),
+        RevDirection::ForwardLog => println!("hello world! (log) (2)")
     }
 }
 
 // reversible rev_* variants of numerous bevy API
+// TODO: include input_system, full app example
 app.rev_add_systems(
     RevUpdate, // main reversible schedule
     (rev_system_1, rev_system_2).rev_chain() // reversed during RevDirection::BackwardLog
