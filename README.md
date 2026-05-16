@@ -45,19 +45,19 @@ app.rev_add_systems(
 // control how and if RevUpdate is ran
 fn input_system(
     keyboard_input: Res<ButtonInput<KeyCode>>,
-    mut meta: ResMut<RevMeta>
+    mut commands: Commands
 ) {
     if keyboard_input.pressed(KeyCode::ArrowUp) {
-        meta.set_queue(RevQueue::RunNotLog);
+        commands.queue(RevQueue::RunNotLog);
         println!("queue forward, truncates too-old past frames and all future frames");
     } else if keyboard_input.pressed(KeyCode::ArrowDown) {
-        meta.set_queue(RevQueue::Pause);
+        commands.queue(RevQueue::Pause);
         println!("queue pause, will not run RevUpdate until unpaused");
     } else if keyboard_input.pressed(KeyCode::ArrowLeft) {
-        meta.set_queue(RevQueue::RunBackwardLog);
+        commands.queue(RevQueue::RunBackwardLog);
         println!("queue backward log, reverts logged frames, pauses at past end");
     } else if keyboard_input.pressed(KeyCode::ArrowRight) {
-        meta.set_queue(RevQueue::RunForwardLog);
+        commands.queue(RevQueue::RunForwardLog);
         println!("queue forward log, advances logged frames, pauses at future end");
     }
 }
