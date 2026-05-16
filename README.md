@@ -20,8 +20,8 @@ fn rev_system_1(not_log: NotLog, mut commands: Commands) {
     commands.queue(|_: &mut World| println!("hello world! (1)"));
     commands.as_rev(not_log).queue_undo_redo(|_: &mut World, direction| {
         match direction {
-            UndoRedoDirection::Undo => println!("!dlrow olleh (log) (1)"),
-            UndoRedoDirection::Redo => println!("hello world! (log) (1)"),
+            UndoRedoDirection::Undo => println!("!dlrow olleh (1, log)"),
+            UndoRedoDirection::Redo => println!("hello world! (1, log)"),
         }
     });
 }
@@ -30,8 +30,8 @@ fn rev_system_1(not_log: NotLog, mut commands: Commands) {
 fn rev_system_2(meta: Res<RevMeta>) {
     match meta.running_direction() {
         RevDirection::NotLog(_) => println!("hello world! (2)"),
-        RevDirection::BackwardLog => println!("!dlrow olleh (log) (2)"),
-        RevDirection::ForwardLog => println!("hello world! (log) (2)")
+        RevDirection::BackwardLog => println!("!dlrow olleh (2, log)"),
+        RevDirection::ForwardLog => println!("hello world! (2, log)")
     }
 }
 
