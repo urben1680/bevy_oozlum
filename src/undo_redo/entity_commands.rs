@@ -27,8 +27,7 @@ type CmdOut = Result<(), EntityRevDespawnedError>;
 /// [`EntityCommands`] wrapper for reversible commands. Constructed with
 /// [`EntityCommands.as_rev`](CommandsAsRev::as_rev).
 ///
-/// Incompatible with [delayed commands](bevy::time::DelayedCommandsExt) which will cause runtime
-/// errors.
+/// Incompatible with delayed commands which will cause runtime errors.
 pub struct RevEntityCommands<'a>(pub(super) EntityCommands<'a>);
 
 impl<'a> From<RevEntityCommands<'a>> for EntityCommands<'a> {
@@ -541,8 +540,7 @@ impl<'a> RevEntityCommands<'a> {
 /// [`EntityEntryCommands`] wrapper for reversible commands. Constructed with
 /// [`EntityEntryCommands.as_rev`](CommandsAsRev::as_rev).
 ///
-/// Incompatible with [delayed commands](bevy::time::DelayedCommandsExt) which will cause runtime
-/// errors.
+/// Incompatible with delayed commands which will cause runtime errors.
 pub struct RevEntityEntryCommands<'a, T>(EntityEntryCommands<'a, T>);
 
 impl<'a, T> From<RevEntityEntryCommands<'a, T>> for EntityEntryCommands<'a, T> {
@@ -648,8 +646,7 @@ impl<'a, T: Component> RevEntityEntryCommands<'a, T> {
 /// [`RelatedSpawnerCommands`] wrapper for reversible commands. Constructed with
 /// [`RelatedSpawnerCommands.as_rev`](CommandsAsRev::as_rev).
 ///
-/// Incompatible with [delayed commands](bevy::time::DelayedCommandsExt) which will cause runtime
-/// errors.
+/// Incompatible with delayed commands which will cause runtime errors.
 pub struct RevRelatedSpawnerCommands<'a, R: Relationship>(RelatedSpawnerCommands<'a, R>);
 
 impl<'a, R: Relationship> From<RevRelatedSpawnerCommands<'a, R>> for RelatedSpawnerCommands<'a, R> {

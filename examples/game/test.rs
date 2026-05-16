@@ -34,7 +34,7 @@ pub fn main() {
 fn test(mut app: App) {
     app.world_mut()
         .insert_resource(FallbackErrorHandler(|err, _| {
-            if err.severity() >= Severity::Error {
+            if err.severity() >= Severity::Warning {
                 panic!("{err}");
             }
         }));

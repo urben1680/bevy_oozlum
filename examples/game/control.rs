@@ -52,7 +52,7 @@ fn system(
         return;
     }
 
-    // RevMeta::set_queue is used to control how RevUpdate is run
+    // RevMeta::set_queue is used to control how/if RevUpdate is run
     if input.just_pressed(KeyCode::ArrowUp) {
         meta.set_queue(RevQueue::RunNotLog);
     } else if input.just_pressed(KeyCode::ArrowDown) {

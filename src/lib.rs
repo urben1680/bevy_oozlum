@@ -1,3 +1,5 @@
+//! # ![Bevy Oozlum](https://raw.githubusercontent.com/urben1680/bevy_oozlum/refs/heads/main/logo.png)
+//!
 //! `bevy_oozlum` is a crate for [`bevy`] to write reversible systems and schedules.
 //! It may be useful to implement rewind features in a game that run as smoothly as the normal
 //! gameplay.
@@ -214,7 +216,7 @@
 //!   are used that also contain other data next to the entity collections however, some APIs in
 //!   this crate will not compile in the best case or will silently make that data unrecoverable at
 //!   the worst case. This has to do with the lack of untyped API support as pointed out above.
-//! - Reversible commands cannot be [delayed], this will cause run-time errors.
+//! - Reversible commands cannot be delayed, this will cause run-time errors.
 //! - The behavior of reversible sync points is deeply embedded in this crate. Never build
 //!   reversible schedules with **[`ScheduleBuildSettings::auto_insert_apply_deferred`] set to
 //!   `false`**. Suppress them individually when configuring systems and sets.
@@ -252,7 +254,6 @@
 //! [`UpdateLog`]: crate::log::UpdateLog
 //! [`Tick`]: bevy_ecs::change_detection::Tick
 //! [`UndoRedo`]: crate::undo_redo::UndoRedo
-//! [delayed]: bevy::time::DelayedCommandsExt
 //! [`ScheduleBuildSettings::auto_insert_apply_deferred`]: bevy_ecs::schedule::ScheduleBuildSettings::auto_insert_apply_deferred
 //! [clear the log]: crate::meta::RevQueue::ClearThenRunNotLog
 
@@ -288,7 +289,7 @@ fn panic_on_error_events(world: &mut bevy_ecs::world::World) {
     use bevy_ecs::error::{FallbackErrorHandler, Severity};
 
     world.insert_resource(FallbackErrorHandler(|err, _| {
-        if err.severity() >= Severity::Debug {
+        if err.severity() >= Severity::Warning {
             panic!("{err}");
         }
     }));

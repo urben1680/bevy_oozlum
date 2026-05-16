@@ -5,8 +5,6 @@ use bevy::prelude::*;
 // RevDirection::NotLog => an entity is spawned with Waste
 // RevDirection::BackwardLog => the entity is either disabled or despawned
 // RevDirection::ForwardLog => the entity is either enabled or respawned
-//
-// In the disabling/enabling case, this is done with the RevDespawned component under the hood.
 
 mod rev_command; // reversible command from a simple system
 mod rev_config; // reversible schedule configuration

@@ -206,6 +206,8 @@ ENTER (hold): reduce past length                 BACKSPACE: clear log"
     }
     writeln!(&mut text.0, "\n")?;
 
+    // we write "get_running_direction" instead of the read "get_ran_direction" to visualize what
+    // value would be present in RevUpdate, not this system here
     match meta.get_ran_direction() {
         None => writeln!(&mut text.0, "meta.get_running_direction == None"),
         Some(direction) => writeln!(

@@ -6,18 +6,18 @@ use crate::{Waste, control::JustPressed};
 pub fn plugin<const ROW: u64>(app: &mut App) {
     // Use rev_add_systems for reversible systems.
     app.rev_add_systems(RevUpdate, system1::<ROW>)
-        .rev_add_systems(RevUpdateInner, system2::<ROW>);
+        .rev_add_systems(MyRevSchedule, system2::<ROW>);
 }
 
 #[derive(ScheduleLabel, Copy, Clone, Debug, Hash, PartialEq, Eq)]
-struct RevUpdateInner;
+struct MyRevSchedule;
 
 fn system1<const ROW: u64>(not_log: NotLog, input: Res<JustPressed>, mut commands: Commands) {
     if input.get(ROW) {
         // NotLog is like a token to prove that methods needing it are called during
         // RevDirection::NotLog. Because of this it should not be stored past that.
 
-        commands.as_rev(not_log).rev_run_schedule(RevUpdateInner);
+        commands.as_rev(not_log).rev_run_schedule(MyRevSchedule);
     }
 }
 

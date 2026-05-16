@@ -123,8 +123,8 @@ fn increase_score(mut world: DeferredWorld, _: HookContext) {
     }
 }
 
-// RevMeta::past_end is increased to prevent the past length to exceed the maximum. Then existing,
-// old Waste could get out-of-log, is despawne dhere and brings you closer to the losing condition.
+// When RevMeta::past_end is increased to prevent the past length to exceed the maximum, existing,
+// old Waste could get out-of-log, is despawned here and brings you closer to the losing condition.
 fn despawn_lost_waste(
     meta: Res<RevMeta>,
     waste_query: Query<(Entity, &Waste)>,

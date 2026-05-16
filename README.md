@@ -2,9 +2,10 @@
 [![Crates.io](https://img.shields.io/crates/v/bevy_oozlum.svg)](https://crates.io/crates/bevy_oozlum)
 [![Docs](https://docs.rs/bevy_oozlum/badge.svg)](https://docs.rs/bevy_oozlum/latest/bevy/)
 
-# What is Bevy Oozlum?
+# ![Bevy Oozlum](https://raw.githubusercontent.com/urben1680/bevy_oozlum/refs/heads/main/logo.png)
 
-Bevy Oozlum is a crate for [Bevy](https://bevy.org/) to write reversible systems, commands and schedules. It may be useful to implement a rewind feature that runs as smooth as the normal gameplay.
+Bevy Oozlum is a crate for [Bevy](https://bevy.org/) to write reversible systems, commands and schedules. It may be useful to implement a rewind feature that runs as smooth as the normal 
+gameplay.
 
 "Oozlum" is a mythical bird that is able to fly backwards.
 
@@ -18,7 +19,7 @@ This crate is experimential and may be discontinued at any time.
 
 | Bevy Oozlum | Bevy |
 | - | - |
-| 0.1 | 0.19 |
+| 0.1.0-rc.1 | =0.19.0-rc.1 |
 
 ## License
 
