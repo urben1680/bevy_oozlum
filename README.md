@@ -17,7 +17,7 @@ reverting to very distant past world states should probably not be done this way
 use bevy::prelude::*;
 use bevy_oozlum::prelude::*;
 
-// reversible system where the logic happens in the system
+// reversible system where the logic happens directly in the system
 fn rev_system_1(meta: Res<RevMeta>) {
     match meta.running_direction() {
         RevDirection::NotLog(_) => println!("hello world! (1)"),
@@ -42,16 +42,16 @@ fn input_system(
     keyboard_input: Res<ButtonInput<KeyCode>>,
     mut commands: Commands
 ) {
-    if keyboard_input.pressed(KeyCode::ArrowUp) {
-        // truncates too-old past frames and all future frames
+    if keyboard_input.just_pressed(KeyCode::ArrowUp) {
+        // truncates too-old past frames and all future frames from log
         commands.queue(RevQueue::RunNotLog);
-    } else if keyboard_input.pressed(KeyCode::ArrowLeft) {
+    } else if keyboard_input.just_pressed(KeyCode::ArrowLeft) {
         // undoes frames, pauses at past log end
         commands.queue(RevQueue::RunBackwardLog);
-    } else if keyboard_input.pressed(KeyCode::ArrowRight) {
+    } else if keyboard_input.just_pressed(KeyCode::ArrowRight) {
         // redoes frames, pauses at future log end
         commands.queue(RevQueue::RunForwardLog);
-    } else if keyboard_input.pressed(KeyCode::Down) {
+    } else if keyboard_input.just_pressed(KeyCode::Down) {
         // do not run reversible systems until unpaused
         commands.queue(RevQueue::Pause);
     }
