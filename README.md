@@ -6,7 +6,8 @@
 
 Bevy Oozlum is a crate for [Bevy](https://bevy.org/) to write reversible systems, commands and schedules. It can be useful to implement rewind features in a game that run as smoothly as the normal gameplay.
 
-This crate does not work by doing world snapshots and instead reverts to a prior world state by running the backward logic of reversible systems and their commands in reverse order.
+This crate is not using a snapshot approach and instead reverts to a prior world state by running the backward logic of reversible systems and their commands in reverse order. Because of that,
+reverting to very distant past world states should probably not be done this way.
 
 "Oozlum" is a mythical bird that is able to fly backwards.
 
@@ -45,10 +46,10 @@ fn input_system(
         // truncates too-old past frames and all future frames
         commands.queue(RevQueue::RunNotLog);
     } else if keyboard_input.pressed(KeyCode::ArrowLeft) {
-        // undoes frames, pauses at past end
+        // undoes frames, pauses at past log end
         commands.queue(RevQueue::RunBackwardLog);
     } else if keyboard_input.pressed(KeyCode::ArrowRight) {
-        // redoes frames, pauses at future end
+        // redoes frames, pauses at future log end
         commands.queue(RevQueue::RunForwardLog);
     } else if keyboard_input.pressed(KeyCode::Down) {
         // do not run reversible systems until unpaused
