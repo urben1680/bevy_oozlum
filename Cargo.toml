@@ -44,6 +44,10 @@ bevy = { version = "=0.19.0-rc.1", features = ["track_location", "debug"] }
 name = "game"
 doc-scrape-examples = true
 
+[[example]]
+name = "jump_to_frame"
+doc-scrape-examples = true
+
 [features]
 default = ["app", "reflect"]
 app = ["dep:bevy_app"]

@@ -167,6 +167,22 @@ impl RevMeta {
         )
     }
 
+    /// Returns `true` if [`RevUpdate`] is currently running in [`RevDirection::ForwardLog`].
+    pub fn is_running_forward_log(&self) -> bool {
+        matches!(
+            self.direction,
+            RunningOrRan::Running(RevDirection::ForwardLog)
+        )
+    }
+
+    /// Returns `true` if [`RevUpdate`] is currently running in [`RevDirection::BackwardLog`].
+    pub fn is_running_backward_log(&self) -> bool {
+        matches!(
+            self.direction,
+            RunningOrRan::Running(RevDirection::BackwardLog)
+        )
+    }
+
     /// Returns `true` if [`RevUpdate`] is currently running in [`RevDirection::ForwardLog`] or
     /// [`RevDirection::BackwardLog`].
     pub fn is_running_log(&self) -> bool {
