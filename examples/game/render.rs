@@ -40,7 +40,7 @@ pub fn plugin(_app: &mut App) {
 fn setup(mut commands: Commands) {
     commands.spawn(Camera2d);
     commands.spawn((
-        Text(String::with_capacity(73 * 26)),
+        Text::default(),
         TextLayout::no_wrap(),
         Node {
             flex_direction: FlexDirection::Column,

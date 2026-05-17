@@ -1,6 +1,6 @@
 //! Contains reversible [`EntityCommands`] methods and reversible standalone command fns.
 
-use core::ops::{Deref, DerefMut};
+use core::ops::Deref;
 
 use bevy_ecs::{
     bundle::{Bundle, InsertMode},
@@ -43,12 +43,6 @@ impl<'a> Deref for RevEntityCommands<'a> {
     }
 }
 
-impl DerefMut for RevEntityCommands<'_> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
 impl CommandsAsRev for EntityCommands<'_> {
     type Out<'a>
         = RevEntityCommands<'a>
@@ -70,6 +64,11 @@ impl<'a> RevEntityCommands<'a> {
     /// This is useful if you have `&mut RevEntityCommands` but need `RevEntityCommands`.
     pub fn reborrow(&mut self) -> RevEntityCommands<'_> {
         RevEntityCommands(self.0.reborrow())
+    }
+
+    /// Returns `&mut EntityCommands` for non-reversible commands.
+    pub fn mut_non_rev(&mut self) -> &mut EntityCommands<'a> {
+        &mut self.0
     }
 
     /// Queues an [`UndoRedo`] implementor in a resource to be collected by the reversible system's
@@ -110,7 +109,7 @@ impl<'a> RevEntityCommands<'a> {
         undo_redo: impl UndoRedo,
         caller: MaybeLocation,
     ) -> &mut Self {
-        self.commands_mut().queue(move |world: &mut World| {
+        self.0.commands_mut().queue(move |world: &mut World| {
             world.queue_undo_redo(undo_redo, caller);
         });
         self
@@ -139,7 +138,7 @@ impl<'a> RevEntityCommands<'a> {
         undo_redo: impl UndoRedo,
         caller: MaybeLocation,
     ) -> &mut Self {
-        self.commands_mut().queue(move |world: &mut World| {
+        self.0.commands_mut().queue(move |world: &mut World| {
             world.redo_and_queue(undo_redo, caller);
         });
         self
@@ -157,7 +156,7 @@ impl<'a> RevEntityCommands<'a> {
     ) -> &mut Self {
         let id = self.id();
         func(&mut RevRelatedSpawnerCommands(RelatedSpawnerCommands::new(
-            self.commands(),
+            self.0.commands(),
             id,
         )));
         self
@@ -183,7 +182,7 @@ impl<'a> RevEntityCommands<'a> {
     #[track_caller]
     pub fn rev_mark_spawned(&mut self, include_unlinked_related: bool) -> &mut Self {
         let caller = MaybeLocation::caller();
-        self.queue(move |mut entity_world_mut: EntityWorldMut| {
+        self.0.queue(move |mut entity_world_mut: EntityWorldMut| {
             entity_world_mut
                 .rev_mark_spawned(include_unlinked_related, caller)
                 .map(|_| ())
@@ -198,7 +197,7 @@ impl<'a> RevEntityCommands<'a> {
     #[track_caller]
     pub fn rev_despawn(&mut self) {
         let caller = MaybeLocation::caller();
-        self.queue(move |entity_world_mut: EntityWorldMut| {
+        self.0.queue(move |entity_world_mut: EntityWorldMut| {
             entity_world_mut.rev_despawn(caller).map(|_| ())
         });
     }
@@ -207,7 +206,7 @@ impl<'a> RevEntityCommands<'a> {
     #[track_caller]
     pub fn rev_with_related<R: Relationship, B: Bundle>(&mut self, bundle: B) -> &mut Self {
         let caller = MaybeLocation::caller();
-        self.queue(move |mut entity_world_mut: EntityWorldMut| {
+        self.0.queue(move |mut entity_world_mut: EntityWorldMut| {
             entity_world_mut
                 .rev_with_related::<R>(
                     bundle,
@@ -234,7 +233,7 @@ impl<'a> RevEntityCommands<'a> {
         related: impl AsRef<[Entity]> + Send + 'static,
     ) -> &mut Self {
         let caller = MaybeLocation::caller();
-        self.queue(move |mut entity_world_mut: EntityWorldMut| {
+        self.0.queue(move |mut entity_world_mut: EntityWorldMut| {
             entity_world_mut
                 .rev_add_related::<R>(related, caller)
                 .map(|_| ())
@@ -255,7 +254,7 @@ impl<'a> RevEntityCommands<'a> {
     #[track_caller]
     pub fn rev_add_one_related<R: Relationship>(&mut self, entity: Entity) -> &mut Self {
         let caller = MaybeLocation::caller();
-        self.queue(move |mut entity_world_mut: EntityWorldMut| {
+        self.0.queue(move |mut entity_world_mut: EntityWorldMut| {
             entity_world_mut
                 .rev_add_one_related::<R>(entity, caller)
                 .map(|_| ())
@@ -275,7 +274,7 @@ impl<'a> RevEntityCommands<'a> {
         #[allow(clippy::let_unit_value)]
         let _ = R::ASSERT; // may contain non-default extra data
         let caller = MaybeLocation::caller();
-        self.queue(move |mut entity_world_mut: EntityWorldMut| {
+        self.0.queue(move |mut entity_world_mut: EntityWorldMut| {
             entity_world_mut
                 .rev_detach_all_related::<R>(caller)
                 .map(|_| ())
@@ -298,7 +297,7 @@ impl<'a> RevEntityCommands<'a> {
         #[allow(clippy::let_unit_value)]
         let _ = R::ASSERT; // may contain non-default extra data
         let caller = MaybeLocation::caller();
-        self.queue(move |mut entity_world_mut: EntityWorldMut| {
+        self.0.queue(move |mut entity_world_mut: EntityWorldMut| {
             entity_world_mut
                 .rev_remove_related::<R>(related, caller)
                 .map(|_| ())
@@ -330,7 +329,7 @@ impl<'a> RevEntityCommands<'a> {
         #[allow(clippy::let_unit_value)]
         let _ = R::ASSERT; // may contain non-default extra data
         let caller = MaybeLocation::caller();
-        self.queue(move |mut entity_world_mut: EntityWorldMut| {
+        self.0.queue(move |mut entity_world_mut: EntityWorldMut| {
             entity_world_mut
                 .rev_replace_related::<R>(related, caller)
                 .map(|_| ())
@@ -354,7 +353,7 @@ impl<'a> RevEntityCommands<'a> {
     #[track_caller]
     pub fn rev_despawn_related<S: RelationshipTarget>(&mut self) -> &mut Self {
         let caller = MaybeLocation::caller();
-        self.queue(move |mut entity_world_mut: EntityWorldMut| {
+        self.0.queue(move |mut entity_world_mut: EntityWorldMut| {
             entity_world_mut
                 .rev_despawn_related::<S>(caller)
                 .map(|_| ())
@@ -374,7 +373,7 @@ impl<'a> RevEntityCommands<'a> {
     /// Reversible version of [`EntityCommands::insert`].
     #[track_caller]
     pub fn rev_insert<Marker>(&mut self, bundle: impl RevBundle<Marker>) -> &mut Self {
-        self.queue(rev_insert_with_caller(
+        self.0.queue(rev_insert_with_caller(
             bundle,
             InsertMode::Replace,
             MaybeLocation::caller(),
@@ -399,7 +398,7 @@ impl<'a> RevEntityCommands<'a> {
     /// Reversible version of [`EntityCommands::insert_if_new`].
     #[track_caller]
     pub fn rev_insert_if_new<Marker>(&mut self, bundle: impl RevBundle<Marker>) -> &mut Self {
-        self.queue(rev_insert_with_caller(
+        self.0.queue(rev_insert_with_caller(
             bundle,
             InsertMode::Keep,
             MaybeLocation::caller(),
@@ -428,7 +427,8 @@ impl<'a> RevEntityCommands<'a> {
     /// instead.
     #[track_caller]
     pub fn rev_remove<B: RevBundle<Marker>, Marker>(&mut self) -> &mut Self {
-        self.queue(rev_remove_with_caller::<B, _>(MaybeLocation::caller()));
+        self.0
+            .queue(rev_remove_with_caller::<B, _>(MaybeLocation::caller()));
         self
     }
 
@@ -453,13 +453,14 @@ impl<'a> RevEntityCommands<'a> {
     /// Reversible version of [`EntityCommands::try_despawn`].
     #[track_caller]
     pub fn rev_try_despawn(&mut self) {
-        self.queue_silenced(rev_despawn_with_caller(MaybeLocation::caller()));
+        self.0
+            .queue_silenced(rev_despawn_with_caller(MaybeLocation::caller()));
     }
 
     /// Reversible version of [`EntityCommands::try_insert`].
     #[track_caller]
     pub fn rev_try_insert<Marker>(&mut self, bundle: impl RevBundle<Marker>) -> &mut Self {
-        self.queue_silenced(rev_insert_with_caller(
+        self.0.queue_silenced(rev_insert_with_caller(
             bundle,
             InsertMode::Replace,
             MaybeLocation::caller(),
@@ -484,7 +485,7 @@ impl<'a> RevEntityCommands<'a> {
     /// Reversible version of [`EntityCommands::try_insert_if_new`].
     #[track_caller]
     pub fn rev_try_insert_if_new<Marker>(&mut self, bundle: impl RevBundle<Marker>) -> &mut Self {
-        self.queue_silenced(rev_insert_with_caller(
+        self.0.queue_silenced(rev_insert_with_caller(
             bundle,
             InsertMode::Keep,
             MaybeLocation::caller(),
@@ -514,7 +515,8 @@ impl<'a> RevEntityCommands<'a> {
     /// instead.
     #[track_caller]
     pub fn rev_try_remove<B: RevBundle<Marker>, Marker>(&mut self) -> &mut Self {
-        self.queue_silenced(rev_remove_with_caller::<B, _>(MaybeLocation::caller()));
+        self.0
+            .queue_silenced(rev_remove_with_caller::<B, _>(MaybeLocation::caller()));
         self
     }
 
@@ -556,12 +558,6 @@ impl<'a, T> Deref for RevEntityEntryCommands<'a, T> {
     }
 }
 
-impl<T> DerefMut for RevEntityEntryCommands<'_, T> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
 impl<T: Component> CommandsAsRev for EntityEntryCommands<'_, T> {
     type Out<'a>
         = RevEntityEntryCommands<'a, T>
@@ -586,6 +582,11 @@ impl<'a, T: Component> RevEntityEntryCommands<'a, T> {
         RevEntityEntryCommands(self.0.reborrow())
     }
 
+    /// Returns `&mut EntityEntryCommands` for non-reversible commands.
+    pub fn mut_non_rev(&mut self) -> &mut EntityEntryCommands<'a, T> {
+        &mut self.0
+    }
+
     /// Reversible version of [`EntityEntryCommands::or_default`].
     #[track_caller]
     pub fn rev_or_default(&mut self) -> &mut Self
@@ -601,17 +602,19 @@ impl<'a, T: Component> RevEntityEntryCommands<'a, T> {
     where
         T: FromWorld,
     {
-        self.entity().queue(rev_insert_from_world_with_caller::<T>(
-            InsertMode::Keep,
-            MaybeLocation::caller(),
-        ));
+        self.0
+            .entity()
+            .queue(rev_insert_from_world_with_caller::<T>(
+                InsertMode::Keep,
+                MaybeLocation::caller(),
+            ));
         self
     }
 
     /// Reversible version of [`EntityEntryCommands::or_insert`].
     #[track_caller]
     pub fn rev_or_insert(&mut self, default: T) -> &mut Self {
-        self.entity().queue(rev_insert_with_caller(
+        self.0.entity().queue(rev_insert_with_caller(
             default,
             InsertMode::Keep,
             MaybeLocation::caller(),
@@ -628,7 +631,7 @@ impl<'a, T: Component> RevEntityEntryCommands<'a, T> {
     /// Reversible version of [`EntityEntryCommands::or_try_insert`].
     #[track_caller]
     pub fn rev_or_try_insert(&mut self, default: T) -> &mut Self {
-        self.entity().queue_silenced(rev_insert_with_caller(
+        self.0.entity().queue_silenced(rev_insert_with_caller(
             default,
             InsertMode::Keep,
             MaybeLocation::caller(),
@@ -662,12 +665,6 @@ impl<'a, R: Relationship> Deref for RevRelatedSpawnerCommands<'a, R> {
     }
 }
 
-impl<R: Relationship> DerefMut for RevRelatedSpawnerCommands<'_, R> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
 impl<R: Relationship> CommandsAsRev for RelatedSpawnerCommands<'_, R> {
     type Out<'a>
         = RevRelatedSpawnerCommands<'a, R>
@@ -693,6 +690,11 @@ impl<'a, R: Relationship> RevRelatedSpawnerCommands<'a, R> {
         RevRelatedSpawnerCommands(self.0.reborrow())
     }
 
+    /// Returns `&mut RelatedSpawnerCommands` for non-reversible commands.
+    pub fn mut_non_rev(&mut self) -> &mut RelatedSpawnerCommands<'a, R> {
+        &mut self.0
+    }
+
     /// Reversible version of [`RelatedSpawnerCommands::spawn`].
     ///
     /// See the [`undo_redo`](crate::undo_redo) module documentation to understand the mechanics of
@@ -701,7 +703,7 @@ impl<'a, R: Relationship> RevRelatedSpawnerCommands<'a, R> {
     pub fn rev_spawn(&mut self, bundle: impl Bundle) -> RevEntityCommands<'_> {
         let target = self.target_entity();
         rev_spawn_with_caller(
-            self.commands_mut(),
+            self.0.commands_mut(),
             (R::from(target), bundle),
             MaybeLocation::caller(),
         )
@@ -715,7 +717,7 @@ impl<'a, R: Relationship> RevRelatedSpawnerCommands<'a, R> {
     pub fn rev_spawn_empty(&mut self) -> RevEntityCommands<'_> {
         let target = self.target_entity();
         rev_spawn_with_caller(
-            self.commands_mut(),
+            self.0.commands_mut(),
             R::from(target),
             MaybeLocation::caller(),
         )

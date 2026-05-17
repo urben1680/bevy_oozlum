@@ -27,15 +27,19 @@ fn rev_system_1(meta: Res<RevMeta>) {
 }
 
 // reversible system where the logic happens in commands
-// NotLog system param makes this system only run during RevDirection::NotLog
+// the NotLog system param makes this system only run during RevDirection::NotLog
 fn rev_system_2(not_log: NotLog, mut commands: Commands) {
     commands.queue(|_: &mut World| println!("hello world! (2)"));
-    commands
-        .as_rev(not_log) // access reversible commands
-        .queue_undo_redo(|_: &mut World, direction| match direction {
-            UndoRedoDirection::Undo => println!("!dlrow olleh (2, log)"),
-            UndoRedoDirection::Redo => println!("hello world! (2, log)"),
-        });
+    let mut rev_commands = commands.as_rev(not_log);
+    rev_commands.queue_undo_redo(|_: &mut World, direction| match direction {
+        UndoRedoDirection::Undo => println!("!dlrow olleh (2, log)"),
+        UndoRedoDirection::Redo => println!("hello world! (2, log)"),
+    });
+
+    // common reversible commands define both the "doing" and undo-redo in one:
+    /*
+    let mut rev_entity_commands = rev_commands.rev_spawn(MyComponent);
+    */
 }
 
 fn input_system(
@@ -43,7 +47,7 @@ fn input_system(
     mut commands: Commands
 ) {
     if keyboard_input.just_pressed(KeyCode::ArrowUp) {
-        // truncates too-old past frames and all future frames from log
+        // truncates too-old past frames and all future frames from the log
         commands.queue(RevQueue::RunNotLog);
     } else if keyboard_input.just_pressed(KeyCode::ArrowLeft) {
         // undoes frames, pauses at past log end

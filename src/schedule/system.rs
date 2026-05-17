@@ -467,6 +467,7 @@ mod test {
             .commands()
             .as_rev(not_log)
             .queue_undo_redo(blank_undo_redo)
+            .mut_non_rev()
             .spawn(EmptyOnAdd);
     }
 
@@ -489,6 +490,7 @@ mod test {
             .commands()
             .as_rev(not_log)
             .queue_undo_redo(blank_undo_redo)
+            .mut_non_rev()
             .trigger(EmptyObserver);
     }
 

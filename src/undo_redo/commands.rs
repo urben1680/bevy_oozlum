@@ -1,6 +1,6 @@
 //! Contains reversible [`Commands`] methods and reversible standalone command fns.
 
-use core::ops::{Deref, DerefMut};
+use core::ops::Deref;
 
 use bevy_ecs::{
     bundle::{Bundle, InsertMode, NoBundleEffect},
@@ -50,12 +50,6 @@ impl<'a> Deref for RevCommands<'a> {
     }
 }
 
-impl<'a> DerefMut for RevCommands<'a> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
 impl<'a> RevCommands<'a> {
     /// Construct `RevCommands` during [`RevDirection::NotLog`](super::RevDirection::NotLog).
     pub fn new(_: NotLog, commands: &'a mut Commands) -> Self {
@@ -67,6 +61,11 @@ impl<'a> RevCommands<'a> {
     /// This is useful if you have `&mut RevCommands` but need `RevCommands`.
     pub fn reborrow(&mut self) -> RevCommands<'_> {
         RevCommands(self.0.reborrow())
+    }
+
+    /// Returns `&mut Commands` for non-reversible commands.
+    pub fn mut_non_rev(&mut self) -> &mut Commands<'a, 'a> {
+        &mut self.0
     }
 
     /// Queues an [`UndoRedo`] implementor in a resource to be collected by the reversible system's
