@@ -10,13 +10,13 @@ This crate does not work by doing world snapshots and instead reverts to a prior
 
 "Oozlum" is a mythical bird that is able to fly backwards.
 
-## Examples
+## Example
 
 ```rs
 use bevy::prelude::*;
 use bevy_oozlum::prelude::*;
 
-// reversible system where logic happens in the system
+// reversible system where the logic happens in the system
 fn rev_system_1(meta: Res<RevMeta>) {
     match meta.running_direction() {
         RevDirection::NotLog(_) => println!("hello world! (1)"),
@@ -25,21 +25,18 @@ fn rev_system_1(meta: Res<RevMeta>) {
     }
 }
 
-// reversible system where logic happens in commands
+// reversible system where the logic happens in commands
+// NotLog system param makes this system only run during RevDirection::NotLog
 fn rev_system_2(not_log: NotLog, mut commands: Commands) {
-    // NotLog system param makes this system only run during RevDirection::NotLog
     commands.queue(|_: &mut World| println!("hello world! (2)"));
     commands
         .as_rev(not_log) // access reversible commands
-        .queue_undo_redo(|_: &mut World, direction| {
-            match direction {
-                UndoRedoDirection::Undo => println!("!dlrow olleh (2, log)"),
-                UndoRedoDirection::Redo => println!("hello world! (2, log)"),
-            }
+        .queue_undo_redo(|_: &mut World, direction| match direction {
+            UndoRedoDirection::Undo => println!("!dlrow olleh (2, log)"),
+            UndoRedoDirection::Redo => println!("hello world! (2, log)"),
         });
 }
 
-// control how and if RevUpdate is ran
 fn input_system(
     keyboard_input: Res<ButtonInput<KeyCode>>,
     mut commands: Commands
@@ -48,23 +45,25 @@ fn input_system(
         // truncates too-old past frames and all future frames
         commands.queue(RevQueue::RunNotLog);
     } else if keyboard_input.pressed(KeyCode::ArrowLeft) {
-        // reverts logged frames, pauses at past end
+        // undoes frames, pauses at past end
         commands.queue(RevQueue::RunBackwardLog);
     } else if keyboard_input.pressed(KeyCode::ArrowRight) {
-        // advances logged frames, pauses at future end
+        // redoes frames, pauses at future end
         commands.queue(RevQueue::RunForwardLog);
+    } else if keyboard_input.pressed(KeyCode::Down) {
+        // do not run reversible systems until unpaused
+        commands.queue(RevQueue::Pause);
     }
 }
 
-// reversible rev_* variants exist of numerous bevy APIs
 App::new()
     .add_plugins((
         DefaultPlugins,
         RevPlugin.set_max_past_len(5) // set log length 
     ))
     .rev_add_systems(
-        RevUpdate, // main reversible schedule
-        // all orderings are reversed during RevDirection::BackwardLog
+        RevUpdate, // main reversible schedule, by default ran from FixedUpdate
+        // order including commands are reversed at RevDirection::BackwardLog
         (rev_system_1, rev_system_2).rev_chain()
     )
     .add_systems(PreUpdate, input_system)
@@ -72,7 +71,7 @@ App::new()
     .run();
 ```
 
-A bigger example game is available that showcases the most important API additions. See the documentation to learn more.
+A bigger example game is available that showcases the most important API additions in the `row` module. See the documentation to learn of features and limitations.
 
 ## Warning
 

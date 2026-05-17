@@ -34,8 +34,8 @@ fn main() {
             // Add the RevPlugin to your application.
             //
             // The plugin adds an unpaused RevMeta with a max past length of 1 frame and the
-            // run_rev_update system to FixedUpdate. We modify the max past len here. The Plugin also
-            // registers a disabling component: RevDespawned.
+            // run_rev_update system to FixedUpdate. We modify the max past len here. The Plugin
+            // also registers a disabling component: RevDespawned.
             //
             // General order of systems:
             // 1. run_rev_update runs in the specified schedule (here FixedUpdate)
@@ -96,11 +96,11 @@ struct Waste {
 // Increase the score and speed during RevDirection::NotLog, check for winning condition
 fn increase_score(mut world: DeferredWorld, _: HookContext) {
     // Hooks sensible to RevDirection must be written as such, here we do not want to react on
-    // undo-redo logic, only the initial insertion
+    // undo-redo logic, only the initial insertion during RevDirection::NotLog
     if world
         .get_resource::<RevMeta>()
-        .is_some_and(RevMeta::is_running_not_log)
-        && *world.resource::<State<GameState>>().get() != GameState::Running
+        .is_none_or(RevMeta::is_running_log)
+        || *world.resource::<State<GameState>>().get() != GameState::Running
     {
         return;
     }
@@ -123,8 +123,9 @@ fn increase_score(mut world: DeferredWorld, _: HookContext) {
     }
 }
 
-// When RevMeta::past_end is increased to prevent the past length to exceed the maximum, existing,
-// old Waste could get out-of-log, is despawned here and brings you closer to the losing condition.
+// At each RevUpdate run, the past end of the logged frames (RevMeta::past_end) may be increased if
+// otherwise the log length exceeds MAX_PAST_LEN. This may cause Waste components to become
+// out-of-log. In that case despawn them and increase the lost score until the game is lost.
 fn despawn_lost_waste(
     meta: Res<RevMeta>,
     waste_query: Query<(Entity, &Waste)>,
@@ -133,7 +134,7 @@ fn despawn_lost_waste(
     mut next_state: ResMut<NextState<GameState>>,
     mut commands: Commands,
 ) {
-    // Only during RevDirection::NotLog RevMeta::past_end could have increased, so skip otherwise
+    // Only during RevDirection::NotLog the past log end could increase, so skip otherwise
     if meta.is_running_log() {
         return;
     }
@@ -141,7 +142,7 @@ fn despawn_lost_waste(
     for (entity, &Waste { tossed_at, .. }) in waste_query {
         if tossed_at < meta.past_end() {
             // If you want entities to only exist when their spawn was within the current log,
-            // you have to handle the despawn yourself
+            // you have to handle the despawn yourself if they got too old
             commands.entity(entity).despawn();
 
             if *this_state.get() == GameState::Running {

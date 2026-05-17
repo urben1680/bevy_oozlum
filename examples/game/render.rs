@@ -141,12 +141,12 @@ ENTER (hold): reduce past length                 BACKSPACE: clear log"
     let len_to_waves = text.0.len();
 
     for _ in 0..ROWS {
-        for _ in 0..padding_cols {
+        for _ in 0..=padding_cols {
             write!(&mut text.0, " ")?;
         }
         for c in wave_iter(meta.future_end())
             .clone()
-            .take(meta.len() as usize + 1)
+            .take(meta.len() as usize)
         {
             write!(&mut text.0, "{c}")?;
         }
@@ -207,7 +207,7 @@ ENTER (hold): reduce past length                 BACKSPACE: clear log"
     writeln!(&mut text.0, "\n")?;
 
     // we write "get_running_direction" instead of the read "get_ran_direction" to visualize what
-    // value would be present in RevUpdate, not this system here
+    // value would be present in RevUpdate, not this render system here
     match meta.get_ran_direction() {
         None => writeln!(&mut text.0, "meta.get_running_direction == None"),
         Some(direction) => writeln!(

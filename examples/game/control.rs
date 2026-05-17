@@ -21,12 +21,12 @@ pub fn plugin(app: &mut App) {
         RevUpdate,
         reset.after(RevSystems),
     )
-    .insert_resource(JustPressed([false; ROWS].into()));
+    .insert_resource(JustPressed([false; ROWS]));
 }
 
 // Store which digit was pressed as ButtonInput may be cleared before FixedUpdate runs
 #[derive(Resource)]
-pub struct JustPressed(Box<[bool]>);
+pub struct JustPressed([bool; ROWS]);
 
 impl JustPressed {
     pub fn get(&self, row: u64) -> bool {

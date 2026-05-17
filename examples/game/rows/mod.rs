@@ -6,6 +6,9 @@ use bevy::prelude::*;
 // RevDirection::BackwardLog => the entity is either disabled or despawned
 // RevDirection::ForwardLog => the entity is either enabled or respawned
 
+// For this specific task, rev_command is the most dogmatic solution but we want to explore other
+// features of the crate here as well
+
 mod rev_command; // reversible command from a simple system
 mod rev_config; // reversible schedule configuration
 mod rev_hook; // reversible command from hook
