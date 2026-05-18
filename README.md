@@ -7,7 +7,7 @@
 Bevy Oozlum is a crate for [Bevy](https://bevy.org/) to write reversible systems, commands and schedules. It can be useful to implement rewind features in a game that run as smoothly as the normal gameplay.
 
 This crate is not using a snapshot approach and instead reverts to a prior world state by running the backward logic of reversible systems and their commands in reverse order. Because of that,
-reverting to very distant past world states should probably not be done this way.
+reverting to very distant past world states instantly should probably not be done this way.
 
 "Oozlum" is a mythical bird that is able to fly backwards.
 
@@ -18,6 +18,7 @@ use bevy::prelude::*;
 use bevy_oozlum::prelude::*;
 
 // reversible system where the logic happens directly in the system
+// the RevMeta resource offers methods to inspect and control the global log
 fn rev_system_1(meta: Res<RevMeta>) {
     match meta.running_direction() {
         RevDirection::NotLog(_) => println!("hello world! (1)"),
@@ -56,7 +57,7 @@ fn input_system(
         // redoes frames, pauses at future log end
         commands.queue(RevQueue::RunForwardLog);
     } else if keyboard_input.just_pressed(KeyCode::Down) {
-        // do not run reversible systems until unpaused
+        // do not run reversible schedules and their systems until unpaused
         commands.queue(RevQueue::Pause);
     }
 }
@@ -76,7 +77,7 @@ App::new()
     .run();
 ```
 
-A bigger example game is available that showcases the most important API additions in the `row` module. See the documentation to learn of features and limitations.
+A bigger example `game` is available that showcases the most important API additions in the `row` module. See the documentation to learn more of the features and limitations.
 
 ## Warning
 
