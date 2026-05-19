@@ -165,8 +165,7 @@ impl<C: Component> RevBundle<[C; 1]> for C {
 
 impl<R: Relationship, B: Bundle> RevBundle<[R; 2]> for SpawnOneRelated<R, B> {
     fn rev_insert(self, entity: &mut EntityWorldMut, mode: InsertMode, caller: MaybeLocation) {
-        #[allow(clippy::let_unit_value)]
-        let _ = <R as SlimRelationship>::ASSERT;
+        const { <R as SlimRelationship>::ASSERT }
         self.rev_insert_inner(entity, mode, caller);
     }
 
@@ -203,8 +202,7 @@ impl<R: Relationship, L: SpawnableList<R> + Send + Sync + 'static> RevBundle<[R;
     for SpawnRelatedBundle<R, L>
 {
     fn rev_insert(self, entity: &mut EntityWorldMut, mode: InsertMode, caller: MaybeLocation) {
-        #[allow(clippy::let_unit_value)]
-        let _ = <R as SlimRelationship>::ASSERT;
+        const { <R as SlimRelationship>::ASSERT }
         self.rev_insert_inner(entity, mode, caller);
     }
 

@@ -65,7 +65,7 @@ fn input_system(
 App::new()
     .add_plugins((
         DefaultPlugins,
-        RevPlugin.set_max_past_len(5) // set log length 
+        RevPlugin.set_max_past_len(5) // set amount of frames one can reverse to 
     ))
     .rev_add_systems(
         RevUpdate, // main reversible schedule, by default ran from FixedUpdate
@@ -77,7 +77,9 @@ App::new()
     .run();
 ```
 
-A bigger example `game` is available that showcases the most important API additions in the `row` module. See the documentation to learn more of the features and limitations.
+A bigger example `game` is available that showcases the most important API additions in the `row` module.
+
+See the crate's documentation to learn more of the features and limitations.
 
 ## Warning
 
@@ -87,7 +89,7 @@ This crate is experimential and may be discontinued at any time.
 
 | Bevy Oozlum | Bevy |
 | - | - |
-| 0.1.0-rc.1 | =0.19.0-rc.1 |
+| 0.1.0-rc.1 | 0.19.0-rc.1 |
 
 ## License
 

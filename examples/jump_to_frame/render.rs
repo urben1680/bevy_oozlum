@@ -40,9 +40,13 @@ fn setup(mut commands: Commands) {
 fn render(meta: Res<RevMeta>, frame_log: Res<FrameLog>, mut text: Single<&mut Text>) -> Result {
     text.clear();
 
+    if frame_log.allow_backward {
+        write!(&mut text.0, "UP: backward log, pause at end")?;
+    }
+
     writeln!(
         &mut text.0,
-        "UP: backward log, pause at end
+        "
 DOWN: forward log, pause at end
 RIGHT: exit log and resume
 LEFT: pause

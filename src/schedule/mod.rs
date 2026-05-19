@@ -104,6 +104,9 @@ mod test;
 /// Reversible systems in a schedule are automatically added to the [`RevSystems`] set so other,
 /// non-reversible systems can be ordered to them while ignoring the reversed order of
 /// [`RevDirection::BackwardLog`](crate::meta::RevDirection::BackwardLog).
+///
+/// This schedule should never be manually ran unless inside a manual replacement of
+/// `run_rev_update`.
 #[derive(ScheduleLabel, Copy, Clone, Debug, Hash, PartialEq, Eq)]
 pub struct RevUpdate;
 
@@ -115,17 +118,20 @@ pub struct RevUpdate;
 /// this way _unless_ they are ordered relatively to [`RevSystems`], a set containing all systems
 /// added via `rev_add_systems`.
 ///
+/// # Example
+///
 /// ```
 /// # use bevy::prelude::*;
 /// # use bevy_oozlum::prelude::*;
-/// # fn rev_system() {}
-/// # fn regular_system() {}
+/// # fn my_rev_system() {}
+/// # fn my_regular_system() {}
 /// # let mut app = App::new();
-/// app.rev_add_systems(RevUpdate, rev_system) // implicitly in the RevSystems set
+/// app
+///     .rev_add_systems(RevUpdate, my_rev_system) // implicitly in the RevSystems set
 ///     .add_systems(
 ///         RevUpdate,
-///         regular_system
-///          // .after(rev_system) // wrong
+///         my_regular_system
+///          // .after(my_rev_system) // wrong
 ///             .after(RevSystems) // correct
 ///     );
 /// ```

@@ -75,23 +75,20 @@ where
 
     let default_system_sets = system.default_system_sets();
 
-    let shared = Arc::new(Shared {
-        inner: Mutex::new(Inner::from(system)),
-        default_system_sets: default_system_sets.clone(),
-    });
+    let inner = Arc::new(Mutex::new(Inner::from(system)));
 
-    let forward_systems = RevSystem::<_, true>::new(shared.clone(), forward_system_name)
+    let forward_systems = RevSystem::<_, true>::new(inner.clone(), forward_system_name)
         .in_set(unified)
         .in_set(ForwardSystemSet(unified))
         .in_set(ForwardSystems);
 
-    let backward_deferred = BackwardDeferred::new(shared.clone(), backward_deferred_name)
+    let backward_deferred = BackwardDeferred::new(inner.clone(), backward_deferred_name)
         .in_set(unified)
         .in_set(BackwardDeferredSet(unified))
         .in_set(BackwardDeferredAndSystemSet(unified))
         .in_set(BackwardSystems);
 
-    let backward_systems = RevSystem::<_, false>::new(shared, backward_system_name)
+    let backward_systems = RevSystem::<_, false>::new(inner, backward_system_name)
         .in_set(unified)
         .in_set(BackwardSystemSet(unified))
         .in_set(BackwardDeferredAndSystemSet(unified))
@@ -109,6 +106,7 @@ where
     // all configs need to be in all default system sets so using T as a reference for ordering
     // works even when T consists of multiple systems in a pipe and this is ordered to one of such
     // systems and not T as a whole
+    // this fully replaces System::default_system_sets of the System impls in this module
     for set in default_system_sets {
         configs.rev_in_set_inner(set)
     }
@@ -164,32 +162,25 @@ impl RevSystemTypeSet {
 /// one instance with `FORWARD = false` is used in [`BackwardSystems`].
 // is `pub(super)` for docs in parent module
 pub(super) struct RevSystem<T, const FORWARD: bool> {
-    shared: Arc<Shared<T>>,
+    inner: Arc<Mutex<Inner<T>>>,
     name: DebugName,
     flags: SystemStateFlags,
 }
 
 impl<T, const FORWARD: bool> RevSystem<T, FORWARD> {
-    fn new(shared: Arc<Shared<T>>, name: DebugName) -> Self {
+    fn new(inner: Arc<Mutex<Inner<T>>>, name: DebugName) -> Self {
         Self {
-            shared,
+            inner,
             name,
             flags: SystemStateFlags::empty(),
         }
     }
 }
 
-struct Shared<T> {
-    inner: Mutex<Inner<T>>,
-    default_system_sets: Vec<InternedSystemSet>,
-}
-
-impl<T> Shared<T> {
-    fn get_inner<'a>(&'a self, name: &DebugName) -> MutexGuard<'a, Inner<T>> {
-        self.inner.try_lock().unwrap_or_else(|err| {
-            panic!("reversible system {name} could not be accessed: {err}");
-        })
-    }
+fn get_inner<'a, T>(inner: &'a Mutex<Inner<T>>, name: &DebugName) -> MutexGuard<'a, Inner<T>> {
+    inner.try_lock().unwrap_or_else(|err| {
+        panic!("reversible system {name} could not be accessed: {err}");
+    })
 }
 
 struct Inner<T> {
@@ -227,7 +218,6 @@ impl<T: System<In = (), Out = ()>, const FORWARD: bool> System for RevSystem<T, 
         world: UnsafeWorldCell,
     ) -> Result<(), RunSystemError> {
         let system = &mut self
-            .shared
             .inner
             .try_lock()
             .map_err(try_lock_validation_err(&self.name))?
@@ -247,7 +237,7 @@ impl<T: System<In = (), Out = ()>, const FORWARD: bool> System for RevSystem<T, 
     }
     #[cfg(feature = "hotpatching")]
     fn refresh_hotpatch(&mut self) {
-        match self.shared.inner.try_lock() {
+        match self.inner.try_lock() {
             Ok(mut inner) => inner.system.refresh_hotpatch(),
             Err(err) => error!("could not hotpatch system {}: {err}", self.name),
         }
@@ -256,11 +246,7 @@ impl<T: System<In = (), Out = ()>, const FORWARD: bool> System for RevSystem<T, 
         let mut last_run = Tick::new(0);
 
         let mut result = || -> Result<(), BevyError> {
-            let mut inner = self
-                .shared
-                .inner
-                .try_lock()
-                .map_err(|err| err.to_string())?;
+            let mut inner = self.inner.try_lock().map_err(|err| err.to_string())?;
 
             last_run = inner.system.get_last_run();
 
@@ -292,25 +278,25 @@ impl<T: System<In = (), Out = ()>, const FORWARD: bool> System for RevSystem<T, 
         unreachable!() // reversible systems are not used as observers
     }
     fn initialize(&mut self, world: &mut World) -> FilteredAccessSet {
-        let mut inner = self.shared.get_inner(&self.name);
+        let mut inner = get_inner(&self.inner, &self.name);
         let access = inner.system.initialize(world);
         inner.initialized = true;
         self.flags = inner.system.flags();
         access
     }
     fn check_change_tick(&mut self, check: CheckChangeTicks) {
-        let mut inner = self.shared.get_inner(&self.name);
+        let mut inner = get_inner(&self.inner, &self.name);
         inner.system.check_change_tick(check);
     }
     fn default_system_sets(&self) -> Vec<InternedSystemSet> {
-        self.shared.default_system_sets.clone()
+        Vec::new() // already specified via rev_in_set_inner at into_rev_system
     }
     fn get_last_run(&self) -> Tick {
-        let inner = self.shared.get_inner(&self.name);
+        let inner = get_inner(&self.inner, &self.name);
         inner.system.get_last_run()
     }
     fn set_last_run(&mut self, last_run: Tick) {
-        let mut inner = self.shared.get_inner(&self.name);
+        let mut inner = get_inner(&self.inner, &self.name);
         inner.system.set_last_run(last_run);
     }
 }
@@ -319,16 +305,16 @@ impl<T: System<In = (), Out = ()>, const FORWARD: bool> System for RevSystem<T, 
 /// actions from `T`. If `T` has no deferred parameters or is exclusive, this is a noop system.
 // is `pub(super)` for docs in parent module
 pub(super) struct BackwardDeferred<T> {
-    shared: Arc<Shared<T>>,
+    inner: Arc<Mutex<Inner<T>>>,
     tick: Tick,
     name: DebugName,
     has_deferred: bool,
 }
 
 impl<T> BackwardDeferred<T> {
-    fn new(shared: Arc<Shared<T>>, name: DebugName) -> Self {
+    fn new(inner: Arc<Mutex<Inner<T>>>, name: DebugName) -> Self {
         Self {
-            shared,
+            inner,
             tick: Tick::new(u32::MAX),
             name,
             has_deferred: Default::default(),
@@ -379,14 +365,8 @@ impl<T: System> System for BackwardDeferred<T> {
         let mut last_run = Tick::new(0);
 
         let mut result = || -> Result<(), BevyError> {
-            let mut inner = self
-                .shared
-                .inner
-                .try_lock()
-                .map_err(|err| err.to_string())?;
-
+            let mut inner = self.inner.try_lock().map_err(|err| err.to_string())?;
             last_run = inner.system.get_last_run();
-
             inner.deferred_log.backward(world).map_err(Into::into)
         };
 
@@ -407,7 +387,7 @@ impl<T: System> System for BackwardDeferred<T> {
         unreachable!(); // reversible systems are not used as observers
     }
     fn initialize(&mut self, world: &mut World) -> FilteredAccessSet {
-        let mut inner = self.shared.get_inner(&self.name);
+        let mut inner = get_inner(&self.inner, &self.name);
         if !inner.initialized {
             inner.system.initialize(world);
         }
@@ -415,7 +395,7 @@ impl<T: System> System for BackwardDeferred<T> {
         FilteredAccessSet::new()
     }
     fn default_system_sets(&self) -> Vec<InternedSystemSet> {
-        self.shared.default_system_sets.clone()
+        Vec::new() // already specified via rev_in_set_inner at into_rev_system
     }
     fn check_change_tick(&mut self, check: CheckChangeTicks) {
         self.tick.check_tick(check);

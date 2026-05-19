@@ -19,7 +19,7 @@ pub fn main() {
             .set_max_past_len(MAX_PAST_LEN)
             .set_runner_in_schedule(Update), // not FixedUpdae
         rows::plugin,
-        control::plugin,
+        input::plugin,
         MinimalPlugins,
         StatesPlugin,
         InputPlugin,
@@ -129,7 +129,7 @@ fn assert_ran(app: &App, ran: RevDirection) {
 #[track_caller]
 fn assert_pause(app: &App) {
     let meta = app.world().resource::<RevMeta>();
-    assert!(meta.paused(), "{:?}", Location::caller());
+    assert!(meta.is_paused(), "{:?}", Location::caller());
 }
 
 #[track_caller]

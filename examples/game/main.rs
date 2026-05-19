@@ -25,7 +25,7 @@ const FRAMERATE_MAX: f64 = 66.667;
 mod rows;
 
 // And in this how to control the global reversible progression
-mod control;
+mod input;
 
 #[cfg(not(feature = "ci_mode"))]
 fn main() {
@@ -44,7 +44,7 @@ fn main() {
             //    reversed order, depending on the current RevDirection
             RevPlugin.set_max_past_len(MAX_PAST_LEN),
             rows::plugin,
-            control::plugin,
+            input::plugin,
             render::plugin,
             DefaultPlugins.set(render::window_plugin()),
         ))

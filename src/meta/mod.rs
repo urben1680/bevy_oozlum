@@ -45,16 +45,32 @@ pub use direction::*;
 #[derive(Resource, Debug)]
 #[cfg_attr(feature = "reflect", derive(bevy_reflect::Reflect), reflect(Default))]
 pub struct RevMeta {
+    /// Inclusive log start
     past_end: u64,
+
+    /// Current frame
     now: u64,
+
+    /// Inclusive log end
     future_end: u64,
+
+    /// maximum amount of frames that can be reversed
     max_past_len: NonZeroU64,
+
+    /// Current or previous direction
     direction: RunningOrRan,
+
+    /// Queued direction, if any
     queue: Option<RevQueue>,
+
+    /// Number of log -> non-log direction changes, regardless if paused in between
     log_exits: u64,
+
+    /// Number of applied clears from `RevQueue`
     log_clears: u64,
 
     #[cfg(feature = "track_update_logs")]
+    /// Tracker of `UpdateLog` updates to report missed updates at [`Self::update`]
     update_log_limits: UpdateLogLimits,
 }
 
@@ -92,6 +108,7 @@ impl RevMeta {
             queue: (!paused).then_some(RevQueue::RunNotLog),
             log_exits: 0,
             log_clears: 0,
+
             #[cfg(feature = "track_update_logs")]
             update_log_limits: UpdateLogLimits::default(),
         }
@@ -100,19 +117,19 @@ impl RevMeta {
     /// Change the current [`RevQueue`] that will be applied right before the next time
     /// [`run_rev_update`](crate::schedule::run_rev_update) runs. See the `RevQueue` docs for more
     /// information.
-    pub fn set_queue(&mut self, queue: RevQueue) {
+    pub const fn set_queue(&mut self, queue: RevQueue) {
         self.queue = Some(queue);
     }
 
     /// Remove the current [`RevQueue`] before it could be applied right before the next time
     /// [`run_rev_update`](crate::schedule::run_rev_update) runs.
-    pub fn unset_queue(&mut self) {
+    pub const fn unset_queue(&mut self) {
         self.queue = None;
     }
 
     /// Get the current [`RevQueue`] that will be applied right before the next time
     /// [`run_rev_update`](crate::schedule::run_rev_update) runs.
-    pub fn get_queue(&self) -> Option<RevQueue> {
+    pub const fn get_queue(&self) -> Option<RevQueue> {
         self.queue
     }
 
@@ -123,12 +140,15 @@ impl RevMeta {
     /// [`run_rev_update`](crate::schedule::run_rev_update) runs. If at that point one or more
     /// frames of the log fall past that limit, the log will be truncated. This is final,
     /// increasing the limit again will not bring back truncated log entries.
-    pub fn set_max_past_len(&mut self, max_past_len: u64) {
-        self.max_past_len = NonZeroU64::new(max_past_len).unwrap_or(NonZeroU64::MIN);
+    pub const fn set_max_past_len(&mut self, max_past_len: u64) {
+        self.max_past_len = match NonZeroU64::new(max_past_len) {
+            Some(max_past_len) => max_past_len,
+            None => NonZeroU64::MIN,
+        };
     }
 
     /// Get how many past frames can be reveres to at most.
-    pub fn get_max_past_len(&self) -> NonZeroU64 {
+    pub const fn get_max_past_len(&self) -> NonZeroU64 {
         self.max_past_len
     }
 
@@ -140,14 +160,14 @@ impl RevMeta {
     /// for a fallible version.
     ///
     /// [`get_running_direction`]: Self::get_running_direction
-    pub fn running_direction(&self) -> RevDirection {
+    pub const fn running_direction(&self) -> RevDirection {
         self.get_running_direction().unwrap()
     }
 
     /// Get at which direction [`RevUpdate`] is currently running.
     ///
     /// Returns `None` if `RevUpdate` is not currently running.
-    pub fn get_running_direction(&self) -> Option<RevDirection> {
+    pub const fn get_running_direction(&self) -> Option<RevDirection> {
         match self.direction {
             RunningOrRan::Running(direction) => Some(direction),
             _ => None,
@@ -155,12 +175,22 @@ impl RevMeta {
     }
 
     /// Returns `true` if [`RevUpdate`] is currently running.
-    pub fn is_running(&self) -> bool {
+    pub const fn is_running(&self) -> bool {
         matches!(self.direction, RunningOrRan::Running(_))
     }
 
+    /// Returns `true` if [`RevUpdate`] is currently running in [`RevDirection::NotLog`] or
+    /// [`RevDirection::ForwardLog`].
+    pub const fn is_running_forward(&self) -> bool {
+        matches!(
+            self.direction,
+            RunningOrRan::Running(RevDirection::NotLog(_))
+                | RunningOrRan::Running(RevDirection::ForwardLog)
+        )
+    }
+
     /// Returns `true` if [`RevUpdate`] is currently running in [`RevDirection::NotLog`].
-    pub fn is_running_not_log(&self) -> bool {
+    pub const fn is_running_not_log(&self) -> bool {
         matches!(
             self.direction,
             RunningOrRan::Running(RevDirection::NotLog(_))
@@ -168,7 +198,7 @@ impl RevMeta {
     }
 
     /// Returns `true` if [`RevUpdate`] is currently running in [`RevDirection::ForwardLog`].
-    pub fn is_running_forward_log(&self) -> bool {
+    pub const fn is_running_forward_log(&self) -> bool {
         matches!(
             self.direction,
             RunningOrRan::Running(RevDirection::ForwardLog)
@@ -176,7 +206,7 @@ impl RevMeta {
     }
 
     /// Returns `true` if [`RevUpdate`] is currently running in [`RevDirection::BackwardLog`].
-    pub fn is_running_backward_log(&self) -> bool {
+    pub const fn is_running_backward_log(&self) -> bool {
         matches!(
             self.direction,
             RunningOrRan::Running(RevDirection::BackwardLog)
@@ -185,7 +215,7 @@ impl RevMeta {
 
     /// Returns `true` if [`RevUpdate`] is currently running in [`RevDirection::ForwardLog`] or
     /// [`RevDirection::BackwardLog`].
-    pub fn is_running_log(&self) -> bool {
+    pub const fn is_running_log(&self) -> bool {
         matches!(
             self.direction,
             RunningOrRan::Running(RevDirection::ForwardLog)
@@ -198,7 +228,7 @@ impl RevMeta {
     /// Returns `None` if `RevUpdate` is currently running or `RevMeta` is currently [paused].
     ///
     /// [paused]: Self::paused
-    pub fn get_ran_direction(&self) -> Option<RevDirection> {
+    pub const fn get_ran_direction(&self) -> Option<RevDirection> {
         match self.direction {
             RunningOrRan::Ran(direction) => Some(direction),
             _ => None,
@@ -206,28 +236,97 @@ impl RevMeta {
     }
 
     /// Returns `true` if `RevMeta` is currently paused. Returns `false` otherwise.
-    pub fn paused(&self) -> bool {
+    pub const fn is_paused(&self) -> bool {
         matches!(self.direction, RunningOrRan::Pause { .. })
     }
 
-    /// The reversible frame of the [`RevUpdate`] schedule.
+    /// The current reversible frame.
     ///
     /// It is increased right before the schedule runs [forward]. When running at
     /// [`RevDirection::BackwardLog`], the frame is reduced _afterwards_. Because of this, undoing
     /// a specific frame `n` will also make this method return the same `n`. This also means this
     /// value is never `0` when reversible systems are running.
     ///
-    /// This is not increased or decreased multiple times per reversible frame, so it is **no**
-    /// reversible alternative to [`Tick`].
+    /// | direction | `now` before<br> `RevUpdate` | `now` at<br> `RevUpdate` | `now` after<br> `RevUpdate` |
+    /// | - | :-: | :-: | :-: |
+    /// | forward | 0 | 1 | 1 |
+    /// | forward | 1 | 2 | 2 |
+    /// | pause | 2 | not running | 2 |
+    /// | backward | 2 | 2 | 1 |
+    /// | backward | 1 | 1 | 0 |
     ///
+    /// The `now()` value before or after [`RevUpdate`] can be understood as the "id" of the current
+    /// world state. During `RevUpdate` it is more the "id" of the transition between two states.
+    ///
+    /// This is not increased or decreased multiple times per reversible frame, so it is **no**
+    /// reversible alternative to [`Tick`] to determine sub-frame ordering. Unlike `Tick` this value
+    /// is also not wrapped or clamped so it can be used for [total orderings] of frames. It is
+    /// however always starting at `0` when `RevMeta` is constructed, usually at the app start.
+    ///
+    /// - If the value as it will be _before_ a potentially running `RevUpdate` is desired, use
+    ///   [`now_before_running`] instead.
+    /// - If the value as it will be _after_ a potentially running `RevUpdate` is desired, use
+    ///   [`now_after_running`] instead.
+    ///
+    /// [forward]: RevMeta::is_running_forward
     /// [`Tick`]: bevy_ecs::change_detection::Tick
-    /// [forward]: RevDirection::is_forward
+    /// [total orderings]: Ord
+    /// [`now_before_running`]: Self::now_before_running
+    /// [`now_after_running`]: Self::now_after_running
     pub const fn now(&self) -> u64 {
         self.now
     }
 
+    /// The current pre-[`RevUpdate`] reversible frame.
+    ///
+    /// This returns a different value than [`now`] if `RevUpdate` is currently running [forward],
+    /// see the `now` method documentation for the general meaning of the current frame and to
+    /// understand the difference to this method here.
+    ///
+    /// | direction | `now_before_running`<br> before `RevUpdate` | `now_before_running`<br> at `RevUpdate` | `now_before_running`<br> after `RevUpdate` |
+    /// | - | :-: | :-: | :-: |
+    /// | forward | 0 | 0 | 1 |
+    /// | forward | 1 | 1 | 2 |
+    /// | pause | 2 | not running | 2 |
+    /// | backward | 2 | 2 | 1 |
+    /// | backward | 1 | 1 | 0 |
+    ///
+    /// [`now`]: RevMeta::now
+    /// [forward]: RevMeta::is_running_forward
+    pub const fn now_before_running(&self) -> u64 {
+        if self.is_running_forward() {
+            self.now - 1
+        } else {
+            self.now
+        }
+    }
+
+    /// The current post-[`RevUpdate`] reversible frame.
+    ///
+    /// This returns a different value than [`now`] if `RevUpdate` is currently running [backward],
+    /// see the `now` method documentation for the general meaning of the current frame and to
+    /// understand the difference to this method here.
+    ///
+    /// | direction | `now_after_running`<br> before `RevUpdate` | `now_after_running`<br> at `RevUpdate` | `now_after_running`<br> after `RevUpdate` |
+    /// | - | :-: | :-: | :-: |
+    /// | forward | 0 | 1 | 1 |
+    /// | forward | 1 | 2 | 2 |
+    /// | pause | 2 | not running | 2 |
+    /// | backward | 2 | 1 | 1 |
+    /// | backward | 1 | 0 | 0 |
+    ///
+    /// [`now`]: RevMeta::now
+    /// [backward]: RevMeta::is_running_backward_log
+    pub const fn now_after_running(&self) -> u64 {
+        if self.is_running_backward_log() {
+            self.now - 1
+        } else {
+            self.now
+        }
+    }
+
     /// Returns the most past frame that currently can be reversed to.
-    pub fn past_end(&self) -> u64 {
+    pub const fn past_end(&self) -> u64 {
         self.past_end
     }
 
@@ -236,12 +335,12 @@ impl RevMeta {
     /// During [`RevDirection::NotLog`], the [current] frame is also the future end.
     ///
     /// [current]: Self::now
-    pub fn future_end(&self) -> u64 {
+    pub const fn future_end(&self) -> u64 {
         self.future_end
     }
 
     /// Returns how many frames can be reversed by.
-    pub fn past_len(&self) -> u64 {
+    pub const fn past_len(&self) -> u64 {
         self.now - self.past_end
     }
 
@@ -253,14 +352,14 @@ impl RevMeta {
     /// Use [`get_not_log`] for a fallible version.
     ///
     /// [`get_not_log`]: Self::get_not_log
-    pub fn not_log(&self) -> NotLog {
+    pub const fn not_log(&self) -> NotLog {
         self.get_not_log().unwrap()
     }
 
     /// Returns the current [`NotLog`].
     ///
     /// Returns `None` if [`RevUpdate`] is not currently running at [`RevDirection::NotLog`].
-    pub fn get_not_log(&self) -> Option<NotLog> {
+    pub const fn get_not_log(&self) -> Option<NotLog> {
         match self.direction {
             RunningOrRan::Running(RevDirection::NotLog(not_log)) => Some(not_log),
             _ => None,
@@ -268,7 +367,7 @@ impl RevMeta {
     }
 
     /// Returns how many frames can be advanced by.
-    pub fn future_len(&self) -> u64 {
+    pub const fn future_len(&self) -> u64 {
         self.future_end - self.now
     }
 
@@ -278,7 +377,7 @@ impl RevMeta {
     /// [`past_len`]: Self::past_len
     /// [`future_len`]: Self::future_len
     #[allow(clippy::len_without_is_empty)] // never empty
-    pub fn len(&self) -> u64 {
+    pub const fn len(&self) -> u64 {
         self.future_end - self.past_end + 1 // both ends are inclusive
     }
 
@@ -287,28 +386,28 @@ impl RevMeta {
     ///
     /// [`running_direction`]: Self::running_direction
     /// [log direction]: RevDirection::is_log
-    pub fn log_exits(&self) -> u64 {
+    pub const fn log_exits(&self) -> u64 {
         self.log_exits
     }
 
     /// Returns the total amount of times [`RevQueue::ClearThenRunNotLog`] or
     /// [`RevQueue::ClearThenPause`] were applied since this `RevMeta` was constructed.
-    pub fn log_clears(&self) -> u64 {
+    pub const fn log_clears(&self) -> u64 {
         self.log_clears
     }
 
     /// Returns `true` if `frame` is in `[past_end, future_end]`.
-    pub fn contains(&self, frame: u64) -> bool {
+    pub const fn contains(&self, frame: u64) -> bool {
         self.future_end.wrapping_sub(frame) <= (self.future_end - self.past_end)
     }
 
     /// Returns `true` if `frame` is in `[past_end, now[`.
-    pub fn past_contains(&self, frame: u64) -> bool {
+    pub const fn past_contains(&self, frame: u64) -> bool {
         self.now.wrapping_sub(frame).wrapping_sub(1) < self.past_len()
     }
 
     /// Returns `true` if `frame` is in `]now, future_end]`.
-    pub fn future_contains(&self, frame: u64) -> bool {
+    pub const fn future_contains(&self, frame: u64) -> bool {
         self.future_end.wrapping_sub(frame) < self.future_len()
     }
 
@@ -385,8 +484,8 @@ impl RevMeta {
                 return Ok(self);
             }
             _ => {
-                // queued log direction at end of log behaves like Some(RevQueue::Pause) which is matched
-                // here as well
+                // queued log direction at end of log behaves like Some(RevQueue::Pause) which is
+                // matched here as well
                 self.direction = RunningOrRan::Pause { after_log };
                 return Ok(self);
             }
@@ -495,7 +594,7 @@ impl RevMeta {
             err => panic!("unexpected {err:#?}"),
         }
         assert_eq!(ran, should_run);
-        assert_eq!(ran, !self.paused());
+        assert_eq!(ran, !self.is_paused());
     }
 
     #[cfg(all(test, feature = "track_update_logs"))]
@@ -619,9 +718,9 @@ impl RevMeta {
                                     "RevMeta was removed during \
                                     RevUpdate"
                                 }
-                                // when update_spawn_despawn returns any of those errors, then only when
-                                // RevMeta existed at that point, but then nothing is executed that
-                                // could have removed RevMeta here
+                                // when update_spawn_despawn returns any of those errors, then only
+                                // when RevMeta existed at that point, but then nothing is executed
+                                // that could have removed RevMeta here
                                 Err(DespawnFinalizerErr::OutOfLog)
                                 | Err(DespawnFinalizerErr::MetaNotRunning) => unreachable!(),
                             })
@@ -688,7 +787,11 @@ impl RevMeta {
 }
 
 /// Error type that [`RevMeta::update`] may return.
+///
+/// This enum is marked as `non_exhaustive` so toggling the `track_update_logs` feature is not a
+/// breaking change as it adds the `UpdateLogsMissed` variant here.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum RevMetaUpdateErr {
     /// [`RevMeta::update`] was called recursively or `RevMeta` was removed while this ran and is
     /// still [in a running state] while the `update` method is called again.

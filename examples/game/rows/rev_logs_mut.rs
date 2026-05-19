@@ -1,7 +1,7 @@
 use bevy::{ecs::error::Result, prelude::*};
 use bevy_oozlum::prelude::*;
 
-use crate::{Waste, control::JustPressed};
+use crate::{Waste, input::JustPressed};
 
 pub fn plugin<const ROW: u64>(app: &mut App) {
     // Use rev_add_systems for reversible systems.

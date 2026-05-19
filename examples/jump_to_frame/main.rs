@@ -1,8 +1,8 @@
 use bevy::prelude::*;
 use bevy_oozlum::prelude::*;
-use std::mem::take;
 
-// This example shows jumping to a specific frame in the log instead of always the log end
+// This example shows jumping to a specific frame in the log instead of always the log end.
+// We also suppress going further backward if the oldest marked frame is reached or there is none.
 
 fn main() {
     App::new()
@@ -11,7 +11,7 @@ fn main() {
             DefaultPlugins.set(render::window_plugin()),
             render::plugin,
         ))
-        .add_systems(PreUpdate, control)
+        .add_systems(PreUpdate, input_system)
         .add_systems(RevUpdate, update_frame_log.after(RevSystems))
         .init_resource::<FrameLog>()
         .insert_resource(Time::<Fixed>::from_seconds(0.33))
@@ -23,19 +23,25 @@ struct FrameLog {
     // frames that can be jumped to
     marked_frames: Vec<u64>,
 
-    // signal next frame to be added to marked_frames
+    // signal next frame to be added to marked_frames, is ignored during log directions
     mark_next_frame: bool,
+
+    // is true if marked_frames contains a frame that is older than meta.now()
+    allow_backward: bool,
 }
 
 fn update_frame_log(mut meta: ResMut<RevMeta>, mut frame_log: ResMut<FrameLog>) {
     // take and thus reset mark_next_frame
-    let mark = take(&mut frame_log.mark_next_frame);
+    let mark = std::mem::take(&mut frame_log.mark_next_frame);
 
     if meta.is_running_not_log() {
         // remove out-of-log frames
         frame_log
             .marked_frames
             .retain(|frame| meta.past_contains(*frame));
+
+        // any remaining marked frame would be less then meta.now(), allowing going backward to it
+        frame_log.allow_backward = !frame_log.marked_frames.is_empty();
 
         // mark frame if desired
         if mark {
@@ -45,26 +51,22 @@ fn update_frame_log(mut meta: ResMut<RevMeta>, mut frame_log: ResMut<FrameLog>) 
         return;
     }
 
-    let mut now = meta.now();
+    if let Ok(index) = frame_log
+        .marked_frames
+        .binary_search(&meta.now_after_running())
+    {
+        // if we reached the oldest marked frame, forbid going further backward
+        frame_log.allow_backward = index != 0;
 
-    if meta.is_running_backward_log() {
-        // RevMeta::now is increased at the *beginning* of:
-        // - RevDirection::NotLog
-        // - RevDirection::ForwardLog
-        //
-        // Therefore, a reverse of this will decrease the value at the *end* of
-        // RevDirection::BackwardLog. As we want to pause the app when the targeted world state of
-        // frame N is reached, we have to account for the frame to not be updated here yet and
-        // reduce it to the value at the end of this update.
-        now -= 1;
-    }
-
-    if frame_log.marked_frames.binary_search(&now).is_ok() {
+        // pause at this marked frame
         meta.set_queue(RevQueue::Pause);
+    } else if meta.is_running_forward_log() {
+        // going forward in log implies we are allowed to go back to the previous frame again
+        frame_log.allow_backward = true;
     }
 }
 
-fn control(
+fn input_system(
     input: Res<ButtonInput<KeyCode>>,
     mut frame_log: ResMut<FrameLog>,
     mut commands: Commands,
@@ -75,7 +77,7 @@ fn control(
         commands.queue(RevQueue::Pause);
     } else if input.just_pressed(KeyCode::ArrowDown) {
         commands.queue(RevQueue::RunForwardLog);
-    } else if input.just_pressed(KeyCode::ArrowUp) {
+    } else if input.just_pressed(KeyCode::ArrowUp) && frame_log.allow_backward {
         commands.queue(RevQueue::RunBackwardLog);
     } else if input.just_pressed(KeyCode::Space) {
         frame_log.mark_next_frame = true;
