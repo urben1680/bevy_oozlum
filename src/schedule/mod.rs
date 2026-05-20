@@ -83,7 +83,6 @@ use bevy_ecs::{
     system::{IntoSystem, RunSystemError, ScheduleSystem},
     world::World,
 };
-use bevy_log::info;
 use core::{fmt::Debug, hash::Hash};
 use variadics_please::all_tuples;
 
@@ -283,24 +282,13 @@ impl RevSchedule for Schedule {
 }
 
 fn set_base_sets(schedule: &mut Schedule) {
-    fn is_forward<const TRUTHY: bool>(meta: Option<Res<RevMeta>>) -> bool {
-        meta.and_then(|meta| meta.get_running_direction())
-            .is_some_and(|direction| direction.is_forward() == TRUTHY)
-    }
-
     // check needs to be on a non-pub set so user code cannot make this unreliable
     if schedule.graph().system_sets.contains(ForwardSystems) {
         return;
     }
 
-    let mut settings = schedule.get_build_settings();
-    if !settings.auto_insert_apply_deferred {
-        info!(
-            "reversible schedule {:?} has its `auto_insert_apply_deferred` value reset to `true`",
-            schedule.label()
-        );
-        settings.auto_insert_apply_deferred = true;
-        schedule.set_build_settings(settings);
+    fn is_forward<const TRUTHY: bool>(meta: Option<Res<RevMeta>>) -> bool {
+        meta.is_some_and(|meta| meta.is_running_forward() == TRUTHY)
     }
 
     schedule.configure_sets(

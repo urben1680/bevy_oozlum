@@ -223,6 +223,10 @@ impl Debug for BoxedUndoRedo {
 /// Trait that all reversible (deferred) operations use to define how to undo and redo them.
 ///
 /// This is implemented for `impl FnMut(&mut World, UndoRedoDirection)`, see [`UndoRedoDirection`].
+///
+/// **Note** that this is logic applied in commands and to prevent ordering bugs the preceding
+/// operation this may undo or redo should also be done via commands, not directly inside reversible
+/// systems.
 pub trait UndoRedo: Send + 'static {
     /// Undo the reversible operation during [`RevDirection::BackwardLog`].
     fn undo(&mut self, world: &mut World);

@@ -102,7 +102,8 @@ impl<'a> RevEntityCommands<'a> {
     /// As [`queue_undo_redo`](Self::queue_undo_redo) but with explicit [`MaybeLocation`].
     ///
     /// The location can be helpful for identifying non-reversible systems using reversible API.
-    /// [`run_rev_update`](crate::schedule::run_rev_update) may return the relevant error in that case.
+    /// [`run_rev_update`](crate::schedule::run_rev_update) may return the relevant error in that
+    /// case.
     #[track_caller]
     pub fn queue_undo_redo_with_caller(
         &mut self,
@@ -132,7 +133,8 @@ impl<'a> RevEntityCommands<'a> {
     /// As [`redo_and_queue`](Self::redo_and_queue) but with explicit [`MaybeLocation`].
     ///
     /// The location can be helpful for identifying non-reversible systems using reversible API.
-    /// [`run_rev_update`](crate::schedule::run_rev_update) may return the relevant error in that case.
+    /// [`run_rev_update`](crate::schedule::run_rev_update) may return the relevant error in that
+    /// case.
     pub fn redo_and_queue_with_caller(
         &mut self,
         undo_redo: impl UndoRedo,

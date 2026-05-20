@@ -142,9 +142,11 @@ unsafe impl<T: ReadOnlySystem<In = (), Out = bool>> ReadOnlySystem for RevCondit
 
 #[derive(Default)]
 struct ConditionLogs {
-    /// A `bool`-like log for frames in which [`Self::condition`] returned `Ok(true)`.
+    /// A `bool`-like log for frames in which [`RevCondition::condition`] returned `Ok(true)`.
     ok_true_log: UpdateLog,
 
+    /// logs errors to return them again at log directions, in a `Option<Box>` as this is a large
+    /// type for a niche case.
     failed_log: Option<Box<FailedLogs>>,
 }
 

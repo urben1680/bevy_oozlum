@@ -36,7 +36,8 @@ impl<C> InnerComponentBuffer<C> {
     fn unexpected_swap(&self, world: &World, undo_redo: &str, name: DebugName) {
         world.fallback_error_handler()(
             BevyError::warning(format!(
-                "{undo_redo} reversible {name} for {}{LOCATION_PREFIX}{} succeeded but encountered unexpected value in entity that was not present initially which was now swapped with",
+                "{undo_redo} reversible {name} for {}{LOCATION_PREFIX}{} succeeded but encountered \
+                unexpected value in entity that was not present initially which was now swapped with",
                 self.entity, self.caller
             )),
             ErrorContext::Command { name },
@@ -45,7 +46,8 @@ impl<C> InnerComponentBuffer<C> {
     fn error(&self, world: &World, undo_redo: &str, name: DebugName, msg: &str) {
         world.fallback_error_handler()(
             BevyError::error(format!(
-                "{undo_redo} reversible {name} for {}{LOCATION_PREFIX}{} {msg}, this may also have been in an invalid state from earlier error before",
+                "{undo_redo} reversible {name} for {}{LOCATION_PREFIX}{} {msg}, \
+                this may also have been in an invalid state from earlier error before",
                 self.entity, self.caller
             )),
             ErrorContext::Command { name },
@@ -54,7 +56,8 @@ impl<C> InnerComponentBuffer<C> {
     fn follow_up_error(&self, world: &World, undo_redo: &str, name: DebugName) {
         world.fallback_error_handler()(
             BevyError::info(format!(
-                "{undo_redo} reversible {name} for {}{LOCATION_PREFIX}{} was applied but was in invalid state from an earlier error",
+                "{undo_redo} reversible {name} for {}{LOCATION_PREFIX}{} \
+                was applied but was in invalid state from an earlier error",
                 self.entity, self.caller
             )),
             ErrorContext::Command { name },
@@ -95,7 +98,8 @@ impl<R> InnerResourceBuffer<R> {
     fn unexpected_swap(&self, world: &World, undo_redo: &str, name: DebugName) {
         world.fallback_error_handler()(
             BevyError::warning(format!(
-                "{undo_redo} reversible {name}{LOCATION_PREFIX}{} succeeded but encountered unexpected value in world that was not present initially which was now swapped with",
+                "{undo_redo} reversible {name}{LOCATION_PREFIX}{} succeeded but encountered \
+                unexpected value in world that was not present initially which was now swapped with",
                 self.caller
             )),
             ErrorContext::Command { name },
@@ -104,7 +108,8 @@ impl<R> InnerResourceBuffer<R> {
     fn error(&self, world: &World, undo_redo: &str, name: DebugName, msg: &str) {
         world.fallback_error_handler()(
             BevyError::error(format!(
-                "{undo_redo} reversible {name}{LOCATION_PREFIX}{} {msg}, this may also have been in an invalid state from earlier error before",
+                "{undo_redo} reversible {name}{LOCATION_PREFIX}{} {msg}, this \
+                may also have been in an invalid state from earlier error before",
                 self.caller
             )),
             ErrorContext::Command { name },
@@ -113,7 +118,8 @@ impl<R> InnerResourceBuffer<R> {
     fn follow_up_error(&self, world: &World, undo_redo: &str, name: DebugName) {
         world.fallback_error_handler()(
             BevyError::info(format!(
-                "{undo_redo} reversible {name}{LOCATION_PREFIX}{} was applied but was in invalid state from an earlier error",
+                "{undo_redo} reversible {name}{LOCATION_PREFIX}{} was \
+                applied but was in invalid state from an earlier error",
                 self.caller
             )),
             ErrorContext::Command { name },
@@ -199,9 +205,17 @@ impl<C: Component> UndoRedo for RevInsertComponentNew<C> {
         let name = DebugName::type_name::<Self>();
         match self.0.toggle_component(world) {
             Ok(ToggleResult::Taken) => {} // expected result
-            Ok(ToggleResult::Noop) => self.0.error(world, UNDO, name, "failed, initially inserted value is now missing in entity and could not be taken back"),
-            Ok(ToggleResult::Inserted) | Ok(ToggleResult::Swapped) => self.0.follow_up_error(world, UNDO, name),
-            Err(err) => self.0.entity_err(world, UNDO, name, err)
+            Ok(ToggleResult::Noop) => self.0.error(
+                world,
+                UNDO,
+                name,
+                "failed, initially inserted value is now \
+                missing in entity and could not be taken back",
+            ),
+            Ok(ToggleResult::Inserted) | Ok(ToggleResult::Swapped) => {
+                self.0.follow_up_error(world, UNDO, name)
+            }
+            Err(err) => self.0.entity_err(world, UNDO, name, err),
         }
     }
     fn redo(&mut self, world: &mut World) {
@@ -222,8 +236,16 @@ impl<C: Component> UndoRedo for RevInsertComponentOverwrite<C> {
         let name = DebugName::type_name::<Self>();
         match self.0.toggle_component(world) {
             Ok(ToggleResult::Swapped) => {} // expected result
-            Ok(ToggleResult::Inserted) => self.0.error(world, UNDO, name, "failed, initially inserted value is now missing in entity and could not be swapped with, only reinserted initially overwritten value"),
-            Ok(ToggleResult::Taken) | Ok(ToggleResult::Noop) => self.0.follow_up_error(world, UNDO, name),
+            Ok(ToggleResult::Inserted) => self.0.error(
+                world,
+                UNDO,
+                name,
+                "failed, initially inserted value is now missing in entity and could \
+                not be swapped with, only reinserted initially overwritten value",
+            ),
+            Ok(ToggleResult::Taken) | Ok(ToggleResult::Noop) => {
+                self.0.follow_up_error(world, UNDO, name)
+            }
             Err(err) => self.0.entity_err(world, UNDO, name, err),
         }
     }
@@ -231,8 +253,16 @@ impl<C: Component> UndoRedo for RevInsertComponentOverwrite<C> {
         let name = DebugName::type_name::<Self>();
         match self.0.toggle_component(world) {
             Ok(ToggleResult::Swapped) => {} // expected result
-            Ok(ToggleResult::Inserted) => self.0.error(world, REDO, name, "failed, initially overwritten and at undo reinserted value is now missing in entity and could not be swapped with, only reinserted initially inserted value"),
-            Ok(ToggleResult::Taken) | Ok(ToggleResult::Noop) => self.0.follow_up_error(world, REDO, name),
+            Ok(ToggleResult::Inserted) => self.0.error(
+                world,
+                REDO,
+                name,
+                "failed, initially overwritten and at undo reinserted value is now missing \
+                in entity and could not be swapped with, only reinserted initially inserted value",
+            ),
+            Ok(ToggleResult::Taken) | Ok(ToggleResult::Noop) => {
+                self.0.follow_up_error(world, REDO, name)
+            }
             Err(err) => self.0.entity_err(world, REDO, name, err),
         }
     }
@@ -254,8 +284,16 @@ impl<C: Component> UndoRedo for RevRemoveComponent<C> {
         let name = DebugName::type_name::<Self>();
         match self.0.toggle_component(world) {
             Ok(ToggleResult::Taken) => {} // expected result
-            Ok(ToggleResult::Noop) => self.0.error(world, REDO, name, "failed, initially removed and at undo reinserted value is now missing in entity and could not be taken back"),
-            Ok(ToggleResult::Inserted) | Ok(ToggleResult::Swapped) => self.0.follow_up_error(world, REDO, name),
+            Ok(ToggleResult::Noop) => self.0.error(
+                world,
+                REDO,
+                name,
+                "failed, initially removed and at undo reinserted value \
+                is now missing in entity and could not be taken back",
+            ),
+            Ok(ToggleResult::Inserted) | Ok(ToggleResult::Swapped) => {
+                self.0.follow_up_error(world, REDO, name)
+            }
             Err(err) => self.0.entity_err(world, REDO, name, err),
         }
     }
@@ -266,8 +304,16 @@ impl<R: Resource> UndoRedo for RevInsertResourceNew<R> {
         let name = DebugName::type_name::<Self>();
         match self.0.toggle_resource(world) {
             ToggleResult::Taken => {} // expected result
-            ToggleResult::Noop => self.0.error(world, UNDO, name, "failed, initially inserted value is now missing in world and could not be taken back"),
-            ToggleResult::Inserted | ToggleResult::Swapped => self.0.follow_up_error(world, UNDO, name),
+            ToggleResult::Noop => self.0.error(
+                world,
+                UNDO,
+                name,
+                "failed, initially inserted value is now \
+                missing in world and could not be taken back",
+            ),
+            ToggleResult::Inserted | ToggleResult::Swapped => {
+                self.0.follow_up_error(world, UNDO, name)
+            }
         }
     }
     fn redo(&mut self, world: &mut World) {
@@ -285,7 +331,13 @@ impl<R: Resource> UndoRedo for RevInsertResourceOverwrite<R> {
         let name = DebugName::type_name::<Self>();
         match self.0.toggle_resource(world) {
             ToggleResult::Swapped => {} // expected result
-            ToggleResult::Inserted => self.0.error(world, UNDO, name, "failed, initially inserted value is now missing in world and could not be swapped with, only reinserted initially overwritten value"),
+            ToggleResult::Inserted => self.0.error(
+                world,
+                UNDO,
+                name,
+                "failed, initially inserted value is now missing in world and could \
+                not be swapped with, only reinserted initially overwritten value",
+            ),
             ToggleResult::Taken | ToggleResult::Noop => self.0.follow_up_error(world, UNDO, name),
         }
     }
@@ -293,7 +345,13 @@ impl<R: Resource> UndoRedo for RevInsertResourceOverwrite<R> {
         let name = DebugName::type_name::<Self>();
         match self.0.toggle_resource(world) {
             ToggleResult::Swapped => {} // expected result
-            ToggleResult::Inserted => self.0.error(world, REDO, name, "failed, initially overwritten and at undo reinserted value is now missing in world and could not be swapped with, only reinserted initially inserted value"),
+            ToggleResult::Inserted => self.0.error(
+                world,
+                REDO,
+                name,
+                "failed, initially overwritten and at undo reinserted value is now missing in \
+                world and could not be swapped with, only reinserted initially inserted value",
+            ),
             ToggleResult::Taken | ToggleResult::Noop => self.0.follow_up_error(world, REDO, name),
         }
     }
@@ -312,8 +370,16 @@ impl<R: Resource> UndoRedo for RevRemoveResource<R> {
         let name = DebugName::type_name::<Self>();
         match self.0.toggle_resource(world) {
             ToggleResult::Taken => {} // expected result
-            ToggleResult::Noop => self.0.error(world, REDO, name, "failed, initially removed and at undo reinserted value is now missing in world and could not be taken back"),
-            ToggleResult::Inserted | ToggleResult::Swapped => self.0.follow_up_error(world, REDO, name),
+            ToggleResult::Noop => self.0.error(
+                world,
+                REDO,
+                name,
+                "failed, initially removed and at undo reinserted value \
+                is now missing in world and could not be taken back",
+            ),
+            ToggleResult::Inserted | ToggleResult::Swapped => {
+                self.0.follow_up_error(world, REDO, name)
+            }
         }
     }
 }

@@ -253,7 +253,7 @@ impl<E: EntityCollection, const SPAWN: bool> RevSpawnDespawn<E, SPAWN> {
                             name: DebugName::type_name::<Self>(),
                         },
                     );
-                    1 // 0 would be an invalid value for RevDirection::NotLog regardless of this error
+                    1 // 0 would be an invalid value for RevDirection::NotLog
                 });
 
             world.insert_resource(DespawnFinalizer {
