@@ -10,7 +10,7 @@ use bevy_ecs::{
 use super::*;
 use crate::{
     meta::RevDirection,
-    panic_on_error_events,
+    panic_on_warnings_or_errors,
     schedule::{RevUpdate, run_rev_update},
     undo_redo::CommandsAsRev,
 };
@@ -34,7 +34,7 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
 ) {
     // set up world
     let mut world = World::new();
-    panic_on_error_events(&mut world);
+    panic_on_warnings_or_errors(&mut world);
     world.init_resource::<TestLog>();
     world.insert_resource(RevMeta::new(u64::MAX, false));
 

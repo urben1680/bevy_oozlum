@@ -542,7 +542,7 @@ mod test {
     ) {
         use crate::meta::RevQueue;
 
-        crate::panic_on_error_events(world);
+        crate::panic_on_warnings_or_errors(world);
         world.register_disabling_component::<RevDespawned>();
         let mut meta = RevMeta::default();
         let mut state = None;

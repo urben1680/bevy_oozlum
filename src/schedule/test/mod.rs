@@ -21,7 +21,7 @@ use bevy_ecs::{
 use crate::{
     app::{RevApp, RevPlugin},
     meta::{NotLog, RevDirection, RevQueue},
-    panic_on_error_events,
+    panic_on_warnings_or_errors,
     schedule::RevUpdate,
     undo_redo::{CommandsAsRev, UndoRedo},
 };
@@ -346,7 +346,7 @@ fn truncates_future_command_log() {
             .set_runner_in_schedule(Update),
     )
     .rev_add_systems(RevUpdate, system);
-    panic_on_error_events(app.world_mut());
+    panic_on_warnings_or_errors(app.world_mut());
 
     app.update(); // do 1
     app.update(); // do 2, command queued
@@ -392,7 +392,7 @@ fn delayed_rev_command_errors() {
     ))
     .rev_add_systems(RevUpdate, system)
     .rev_add_systems(PreUpdate, ApplyDeferred);
-    panic_on_error_events(app.world_mut());
+    panic_on_warnings_or_errors(app.world_mut());
 
     app.update();
     app.world_mut()

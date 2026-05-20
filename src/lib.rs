@@ -132,18 +132,18 @@
 //!     keyboard_input: Res<ButtonInput<KeyCode>>,
 //!     mut commands: Commands
 //! ) {
-//!     if keyboard_input.pressed(KeyCode::ArrowUp) {
+//!     if keyboard_input.just_pressed(KeyCode::ArrowUp) {
+//!         // truncates too-old past frames and all future frames from the log
 //!         commands.queue(RevQueue::RunNotLog);
-//!         println!("queue forward, truncates too-old past frames and all future frames");
-//!     } else if keyboard_input.pressed(KeyCode::ArrowDown) {
-//!         commands.queue(RevQueue::Pause);
-//!         println!("queue pause, will not run RevUpdate until unpaused");
-//!     } else if keyboard_input.pressed(KeyCode::ArrowLeft) {
+//!     } else if keyboard_input.just_pressed(KeyCode::ArrowLeft) {
+//!         // undoes frames, pauses at past log end
 //!         commands.queue(RevQueue::RunBackwardLog);
-//!         println!("queue backward log, reverts logged frames, pauses at past end");
-//!     } else if keyboard_input.pressed(KeyCode::ArrowRight) {
+//!     } else if keyboard_input.just_pressed(KeyCode::ArrowRight) {
+//!         // redoes frames, pauses at future log end
 //!         commands.queue(RevQueue::RunForwardLog);
-//!         println!("queue forward log, advances logged frames, pauses at future end");
+//!     } else if keyboard_input.just_pressed(KeyCode::Down) {
+//!         // do not run reversible schedules and their systems until unpaused
+//!         commands.queue(RevQueue::Pause);
 //!     }
 //! }
 //! ```
@@ -285,7 +285,7 @@ pub mod prelude {
 }
 
 #[cfg(test)]
-fn panic_on_error_events(world: &mut bevy_ecs::world::World) {
+fn panic_on_warnings_or_errors(world: &mut bevy_ecs::world::World) {
     use bevy_ecs::error::{FallbackErrorHandler, Severity};
 
     world.insert_resource(FallbackErrorHandler(|err, _| {

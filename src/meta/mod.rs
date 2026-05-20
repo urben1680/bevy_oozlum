@@ -227,7 +227,7 @@ impl RevMeta {
     ///
     /// Returns `None` if `RevUpdate` is currently running or `RevMeta` is currently [paused].
     ///
-    /// [paused]: Self::paused
+    /// [paused]: Self::is_paused
     pub const fn get_ran_direction(&self) -> Option<RevDirection> {
         match self.direction {
             RunningOrRan::Ran(direction) => Some(direction),

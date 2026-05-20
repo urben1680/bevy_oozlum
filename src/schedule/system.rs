@@ -454,7 +454,7 @@ mod test {
         world::{DeferredWorld, World},
     };
 
-    use crate::{panic_on_error_events, prelude::*, undo_redo::UndoRedoQueue};
+    use crate::{panic_on_warnings_or_errors, prelude::*, undo_redo::UndoRedoQueue};
 
     fn blank_undo_redo(_: &mut World, _: UndoRedoDirection) {}
 
@@ -523,7 +523,7 @@ mod test {
             .rev_add_systems(RevUpdate, system)
             .add_observer(observer)
             .add_observer(empty_observer);
-        panic_on_error_events(app.world_mut());
+        panic_on_warnings_or_errors(app.world_mut());
         app.update();
         let queue = app.world().resource::<UndoRedoQueue>();
         assert!(queue.is_empty(), "{queue:?}");
@@ -561,7 +561,7 @@ mod test {
         let mut app = App::new();
         app.add_plugins(RevPlugin.set_runner_in_schedule(Update))
             .rev_add_systems(RevUpdate, (system1, system2, system3));
-        panic_on_error_events(app.world_mut());
+        panic_on_warnings_or_errors(app.world_mut());
 
         app.update();
         assert_eq!(app.world().resource::<Counter>().0, 3);
@@ -591,7 +591,7 @@ mod test {
         let mut app = App::new();
         app.add_plugins(RevPlugin.set_runner_in_schedule(Update))
             .rev_add_systems(RevUpdate, system);
-        panic_on_error_events(app.world_mut());
+        panic_on_warnings_or_errors(app.world_mut());
 
         app.update();
         assert!(app.world().contains_resource::<Done>());
@@ -606,8 +606,8 @@ mod test {
     }
 
     #[test]
-    #[should_panic = "exclusive systems are not supported"]
+    #[should_panic = "exclusive system"]
     fn deny_exclusive_systems() {
-        App::new().rev_add_systems(RevUpdate, |_: &mut World| {});
+        super::into_rev_system(|_: &mut World| {});
     }
 }
