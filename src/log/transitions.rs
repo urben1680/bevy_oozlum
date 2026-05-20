@@ -288,28 +288,28 @@ impl<T, U> TransitionsLog<T, U> {
     /// Returns an iterator of the stored log transitions (`T`).
     ///
     /// See [`VecDeque::iter`].
-    pub fn transitions_iter<'a>(&'a self) -> Iter<'a, T> {
+    pub fn transitions_iter(&self) -> Iter<'_, T> {
         self.transitions.iter()
     }
 
     /// Returns an iterator of the stored log updates (`U`).
     ///
     /// See [`VecDeque::iter`].
-    pub fn updates_iter<'a>(&'a self) -> Iter<'a, TransitionsLogUpdate<U>> {
+    pub fn updates_iter(&self) -> Iter<'_, TransitionsLogUpdate<U>> {
         self.updates.iter()
     }
 
     /// Returns an iterator of the stored log transitions (`T`).
     ///
     /// See [`VecDeque::iter_mut`].
-    pub fn transitions_mut<'a>(&'a mut self) -> IterMut<'a, T> {
+    pub fn transitions_iter_mut(&mut self) -> IterMut<'_, T> {
         self.transitions.iter_mut()
     }
 
     /// Returns an iterator of the stored log updates (`U`).
     ///
     /// See [`VecDeque::iter_mut`].
-    pub fn updates_mut<'a>(&'a mut self) -> IterMut<'a, TransitionsLogUpdate<U>> {
+    pub fn updates_iter_mut(&mut self) -> IterMut<'_, TransitionsLogUpdate<U>> {
         self.updates.iter_mut()
     }
 

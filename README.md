@@ -39,7 +39,7 @@ fn rev_system_2(not_log: NotLog, mut commands: Commands) {
 
     // common reversible commands define both the "doing" and undo-redo in one:
     /*
-    let mut rev_entity_commands = rev_commands.rev_spawn(MyComponent);
+    let rev_entity_commands = rev_commands.rev_spawn(MyComponent);
     */
 }
 
@@ -69,7 +69,7 @@ App::new()
     ))
     .rev_add_systems(
         RevUpdate, // main reversible schedule, by default ran from FixedUpdate
-        // order including commands are reversed at RevDirection::BackwardLog
+        // the order including commands is reversed at RevDirection::BackwardLog
         (rev_system_1, rev_system_2).rev_chain()
     )
     .add_systems(PreUpdate, input_system)

@@ -198,14 +198,14 @@ impl<T> TransitionLog<T> {
     /// Returns an iterator of the stored log entries.
     ///
     /// See [`VecDeque::iter`].
-    pub fn iter<'a>(&'a self) -> Iter<'a, T> {
+    pub fn iter(&self) -> Iter<'_, T> {
         self.transitions.iter()
     }
 
     /// Returns an iterator of the stored log entries.
     ///
     /// See [`VecDeque::iter_mut`].
-    pub fn iter_mut<'a>(&'a mut self) -> IterMut<'a, T> {
+    pub fn iter_mut(&mut self) -> IterMut<'_, T> {
         self.transitions.iter_mut()
     }
 
