@@ -1,6 +1,6 @@
 [package]
 name = "bevy_oozlum"
-version = "0.1.0-rc.1"
+version = "0.1.0-rc.2"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 rust-version = "1.95.0" # keep in sync with bevy
@@ -27,18 +27,18 @@ features = ["app", "reflect", "hotpatching", "track_update_logs"] # all but ci_m
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(docsrs_dep)'] }
 
 [dependencies] # do not use = in versions when bevy 0.19 is released
-bevy_app = { version = "0.19.0-rc.1", optional = true, default-features = false }
-bevy_ecs = { version = "0.19.0-rc.1", default-features = false }
-bevy_log = { version = "0.19.0-rc.1", default-features = false }
-bevy_platform = { version = "0.19.0-rc.1", default-features = false }
-bevy_ptr = { version = "0.19.0-rc.1", default-features = false } 
-bevy_reflect = { version = "0.19.0-rc.1", optional = true, default-features = false }
-bevy_utils = { version = "0.19.0-rc.1", default-features = false }
+bevy_app = { version = "0.19.0-rc.2", optional = true, default-features = false }
+bevy_ecs = { version = "0.19.0-rc.2", default-features = false }
+bevy_log = { version = "0.19.0-rc.2", default-features = false }
+bevy_platform = { version = "0.19.0-rc.2", default-features = false }
+bevy_ptr = { version = "0.19.0-rc.2", default-features = false } 
+bevy_reflect = { version = "0.19.0-rc.2", optional = true, default-features = false }
+bevy_utils = { version = "0.19.0-rc.2", default-features = false }
 nonmax = { version = "0.5", optional = true, default-features = false } # keep in sync with bevy
 variadics_please = "1.1" # keep in sync with bevy
 
 [dev-dependencies]
-bevy = { version = "0.19.0-rc.1", features = ["track_location", "debug"] }
+bevy = { version = "0.19.0-rc.2", features = ["track_location", "debug"] }
 
 [[example]]
 name = "game"

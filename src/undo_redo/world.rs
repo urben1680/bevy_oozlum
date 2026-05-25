@@ -52,7 +52,7 @@ pub(super) trait RevWorld {
     where
         I: IntoIterator<Item: Bundle<Effect: NoBundleEffect>>;
 
-    fn rev_try_insert_batch_inner<I, B, Marker>(
+    fn rev_try_insert_batch<I, B, Marker>(
         &mut self,
         iter: I,
         op: impl FnMut(EntityWorldMut, B) -> Result<(), EntityRevDespawnedError>,
@@ -164,7 +164,7 @@ impl RevWorld for World {
         entities
     }
 
-    fn rev_try_insert_batch_inner<I, B, Marker>(
+    fn rev_try_insert_batch<I, B, Marker>(
         &mut self,
         iter: I,
         mut op: impl FnMut(EntityWorldMut, B) -> Result<(), EntityRevDespawnedError>,
