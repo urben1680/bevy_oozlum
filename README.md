@@ -4,7 +4,7 @@
 
 # ![Bevy Oozlum](https://raw.githubusercontent.com/urben1680/bevy_oozlum/refs/heads/main/logo.png)
 
-Bevy Oozlum is a crate for [Bevy](https://bevy.org/) to write reversible systems, commands and schedules. It can be useful to implement rewind features in a game that run as smoothly as the normal gameplay.
+Bevy Oozlum is a crate for [Bevy](https://bevy.org/) to write **reversible systems**, **commands** and **schedules**. It can be useful to implement rewind features in a game that run as smoothly as the normal gameplay.
 
 This crate is not using a snapshot approach and instead reverts to a prior world state by running the backward logic of reversible systems and their commands in reverse order. Because of that, reverting to very distant past world states instantly should probably not be done this way.
 
@@ -79,6 +79,23 @@ App::new()
 A bigger example `game` is available that showcases the most important API additions in the `row` module.
 
 See the crate's documentation to learn more of the features and limitations.
+
+## Limitations
+
+The following bevy features are currently not available as reversible variants:
+
+- Change detection via `Tick`s or query filters using them
+- Exclusive systems
+- Hooks and observers, though both may queue reversible commands
+- Many commands are available but not all, like those for dynamic components or cloning entities *
+- Delayed commands
+- Commands working with `Relationship`(`Target`) that have additional fields *
+- Disabling automatically inserted sync points of reversible schedules
+- Hotpatching reversible systems is supported but this is not reversible *
+
+<sub>* because this is currently out of scope, but may be implemented manually by the user</sub>
+
+This list may be incomplete.
 
 ## Warning
 

@@ -62,9 +62,9 @@ where
         //    then do non-UndoRedo logic based on the current RevDirection (2), and third do another
         //    UndoRedo-generating logic via RevWorld (3).
         //    This would be the order of actions depending on RevDirection:
-        //    NotLog:      do (1), do (2), do (3), all in the exclusive system, not in a sync point
-        //    BackwardLog: undo (3), undo (1) in a preceding sync point, undo (2) in the system
-        //    ForwardLog:  redo (2) in the system, redo (1), redo (3) in a following sync point
+        //     NotLog:      do (1), do (2), do (3), all in the exclusive system, not in a sync point
+        //     BackwardLog: undo (3), undo (1) in a preceding sync point, undo (2) in the system
+        //     ForwardLog:  redo (2) in the system, redo (1), redo (3) in a following sync point
         //    As one can see, the order is wrong. The user would have to actively refrain from using
         //    such a RevWorld API. Not offering such an API would be not enough as nothing hinders
         //    the user from directly applying reversible commands in the system.

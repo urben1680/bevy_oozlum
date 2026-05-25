@@ -206,17 +206,20 @@
 //!   that expose or work with [`Tick`]s will not be compatible. The mechanism behind them will be
 //!   unable to differentiate between changes at non-log and log phases. Because of this it would
 //!   not behave deterministically.
+//! - **Hooks** are not reversible but may queue reversible commands.
+//! - **Observers** can be written reversibly but would need to be triggered from reversible
+//!   commands. It is adviced to instead only queue reversible commands _from_ them.
 //! - As using reversible **exclusive systems** would come with some footguns that are hard to
 //!   detect and prevent, they are not supported and will cause panics.
 //! - Reversible (entity) commands lack some methods that are available in vanilla bevy, most
 //!   prominently those based on **dynamic components** or **entity cloning**. Supporting them is
 //!   past the scope of this crate. One has to implement [`UndoRedo`] types on their own if these
 //!   are needed.
+//! - Reversible commands cannot be delayed, this will cause run-time errors.
 //! - Reversible commands working with **relationships** are generally available. If custom types
 //!   are used that also contain other data next to the entity collections however, some APIs in
 //!   this crate will not compile in the best case or will silently make that data unrecoverable at
 //!   the worst case. This has to do with the lack of untyped API support as pointed out above.
-//! - Reversible commands cannot be delayed, this will cause run-time errors.
 //! - The behavior of reversible sync points is deeply embedded in this crate. Never build
 //!   reversible schedules with **[`ScheduleBuildSettings::auto_insert_apply_deferred`] set to
 //!   `false`**. Suppress them individually when configuring systems and sets.
