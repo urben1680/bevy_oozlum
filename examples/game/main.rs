@@ -1,3 +1,5 @@
+#![allow(missing_docs)]
+
 use bevy::{
     ecs::{lifecycle::HookContext, world::DeferredWorld},
     prelude::*,

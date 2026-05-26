@@ -353,7 +353,7 @@ where
 {
     move |world: &mut World| {
         world
-            .rev_try_insert_batch_inner(iter, |mut entity_mut, bundle| {
+            .rev_try_insert_batch(iter, |mut entity_mut, bundle| {
                 match insert_mode {
                     InsertMode::Replace => entity_mut.rev_insert(bundle, caller),
                     InsertMode::Keep => entity_mut.rev_insert_if_new(bundle, caller),
