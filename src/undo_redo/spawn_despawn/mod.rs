@@ -235,10 +235,7 @@ impl<E: EntityCollection, const SPAWN: bool> RevSpawnDespawn<E, SPAWN> {
         if !world.contains_resource::<DespawnFinalizer>() {
             let init_at = world
                 .get_resource::<RevMeta>()
-                .filter(|meta| {
-                    meta.get_running_direction()
-                        .is_some_and(RevDirection::is_not_log)
-                })
+                .filter(|meta| meta.is_running_not_log())
                 .map(|meta| meta.now())
                 .unwrap_or_else(|| {
                     world.fallback_error_handler()(
