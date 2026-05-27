@@ -12,7 +12,7 @@ use bevy_ecs::{
 };
 use bevy_log::error;
 use bevy_platform::sync::{
-    Arc, Mutex, MutexGuard, TryLockError,
+    Arc, Mutex, MutexGuard,
     atomic::{AtomicU32, Ordering},
 };
 use bevy_utils::DebugName;
@@ -240,7 +240,12 @@ impl<T: System<In = (), Out = ()>, const FORWARD: bool> System for RevSystem<T, 
         let system = &mut self
             .inner
             .try_lock()
-            .map_err(try_lock_validation_err(&self.name))?
+            .map_err(|err| {
+                SystemParamValidationError::invalid::<T>(format!(
+                    "param validation of reversible system {} failed: {err}",
+                    self.name
+                ))
+            })?
             .system;
 
         // SAFETY: Self::initialize called T::initialize to register all access of T
@@ -425,17 +430,6 @@ impl<T: System> System for BackwardDeferred<T> {
     }
     fn set_last_run(&mut self, last_run: Tick) {
         self.tick = last_run;
-    }
-}
-
-fn try_lock_validation_err<'a, T>(
-    name: &'a DebugName,
-) -> impl for<'b> FnOnce(TryLockError<MutexGuard<'b, Inner<T>>>) -> SystemParamValidationError + 'a
-{
-    move |err| {
-        SystemParamValidationError::invalid::<T>(format!(
-            "param validation of reversible system {name} failed: {err}"
-        ))
     }
 }
 
