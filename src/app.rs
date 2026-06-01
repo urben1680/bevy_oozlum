@@ -7,12 +7,12 @@ use bevy_ecs::{
         InternedScheduleLabel, InternedSystemSet, IntoScheduleConfigs, IntoSystemSet,
         ScheduleCleanupPolicy, ScheduleError, ScheduleLabel, Schedules, SystemSet,
     },
-    system::ScheduleSystem,
+    system::{Command, ScheduleSystem},
 };
 use bevy_log::warn_once;
 
 use crate::{
-    meta::RevMeta,
+    meta::{RevMeta, RevQueue},
     schedule::{IntoRevScheduleConfigs, RevSchedule, run_rev_update},
     undo_redo::RevDespawned,
 };
@@ -150,7 +150,7 @@ pub struct ModifiedRevPlugin {
 }
 
 impl ModifiedRevPlugin {
-    const META_DEFAULT: (u64, bool) = (RevMeta::DEFAULT_MAX_PAST_LEN, RevMeta::DEFAULT_PAUSED);
+    const META_DEFAULT: (u64, bool) = (RevMeta::DEFAULT_MAX_PAST_LEN, false);
 
     /// Unsets [`RevMeta`] insertion. With this the insertion needs to be done manually.
     pub fn unset_meta(mut self) -> ModifiedRevPlugin {
@@ -177,7 +177,7 @@ impl ModifiedRevPlugin {
             }
             None => {
                 warn_once!("overwrote plugin change with RevUpdate::set_max_past_len");
-                self.meta = Some((max_past_len, RevMeta::DEFAULT_PAUSED));
+                self.meta = Some((max_past_len, false));
             }
         }
         self
@@ -280,7 +280,10 @@ impl Plugin for ModifiedRevPlugin {
     fn build(&self, app: &mut App) {
         app.register_disabling_component::<RevDespawned>();
         if let Some((max_past_len, paused)) = self.meta {
-            app.insert_resource(RevMeta::new(max_past_len, paused));
+            app.insert_resource(RevMeta::new(max_past_len));
+            if !paused {
+                RevQueue::RunNotLog.apply(app.world_mut());
+            }
         }
         match self.runner {
             Some((schedule, None)) => {

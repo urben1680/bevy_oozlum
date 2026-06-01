@@ -549,9 +549,8 @@ mod test {
 
         // forward
         meta = meta
-            .update(|mut meta, direction| {
+            .update(Some(RevQueue::RunNotLog), |meta, direction| {
                 assert_eq!(direction, RevDirection::NOT_LOG_MIN);
-                meta.set_queue(RevQueue::RunBackwardLog);
                 world.insert_resource(meta);
                 state = Some(forward(world, direction.past_len()));
                 finalize_despawns(world).unwrap();
@@ -561,14 +560,8 @@ mod test {
 
         // backward log
         meta = meta
-            .update(|mut meta, direction| {
+            .update(Some(RevQueue::RunBackwardLog), |meta, direction| {
                 assert_eq!(direction, RevDirection::BackwardLog);
-                let queue = if forward_log.is_some() {
-                    RevQueue::RunForwardLog
-                } else {
-                    RevQueue::RunNotLog
-                };
-                meta.set_queue(queue);
                 world.insert_resource(meta);
                 world.resource_scope::<UndoRedoQueue, _>(|world, mut queue| queue.undo(world));
                 finalize_despawns(world).unwrap();
@@ -580,9 +573,8 @@ mod test {
         if let Some(forward_log) = forward_log {
             // forward log
             meta = meta
-                .update(|mut meta, direction| {
+                .update(Some(RevQueue::RunForwardLog), |meta, direction| {
                     assert_eq!(direction, RevDirection::ForwardLog);
-                    meta.set_queue(RevQueue::RunNotLog);
                     world.insert_resource(meta);
                     world.resource_scope::<UndoRedoQueue, _>(|world, mut queue| queue.redo(world));
                     finalize_despawns(world).unwrap();
@@ -593,7 +585,7 @@ mod test {
         }
 
         // finalize
-        meta.update(|meta, _| {
+        meta.update(Some(RevQueue::RunNotLog), |meta, _| {
             world.insert_resource(meta);
             finalize_despawns(world).unwrap();
             finalize(world, state.as_mut().unwrap());

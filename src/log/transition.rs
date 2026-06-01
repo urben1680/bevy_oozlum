@@ -406,7 +406,7 @@ mod test {
     impl MetaAndLogs {
         fn new(max_past_len: u64) -> Self {
             Self {
-                meta: RevMeta::new(max_past_len, false),
+                meta: RevMeta::new(max_past_len),
                 logs: Logs::default(),
             }
         }
@@ -418,12 +418,11 @@ mod test {
             clear: bool,
         ) {
             let queue = if clear {
-                RevQueue::ClearThenRunNotLog
+                Some(RevQueue::ClearThenRunNotLog)
             } else {
-                RevQueue::RunNotLog
+                Some(RevQueue::RunNotLog)
             };
-            self.meta.set_queue(queue);
-            self.meta.update_ref(true, |meta, direction| {
+            self.meta.update_ref(queue, true, |meta, direction| {
                 let RevDirection::NotLog(not_log) = direction else {
                     unreachable!()
                 };
@@ -437,43 +436,45 @@ mod test {
             });
         }
         fn noop_forward_backward_log(&mut self) {
-            self.meta.set_queue(RevQueue::RunNotLog);
-            self.meta.update_ref(true, |_, _| ());
-            self.meta.set_queue(RevQueue::RunBackwardLog);
-            self.meta.update_ref(true, |_, _| ());
+            self.meta
+                .update_ref(Some(RevQueue::RunNotLog), true, |_, _| ());
+            self.meta
+                .update_ref(Some(RevQueue::RunBackwardLog), true, |_, _| ());
         }
         #[track_caller]
         fn forward_log(&mut self, expected: Result<char, ()>) {
-            self.meta.set_queue(RevQueue::RunForwardLog);
             match expected {
                 Ok(_) => {
-                    self.meta.update_ref(true, |meta, _| {
-                        self.logs.assert_forward_log_transition(meta, expected);
-                    });
+                    self.meta
+                        .update_ref(Some(RevQueue::RunForwardLog), true, |meta, _| {
+                            self.logs.assert_forward_log_transition(meta, expected);
+                        });
                 }
                 Err(()) => {
-                    self.meta.update_ref(false, |_, _| ());
+                    self.meta
+                        .update_ref(Some(RevQueue::RunForwardLog), false, |_, _| ());
                     self.logs
                         .assert_forward_log_transition(&self.meta, expected);
                 }
             }
         }
         fn forward_log_err_in_global_log(&mut self) {
-            self.meta.update_ref(true, |meta, _| {
+            self.meta.update_ref(None, true, |meta, _| {
                 self.logs.assert_forward_log_transition(meta, Err(()));
             });
         }
         #[track_caller]
         fn backward_log(&mut self, expected: Result<char, ()>) {
-            self.meta.set_queue(RevQueue::RunBackwardLog);
             match expected {
                 Ok(_) => {
-                    self.meta.update_ref(true, |meta, _| {
-                        self.logs.assert_backward_log_transition(meta, expected);
-                    });
+                    self.meta
+                        .update_ref(Some(RevQueue::RunBackwardLog), true, |meta, _| {
+                            self.logs.assert_backward_log_transition(meta, expected);
+                        });
                 }
                 Err(()) => {
-                    self.meta.update_ref(false, |_, _| ());
+                    self.meta
+                        .update_ref(Some(RevQueue::RunBackwardLog), false, |_, _| ());
                     self.logs
                         .assert_backward_log_transition(&self.meta, expected);
                 }

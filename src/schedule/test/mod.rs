@@ -14,7 +14,7 @@ use bevy_ecs::{
     component::Component,
     event::Event,
     resource::Resource,
-    system::{Commands, IntoSystem, Local},
+    system::{Command, Commands, IntoSystem, Local},
     world::World,
 };
 
@@ -350,24 +350,16 @@ fn truncates_future_command_log() {
 
     app.update(); // do 1
     app.update(); // do 2, command queued
-    app.world_mut()
-        .resource_mut::<RevMeta>()
-        .set_queue(RevQueue::RunBackwardLog);
+    RevQueue::RunBackwardLog.apply(app.world_mut());
     app.update(); // undo 2
     app.update(); // undo 1
-    app.world_mut()
-        .resource_mut::<RevMeta>()
-        .set_queue(RevQueue::RunForwardLog);
+    RevQueue::RunForwardLog.apply(app.world_mut());
     app.update(); // do 1, should truncate logs
     app.update(); // do 2, no command queued
-    app.world_mut()
-        .resource_mut::<RevMeta>()
-        .set_queue(RevQueue::RunBackwardLog);
+    RevQueue::RunBackwardLog.apply(app.world_mut());
     app.update(); // undo 2
     app.update(); // undo 1
-    app.world_mut()
-        .resource_mut::<RevMeta>()
-        .set_queue(RevQueue::RunForwardLog);
+    RevQueue::RunForwardLog.apply(app.world_mut());
     app.update(); // redo 1
     app.update(); // redo 2, should not panic
 }

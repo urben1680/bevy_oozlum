@@ -1,9 +1,9 @@
-use alloc::{borrow::Cow, format};
+use alloc::borrow::Cow;
 use bevy_ecs::{
     change_detection::Tick,
     component::ComponentId,
-    error::Result as BevyResult,
     query::FilteredAccessSet,
+    resource::Resource,
     system::{Command, ReadOnlySystemParam, SystemMeta, SystemParam, SystemParamValidationError},
     world::{World, unsafe_world_cell::UnsafeWorldCell},
 };
@@ -103,14 +103,36 @@ pub(super) enum RunningOrRan {
     Pause { after_log: bool },
 }
 
-/// The next state [`RevMeta`] should be in via [`RevMeta::set_queue`], will be applied when
-/// [`run_rev_update`] runs. Before that, a different queue can be set, which will
-/// overwrite a different pending value. Can also be [unset] before that.
+/// The next state [`RevUpdate`] should run in, will be applied when [`run_rev_update`] runs by
+/// passing this value from a command to [`RevMeta::update`].
 ///
-/// This type may also be used as a [`Command`] that can fail if [`RevMeta`] is missing.
+/// # Example
 ///
+/// ```
+/// # use bevy::prelude::*;
+/// # use bevy_oozlum::prelude::*;
+/// fn input_system(
+///     keyboard_input: Res<ButtonInput<KeyCode>>,
+///     mut commands: Commands
+/// ) {
+///     if keyboard_input.just_pressed(KeyCode::ArrowUp) {
+///         // truncates too-old past frames and all future frames from the log
+///         commands.queue(RevQueue::RunNotLog);
+///     } else if keyboard_input.just_pressed(KeyCode::ArrowLeft) {
+///         // undoes frames, pauses at past log end
+///         commands.queue(RevQueue::RunBackwardLog);
+///     } else if keyboard_input.just_pressed(KeyCode::ArrowRight) {
+///         // redoes frames, pauses at future log end
+///         commands.queue(RevQueue::RunForwardLog);
+///     } else if keyboard_input.just_pressed(KeyCode::Down) {
+///         // do not run reversible schedules and their systems until unpaused
+///         commands.queue(RevQueue::Pause);
+///     }
+/// }
+/// ```
+///
+/// [`RevUpdate`]: crate::schedule::RevUpdate
 /// [`run_rev_update`]: crate::schedule::run_rev_update
-/// [unset]: RevMeta::unset_queue
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "reflect", derive(bevy_reflect::Reflect))]
 pub enum RevQueue {
@@ -152,14 +174,25 @@ pub enum RevQueue {
     ClearThenPause,
 }
 
+#[derive(Resource)]
+struct RevQueueRes(RevQueue);
+
 impl Command for RevQueue {
-    type Out = BevyResult;
-    fn apply(self, world: &mut World) -> BevyResult {
-        world
-            .get_resource_mut::<RevMeta>()
-            .ok_or_else(|| format!("could not queue {self:?}, RevMeta is missing"))?
-            .set_queue(self);
-        Ok(())
+    type Out = ();
+    fn apply(self, world: &mut World) {
+        world.insert_resource(RevQueueRes(self));
+    }
+}
+
+impl RevQueue {
+    /// Takes the queued direction that a command previously stored. This should be passed to
+    /// [`RevMeta::update`].
+    ///
+    /// This function should only be used in custom replacements of the [`run_rev_update`] system.
+    ///
+    /// [`run_rev_update`]: crate::schedule::run_rev_update
+    pub fn take(world: &mut World) -> Option<Self> {
+        world.remove_resource::<RevQueueRes>().map(|queue| queue.0)
     }
 }
 

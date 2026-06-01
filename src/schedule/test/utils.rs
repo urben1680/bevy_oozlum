@@ -36,7 +36,8 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
     let mut world = World::new();
     panic_on_warnings_or_errors(&mut world);
     world.init_resource::<TestLog>();
-    world.insert_resource(RevMeta::new(u64::MAX, false));
+    world.insert_resource(RevMeta::new(u64::MAX));
+    RevQueue::RunNotLog.apply(&mut world);
 
     // set up schedules
     let mut schedule = Schedule::new(FixedUpdate);
@@ -114,8 +115,7 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
     }
 
     // run tests backward log
-    let mut meta = world.resource_mut::<RevMeta>();
-    meta.set_queue(RevQueue::RunBackwardLog);
+    RevQueue::RunBackwardLog.apply(&mut world);
     for (step, expected) in expected.iter().enumerate().rev() {
         test_step(
             &mut world,
@@ -128,8 +128,7 @@ fn test_run_variant<C: for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>(
     }
 
     // run tests forward log
-    let mut meta = world.resource_mut::<RevMeta>();
-    meta.set_queue(RevQueue::RunForwardLog);
+    RevQueue::RunForwardLog.apply(&mut world);
     for (step, expected) in expected.iter().enumerate() {
         test_step(
             &mut world,

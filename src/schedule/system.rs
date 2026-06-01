@@ -566,11 +566,11 @@ mod test {
         app.update();
         assert_eq!(app.world().resource::<Counter>().0, 3);
 
-        RevQueue::RunBackwardLog.apply(app.world_mut()).unwrap();
+        RevQueue::RunBackwardLog.apply(app.world_mut());
         app.update();
         assert_eq!(app.world().resource::<Counter>().0, 6);
 
-        RevQueue::RunForwardLog.apply(app.world_mut()).unwrap();
+        RevQueue::RunForwardLog.apply(app.world_mut());
         app.update();
         assert_eq!(app.world().resource::<Counter>().0, 9);
     }
@@ -596,11 +596,11 @@ mod test {
         app.update();
         assert!(app.world().contains_resource::<Done>());
 
-        RevQueue::RunBackwardLog.apply(app.world_mut()).unwrap();
+        RevQueue::RunBackwardLog.apply(app.world_mut());
         app.update();
         assert!(!app.world().contains_resource::<Done>());
 
-        RevQueue::RunForwardLog.apply(app.world_mut()).unwrap();
+        RevQueue::RunForwardLog.apply(app.world_mut());
         app.update();
         assert!(app.world().contains_resource::<Done>());
     }

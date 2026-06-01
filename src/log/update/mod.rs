@@ -529,7 +529,7 @@ mod test {
     impl MetaAndLog {
         fn new(max_past_len: u64) -> Self {
             Self {
-                meta: RevMeta::new(max_past_len, false),
+                meta: RevMeta::new(max_past_len),
                 update_log: UpdateLog::new(),
                 last_update: MaybeLocation::caller().map(Some),
             }
@@ -538,12 +538,11 @@ mod test {
         fn forward<const N: usize>(&mut self, past_lens: [u64; N], clear: bool) {
             let caller = MaybeLocation::caller().map(Some);
             let queue = if clear {
-                RevQueue::ClearThenRunNotLog
+                Some(RevQueue::ClearThenRunNotLog)
             } else {
-                RevQueue::RunNotLog
+                Some(RevQueue::RunNotLog)
             };
-            self.meta.set_queue(queue);
-            self.meta.update_ref_or_missed(Ok(true), |meta, _| {
+            self.meta.update_ref_or_missed(queue, Ok(true), |meta, _| {
                 for past_len in past_lens {
                     let past_len = NonZeroU64::new(past_len).unwrap();
                     let actual = self.update_log.forward_past_len_with_caller(meta, caller);
@@ -564,33 +563,36 @@ mod test {
                     if insufficient_updates == 1 {
                         missed.last_update = caller;
                     }
-                    self.meta.set_queue(RevQueue::RunForwardLog);
-                    self.meta.update_ref_or_missed(Err(missed), |meta, _| {
-                        for _ in 0..insufficient_updates {
-                            assert!(
-                                self.update_log
-                                    .forward_log_with_caller(meta, caller)
-                                    .unwrap()
-                            );
-                        }
-                    });
+                    self.meta.update_ref_or_missed(
+                        Some(RevQueue::RunForwardLog),
+                        Err(missed),
+                        |meta, _| {
+                            for _ in 0..insufficient_updates {
+                                assert!(
+                                    self.update_log
+                                        .forward_log_with_caller(meta, caller)
+                                        .unwrap()
+                                );
+                            }
+                        },
+                    );
                     self.revert(insufficient_updates, false);
                 }
             }
 
             // test where all updates ran
-            self.meta.set_queue(RevQueue::RunForwardLog);
-            self.meta.update_ref_or_missed(Ok(true), |meta, _| {
-                for _ in 0..updates {
-                    assert!(
-                        self.update_log
-                            .forward_log_with_caller(meta, caller)
-                            .unwrap()
-                    );
-                }
-                // assert no more updates would run
-                assert!(!self.update_log.forward_log(meta).unwrap());
-            });
+            self.meta
+                .update_ref_or_missed(Some(RevQueue::RunForwardLog), Ok(true), |meta, _| {
+                    for _ in 0..updates {
+                        assert!(
+                            self.update_log
+                                .forward_log_with_caller(meta, caller)
+                                .unwrap()
+                        );
+                    }
+                    // assert no more updates would run
+                    assert!(!self.update_log.forward_log(meta).unwrap());
+                });
 
             if updates != 0 {
                 self.last_update = caller;
@@ -608,33 +610,36 @@ mod test {
                     if insufficient_updates == 1 {
                         missed.last_update = caller;
                     }
-                    self.meta.set_queue(RevQueue::RunBackwardLog);
-                    self.meta.update_ref_or_missed(Err(missed), |meta, _| {
-                        for _ in 0..insufficient_updates {
-                            assert!(
-                                self.update_log
-                                    .backward_log_with_caller(meta, caller)
-                                    .unwrap()
-                            );
-                        }
-                    });
+                    self.meta.update_ref_or_missed(
+                        Some(RevQueue::RunBackwardLog),
+                        Err(missed),
+                        |meta, _| {
+                            for _ in 0..insufficient_updates {
+                                assert!(
+                                    self.update_log
+                                        .backward_log_with_caller(meta, caller)
+                                        .unwrap()
+                                );
+                            }
+                        },
+                    );
                     self.revert(insufficient_updates, true);
                 }
             }
 
             // test where all updates ran
-            self.meta.set_queue(RevQueue::RunBackwardLog);
-            self.meta.update_ref_or_missed(Ok(true), |meta, _| {
-                for _ in 0..updates {
-                    assert!(
-                        self.update_log
-                            .backward_log_with_caller(meta, caller)
-                            .unwrap()
-                    );
-                }
-                // assert no more updates would run
-                assert!(!self.update_log.backward_log(meta).unwrap());
-            });
+            self.meta
+                .update_ref_or_missed(Some(RevQueue::RunBackwardLog), Ok(true), |meta, _| {
+                    for _ in 0..updates {
+                        assert!(
+                            self.update_log
+                                .backward_log_with_caller(meta, caller)
+                                .unwrap()
+                        );
+                    }
+                    // assert no more updates would run
+                    assert!(!self.update_log.backward_log(meta).unwrap());
+                });
 
             if updates != 0 {
                 self.last_update = caller;
@@ -648,12 +653,11 @@ mod test {
         }
         fn revert(&mut self, updates: u64, forward: bool) {
             let queue = if forward {
-                RevQueue::RunForwardLog
+                Some(RevQueue::RunForwardLog)
             } else {
-                RevQueue::RunBackwardLog
+                Some(RevQueue::RunBackwardLog)
             };
-            self.meta.set_queue(queue);
-            self.meta.update_ref_or_missed(Ok(true), |meta, _| {
+            self.meta.update_ref_or_missed(queue, Ok(true), |meta, _| {
                 if forward {
                     for _ in 0..updates {
                         assert!(

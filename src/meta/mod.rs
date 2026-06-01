@@ -13,7 +13,7 @@ use alloc::{borrow::Cow, boxed::Box, format};
 use alloc::{string::ToString, vec::Vec};
 use bevy_ecs::{
     resource::Resource,
-    system::{RunSystemError, SystemParamValidationError},
+    system::{Command, RunSystemError, SystemParamValidationError},
     world::World,
 };
 #[cfg(feature = "reflect")]
@@ -31,15 +31,15 @@ pub use direction::*;
 ///
 /// 1. To read in reversible systems that need to match the [`RevDirection`] via
 ///    [`running_direction`] to decide if they should run forwards or backwards.
-/// 2. To queue a new direction via [`set_queue`] or to pause.
-/// 3. To modify the maximum past length that should be tracked via [`set_max_past_len`].
-/// 4. To globally clear all logs, for example when the level changes and all logs become obsolete.
-///    This is also done via [`set_queue`].
-/// 5. To read the reversible frame ids via [`now`] and other methods, possibly to track important
+/// 2. To modify the maximum past length that should be tracked via [`set_max_past_len`].
+/// 3. To read the reversible frame ids via [`now`] and other methods, possibly to track important
 ///    moments one wants to revert to.
 ///
+/// To control in which `RevDirection`the next update runs, queue a [`RevQueue`] command or pass it
+/// to [`update`] directly. This also supports clearing the present log as an immediate step.
+///
 /// [`running_direction`]: Self::running_direction
-/// [`set_queue`]: Self::set_queue
+/// [`update`]: Self::update
 /// [`set_max_past_len`]: Self::set_max_past_len
 /// [`now`]: Self::now
 #[derive(Resource, Debug)]
@@ -60,9 +60,6 @@ pub struct RevMeta {
     /// Current or previous direction
     direction: RunningOrRan,
 
-    /// Queued direction, if any
-    queue: Option<RevQueue>,
-
     /// Number of log -> non-log direction changes, regardless if paused in between
     log_exits: u64,
 
@@ -76,61 +73,35 @@ pub struct RevMeta {
 
 impl Default for RevMeta {
     fn default() -> Self {
-        Self::new(Self::DEFAULT_MAX_PAST_LEN, Self::DEFAULT_PAUSED)
+        Self::new(Self::DEFAULT_MAX_PAST_LEN)
     }
 }
 
 impl RevMeta {
     pub(crate) const DEFAULT_MAX_PAST_LEN: u64 = 1;
-    pub(crate) const DEFAULT_PAUSED: bool = false;
 
     /// Construct a new value. This is usually done automatically by [`RevPlugin`].
     ///
-    /// - `max_past_len` defines how many frames can be reverted to via [`set_queue`] with
-    ///   [`RevQueue::RunBackwardLog`]. The amount can be later changed via
-    ///   [`set_max_past_len`]. If `0` is used, the value is replaced with `1`.
-    /// - `paused` defines if after inserting this `RevMeta` it will be attempted to run
-    ///   [`RevUpdate`] right away. For this that schedule and the [`run_rev_update`] system
-    ///   must have been added to the app. If it is inserted in the paused state, it can be unpaused
-    ///   via [`set_queue`] with [`RevQueue::RunNotLog`].
+    /// `max_past_len` defines how many frames can be reverted to with the
+    /// [`RevQueue::RunBackwardLog`] command. The amount can be later changed via
+    /// [`set_max_past_len`]. If `0` is used, the value is replaced with `1`.
     ///
     /// [`run_rev_update`]: crate::schedule::run_rev_update
     /// [`RevPlugin`]: crate::app::RevPlugin
-    /// [`set_queue`]: Self::set_queue
     /// [`set_max_past_len`]: Self::set_max_past_len
-    pub fn new(max_past_len: u64, paused: bool) -> Self {
+    pub fn new(max_past_len: u64) -> Self {
         Self {
             past_end: 0,
             now: 0,
             future_end: 0,
             max_past_len: NonZeroU64::new(max_past_len).unwrap_or(NonZeroU64::MIN),
             direction: RunningOrRan::Pause { after_log: false },
-            queue: (!paused).then_some(RevQueue::RunNotLog),
             log_exits: 0,
             log_clears: 0,
 
             #[cfg(feature = "track_update_logs")]
             update_log_limits: UpdateLogLimits::default(),
         }
-    }
-
-    /// Change the current [`RevQueue`] that will be applied right before the next time
-    /// [`run_rev_update`](crate::schedule::run_rev_update) runs. See the `RevQueue` docs for more
-    /// information.
-    pub const fn set_queue(&mut self, queue: RevQueue) {
-        self.queue = Some(queue);
-    }
-
-    /// Remove the current [`RevQueue`] before it could be applied right before the next time
-    /// [`run_rev_update`](crate::schedule::run_rev_update) runs.
-    pub const fn unset_queue(&mut self) {
-        self.queue = None;
-    }
-
-    /// Get the current [`RevQueue`] that will be applied right before the next time
-    /// [`run_rev_update`](crate::schedule::run_rev_update) runs.
-    pub const fn get_queue(&self) -> Option<RevQueue> {
-        self.queue
     }
 
     /// Set how many past frames can be reveres to at most. If `0` is used, the value is replaced
@@ -437,6 +408,7 @@ impl RevMeta {
     /// [log directions]: RevDirection::is_log
     pub fn update(
         mut self,
+        queue: Option<RevQueue>,
         c: impl FnOnce(Self, RevDirection) -> Option<Self>,
     ) -> Result<Self, RevMetaUpdateErr> {
         // get direction that ran previously
@@ -460,7 +432,7 @@ impl RevMeta {
         };
 
         // get queued direction
-        let queue = match self.queue.take() {
+        let queue = match queue {
             None => None,
             Some(RevQueue::RunNotLog) => {
                 if after_log {
@@ -581,10 +553,15 @@ impl RevMeta {
     }
 
     #[cfg(test)]
-    pub(crate) fn update_ref(&mut self, should_run: bool, c: impl FnOnce(&mut Self, RevDirection)) {
-        let meta = core::mem::replace(self, RevMeta::new(u64::MAX, true));
+    pub(crate) fn update_ref(
+        &mut self,
+        queue: Option<RevQueue>,
+        should_run: bool,
+        c: impl FnOnce(&mut Self, RevDirection),
+    ) {
+        let meta = core::mem::replace(self, RevMeta::new(u64::MAX));
         let mut ran = false;
-        let result = meta.update(|mut meta, direction| {
+        let result = meta.update(queue, |mut meta, direction| {
             ran = true;
             c(&mut meta, direction);
             Some(meta)
@@ -600,17 +577,18 @@ impl RevMeta {
     #[cfg(all(test, feature = "track_update_logs"))]
     pub(crate) fn update_ref_or_missed(
         &mut self,
+        queue: Option<RevQueue>,
         should_run: Result<bool, UpdateLogMissed>,
         c: impl FnOnce(&mut Self, RevDirection),
     ) {
         match should_run {
             Ok(should_run) => {
-                self.update_ref(should_run, c);
+                self.update_ref(queue, should_run, c);
             }
             Err(missed) => {
-                let meta = core::mem::replace(self, RevMeta::new(u64::MAX, true));
+                let meta = core::mem::replace(self, RevMeta::new(u64::MAX));
                 let mut ran = false;
-                let result = meta.update(|mut meta, direction| {
+                let result = meta.update(queue, |mut meta, direction| {
                     ran = true;
                     c(&mut meta, direction);
                     Some(meta)
@@ -665,8 +643,9 @@ impl RevMeta {
                 }
 
                 // update RevMeta and DespawnFinalizer
+                let queue = RevQueue::take(world);
                 let mut despawn_finalizer_result = Ok(());
-                let meta_result = meta.update(|meta, _| {
+                let meta_result = meta.update(queue, |meta, _| {
                     world.insert_resource(meta);
                     schedule.run(world);
                     despawn_finalizer_result = finalize_despawns(world);
@@ -704,6 +683,10 @@ impl RevMeta {
                                 "RevMeta is already running\n{meta:?}"
                             )),
                         ));
+                        if let Some(queue) = queue {
+                            // queue direction again for when RevMeta can actually run again
+                            queue.apply(world);
+                        }
                         world.insert_resource(*meta);
                         err
                     }

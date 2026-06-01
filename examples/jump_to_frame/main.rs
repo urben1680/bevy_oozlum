@@ -32,7 +32,7 @@ struct FrameLog {
     allow_backward: bool,
 }
 
-fn update_frame_log(mut meta: ResMut<RevMeta>, mut frame_log: ResMut<FrameLog>) {
+fn update_frame_log(meta: Res<RevMeta>, mut frame_log: ResMut<FrameLog>, mut commands: Commands) {
     // take and thus reset mark_next_frame
     let mark = std::mem::take(&mut frame_log.mark_next_frame);
 
@@ -61,7 +61,7 @@ fn update_frame_log(mut meta: ResMut<RevMeta>, mut frame_log: ResMut<FrameLog>) 
         frame_log.allow_backward = index != 0;
 
         // pause at this marked frame
-        meta.set_queue(RevQueue::Pause);
+        commands.queue(RevQueue::Pause);
     } else if meta.is_running_forward_log() {
         // going forward in log implies we are allowed to go back to the previous frame again
         frame_log.allow_backward = true;

@@ -122,8 +122,7 @@
 //! [`rev_run_schedule`] command.
 //!
 //! To revert or advance the world in the log of already ran frames, or in other words, to set the
-//! [`RevDirection`] as seen in `rev_system_2`, the [`RevMeta`] resource is offering a [`set_queue`]
-//! method.
+//! [`RevDirection`] as seen in `rev_system_2`, queue a [`RevQueue`] command.
 //!
 //! ```
 //! # use bevy::prelude::*;
@@ -239,7 +238,7 @@
 //! [`RevSystems`]: crate::schedule::RevSystems
 //! [`rev_run_schedule`]: crate::undo_redo::commands::RevCommands::rev_run_schedule
 //! [`RevDirection`]: crate::meta::RevDirection
-//! [`set_queue`]: crate::meta::RevMeta::set_queue
+//! [`RevQueue`]: crate::meta::RevQueue
 //! [`now`]: crate::meta::RevMeta::now
 //! [`RevQueue::Pause`]: crate::meta::RevQueue::Pause
 //! [`RevQueue::RunForwardLog`]: crate::meta::RevQueue::RunForwardLog

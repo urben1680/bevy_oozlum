@@ -557,7 +557,7 @@ fn entries<const N: usize, const M: usize>(
 impl MetaAndLogs {
     fn new(max_past_len: u64) -> Self {
         Self {
-            meta: RevMeta::new(max_past_len, false),
+            meta: RevMeta::new(max_past_len),
             updates: UpdateLog::new(),
             transition_logs: Logs::default(),
             transitions_logs: Logs::default(),
@@ -565,12 +565,11 @@ impl MetaAndLogs {
     }
     fn forward<const N: usize>(&mut self, entries: [Entries; N], clear: bool) {
         let queue = if clear {
-            RevQueue::ClearThenRunNotLog
+            Some(RevQueue::ClearThenRunNotLog)
         } else {
-            RevQueue::RunNotLog
+            Some(RevQueue::RunNotLog)
         };
-        self.meta.set_queue(queue);
-        self.meta.update_ref(true, |meta, _| {
+        self.meta.update_ref(queue, true, |meta, _| {
             for Entries {
                 past_drain,
                 future_drain,
@@ -604,32 +603,32 @@ impl MetaAndLogs {
         });
     }
     fn forward_log<const N: usize>(&mut self, entries: [(&'static str, char); N]) {
-        self.meta.set_queue(RevQueue::RunForwardLog);
-        self.meta.update_ref(true, |meta, _| {
-            let mut entries = entries.into_iter();
-            while self.updates.forward_log(meta).unwrap() {
-                let entry = entries.by_ref().next().unwrap();
-                self.transition_logs
-                    .assert_forward_log_transition(meta, Ok(entry.1));
-                self.transitions_logs
-                    .assert_forward_log_transitions(meta, Ok(entry));
-            }
-            assert_eq!(entries.len(), 0);
-        });
+        self.meta
+            .update_ref(Some(RevQueue::RunForwardLog), true, |meta, _| {
+                let mut entries = entries.into_iter();
+                while self.updates.forward_log(meta).unwrap() {
+                    let entry = entries.by_ref().next().unwrap();
+                    self.transition_logs
+                        .assert_forward_log_transition(meta, Ok(entry.1));
+                    self.transitions_logs
+                        .assert_forward_log_transitions(meta, Ok(entry));
+                }
+                assert_eq!(entries.len(), 0);
+            });
     }
     fn backward_log<const N: usize>(&mut self, entries: [(&'static str, char); N]) {
-        self.meta.set_queue(RevQueue::RunBackwardLog);
-        self.meta.update_ref(true, |meta, _| {
-            let mut entries = entries.into_iter();
-            while self.updates.backward_log(meta).unwrap() {
-                let entry = entries.by_ref().next().unwrap();
-                self.transition_logs
-                    .assert_backward_log_transition(meta, Ok(entry.1));
-                self.transitions_logs
-                    .assert_backward_log_transitions(meta, Ok(entry));
-            }
-            assert_eq!(entries.len(), 0);
-        });
+        self.meta
+            .update_ref(Some(RevQueue::RunBackwardLog), true, |meta, _| {
+                let mut entries = entries.into_iter();
+                while self.updates.backward_log(meta).unwrap() {
+                    let entry = entries.by_ref().next().unwrap();
+                    self.transition_logs
+                        .assert_backward_log_transition(meta, Ok(entry.1));
+                    self.transitions_logs
+                        .assert_backward_log_transitions(meta, Ok(entry));
+                }
+                assert_eq!(entries.len(), 0);
+            });
     }
 }
 

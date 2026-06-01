@@ -41,6 +41,7 @@ fn system(
     state: Res<State<GameState>>,
     mut meta: ResMut<RevMeta>,
     mut just_pressed: ResMut<JustPressed>,
+    mut commands: Commands,
 ) {
     if input.just_pressed(KeyCode::Escape) {
         exit.write(AppExit::Success);
@@ -52,19 +53,19 @@ fn system(
         return;
     }
 
-    // RevMeta::set_queue is used to control how/if RevUpdate is run
+    // RevQueue is used to control how/if RevUpdate is run
     if input.just_pressed(KeyCode::ArrowUp) {
-        meta.set_queue(RevQueue::RunNotLog);
+        commands.queue(RevQueue::RunNotLog);
     } else if input.just_pressed(KeyCode::ArrowDown) {
-        meta.set_queue(RevQueue::Pause);
+        commands.queue(RevQueue::Pause);
     } else if input.just_pressed(KeyCode::ArrowLeft) {
-        meta.set_queue(RevQueue::RunForwardLog);
+        commands.queue(RevQueue::RunForwardLog);
     } else if input.just_pressed(KeyCode::ArrowRight) {
-        meta.set_queue(RevQueue::RunBackwardLog);
+        commands.queue(RevQueue::RunBackwardLog);
     } else if input.just_pressed(KeyCode::Backspace) {
         // One can also pause after clearing with RevQueue::ClearThenPause.
         // Beware that this instantly loses all tossed waste that was not undone yet.
-        meta.set_queue(RevQueue::ClearThenRunNotLog);
+        commands.queue(RevQueue::ClearThenRunNotLog);
     }
 
     // The maximum past length can be adjusted at any time and has an effect the next time RevUpdate

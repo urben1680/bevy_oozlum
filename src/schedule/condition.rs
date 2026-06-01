@@ -298,30 +298,33 @@ mod test {
     impl MetaAndLogs {
         fn new() -> Self {
             Self {
-                meta: RevMeta::new(u64::MAX, false),
+                meta: RevMeta::new(u64::MAX),
                 logs: Default::default(),
             }
         }
         fn forward(&mut self, result: Result<bool, RunSystemError>) {
-            self.meta.set_queue(RevQueue::RunNotLog);
-            self.meta.update_ref(true, |meta, _| {
-                self.logs.insert(meta, &result).unwrap();
-            });
+            self.meta
+                .update_ref(Some(RevQueue::RunNotLog), true, |meta, _| {
+                    self.logs.insert(meta, &result).unwrap();
+                });
         }
         fn noop_forward(&mut self) {
-            self.meta.set_queue(RevQueue::RunNotLog);
-            self.meta.update_ref(true, |_, _| ());
+            self.meta
+                .update_ref(Some(RevQueue::RunNotLog), true, |_, _| ());
         }
         fn forward_log(&mut self, expected: Result<bool, &str>) {
-            self.meta.set_queue(RevQueue::RunForwardLog);
             self.log(true, expected);
         }
         fn backward_log(&mut self, expected: Result<bool, &str>) {
-            self.meta.set_queue(RevQueue::RunBackwardLog);
             self.log(false, expected);
         }
         fn log(&mut self, forward: bool, expected: Result<bool, &str>) {
-            self.meta.update_ref(true, |meta, _| {
+            let queue = if forward {
+                Some(RevQueue::RunForwardLog)
+            } else {
+                Some(RevQueue::RunBackwardLog)
+            };
+            self.meta.update_ref(queue, true, |meta, _| {
                 match (self.logs.get(meta, forward), expected) {
                     (Ok(actual), Ok(expected)) => assert_eq!(actual, expected),
                     (Err(RunSystemError::Failed(actual)), Err(expected)) => {
@@ -340,12 +343,12 @@ mod test {
                     .as_ref()
                     .is_some_and(|failed_logs| failed_logs.failed_cache.0.len() > 1)
             );
-            self.meta.set_queue(RevQueue::ClearThenRunNotLog);
-            self.meta.update_ref(true, |meta, _| {
-                self.logs
-                    .insert(meta, &Err(RunSystemError::Failed(err.into())))
-                    .unwrap();
-            });
+            self.meta
+                .update_ref(Some(RevQueue::ClearThenRunNotLog), true, |meta, _| {
+                    self.logs
+                        .insert(meta, &Err(RunSystemError::Failed(err.into())))
+                        .unwrap();
+                });
             let failed_logs = self.logs.failed_log.unwrap();
             let mut values = failed_logs.failed_cache.0.values();
             let mut actual = values.next().unwrap().string.clone();

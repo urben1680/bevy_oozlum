@@ -22,12 +22,7 @@ struct RunValues {
 
 impl RevMeta {
     fn update_assert(&mut self, queue: Option<RevQueue>, values: Option<RunValues>) {
-        match queue {
-            None if self.now == 0 => assert_eq!(self.get_queue(), Some(RevQueue::RunNotLog)),
-            None => assert_eq!(self.get_queue(), None),
-            Some(queue) => self.set_queue(queue),
-        }
-        self.update_ref(values.is_some(), |meta, direction| {
+        self.update_ref(queue, values.is_some(), |meta, direction| {
             let values = values.unwrap();
             assert_eq!(meta.past_end(), values.past_end);
             assert_eq!(meta.now_before_running(), values.now_before_running);
@@ -43,9 +38,9 @@ impl RevMeta {
 
 #[test]
 fn traverses_log() {
-    let mut meta = RevMeta::new(4, false);
+    let mut meta = RevMeta::new(4);
     meta.update_assert(
-        None,
+        Some(RevQueue::RunNotLog),
         Some(RunValues {
             past_end: 0,
             now_before_running: 0,
@@ -366,7 +361,7 @@ fn traverses_log() {
 
 #[test]
 fn contains_returns_expected() {
-    let mut meta = RevMeta::new(u64::MAX, true);
+    let mut meta = RevMeta::new(u64::MAX);
     meta.past_end = 1;
     meta.now = 3;
     meta.future_end = 5;
