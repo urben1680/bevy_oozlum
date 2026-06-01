@@ -1,8 +1,8 @@
+# ![Bevy Oozlum](logo.png)
+
 [![License](https://img.shields.io/badge/license-MIT%2FApache-blue.svg)](https://github.com/urben1680/bevy_oozlum#license)
 [![Crates.io](https://img.shields.io/crates/v/bevy_oozlum.svg)](https://crates.io/crates/bevy_oozlum)
 [![Docs](https://docs.rs/bevy_oozlum/badge.svg)](https://docs.rs/bevy_oozlum/latest/bevy/)
-
-# ![Bevy Oozlum](logo.png)
 
 Bevy Oozlum is a crate for [Bevy](https://bevy.org/) to write **reversible systems**, **commands** and **schedules**. It can be useful to implement rewind features in a game that run as smoothly as the normal gameplay.
 

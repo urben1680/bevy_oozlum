@@ -45,7 +45,7 @@
 //! [`RevEntityCommands::rev_despawn`]: crate::undo_redo::entity_commands::RevEntityCommands::rev_despawn
 //! [`RelationshipTarget::LINKED_SPAWN`]: bevy_ecs::relationship::RelationshipTarget::LINKED_SPAWN
 
-use alloc::{boxed::Box, format, string::ToString, vec::Vec};
+use alloc::{boxed::Box, vec::Vec};
 use bevy_ecs::{change_detection::MaybeLocation, entity::Entity, resource::Resource, world::World};
 use bevy_platform::cell::SyncCell;
 use bevy_utils::prelude::DebugName;
@@ -357,10 +357,10 @@ impl Display for UndoRedoLogError {
                 expected_forward,
                 direction,
             } => {
-                let actual = match direction {
-                    Some(direction) => format!("{direction}"),
-                    None => "none".to_string(),
-                };
+                let actual = core::fmt::from_fn(|f| match direction {
+                    Some(direction) => write!(f, "{direction}"),
+                    None => write!(f, "none"),
+                });
                 let expected = if *expected_forward {
                     "forward"
                 } else {

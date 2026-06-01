@@ -505,8 +505,7 @@ impl RevMeta {
         #[cfg(feature = "track_update_logs")]
         {
             // check for `UpdateLog` instances that were missed being updated
-            let now = meta.now;
-            match meta.update_log_limits.update(now, direction.is_log()) {
+            match meta.update_log_limits.update(meta.now, direction.is_log()) {
                 Ok(()) => Ok(meta),
                 Err(update_logs_missed) => Err(RevMetaUpdateErr::UpdateLogsMissed {
                     meta: meta.into(),
@@ -771,10 +770,10 @@ impl RevMeta {
 
 /// Error type that [`RevMeta::update`] may return.
 ///
-/// This enum is marked as `non_exhaustive` so toggling the `track_update_logs` feature is not a
-/// breaking change as it adds the `UpdateLogsMissed` variant here.
+/// This enum is marked as `non_exhaustive` without the `track_update_logs` feature to make
+/// activating it not a breaking change as it adds the `UpdateLogsMissed` variant here.
 #[derive(Debug)]
-#[non_exhaustive]
+#[cfg_attr(not(feature = "track_update_logs"), non_exhaustive)]
 pub enum RevMetaUpdateErr {
     /// [`RevMeta::update`] was called recursively or `RevMeta` was removed while this ran and is
     /// still [in a running state] while the `update` method is called again.
