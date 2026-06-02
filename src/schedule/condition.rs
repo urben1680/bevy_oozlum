@@ -368,6 +368,7 @@ mod test {
 
         let mut meta_and_log = MetaAndLogs::new();
 
+        meta_and_log.forward(Ok(true));
         meta_and_log.forward(Err(failed("first error")));
         meta_and_log.forward(Ok(true));
         meta_and_log.forward(Err(skipped_skipped));
@@ -383,7 +384,9 @@ mod test {
         meta_and_log.backward_log(Ok(false));
         meta_and_log.backward_log(Ok(true));
         meta_and_log.backward_log(Err("first error"));
+        meta_and_log.backward_log(Ok(true));
 
+        meta_and_log.forward_log(Ok(true));
         meta_and_log.forward_log(Err("first error"));
         meta_and_log.forward_log(Ok(true));
         meta_and_log.forward_log(Ok(false));
@@ -403,7 +406,9 @@ mod test {
         meta_and_log.backward_log(Ok(false));
         meta_and_log.backward_log(Ok(true));
         meta_and_log.backward_log(Err("first error"));
+        meta_and_log.backward_log(Ok(true));
 
+        meta_and_log.forward_log(Ok(true));
         meta_and_log.forward_log(Err("first error"));
         meta_and_log.forward_log(Ok(true));
         meta_and_log.forward_log(Ok(false));

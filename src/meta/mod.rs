@@ -8,12 +8,12 @@ use crate::{
     schedule::RevUpdate,
     undo_redo::{DespawnFinalizerErr, UndoRedoQueue, finalize_despawns},
 };
-use alloc::{borrow::Cow, boxed::Box, format};
+use alloc::{borrow::Cow, format};
 #[cfg(feature = "track_update_logs")]
 use alloc::{string::ToString, vec::Vec};
 use bevy_ecs::{
     resource::Resource,
-    system::{Command, RunSystemError, SystemParamValidationError},
+    system::{RunSystemError, SystemParamValidationError},
     world::World,
 };
 #[cfg(feature = "reflect")]
@@ -427,7 +427,7 @@ impl RevMeta {
             ),
             RunningOrRan::Pause { after_log } => (None, after_log),
             RunningOrRan::Running(_) => {
-                return Err(RevMetaUpdateErr::AlreadyRunning { meta: self.into() });
+                return Err(RevMetaUpdateErr::AlreadyRunning { meta: self });
             }
         };
 
@@ -495,7 +495,7 @@ impl RevMeta {
             return Err(RevMetaUpdateErr::RevMetaNotReturned);
         };
         if meta.immutable_running_state() != immutable_running_state {
-            return Err(RevMetaUpdateErr::RevMetaReplaced { meta: meta.into() });
+            return Err(RevMetaUpdateErr::RevMetaReplaced { meta });
         }
         if direction.is_backward() {
             meta.now -= 1;
@@ -508,7 +508,7 @@ impl RevMeta {
             match meta.update_log_limits.update(meta.now, direction.is_log()) {
                 Ok(()) => Ok(meta),
                 Err(update_logs_missed) => Err(RevMetaUpdateErr::UpdateLogsMissed {
-                    meta: meta.into(),
+                    meta,
                     update_logs_missed,
                 }),
             }
@@ -642,7 +642,7 @@ impl RevMeta {
                 }
 
                 // update RevMeta and DespawnFinalizer
-                let queue = RevQueue::take(world);
+                let queue = world.remove_resource();
                 let mut despawn_finalizer_result = Ok(());
                 let meta_result = meta.update(queue, |meta, _| {
                     world.insert_resource(meta);
@@ -684,21 +684,20 @@ impl RevMeta {
                         ));
                         if let Some(queue) = queue {
                             // queue direction again for when RevMeta can actually run again
-                            queue.apply(world);
+                            world.insert_resource(queue);
                         }
-                        world.insert_resource(*meta);
+                        world.insert_resource(meta);
                         err
                     }
                     Err(RevMetaUpdateErr::RevMetaNotReturned) => {
                         Err(RunSystemError::Failed(
                             Cow::Borrowed(match despawn_finalizer_result {
                                 Ok(()) => {
-                                    "RevMeta was removed during RevUpdate, possible in hooks \
+                                    "RevMeta was removed during RevUpdate, possibly in hooks \
                                     or observers related to despawns"
                                 }
                                 Err(DespawnFinalizerErr::MetaMissing) => {
-                                    "RevMeta was removed during \
-                                    RevUpdate"
+                                    "RevMeta was removed during RevUpdate"
                                 }
                                 // when update_spawn_despawn returns any of those errors, then only
                                 // when RevMeta existed at that point, but then nothing is executed
@@ -713,7 +712,7 @@ impl RevMeta {
                         let err = Err(RunSystemError::Failed(
                             format!("RevMeta was replaced with a different value\n{meta:?}").into(),
                         ));
-                        world.insert_resource(*meta);
+                        world.insert_resource(meta);
                         err
                     }
                     #[cfg(feature = "track_update_logs")]
@@ -748,7 +747,7 @@ impl RevMeta {
                             .into(),
                         ));
 
-                        world.insert_resource(*meta);
+                        world.insert_resource(meta);
 
                         err
                     }
@@ -770,7 +769,7 @@ impl RevMeta {
 
 /// Error type that [`RevMeta::update`] may return.
 ///
-/// This enum is marked as `non_exhaustive` without the `track_update_logs` feature to make
+/// Without the `track_update_logs` feature, this enum is marked as `non_exhaustive` to make
 /// activating it not a breaking change as it adds the `UpdateLogsMissed` variant here.
 #[derive(Debug)]
 #[cfg_attr(not(feature = "track_update_logs"), non_exhaustive)]
@@ -781,7 +780,7 @@ pub enum RevMetaUpdateErr {
     /// [in a running state]: RevMeta::running_direction
     AlreadyRunning {
         /// `RevMeta` in the state it was attempted to be updated with.
-        meta: Box<RevMeta>,
+        meta: RevMeta,
     },
 
     /// The closure of [`RevMeta::update`] did not return `RevMeta`.
@@ -790,7 +789,7 @@ pub enum RevMetaUpdateErr {
     /// `RevMeta` was replaced with a different value during [`RevMeta::update`].
     RevMetaReplaced {
         /// `RevMeta` in the state as it was returned from the closure of [`RevMeta::update`].
-        meta: Box<RevMeta>,
+        meta: RevMeta,
     },
 
     #[cfg(feature = "track_update_logs")]
@@ -803,7 +802,7 @@ pub enum RevMetaUpdateErr {
     /// [log directions]: RevDirection::is_log
     UpdateLogsMissed {
         /// `RevMeta` in the state after it was updated regardless of this error.
-        meta: Box<RevMeta>,
+        meta: RevMeta,
 
         /// Information about which [`UpdateLog`]s did not update as they should have.
         ///

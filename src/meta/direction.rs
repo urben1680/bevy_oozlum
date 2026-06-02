@@ -131,9 +131,14 @@ pub(super) enum RunningOrRan {
 /// }
 /// ```
 ///
+/// If a custom [`run_rev_update`] is written, the currently queued value is stored as a resource to
+/// be taken and passed to [`RevMeta::update`]. It should be reinserted if `update` returns
+/// [`Err(RevMetaUpdateErr::AlreadyRunning)`].
+///
 /// [`RevUpdate`]: crate::schedule::RevUpdate
 /// [`run_rev_update`]: crate::schedule::run_rev_update
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// [`Err(RevMetaUpdateErr::AlreadyRunning)`]: super::RevMetaUpdateErr::AlreadyRunning
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Resource)]
 #[cfg_attr(feature = "reflect", derive(bevy_reflect::Reflect))]
 pub enum RevQueue {
     /// Run in [`RevDirection::NotLog`] next.
@@ -174,25 +179,10 @@ pub enum RevQueue {
     ClearThenPause,
 }
 
-#[derive(Resource)]
-struct RevQueueRes(RevQueue);
-
 impl Command for RevQueue {
     type Out = ();
     fn apply(self, world: &mut World) {
-        world.insert_resource(RevQueueRes(self));
-    }
-}
-
-impl RevQueue {
-    /// Takes the queued direction that a command previously stored. This should be passed to
-    /// [`RevMeta::update`].
-    ///
-    /// This function should only be used in custom replacements of the [`run_rev_update`] system.
-    ///
-    /// [`run_rev_update`]: crate::schedule::run_rev_update
-    pub fn take(world: &mut World) -> Option<Self> {
-        world.remove_resource::<RevQueueRes>().map(|queue| queue.0)
+        world.insert_resource(self)
     }
 }
 

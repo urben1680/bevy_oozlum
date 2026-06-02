@@ -1,4 +1,4 @@
-# ![Bevy Oozlum](logo.png)
+# ![Bevy Oozlum](https://raw.githubusercontent.com/urben1680/bevy_oozlum/refs/heads/main/logo.png)
 
 [![License](https://img.shields.io/badge/license-MIT%2FApache-blue.svg)](https://github.com/urben1680/bevy_oozlum#license)
 [![Crates.io](https://img.shields.io/crates/v/bevy_oozlum.svg)](https://crates.io/crates/bevy_oozlum)
@@ -95,7 +95,7 @@ The following bevy features are currently not available as reversible variants:
 
 <sub>* because this is currently out of scope, but may be implemented manually by the user</sub>
 
-This list may be incomplete.
+This list may be incomplete. Only some items on this list are prevented or at least detected by this crate.
 
 ## Warning
 

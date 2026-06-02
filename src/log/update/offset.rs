@@ -256,6 +256,7 @@ impl OffsetLog {
                         self.meta.index -= to_drain;
 
                         if last {
+                            // if the last item is a streak, self.meta should be Some too
                             let (streak, step) = self.meta.streak_and_step.as_mut().unwrap();
                             streak.max -= remaining_u8;
                             *step -= remaining_u8;
@@ -333,6 +334,7 @@ impl OffsetLog {
         {
             streak.max += 1;
             *step += 1;
+            // if self.meta is Some, self.offset is expected to not be empty
             *self.offsets.back_mut().unwrap() += 1;
         } else {
             self.meta.index += 1;
@@ -638,8 +640,7 @@ enum FirstByte {
 }
 
 impl From<&u8> for FirstByte {
-    fn from(value: &u8) -> Self {
-        let value = *value;
+    fn from(&value: &u8) -> Self {
         match value >> 6 {
             0b10 => Self::SingleByteStreak(Streak {
                 max: value & NON_WRAPPED_BYTE_MASK,
@@ -663,11 +664,15 @@ mod test {
 
     #[rustfmt::skip]
     const OFFSETS_ENCODED: [u8; 114] = [
+        // single-byte offsets
+
         0b01_000000, 0b10_000000, 0b00_000000, 0b00_111111,
 
         0b01_111111,
 
         0b10_111111,
+
+        // multi-byte offsets
 
         0b11_000000, 0b11_000000,
         0b11_111111, 0b11_111111,
@@ -698,6 +703,8 @@ mod test {
     ];
     #[rustfmt::skip]
     const OFFSETS_DECODED: [u64; 150] = [
+        // single-byte offsets
+
         0, 1, 2, 65,
 
         // x64
@@ -712,32 +719,17 @@ mod test {
         1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
         1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
 
-        66,
-        4161,
+        // multi-byte offsets
 
-        4162,
-        528449,
-
-        528450,
-        67637313,
-
-        67637314,
-        8657571905,
-
-        8657571906,
-        1108169199681,
-
-        1108169199682,
-        141845657555009,
-
-        141845657555010,
-        18156244167036993,
-
-        18156244167036994,
-        2323999253380730945,
-
-        2323999253380730946,
-        u64::MAX
+        66, 4161,
+        4162, 528449,
+        528450, 67637313,
+        67637314, 8657571905,
+        8657571906, 1108169199681,
+        1108169199682, 141845657555009,
+        141845657555010, 18156244167036993,
+        18156244167036994, 2323999253380730945,
+        2323999253380730946, u64::MAX
     ];
 
     #[test]

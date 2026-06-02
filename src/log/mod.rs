@@ -257,8 +257,8 @@ impl<T> Drop for DrainAll<'_, T> {
     }
 }
 
-/// Defines a range of log entries that should be kept. Behaves like [`Range`](core::ops::Range) but
-/// comes with usecase-relevant methods.
+/// Defines a range of log entries that should be kept. Comparable to [`Range`](core::ops::Range)
+/// but comes with usecase-relevant methods.
 #[derive(Clone, Copy, Debug)]
 struct GapRange {
     start: usize,
