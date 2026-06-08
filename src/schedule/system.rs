@@ -1,4 +1,4 @@
-use alloc::{borrow::Cow, format, string::ToString, vec::Vec};
+use alloc::{borrow::Cow, boxed::Box, format, string::ToString, vec::Vec};
 use bevy_ecs::{
     change_detection::{CheckChangeTicks, Tick},
     error::{BevyError, ErrorContext},
@@ -205,7 +205,7 @@ fn get_inner<'a, T>(inner: &'a Mutex<Inner<T>>, name: &DebugName) -> MutexGuard<
 
 struct Inner<T> {
     system: T,
-    deferred_log: UndoRedoLog,
+    deferred_log: Option<Box<UndoRedoLog>>,
     initialized: bool,
 }
 
@@ -213,7 +213,7 @@ impl<T> From<T> for Inner<T> {
     fn from(system: T) -> Self {
         Self {
             system,
-            deferred_log: Default::default(),
+            deferred_log: None,
             initialized: false,
         }
     }
@@ -283,7 +283,11 @@ impl<T: System<In = (), Out = ()>, const FORWARD: bool> System for RevSystem<T, 
             }
 
             // reverisble commands are now in the queue resource so commands_log can take them
-            inner.deferred_log.forward(world).map_err(Into::into)
+            inner
+                .deferred_log
+                .as_mut()
+                .map(|deferred_log| deferred_log.forward(world).map_err(Into::into))
+                .unwrap_or(Ok(()))
         };
 
         if let Err(err) = result() {
@@ -305,8 +309,14 @@ impl<T: System<In = (), Out = ()>, const FORWARD: bool> System for RevSystem<T, 
     fn initialize(&mut self, world: &mut World) -> FilteredAccessSet {
         let mut inner = get_inner(&self.inner, &self.name);
         let access = inner.system.initialize(world);
+
+        if !inner.initialized && inner.system.has_deferred() {
+            inner.deferred_log = Some(Default::default());
+        }
+
         inner.initialized = true;
         self.flags = inner.system.flags();
+
         access
     }
     fn check_change_tick(&mut self, check: CheckChangeTicks) {
@@ -391,8 +401,14 @@ impl<T: System> System for BackwardDeferred<T> {
 
         let mut result = || -> Result<(), BevyError> {
             let mut inner = self.inner.try_lock().map_err(|err| err.to_string())?;
+
             last_run = inner.system.get_last_run();
-            inner.deferred_log.backward(world).map_err(Into::into)
+
+            inner
+                .deferred_log
+                .as_mut()
+                .map(|deferred_log| deferred_log.backward(world).map_err(Into::into))
+                .unwrap_or(Ok(()))
         };
 
         if let Err(err) = result() {
@@ -415,8 +431,15 @@ impl<T: System> System for BackwardDeferred<T> {
         let mut inner = get_inner(&self.inner, &self.name);
         if !inner.initialized {
             inner.system.initialize(world);
+
+            if inner.system.has_deferred() {
+                inner.deferred_log = Some(Default::default());
+                self.has_deferred = true;
+            }
+        } else if inner.system.has_deferred() {
+            self.has_deferred = true;
         }
-        self.has_deferred = inner.system.has_deferred();
+
         FilteredAccessSet::new()
     }
     fn default_system_sets(&self) -> Vec<InternedSystemSet> {
