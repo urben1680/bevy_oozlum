@@ -172,7 +172,7 @@ pub(super) fn mark_entity<const SPAWN: bool>(
         return false;
     }
 
-    let mut entities_set = EntityHashSet::from([entity.id()]);
+    let mut entities_set = EntityHashSet::new();
 
     add_children(
         entity.world(),
@@ -181,7 +181,15 @@ pub(super) fn mark_entity<const SPAWN: bool>(
         include_unlinked_related,
     );
 
-    entity.world_scope(|world| mark_inner::<SPAWN>(world, entities_set, caller));
+    let id = entity.id();
+
+    if entities_set.is_empty() {
+        // do not allocate a HashSet just for one entity
+        entity.world_scope(|world| mark_inner::<SPAWN>(world, id, caller));
+    } else {
+        entities_set.insert(id);
+        entity.world_scope(|world| mark_inner::<SPAWN>(world, entities_set, caller));
+    }
 
     true
 }
@@ -206,15 +214,15 @@ pub(super) fn mark_spawn_empty(entity: &mut EntityWorldMut, caller: MaybeLocatio
 /// Mark multiple entities as spawned/despawned.
 fn mark_inner<const SPAWN: bool>(
     world: &mut World,
-    entities: EntityHashSet,
+    entities: impl EntityCollection,
     caller: MaybeLocation,
 ) {
     let spawn_despawn = RevSpawnDespawn::<_, SPAWN> { entities, caller };
 
     let iter = spawn_despawn
         .entities
-        .iter()
-        .map(|&entity| (entity, caller));
+        .iter_entities()
+        .map(|entity| (entity, caller));
 
     if SPAWN {
         spawn_despawn.finalizer(world).spawn_queue.extend(iter);
@@ -332,7 +340,7 @@ impl EntityCollection for EntityHashSet {
 
 impl EntityCollection for Entity {
     fn iter_entities(&self) -> impl Iterator<Item = Entity> {
-        [*self].into_iter()
+        core::iter::once(*self)
     }
 }
 
