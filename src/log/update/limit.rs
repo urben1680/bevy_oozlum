@@ -145,7 +145,7 @@ impl UpdateLogLimits {
         self.limits_updates = self.limits_updates.checked_add(1).unwrap();
 
         // there should be no gaps in the 2D vector, otherwise that would be a bug here
-        assert_eq!(
+        debug_assert_eq!(
             self.update_log_updates
                 .iter_mut()
                 .flatten()

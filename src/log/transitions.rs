@@ -671,8 +671,7 @@ impl<T, U> ExactSizeIterator for TransitionsLogIterMut<'_, T, U> {
 
 impl<T, U> FusedIterator for TransitionsLogIterMut<'_, T, U> {}
 
-/// An internal wrapper around the update and the amount of transitions that belong to
-/// a log entry.
+/// An internal wrapper around the update and the amount of transitions that belong to a log entry.
 #[derive(Debug, Clone)]
 pub struct TransitionsLogUpdate<U> {
     /// The update value of this log entry.

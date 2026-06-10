@@ -598,7 +598,7 @@ impl RevMeta {
                         meta,
                         update_logs_missed,
                     }) => {
-                        *self = *meta;
+                        *self = meta;
                         assert_eq!(update_logs_missed, [missed]);
                     }
                     other => panic!("unexpected {other:#?}"),

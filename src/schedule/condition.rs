@@ -185,10 +185,13 @@ impl ConditionLogs {
 
 #[derive(Default)]
 struct FailedLogs {
+    /// Track at which condition update an error occured.
     err_failed_log: UpdateLog,
 
+    /// Track the error chronologically by hash
     failed_log: TransitionLog<u64>,
 
+    /// Cache of error `String`s by hash, tracks number of occurences in `failed_log`.
     failed_cache: FailedCache,
 }
 
@@ -200,18 +203,8 @@ impl FailedLogs {
         // log hash as transition, reduce usages for drained, remove if unused
         let past_len = self.err_failed_log.forward_past_len(meta);
         let mut drain = self.failed_log.forward_push(meta, past_len, key);
-        let keys = drain.all();
-
-        for hash in keys {
-            if let Entry::Occupied(mut occupied) = self.failed_cache.0.entry(hash) {
-                let usages = &mut occupied.get_mut().usages;
-                match usages.checked_sub(1) {
-                    Some(reduced) => *usages = reduced,
-                    None => {
-                        occupied.remove();
-                    }
-                }
-            };
+        for key in drain.all() {
+            self.failed_cache.reduce_or_remove(key);
         }
 
         Ok(())
@@ -259,10 +252,9 @@ impl FailedCache {
             .map(|Failed { string, .. }| string.as_str())
             .unwrap_or("reversible condition could not load logged error")
     }
-    fn insert_get_key(&mut self, failed: &BevyError) -> u64 {
+    fn insert_get_key(&mut self, failed: impl ToString) -> u64 {
         let string = failed.to_string();
-        let hash_state = FixedState::default();
-        let hash = hash_state.hash_one(&string);
+        let hash = FixedState::default().hash_one(&string);
         let entry = self.0.raw_entry_mut().from_key_hashed_nocheck(hash, &hash);
         match entry {
             RawEntryMut::Vacant(entry) => {
@@ -274,6 +266,17 @@ impl FailedCache {
         };
 
         hash
+    }
+    fn reduce_or_remove(&mut self, key: u64) {
+        if let Entry::Occupied(mut occupied) = self.0.entry(key) {
+            let usages = &mut occupied.get_mut().usages;
+            match usages.checked_sub(1) {
+                Some(reduced) => *usages = reduced,
+                None => {
+                    occupied.remove();
+                }
+            }
+        };
     }
 }
 
@@ -416,5 +419,35 @@ mod test {
         meta_and_log.forward_log(Err("third error"));
 
         meta_and_log.forward_clear("fourth error");
+    }
+
+    #[test]
+    fn cache_deduplicates() {
+        let mut cache = FailedCache::default();
+        let err = "cached err";
+        let hash = cache.insert_get_key(err);
+        cache.insert_get_key(err);
+
+        cache.reduce_or_remove(hash);
+        assert_eq!(cache.get(hash), err);
+
+        cache.reduce_or_remove(hash);
+        assert_eq!(
+            cache.get(hash),
+            "reversible condition could not load logged error"
+        );
+    }
+
+    #[test]
+    fn bevy_error_repeat_has_same_hash() {
+        let mut cache = FailedCache::default();
+
+        // construct two errors with the same stack trace
+        let [err1, err2] = core::array::from_fn(|_| BevyError::error("cached err"));
+
+        let hash1 = cache.insert_get_key(err1);
+        let hash2 = cache.insert_get_key(err2);
+
+        assert_eq!(hash1, hash2);
     }
 }

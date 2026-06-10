@@ -55,7 +55,7 @@ fn input_system(
     } else if keyboard_input.just_pressed(KeyCode::ArrowRight) {
         // redoes frames, pauses at future log end
         commands.queue(RevQueue::RunForwardLog);
-    } else if keyboard_input.just_pressed(KeyCode::Down) {
+    } else if keyboard_input.just_pressed(KeyCode::ArrowDown) {
         // do not run reversible schedules and their systems until unpaused
         commands.queue(RevQueue::Pause);
     }

@@ -168,7 +168,8 @@ pub struct DrainAll<'a, T> {
 }
 
 impl<'a, T> DrainAll<'a, T> {
-    /// Calling this will cause `log` to become empty.
+    /// Calling this may cause `log` to become empty including in-log items that are returned on
+    /// Self::drop.
     ///
     /// Calling this again will return an empty iterator.
     fn new(
