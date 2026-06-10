@@ -667,7 +667,7 @@ impl RevMeta {
                             DespawnFinalizerErr::MetaNotRunning => format!(
                                 "RevMeta stopped running early, it may have been replaced\n{meta:?}"
                             ),
-                            // update_spawn_despawn would skip all logic without RevMeta,
+                            // finalize_despawns would skip all logic without RevMeta,
                             // nothing could return it to be present again here
                             DespawnFinalizerErr::MetaMissing => unreachable!(),
                         }
@@ -699,7 +699,7 @@ impl RevMeta {
                                 Err(DespawnFinalizerErr::MetaMissing) => {
                                     "RevMeta was removed during RevUpdate"
                                 }
-                                // when update_spawn_despawn returns any of those errors, then only
+                                // when finalize_despawns returns any of those errors, then only
                                 // when RevMeta existed at that point, but then nothing is executed
                                 // that could have removed RevMeta here
                                 Err(DespawnFinalizerErr::OutOfLog)
@@ -740,7 +740,7 @@ impl RevMeta {
                                     "RevMeta stopped running early, it may have been replaced, \
                                     additionally {err:?}"
                                 ),
-                                // update_spawn_despawn would skip all logic without RevMeta,
+                                // finalize_despawns would skip all logic without RevMeta,
                                 // nothing could return it to be present again here
                                 Err(DespawnFinalizerErr::MetaMissing) => unreachable!(),
                             }

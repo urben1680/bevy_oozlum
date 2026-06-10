@@ -76,6 +76,7 @@ pub fn finalize_despawns(world: &mut World) -> Result<(), DespawnFinalizerErr> {
 
                     let mut past_drain = drain.past();
                     while let Some((entities, spawn_amount)) = past_drain.next_log_entry() {
+                        // despawn entities that were despawned too long ago to be respawned by undo
                         for entity in entities.skip(spawn_amount) {
                             let _ = world.try_despawn(entity);
                         }
@@ -84,6 +85,7 @@ pub fn finalize_despawns(world: &mut World) -> Result<(), DespawnFinalizerErr> {
 
                     let mut future_drain = drain.future();
                     while let Some((entities, spawn_amount)) = future_drain.next_log_entry() {
+                        // despawn entities that got their spawn frame undone and overwritten
                         for entity in entities.take(spawn_amount) {
                             let _ = world.try_despawn(entity);
                         }
