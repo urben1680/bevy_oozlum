@@ -240,7 +240,22 @@ impl RevSchedule for Schedule {
         &mut self,
         systems: impl IntoRevScheduleConfigs<ScheduleSystem, Marker>,
     ) -> &mut Self {
-        set_base_sets(self);
+        // check on a non-pub set the system adds so user code cannot make this unreliable
+        if !self.graph().system_sets.contains(ForwardSystems) {
+            fn is_forward<const TRUTHY: bool>(meta: Option<Res<RevMeta>>) -> bool {
+                meta.is_some_and(|meta| meta.is_running_forward() == TRUTHY)
+            }
+
+            self.configure_sets(
+                (
+                    ForwardSystems.run_if(is_forward::<true>),
+                    BackwardSystems.run_if(is_forward::<false>),
+                )
+                    .chain_ignore_deferred() // todo: remove to reduce sync points
+                    .in_set(RevSystemsSet(())),
+            );
+        }
+
         let configs = systems.into_rev_configs();
         self.add_systems((
             configs.forward_systems,
@@ -254,7 +269,6 @@ impl RevSchedule for Schedule {
         &mut self,
         sets: impl IntoRevScheduleConfigs<InternedSystemSet, Marker>,
     ) -> &mut Self {
-        set_base_sets(self);
         let configs = sets.into_rev_configs();
         self.configure_sets((
             configs.forward_systems,
@@ -279,26 +293,6 @@ impl RevSchedule for Schedule {
                 + self.remove_systems_in_set(BackwardDeferredAndSystemSet(set), world, policy)?,
         )
     }
-}
-
-fn set_base_sets(schedule: &mut Schedule) {
-    // check needs to be on a non-pub set so user code cannot make this unreliable
-    if schedule.graph().system_sets.contains(ForwardSystems) {
-        return;
-    }
-
-    fn is_forward<const TRUTHY: bool>(meta: Option<Res<RevMeta>>) -> bool {
-        meta.is_some_and(|meta| meta.is_running_forward() == TRUTHY)
-    }
-
-    schedule.configure_sets(
-        (
-            ForwardSystems.run_if(is_forward::<true>),
-            BackwardSystems.run_if(is_forward::<false>),
-        )
-            .chain_ignore_deferred() // todo: remove to reduce sync points
-            .in_set(RevSystemsSet(())),
-    );
 }
 
 /// Reversible variant of [`ScheduleConfigs<T>`].

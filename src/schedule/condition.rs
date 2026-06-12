@@ -427,6 +427,7 @@ mod test {
         let err = "cached err";
         let hash = cache.insert_get_key(err);
         cache.insert_get_key(err);
+        assert_eq!(cache.0.len(), 1);
 
         cache.reduce_or_remove(hash);
         assert_eq!(cache.get(hash), err);
@@ -436,6 +437,7 @@ mod test {
             cache.get(hash),
             "reversible condition could not load logged error"
         );
+        assert!(cache.0.is_empty());
     }
 
     #[test]
