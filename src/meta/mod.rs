@@ -5,7 +5,7 @@
 #[cfg(feature = "track_update_logs")]
 use crate::log::{UpdateLogLimits, UpdateLogMissed};
 use crate::{
-    schedule::RevUpdate,
+    schedule::{RevUpdate, remove_noop_backward_deferred},
     undo_redo::{DespawnFinalizerErr, UndoRedoQueue, finalize_despawns},
 };
 use alloc::{borrow::Cow, format};
@@ -644,8 +644,10 @@ impl RevMeta {
                 // update RevMeta and DespawnFinalizer
                 let queue = world.remove_resource();
                 let mut despawn_finalizer_result = Ok(());
+                let mut remove_noop_backward_deferred_result = Ok(());
                 let meta_result = meta.update(queue, |meta, _| {
                     world.insert_resource(meta);
+                    remove_noop_backward_deferred_result = remove_noop_backward_deferred(world);
                     schedule.run(world);
                     despawn_finalizer_result = finalize_despawns(world);
                     world.remove_resource::<RevMeta>()
@@ -656,7 +658,7 @@ impl RevMeta {
                     Ok(meta) => {
                         let Err(err) = despawn_finalizer_result else {
                             world.insert_resource(meta);
-                            return Ok(());
+                            return remove_noop_backward_deferred_result;
                         };
                         let err = Err(RunSystemError::Failed(
                         match err {

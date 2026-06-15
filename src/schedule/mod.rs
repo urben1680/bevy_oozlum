@@ -39,7 +39,7 @@
 //! Additionally, another new system per `T` is added that runs at [`BackwardLog`]
 //! but before `B` which undoes deferred actions such as [reversible commands]. With a sync point in
 //! between, `B` will start with the [`World`] state that was present when `F` finished but did not
-//! have its deferred actions applied yet. This third system is otherwise noop.
+//! have its deferred actions applied yet. This third system is otherwise noop and removed.
 //!
 //! Configurations that order the systems will be reversed for the `B` variants.
 //!
@@ -90,6 +90,7 @@ use crate::meta::RevMeta;
 
 use condition::into_rev_condition;
 use system::into_rev_system;
+pub use system::remove_noop_backward_deferred;
 
 mod condition;
 mod system;
@@ -201,7 +202,7 @@ struct BackwardDeferredAndSystemSet(InternedSystemSet);
 /// frames in the expected amounts.
 ///
 /// Replacing it with a custom runner is possible, use [`RevMeta::update`] and [`finalize_despawns`]
-/// in its closure for that.
+/// in its closure for that. Optionally call [`remove_noop_backward_deferred`] as well.
 ///
 /// [`UpdateLog`]: crate::log::UpdateLog
 /// [`finalize_despawns`]: crate::undo_redo::finalize_despawns

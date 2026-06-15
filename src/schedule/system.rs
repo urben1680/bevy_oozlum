@@ -3,7 +3,11 @@ use bevy_ecs::{
     change_detection::{CheckChangeTicks, Tick},
     error::{BevyError, ErrorContext},
     query::FilteredAccessSet,
-    schedule::{ApplyDeferred, InternedSystemSet, IntoScheduleConfigs, SystemSet},
+    resource::Resource,
+    schedule::{
+        ApplyDeferred, InternedSystemSet, IntoScheduleConfigs, Schedule, ScheduleCleanupPolicy,
+        Schedules, SystemSet,
+    },
     system::{
         IntoSystem, RunSystemError, ScheduleSystem, System, SystemIn, SystemParamValidationError,
         SystemStateFlags,
@@ -25,7 +29,7 @@ use core::{
 use crate::{
     schedule::{
         BackwardDeferredAndSystemSet, BackwardDeferredSet, BackwardSystemSet, BackwardSystems,
-        ForwardSystemSet, ForwardSystems,
+        ForwardSystemSet, ForwardSystems, RevUpdate,
     },
     undo_redo::UndoRedoLog,
 };
@@ -87,6 +91,7 @@ where
     // This set contains BackwardDeferred and both RevSystems of only this system instance. It is
     // the base for the other wrapping sets and for conditions to be used on.
     let unified = RevSystemTypeSet::new(name.clone()).intern();
+    let deferred = BackwardDeferredSet(unified);
 
     let name = |postfix: &str| DebugName::owned(format!("{name}{postfix}"));
     let forward_system_name = name(FORWARD_POSTFIX);
@@ -102,9 +107,9 @@ where
         .in_set(ForwardSystemSet(unified))
         .in_set(ForwardSystems);
 
-    let backward_deferred = BackwardDeferred::new(inner.clone(), backward_deferred_name)
+    let backward_deferred = BackwardDeferred::new(inner.clone(), backward_deferred_name, deferred)
         .in_set(unified)
-        .in_set(BackwardDeferredSet(unified))
+        .in_set(deferred)
         .in_set(BackwardDeferredAndSystemSet(unified))
         .in_set(BackwardSystems);
 
@@ -113,7 +118,7 @@ where
         .in_set(BackwardSystemSet(unified))
         .in_set(BackwardDeferredAndSystemSet(unified))
         .in_set(BackwardSystems)
-        .after(BackwardDeferredSet(unified));
+        .after(deferred);
 
     let mut configs = RevScheduleConfigs {
         forward_systems,
@@ -307,6 +312,7 @@ impl<T: System<In = (), Out = ()>, const FORWARD: bool> System for RevSystem<T, 
         unreachable!() // reversible systems are not used as observers
     }
     fn initialize(&mut self, world: &mut World) -> FilteredAccessSet {
+        // this must panic or else System::run_unsafe cannot be used safely
         let mut inner = get_inner(&self.inner, &self.name);
         let access = inner.system.initialize(world);
 
@@ -343,16 +349,21 @@ pub(super) struct BackwardDeferred<T> {
     inner: Arc<Mutex<Inner<T>>>,
     tick: Tick,
     name: DebugName,
-    has_deferred: bool,
+    state: BackwardDeferredState,
+}
+
+enum BackwardDeferredState {
+    Uninit(BackwardDeferredSet),
+    Init { has_deferred: bool },
 }
 
 impl<T> BackwardDeferred<T> {
-    fn new(inner: Arc<Mutex<Inner<T>>>, name: DebugName) -> Self {
+    fn new(inner: Arc<Mutex<Inner<T>>>, name: DebugName, set: BackwardDeferredSet) -> Self {
         Self {
             inner,
             tick: Tick::new(u32::MAX),
             name,
-            has_deferred: Default::default(),
+            state: BackwardDeferredState::Uninit(set),
         }
     }
 }
@@ -364,7 +375,7 @@ impl<T: System> System for BackwardDeferred<T> {
         self.name.clone()
     }
     fn flags(&self) -> SystemStateFlags {
-        if self.has_deferred {
+        if self.has_deferred() {
             SystemStateFlags::DEFERRED
         } else {
             SystemStateFlags::empty()
@@ -377,14 +388,24 @@ impl<T: System> System for BackwardDeferred<T> {
         false
     }
     fn has_deferred(&self) -> bool {
-        self.has_deferred
+        match self.state {
+            BackwardDeferredState::Init { has_deferred } => has_deferred,
+            BackwardDeferredState::Uninit(set) => {
+                error!(
+                    "reversible system {set:?} should be initialized before calling System::has_deferred"
+                );
+                true
+            }
+        }
     }
     unsafe fn run_unsafe(
         &mut self,
         _input: (),
         world: UnsafeWorldCell,
     ) -> Result<(), RunSystemError> {
-        if !self.has_deferred {
+        if !self.has_deferred() {
+            // do not manually match Self::state and report to the fallback_error_handler because
+            // no access to latter has been registered
             return Err(RunSystemError::Skipped(
                 SystemParamValidationError::skipped::<T>(Cow::Borrowed(
                     "reversible system has no deferred parameters",
@@ -428,16 +449,44 @@ impl<T: System> System for BackwardDeferred<T> {
         unreachable!(); // reversible systems are not used as observers
     }
     fn initialize(&mut self, world: &mut World) -> FilteredAccessSet {
-        let mut inner = get_inner(&self.inner, &self.name);
-        if !inner.initialized {
-            inner.system.initialize(world);
+        if let BackwardDeferredState::Uninit(set) = self.state {
+            match self.inner.try_lock() {
+                Ok(mut inner) => {
+                    if !inner.initialized {
+                        inner.system.initialize(world);
+                        inner.initialized = true;
+                        if inner.system.has_deferred() {
+                            inner.deferred_log = Some(Default::default());
+                        }
+                    }
 
-            if inner.system.has_deferred() {
-                inner.deferred_log = Some(Default::default());
-                self.has_deferred = true;
+                    self.state = if inner.system.has_deferred() {
+                        BackwardDeferredState::Init { has_deferred: true }
+                    } else {
+                        world
+                            .get_resource_or_init::<RemoveBackwardDeferred>()
+                            .0
+                            .push(set);
+                        BackwardDeferredState::Init {
+                            has_deferred: false,
+                        }
+                    };
+                }
+                Err(err) => {
+                    // this does not have to panic because Self::run_unsafe is still safe even if
+                    // not initialized because nothing of the world is accessed
+                    world.fallback_error_handler()(
+                        BevyError::error(format!(
+                            "reversible system {} could not be initialized: {err}",
+                            self.name
+                        )),
+                        ErrorContext::System {
+                            name: self.name.clone(),
+                            last_run: self.tick,
+                        },
+                    );
+                }
             }
-        } else if inner.system.has_deferred() {
-            self.has_deferred = true;
         }
 
         FilteredAccessSet::new()
@@ -456,6 +505,73 @@ impl<T: System> System for BackwardDeferred<T> {
     }
 }
 
+#[derive(Resource, Default)]
+struct RemoveBackwardDeferred(Vec<BackwardDeferredSet>);
+
+impl RemoveBackwardDeferred {
+    fn remove_sets(&mut self, world: &mut World, schedule: &mut Schedule) {
+        self.0.retain(|set| {
+            schedule
+                .remove_systems_in_set(*set, world, ScheduleCleanupPolicy::RemoveSystemsOnly)
+                .ok()
+                .is_none_or(|systems| systems == 0)
+        });
+    }
+    fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+/// A system to optimize reversible schedules when some reversible systems have no commands.
+///
+/// This may fail if the systems cannot be found but this is merely an info-level error.
+///
+/// Using this is optional and by default is added to the closure of [`RevMeta::update`] in the
+/// [`run_rev_update`] system. If added manually, this should not run while any reversible schedule
+/// is running.
+///
+/// [`RevMeta::update`]: crate::meta::RevMeta::update
+/// [`run_rev_update`]: super::run_rev_update
+pub fn remove_noop_backward_deferred(world: &mut World) -> Result<(), RunSystemError> {
+    let mut sets =
+        world
+            .remove_resource::<RemoveBackwardDeferred>()
+            .ok_or(RunSystemError::Skipped(
+                SystemParamValidationError::skipped::<RemoveBackwardDeferred>("resource not found"),
+            ))?;
+
+    world.try_resource_scope::<Schedules, _>(|world, mut schedules| {
+        // assume the only reversible schedule is RevUpdate
+        if let Some(rev_update) = schedules.get_mut(RevUpdate) {
+            // uninit schedules could not have added to RemoveBackwardDeferred
+            if !rev_update.is_changed() {
+                sets.remove_sets(world, rev_update);
+            }
+        }
+
+        let mut schedules = schedules
+            .iter_mut()
+            .filter(|(label, schedule)| !schedule.is_changed() && !label.dyn_eq(&RevUpdate))
+            .map(|(_, schedule)| schedule);
+
+        while !sets.is_empty()
+            && let Some(schedule) = schedules.next()
+        {
+            // bite the bullet, search all schedules
+            sets.remove_sets(world, schedule);
+        }
+    });
+
+    if sets.is_empty() {
+        Ok(())
+    } else {
+        Err(RunSystemError::Failed(BevyError::info(format!(
+            "could not find noop BackwardDeferred systems to remove them as an optimization: {:?}",
+            sets.0
+        ))))
+    }
+}
+
 #[cfg(test)]
 mod test {
     use bevy_app::{App, Update};
@@ -466,11 +582,12 @@ mod test {
         lifecycle::HookContext,
         observer::On,
         resource::Resource,
-        schedule::IntoScheduleConfigs,
+        schedule::{IntoScheduleConfigs, ScheduleLabel},
         system::{Command, Commands, RunSystemError, SystemParamValidationError},
         world::{DeferredWorld, World},
     };
 
+    use super::*;
     use crate::{panic_on_warnings_or_errors, prelude::*, undo_redo::UndoRedoQueue};
 
     fn blank_undo_redo(_: &mut World, _: UndoRedoDirection) {}
@@ -520,6 +637,44 @@ mod test {
             .commands()
             .as_rev(not_log)
             .queue_undo_redo(blank_undo_redo);
+    }
+
+    #[test]
+    fn noop_deferred_are_removed() {
+        #[derive(ScheduleLabel, Copy, Clone, Debug, Hash, PartialEq, Eq)]
+        pub struct MyRevUpdate;
+
+        #[derive(SystemSet, Debug, Copy, Clone, Hash, PartialEq, Eq)]
+        struct NoopSet;
+
+        fn no_commands() {}
+
+        let mut world = World::new();
+        let mut schedule = Schedule::new(MyRevUpdate);
+        schedule.rev_add_systems(no_commands.rev_in_set(NoopSet));
+        schedule.initialize(&mut world).unwrap();
+        world.get_resource_or_init::<Schedules>().insert(schedule);
+
+        assert!(
+            world
+                .get_resource::<RemoveBackwardDeferred>()
+                .is_some_and(|sets| !sets.0.is_empty())
+        );
+        remove_noop_backward_deferred(&mut world).unwrap();
+        assert!(!world.contains_resource::<RemoveBackwardDeferred>());
+
+        world.schedule_scope(MyRevUpdate, |world, schedule| {
+            assert_eq!(
+                schedule
+                    .rev_remove_systems_in_set(
+                        NoopSet,
+                        world,
+                        ScheduleCleanupPolicy::RemoveSystemsOnly
+                    )
+                    .ok(),
+                Some(2) // only both forward/backward RevSystem instances
+            );
+        });
     }
 
     #[test]
