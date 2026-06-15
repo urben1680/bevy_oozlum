@@ -22,7 +22,7 @@ use bevy_platform::sync::{
 use bevy_utils::DebugName;
 use core::{
     any::TypeId,
-    fmt::Debug,
+    fmt::{Debug, Formatter, from_fn},
     hash::{Hash, Hasher},
 };
 
@@ -94,9 +94,9 @@ where
     let deferred = BackwardDeferredSet(unified);
 
     let name = |postfix: &str| DebugName::owned(format!("{name}{postfix}"));
-    let forward_system_name = name(FORWARD_POSTFIX);
-    let backward_deferred_name = name(DEFERRED_POSTFIX);
-    let backward_system_name = name(BACKWARD_POSTFIX);
+    let forward_system_name = name(" (forward system)");
+    let backward_deferred_name = name(" (backward deferred)");
+    let backward_system_name = name(" (backward system)");
 
     let default_system_sets = system.default_system_sets();
 
@@ -139,19 +139,14 @@ where
     configs
 }
 
-const FORWARD_POSTFIX: &str = " (forward system)";
-const DEFERRED_POSTFIX: &str = " (backward deferred)";
-const BACKWARD_POSTFIX: &str = " (backward system)";
-
 /// Reversible variant but no replacement of [`SystemTypeSet`](bevy_ecs::schedule::SystemTypeSet).
 ///
 /// The only configuration will be reversible run conditions in [`RevScheduleConfigs::conditioned`]
 /// where these sets are placed at.
 // is `pub(super)` for docs in parent module
-#[derive(SystemSet, Clone, Debug, Eq)]
+#[derive(SystemSet, Clone, Eq)]
 pub(super) struct RevSystemTypeSet {
     id: u32,
-    #[allow(dead_code)]
     name: DebugName,
 }
 
@@ -164,6 +159,16 @@ impl PartialEq for RevSystemTypeSet {
 impl Hash for RevSystemTypeSet {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.id.hash(state)
+    }
+}
+
+impl Debug for RevSystemTypeSet {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+        if size_of::<DebugName>() == 0 {
+            write!(f, "RevSystemTypeSet({}, {})", self.id, self.name)
+        } else {
+            self.name.fmt(f)
+        }
     }
 }
 
@@ -390,9 +395,10 @@ impl<T: System> System for BackwardDeferred<T> {
     fn has_deferred(&self) -> bool {
         match self.state {
             BackwardDeferredState::Init { has_deferred } => has_deferred,
-            BackwardDeferredState::Uninit(set) => {
+            BackwardDeferredState::Uninit(_) => {
                 error!(
-                    "reversible system {set:?} should be initialized before calling System::has_deferred"
+                    "reversible system {:?} should be initialized before calling System::has_deferred",
+                    self.name
                 );
                 true
             }
@@ -403,17 +409,25 @@ impl<T: System> System for BackwardDeferred<T> {
         _input: (),
         world: UnsafeWorldCell,
     ) -> Result<(), RunSystemError> {
-        if !self.has_deferred() {
-            // do not manually match Self::state and report to the fallback_error_handler because
-            // no access to latter has been registered
-            return Err(RunSystemError::Skipped(
+        match self.state {
+            BackwardDeferredState::Init {
+                has_deferred: false,
+            } => Err(RunSystemError::Skipped(
                 SystemParamValidationError::skipped::<T>(Cow::Borrowed(
                     "reversible system has no deferred parameters",
                 )),
-            ));
+            )),
+            BackwardDeferredState::Init { has_deferred: true } => {
+                self.tick = world.increment_change_tick();
+                Ok(())
+            }
+            BackwardDeferredState::Uninit(_) => {
+                Err(RunSystemError::Failed(BevyError::error(format!(
+                    "reversible system {:?} should be initialized before calling System::has_deferred",
+                    self.name
+                ))))
+            }
         }
-        self.tick = world.increment_change_tick();
-        Ok(())
     }
     #[cfg(feature = "hotpatching")]
     fn refresh_hotpatch(&mut self) {}
@@ -517,9 +531,6 @@ impl RemoveBackwardDeferred {
                 .is_none_or(|systems| systems == 0)
         });
     }
-    fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
 }
 
 /// A system to optimize reversible schedules when some reversible systems have no commands.
@@ -554,7 +565,7 @@ pub fn remove_noop_backward_deferred(world: &mut World) -> Result<(), RunSystemE
             .filter(|(label, schedule)| !schedule.is_changed() && !label.dyn_eq(&RevUpdate))
             .map(|(_, schedule)| schedule);
 
-        while !sets.is_empty()
+        while !sets.0.is_empty()
             && let Some(schedule) = schedules.next()
         {
             // bite the bullet, search all schedules
@@ -562,12 +573,20 @@ pub fn remove_noop_backward_deferred(world: &mut World) -> Result<(), RunSystemE
         }
     });
 
-    if sets.is_empty() {
+    if sets.0.is_empty() {
         Ok(())
     } else {
+        let sets = from_fn(|f| {
+            if size_of::<DebugName>() == 0 {
+                DebugName::borrowed("").fmt(f)
+            } else {
+                f.debug_list()
+                    .entries(sets.0.iter().map(|set| set.0))
+                    .finish()
+            }
+        });
         Err(RunSystemError::Failed(BevyError::info(format!(
-            "could not find noop BackwardDeferred systems to remove them as an optimization: {:?}",
-            sets.0
+            "could not find noop BackwardDeferred systems to remove them as an optimization: {sets:?}"
         ))))
     }
 }
@@ -672,7 +691,7 @@ mod test {
                         ScheduleCleanupPolicy::RemoveSystemsOnly
                     )
                     .ok(),
-                Some(2) // only both forward/backward RevSystem instances
+                Some(2) // only both forward/backward RevSystem instances, not BackwardDeferred
             );
         });
     }
