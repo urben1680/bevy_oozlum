@@ -14,7 +14,6 @@ use bevy_ecs::{
     },
     world::{DeferredWorld, World, unsafe_world_cell::UnsafeWorldCell},
 };
-use bevy_log::error;
 use bevy_platform::sync::{
     Arc, Mutex, MutexGuard,
     atomic::{AtomicU32, Ordering},
@@ -36,12 +35,9 @@ use crate::{
 
 use super::RevScheduleConfigs;
 
-pub(super) fn into_rev_system<T, M1, M2>(system: T) -> RevScheduleConfigs<ScheduleSystem>
-where
-    T: IntoSystem<(), (), M1>, // parts of piping systems to not get converted, only as a whole
-    RevSystem<T::System, true>: IntoScheduleConfigs<ScheduleSystem, M2>,
-    RevSystem<T::System, false>: IntoScheduleConfigs<ScheduleSystem, M2>,
-{
+pub(super) fn into_rev_system<Marker>(
+    system: impl IntoSystem<(), (), Marker>,
+) -> RevScheduleConfigs<ScheduleSystem> {
     let system = IntoSystem::into_system(system);
 
     if system.system_type() == TypeId::of::<ApplyDeferred>() {
@@ -179,7 +175,7 @@ impl RevSystemTypeSet {
         if id == u32::MAX {
             // this technically is a warn and not an error, but detecting the actual first set after
             // overflow needs another atomic with stricter Ordering for both which is not worth it
-            error!(
+            error_or_panic_at_tests!(
                 "an internal atomic counter to create reversible systems is exhausted, \
                 creating more may lead to multiple systems sharing the same run condition"
             );
@@ -274,7 +270,7 @@ impl<T: System<In = (), Out = ()>, const FORWARD: bool> System for RevSystem<T, 
     fn refresh_hotpatch(&mut self) {
         match self.inner.try_lock() {
             Ok(mut inner) => inner.system.refresh_hotpatch(),
-            Err(err) => error!("could not hotpatch system {}: {err}", self.name),
+            Err(err) => error_or_panic_at_tests!("could not hotpatch system {}: {err}", self.name),
         }
     }
     fn apply_deferred(&mut self, world: &mut World) {
@@ -317,7 +313,7 @@ impl<T: System<In = (), Out = ()>, const FORWARD: bool> System for RevSystem<T, 
         unreachable!() // reversible systems are not used as observers
     }
     fn initialize(&mut self, world: &mut World) -> FilteredAccessSet {
-        // this must panic or else System::run_unsafe cannot be used safely
+        // this must panic on try_lock or else System::run_unsafe cannot be used safely
         let mut inner = get_inner(&self.inner, &self.name);
         let access = inner.system.initialize(world);
 
@@ -396,7 +392,7 @@ impl<T: System> System for BackwardDeferred<T> {
         match self.state {
             BackwardDeferredState::Init { has_deferred } => has_deferred,
             BackwardDeferredState::Uninit(_) => {
-                error!(
+                error_or_panic_at_tests!(
                     "reversible system {:?} should be initialized before calling System::has_deferred",
                     self.name
                 );
@@ -590,6 +586,18 @@ pub fn remove_noop_backward_deferred(world: &mut World) -> Result<(), RunSystemE
         ))))
     }
 }
+
+macro_rules! error_or_panic_at_tests {
+    ($($tokens:tt)*) => {
+        if cfg!(test) {
+            panic!($($tokens)*);
+        } else {
+            bevy_log::error!($($tokens)*);
+        }
+    };
+}
+
+use error_or_panic_at_tests;
 
 #[cfg(test)]
 mod test {

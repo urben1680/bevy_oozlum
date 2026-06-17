@@ -279,7 +279,7 @@ pub mod prelude {
     pub use crate::log::{TransitionLog, TransitionsLog, UpdateLog};
     pub use crate::meta::{NotLog, RevDirection, RevMeta, RevQueue};
     pub use crate::schedule::{
-        IntoRevScheduleConfigs as _, RevSchedule as _, RevSystems, RevUpdate,
+        IntoRevScheduleConfigs as _, RevSchedule as _, RevSchedules as _, RevSystems, RevUpdate,
     };
     pub use crate::undo_redo::{
         CommandsAsRev as _, IsRevDespawned as _, RevFetch, UndoRedoDirection,

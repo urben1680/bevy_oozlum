@@ -1,25 +1,24 @@
 //! Contains [`RevPlugin`] and an extension trait to add reversible systems and configure system
 //! sets at the app level.
 
-use bevy_app::{App, FixedUpdate, Plugin};
+use bevy_app::{App, FixedUpdate, Plugin, SubApp};
 use bevy_ecs::{
     schedule::{
         InternedScheduleLabel, InternedSystemSet, IntoScheduleConfigs, IntoSystemSet,
         ScheduleCleanupPolicy, ScheduleError, ScheduleLabel, Schedules, SystemSet,
     },
-    system::{Command, ScheduleSystem},
+    system::ScheduleSystem,
 };
-use bevy_log::warn_once;
 
 use crate::{
     meta::{RevMeta, RevQueue},
-    schedule::{IntoRevScheduleConfigs, RevSchedule, run_rev_update},
+    schedule::{IntoRevScheduleConfigs, RevSchedule, RevSchedules, run_rev_update},
     undo_redo::RevDespawned,
 };
 
-/// Extension trait for [`App`] with reversible variants of various methods.
+/// Extension trait for [`App`] and [`SubApp`] with reversible variants of various methods.
 pub trait RevApp {
-    /// Reversible version of [`App::add_systems`].
+    /// Reversible version of [`App::add_systems`]/[`SubApp::add_systems`].
     ///
     /// Does not support exclusive systems. Never mix reversible systems and regular systems in the
     /// same schedule without separating them with ordered system sets.
@@ -29,14 +28,14 @@ pub trait RevApp {
         systems: impl IntoRevScheduleConfigs<ScheduleSystem, Marker>,
     ) -> &mut Self;
 
-    /// Reversible version of [`App::configure_sets`].
+    /// Reversible version of [`App::configure_sets`]/[`SubApp::configure_sets`].
     fn rev_configure_sets<Marker>(
         &mut self,
         schedule: impl ScheduleLabel,
         sets: impl IntoRevScheduleConfigs<InternedSystemSet, Marker>,
     ) -> &mut Self;
 
-    /// Reversible version of [`App::remove_systems_in_set`].
+    /// Reversible version of [`App::remove_systems_in_set`]/[`SubApp::remove_systems_in_set`].
     fn rev_remove_systems_in_set<Marker>(
         &mut self,
         schedule: impl ScheduleLabel,
@@ -51,10 +50,37 @@ impl RevApp for App {
         schedule: impl ScheduleLabel,
         systems: impl IntoRevScheduleConfigs<ScheduleSystem, Marker>,
     ) -> &mut Self {
+        self.main_mut().rev_add_systems(schedule, systems);
+        self
+    }
+    fn rev_configure_sets<Marker>(
+        &mut self,
+        schedule: impl ScheduleLabel,
+        sets: impl IntoRevScheduleConfigs<InternedSystemSet, Marker>,
+    ) -> &mut Self {
+        self.main_mut().rev_configure_sets(schedule, sets);
+        self
+    }
+    fn rev_remove_systems_in_set<Marker>(
+        &mut self,
+        schedule: impl ScheduleLabel,
+        set: impl IntoSystemSet<Marker>,
+        policy: ScheduleCleanupPolicy,
+    ) -> Result<usize, ScheduleError> {
+        self.main_mut()
+            .rev_remove_systems_in_set(schedule, set, policy)
+    }
+}
+
+impl RevApp for SubApp {
+    fn rev_add_systems<Marker>(
+        &mut self,
+        schedule: impl ScheduleLabel,
+        systems: impl IntoRevScheduleConfigs<ScheduleSystem, Marker>,
+    ) -> &mut Self {
         self.world_mut()
             .resource_mut::<Schedules>()
-            .entry(schedule)
-            .rev_add_systems(systems);
+            .rev_add_systems(schedule, systems);
         self
     }
     fn rev_configure_sets<Marker>(
@@ -64,8 +90,7 @@ impl RevApp for App {
     ) -> &mut Self {
         self.world_mut()
             .resource_mut::<Schedules>()
-            .entry(schedule)
-            .rev_configure_sets(sets);
+            .rev_configure_sets(schedule, sets);
         self
     }
     fn rev_remove_systems_in_set<Marker>(
@@ -272,6 +297,7 @@ impl Plugin for RevPlugin {
     fn build(&self, app: &mut App) {
         app.register_disabling_component::<RevDespawned>();
         app.init_resource::<RevMeta>();
+        app.insert_resource(RevQueue::RunNotLog);
         app.add_systems(FixedUpdate, run_rev_update);
     }
 }
@@ -282,7 +308,7 @@ impl Plugin for ModifiedRevPlugin {
         if let Some((max_past_len, paused)) = self.meta {
             app.insert_resource(RevMeta::new(max_past_len));
             if !paused {
-                RevQueue::RunNotLog.apply(app.world_mut());
+                app.insert_resource(RevQueue::RunNotLog);
             }
         }
         match self.runner {
@@ -296,3 +322,15 @@ impl Plugin for ModifiedRevPlugin {
         }
     }
 }
+
+macro_rules! warn_once {
+    ($($args:tt)*) => {
+        if cfg!(test) {
+            panic!($($args)*);
+        } else {
+            bevy_log::warn_once!($($args)*);
+        }
+    };
+}
+
+use warn_once;

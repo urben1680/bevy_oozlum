@@ -16,6 +16,18 @@ use nonmax::NonMaxU32;
 
 use crate::log::update::UpdateLocation;
 
+/// The locals contain 2D vectors:
+///
+/// - the outer vector's index represents with which [`UpdateLogState::updates_this_frame`] value
+///   limits were pushed.
+/// - the inner vector contains all limits to said `updates_this_frame`.
+/// - the [`NonMaxU32`] value contains the id of the limit this log is associated with.
+///
+/// Because the same UpdateLog could push into two different `ThreadLocal`s inside [`Parallel`], the
+/// 2D vector is needed to drain the pushed limits chronologically so only the last limit of a
+/// specific log is stored in [`UpdateLogLimits::update_log_limits`].
+type UpdateLogUpdates = Parallel<Vec<Vec<(NonMaxU32, UpdateLogLimit)>>>;
+
 /// Part of [`RevMeta`](crate::meta::RevMeta) that keeps track of [`UpdateLog`](super::UpdateLog)
 /// updates and reports when such an update was expected for a present frame but did not happen.
 #[derive(Default)]
@@ -27,17 +39,9 @@ pub(crate) struct UpdateLogLimits {
     /// Amount of times [`update`](Self::update) was called.
     limits_updates: u64,
 
-    /// The locals contain 2D vectors:
-    ///
-    /// - the outer vector's index represents with which [`UpdateLogState::updates_this_frame`]
-    ///   value limits were pushed.
-    /// - the inner vector contains all limits to said `updates_this_frame`.
-    /// - the [`NonMaxU32`] value contains the id of the limit this log is associated with, the
-    ///   draining order will ensure only the last limit of a specific log is stored in
-    ///   [`Self::update_log_limits`].
+    /// Queued limits to be drained into [`Self::update_log_limits`].
     #[cfg_attr(feature = "reflect", reflect(ignore))]
-    #[allow(clippy::type_complexity)]
-    update_log_updates: Box<Parallel<Vec<Vec<(NonMaxU32, UpdateLogLimit)>>>>,
+    update_log_updates: Box<UpdateLogUpdates>,
 
     /// The most recent limits per [`UpdateLog`](super::UpdateLog) with [UpdateLogState::index]
     /// being used as the index in this vector.
@@ -279,7 +283,7 @@ impl UpdateLogLimit {
 /// Makes sure the limits are yielded in chronological order for each log.
 struct UpdatesIter<'a> {
     /// The queued limits
-    update_log_updates: &'a mut Parallel<Vec<Vec<(NonMaxU32, UpdateLogLimit)>>>,
+    update_log_updates: &'a mut UpdateLogUpdates,
 
     /// The [`Parallel`] locals that can be skipped because they contain no more [`UpdateLogLimit`]
     /// for the current [`Self::updates_this_frame`].

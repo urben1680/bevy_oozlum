@@ -78,7 +78,7 @@ use bevy_ecs::{
     schedule::{
         ApplyDeferred, Chain, InternedSystemSet, IntoScheduleConfigs, IntoSystemSet, Schedulable,
         Schedule, ScheduleCleanupPolicy, ScheduleConfigTupleMarker, ScheduleConfigs, ScheduleError,
-        ScheduleLabel, SystemCondition, SystemSet, graph::GraphInfo,
+        ScheduleLabel, Schedules, SystemCondition, SystemSet, graph::GraphInfo,
     },
     system::{IntoSystem, RunSystemError, ScheduleSystem},
     world::World,
@@ -293,6 +293,64 @@ impl RevSchedule for Schedule {
                 + self.remove_systems_in_set(BackwardSystemSet(set), world, policy)?
                 + self.remove_systems_in_set(BackwardDeferredAndSystemSet(set), world, policy)?,
         )
+    }
+}
+
+/// Extension trait for [`Schedules`] for adding reversible systems and configurations.
+pub trait RevSchedules {
+    /// Reversible version of [`Schedules::add_systems`].
+    ///
+    /// Does not support exclusive systems. Never mix reversible systems and regular systems in the
+    /// same schedule without separating them with ordered system sets.
+    fn rev_add_systems<Marker>(
+        &mut self,
+        schedule: impl ScheduleLabel,
+        systems: impl IntoRevScheduleConfigs<ScheduleSystem, Marker>,
+    ) -> &mut Self;
+
+    /// Reversible version of [`Schedules::configure_sets`].
+    fn rev_configure_sets<Marker>(
+        &mut self,
+        schedule: impl ScheduleLabel,
+        sets: impl IntoRevScheduleConfigs<InternedSystemSet, Marker>,
+    ) -> &mut Self;
+
+    /// Reversible version of [`Schedules::remove_systems_in_set`].
+    fn rev_remove_systems_in_set<Marker>(
+        &mut self,
+        schedule: impl ScheduleLabel,
+        set: impl IntoSystemSet<Marker>,
+        world: &mut World,
+        policy: ScheduleCleanupPolicy,
+    ) -> Result<usize, ScheduleError>;
+}
+
+impl RevSchedules for Schedules {
+    fn rev_add_systems<Marker>(
+        &mut self,
+        schedule: impl ScheduleLabel,
+        systems: impl IntoRevScheduleConfigs<ScheduleSystem, Marker>,
+    ) -> &mut Self {
+        self.entry(schedule).rev_add_systems(systems);
+        self
+    }
+    fn rev_configure_sets<Marker>(
+        &mut self,
+        schedule: impl ScheduleLabel,
+        sets: impl IntoRevScheduleConfigs<InternedSystemSet, Marker>,
+    ) -> &mut Self {
+        self.entry(schedule).rev_configure_sets(sets);
+        self
+    }
+    fn rev_remove_systems_in_set<Marker>(
+        &mut self,
+        schedule: impl ScheduleLabel,
+        set: impl IntoSystemSet<Marker>,
+        world: &mut World,
+        policy: ScheduleCleanupPolicy,
+    ) -> Result<usize, ScheduleError> {
+        self.entry(schedule)
+            .rev_remove_systems_in_set(set, world, policy)
     }
 }
 

@@ -347,7 +347,7 @@ impl RevMeta {
     ///
     /// [`past_len`]: Self::past_len
     /// [`future_len`]: Self::future_len
-    #[allow(clippy::len_without_is_empty)] // never empty
+    #[expect(clippy::len_without_is_empty, reason = "never empty")]
     pub const fn len(&self) -> u64 {
         self.future_end - self.past_end + 1 // both ends are inclusive
     }
@@ -406,6 +406,10 @@ impl RevMeta {
     /// [in a running state]: Self::running_direction
     /// [`UpdateLog`]: crate::log::UpdateLog
     /// [log directions]: RevDirection::is_log
+    #[cfg_attr(
+        feature = "track_update_logs",
+        expect(clippy::result_large_err, reason = "barely above clippy limit")
+    )]
     pub fn update(
         mut self,
         queue: Option<RevQueue>,
@@ -455,9 +459,10 @@ impl RevMeta {
                 self.direction = RunningOrRan::Pause { after_log: false };
                 return Ok(self);
             }
-            _ => {
-                // queued log direction at end of log behaves like Some(RevQueue::Pause) which is
-                // matched here as well
+            Some(RevQueue::RunForwardLog)
+            | Some(RevQueue::RunBackwardLog)
+            | Some(RevQueue::Pause) => {
+                // queued log direction at end of log behaves like Some(RevQueue::Pause)
                 self.direction = RunningOrRan::Pause { after_log };
                 return Ok(self);
             }

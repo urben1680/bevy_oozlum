@@ -306,7 +306,7 @@ impl OffsetLog {
     pub(super) fn push(&mut self, offset: u64) {
         self.debug_assert_no_future();
 
-        #[allow(clippy::match_overlapping_arm)] // readability
+        #[expect(clippy::match_overlapping_arm, reason = "readability")]
         match offset {
             0 => self.push_streak::<false>(),
             1 => self.push_streak::<true>(),
@@ -707,13 +707,13 @@ mod test {
 
         0, 1, 2, 65,
 
-        // x64
+        // 0 x64
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 
-        // x64
+        // 1 x64
         1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
         1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
         1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,

@@ -8,6 +8,8 @@ Bevy Oozlum is a crate for [Bevy](https://bevy.org/) to write **reversible syste
 
 This crate is not using a snapshot approach and instead reverts to a prior world state by running the backward logic of reversible systems and their commands in reverse order. Because of that, reverting to very distant past world states instantly should probably not be done this way.
 
+Existing systems (for example from other crates) cannot be translated to reversible variants and have to be rewritten to be reversible and use reversible commands.
+
 "Oozlum" is a mythical bird that is able to fly backwards.
 
 ## Example
