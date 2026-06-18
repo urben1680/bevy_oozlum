@@ -12,6 +12,10 @@ Existing systems (for example from other crates) cannot be translated to reversi
 
 "Oozlum" is a mythical bird that is able to fly backwards.
 
+## Warning
+
+This crate is experimential and may be discontinued at any time.
+
 ## Example
 
 ```rs
@@ -80,8 +84,6 @@ App::new()
 
 A bigger example `game` is available that showcases the most important API additions in the `row` module.
 
-See the crate's documentation to learn more of the features and limitations.
-
 ## Limitations
 
 The following bevy features are currently not available as reversible variants:
@@ -97,21 +99,17 @@ The following bevy features are currently not available as reversible variants:
 
 <sub>* because this is currently out of scope, but may be implemented manually by the user</sub>
 
-This list may be incomplete. Only some items on this list are prevented or at least detected by this crate.
-
-## Warning
-
-This crate is experimential and may be discontinued at any time.
+This list may be incomplete and only some items are prevented to be used in reversible context.
 
 ## Supported bevy version
 
 | Bevy Oozlum | Bevy |
 | - | - |
-| 0.1.0-rc.1 | 0.19.0-rc.1 |
+| 0.1 | 0.19 |
 
 ## License
 
-This crate aligns with bevy's licensing:
+This crate aligns with bevy's licensing with all code being dual-licensed under either:
 
 * MIT License ([LICENSE-MIT](LICENSE-MIT) or [http://opensource.org/licenses/MIT](http://opensource.org/licenses/MIT))
 * Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or [http://www.apache.org/licenses/LICENSE-2.0](http://www.apache.org/licenses/LICENSE-2.0))

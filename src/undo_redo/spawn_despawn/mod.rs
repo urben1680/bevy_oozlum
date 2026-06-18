@@ -253,8 +253,8 @@ impl<E: EntityCollection, const SPAWN: bool> RevSpawnDespawn<E, SPAWN> {
                             "a reversible spawn, despawn or marking an entity as such was \
                             attempted outside RevDirection::NotLog, this may cause an out-of-log \
                             error when attempting to undo this, do not store NotLog to do \
-                            reversible operations and do not use delayed reversible commands as \
-                            this is not supported",
+                            reversible operations and do not use delayed commands to queue \
+                            reversible commands as this is not supported",
                         )),
                         ErrorContext::Command {
                             name: DebugName::type_name::<Self>(),
@@ -691,8 +691,7 @@ fn fetch_and<T, E: From<EntityNotSpawnedError>>(entity: T) -> Result<T, E>
 where
     for<'a> EntityRef<'a>: From<&'a T>,
 {
-    let entity_ref: EntityRef = (&entity).into();
-    match fetch_ref_and(entity_ref) {
+    match fetch_ref_and((&entity).into()) {
         Ok(_) => Ok(entity),
         Err(err) => Err(err.into()),
     }

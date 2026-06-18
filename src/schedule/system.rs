@@ -456,7 +456,7 @@ impl<T: System> System for BackwardDeferred<T> {
         }
     }
     fn queue_deferred(&mut self, _world: DeferredWorld) {
-        unreachable!(); // reversible systems are not used as observers
+        unreachable!() // reversible systems are not used as observers
     }
     fn initialize(&mut self, world: &mut World) -> FilteredAccessSet {
         if let BackwardDeferredState::Uninit(set) = self.state {
