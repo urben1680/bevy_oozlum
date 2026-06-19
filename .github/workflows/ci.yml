@@ -29,10 +29,10 @@ jobs:
           toolchain: 1.95
 
       - name: cargo check with all features
-        run: cargo check --all-targets --all-features
+        run: cargo check --lib --tests --all-features
 
       - name: cargo check without default features
-        run: cargo check --all-targets --no-default-features
+        run: cargo check --lib --tests --no-default-features
 
   stable:
     name: Stable (full checks)
@@ -55,11 +55,12 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Clippy
-        run: cargo clippy --all-targets --all-features -- \
-          -D warnings \
-          -D clippy::undocumented_unsafe_blocks \
-          -D clippy::missing_safety_doc \
-          -D unsafe_op_in_unsafe_fn
+        run: |
+          cargo clippy --all-targets --all-features -- \
+            -D warnings \
+            -D clippy::undocumented_unsafe_blocks \
+            -D clippy::missing_safety_doc \
+            -D unsafe_op_in_unsafe_fn
 
       - name: Tests
         run: cargo test --all-targets --all-features
