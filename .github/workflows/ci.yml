@@ -21,7 +21,6 @@ jobs:
         with:
           wayland: true
           xkb: true
-          x264: true
           fontconfig: true
 
       - uses: dtolnay/rust-toolchain@master
@@ -29,10 +28,10 @@ jobs:
           toolchain: 1.95
 
       - name: cargo check with all features
-        run: cargo check --lib --tests --all-features
+        run: cargo check --lib --all-features
 
       - name: cargo check without default features
-        run: cargo check --lib --tests --no-default-features
+        run: cargo check --lib --no-default-features
 
   stable:
     name: Stable (full checks)
