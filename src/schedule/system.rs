@@ -2,15 +2,14 @@ use alloc::{borrow::Cow, boxed::Box, format, string::ToString, vec::Vec};
 use bevy_ecs::{
     change_detection::{CheckChangeTicks, Tick},
     error::{BevyError, ErrorContext},
-    query::FilteredAccessSet,
     resource::Resource,
     schedule::{
         ApplyDeferred, InternedSystemSet, IntoScheduleConfigs, Schedule, ScheduleCleanupPolicy,
         Schedules, SystemSet,
     },
     system::{
-        IntoSystem, RunSystemError, ScheduleSystem, System, SystemIn, SystemParamValidationError,
-        SystemStateFlags,
+        IntoSystem, RunSystemError, ScheduleSystem, System, SystemAccess, SystemIn,
+        SystemParamValidationError, SystemStateFlags,
     },
     world::{DeferredWorld, World, unsafe_world_cell::UnsafeWorldCell},
 };
@@ -20,7 +19,7 @@ use bevy_platform::sync::{
 };
 use bevy_utils::DebugName;
 use core::{
-    any::TypeId,
+    any::{TypeId, type_name},
     fmt::{Debug, Formatter, from_fn},
     hash::{Hash, Hasher},
 };
@@ -45,47 +44,9 @@ pub(super) fn into_rev_system<Marker>(
         return RevScheduleConfigs::from(ApplyDeferred);
     }
 
-    let name = system.name();
-
-    if system.is_exclusive() {
-        // Exclusive systems are not supported because of the following reasons:
-        //
-        // 1. A hypothetical public RevWorld API would do the direct effect, the "doing", like
-        //    inserting a component anytime inside the exclusive system. Just like RevCommands this
-        //    would store their UndoRedo in a resource that at the next sync point is stored in the
-        //    system state. This has the consequence that the "undoing" and "redoing" can only
-        //    happen at sync points.
-        //    However, reversible logic that happens inside the exclusive system directly, not using
-        //    sync points, can not be reliably ordered to UndoRedo logic without putting the burden
-        //    on the user.
-        //    For example, an exclusive system could rev_spawn an entity via a RevWorld API (1),
-        //    then do non-UndoRedo logic based on the current RevDirection (2), and third do another
-        //    UndoRedo-generating logic via RevWorld (3).
-        //    This would be the order of actions depending on RevDirection:
-        //     NotLog:      do (1), do (2), do (3), all in the exclusive system, not in a sync point
-        //     BackwardLog: undo (3), undo (1) in a preceding sync point, undo (2) in the system
-        //     ForwardLog:  redo (2) in the system, redo (1), redo (3) in a following sync point
-        //    As one can see, the order is wrong. The user would have to actively refrain from using
-        //    such a RevWorld API. Not offering such an API would be not enough as nothing hinders
-        //    the user from directly applying reversible commands in the system.
-        //    The above issue gets worse when mixed with other systems with non-UndoRedo reversible
-        //    logic that run after the exclusive system but before a next sync point.
-        // 2. Supporting reversible exclusive systems makes the RevSystem implementation more
-        //    complicated, error prone and even more dependent on implementation details of
-        //    ExclusiveFunctionSystem that would need to be mirrored here additionally to the
-        //    FunctionSystem implementation. The needed public RevWorld API adds much more code to
-        //    test and maintain.
-        // 3. A RevWorld API might need to be designed entirely differently to RevCommands and the
-        //    relation to RevDirection matching inside the exclusive system. While this may partly
-        //    solve the issues as pointed out at 1., it adds to this crate's learning curve.
-        unimplemented!(
-            "exclusive systems as {name:?} are not supported to be reversible, \
-            use reversible commands via Commands::as_rev instead of &mut World"
-        );
-    }
-
     // This set contains BackwardDeferred and both RevSystems of only this system instance. It is
     // the base for the other wrapping sets and for conditions to be used on.
+    let name = system.name();
     let unified = RevSystemTypeSet::new(name.clone()).intern();
     let deferred = BackwardDeferredSet(unified);
 
@@ -114,7 +75,7 @@ pub(super) fn into_rev_system<Marker>(
         .in_set(BackwardSystemSet(unified))
         .in_set(BackwardDeferredAndSystemSet(unified))
         .in_set(BackwardSystems)
-        .after(deferred);
+        .after_weak(deferred);
 
     let mut configs = RevScheduleConfigs {
         forward_systems,
@@ -312,10 +273,55 @@ impl<T: System<In = (), Out = ()>, const FORWARD: bool> System for RevSystem<T, 
     fn queue_deferred(&mut self, _world: DeferredWorld) {
         unreachable!() // reversible systems are not used as observers
     }
-    fn initialize(&mut self, world: &mut World) -> FilteredAccessSet {
+    fn initialize(&mut self, world: &mut World) -> SystemAccess {
         // this must panic on try_lock or else System::run_unsafe cannot be used safely
         let mut inner = get_inner(&self.inner, &self.name);
         let access = inner.system.initialize(world);
+
+        let name = core::fmt::from_fn(|fmt| {
+            if size_of::<DebugName>() > 0 {
+                write!(fmt, "{}", self.name)
+            } else {
+                write!(fmt, "{}", type_name::<T>())
+            }
+        });
+
+        // Exclusive systems are not supported because of the following reasons:
+        //
+        // 1. A hypothetical public RevWorld API would do the direct effect, the "doing", like
+        //    inserting a component anytime inside the exclusive system. Just like RevCommands this
+        //    would store their UndoRedo in a resource that at the next sync point is stored in the
+        //    system state. This has the consequence that the "undoing" and "redoing" can only
+        //    happen at sync points.
+        //    However, reversible logic that happens inside the exclusive system directly, not using
+        //    sync points, can not be reliably ordered to UndoRedo logic without putting the burden
+        //    on the user.
+        //    For example, an exclusive system could rev_spawn an entity via a RevWorld API (1),
+        //    then do non-UndoRedo logic based on the current RevDirection (2), and third do another
+        //    UndoRedo-generating logic via RevWorld (3).
+        //    This would be the order of actions depending on RevDirection:
+        //     NotLog:      do (1), do (2), do (3), all in the exclusive system, not in a sync point
+        //     BackwardLog: undo (3), undo (1) in a preceding sync point, undo (2) in the system
+        //     ForwardLog:  redo (2) in the system, redo (1), redo (3) in a following sync point
+        //    As one can see, the order is wrong. The user would have to actively refrain from using
+        //    such a RevWorld API. Not offering such an API would be not enough as nothing hinders
+        //    the user from directly applying reversible commands in the system.
+        //    The above issue gets worse when mixed with other systems with non-UndoRedo reversible
+        //    logic that run after the exclusive system but before a next sync point.
+        // 2. Supporting reversible exclusive systems makes the RevSystem implementation more
+        //    complicated, error prone and even more dependent on implementation details of
+        //    ExclusiveFunctionSystem that would need to be mirrored here additionally to the
+        //    FunctionSystem implementation. The needed public RevWorld API adds much more code to
+        //    test and maintain.
+        // 3. A RevWorld API might need to be designed entirely differently to RevCommands and the
+        //    relation to RevDirection matching inside the exclusive system. While this may partly
+        //    solve the issues as pointed out at 1., it adds to this crate's learning curve.
+        assert_ne!(
+            access,
+            SystemAccess::Exclusive,
+            "exclusive systems as {name:?} are not supported to be reversible, \
+            use reversible commands via Commands::as_rev instead of &mut World",
+        );
 
         if !inner.initialized && inner.system.has_deferred() {
             inner.deferred_log = Some(Default::default());
@@ -384,9 +390,6 @@ impl<T: System> System for BackwardDeferred<T> {
     }
     fn is_send(&self) -> bool {
         true
-    }
-    fn is_exclusive(&self) -> bool {
-        false
     }
     fn has_deferred(&self) -> bool {
         match self.state {
@@ -458,7 +461,7 @@ impl<T: System> System for BackwardDeferred<T> {
     fn queue_deferred(&mut self, _world: DeferredWorld) {
         unreachable!() // reversible systems are not used as observers
     }
-    fn initialize(&mut self, world: &mut World) -> FilteredAccessSet {
+    fn initialize(&mut self, world: &mut World) -> SystemAccess {
         if let BackwardDeferredState::Uninit(set) = self.state {
             match self.inner.try_lock() {
                 Ok(mut inner) => {
@@ -499,7 +502,7 @@ impl<T: System> System for BackwardDeferred<T> {
             }
         }
 
-        FilteredAccessSet::new()
+        SystemAccess::None
     }
     fn default_system_sets(&self) -> Vec<InternedSystemSet> {
         Vec::new() // already specified via rev_in_set_inner at into_rev_system
@@ -807,6 +810,9 @@ mod test {
     #[test]
     #[should_panic = "exclusive system"]
     fn deny_exclusive_systems() {
-        super::into_rev_system(|_: &mut World| {});
+        let mut world = World::new();
+        let mut schedule = Schedule::default();
+        schedule.rev_add_systems(|_: &mut World| {});
+        let _ = schedule.initialize(&mut world);
     }
 }

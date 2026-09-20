@@ -4,7 +4,10 @@ use bevy_ecs::{
     component::ComponentId,
     query::FilteredAccessSet,
     resource::Resource,
-    system::{Command, ReadOnlySystemParam, SystemMeta, SystemParam, SystemParamValidationError},
+    system::{
+        Command, ReadOnlySystemParam, SystemAccess, SystemMeta, SystemParam,
+        SystemParamValidationError,
+    },
     world::{World, unsafe_world_cell::UnsafeWorldCell},
 };
 use core::{fmt::Display, num::NonZeroU64};
@@ -233,17 +236,26 @@ unsafe impl SystemParam for NotLog {
     fn init_access(
         &component_id: &Self::State,
         system_meta: &mut SystemMeta,
-        component_access_set: &mut FilteredAccessSet,
+        system_access: &mut SystemAccess,
         _world: &mut World,
     ) {
-        let combined_access = component_access_set.combined_access();
-        assert!(
-            !combined_access.has_write(component_id),
-            "error[B0002]: NotLog in system {} conflicts with a previous ResMut<RevMeta> access. Consider removing the duplicate access. See: https://bevy.org/learn/errors/b0002",
-            system_meta.name(),
-        );
-
-        component_access_set.add_resource_read(component_id);
+        match system_access {
+            SystemAccess::None => {
+                let mut access = FilteredAccessSet::new();
+                access.add_resource_read(component_id);
+                *system_access = SystemAccess::Shared(access);
+            }
+            SystemAccess::Shared(access) => {
+                let combined_access = access.combined_access();
+                assert!(
+                    !combined_access.has_write(component_id),
+                    "error[B0002]: NotLog in system {} conflicts with a previous ResMut<RevMeta> access. Consider removing the duplicate access. See: https://bevy.org/learn/errors/b0002",
+                    system_meta.name(),
+                );
+                access.add_resource_read(component_id);
+            }
+            SystemAccess::Exclusive => {} // RevSystem::initialize will panic
+        }
     }
 
     #[inline]
