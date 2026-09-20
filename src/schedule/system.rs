@@ -19,7 +19,7 @@ use bevy_platform::sync::{
 };
 use bevy_utils::DebugName;
 use core::{
-    any::{TypeId, type_name},
+    any::TypeId,
     fmt::{Debug, Formatter, from_fn},
     hash::{Hash, Hasher},
 };
@@ -278,14 +278,6 @@ impl<T: System<In = (), Out = ()>, const FORWARD: bool> System for RevSystem<T, 
         let mut inner = get_inner(&self.inner, &self.name);
         let access = inner.system.initialize(world);
 
-        let name = core::fmt::from_fn(|fmt| {
-            if size_of::<DebugName>() > 0 {
-                write!(fmt, "{}", self.name)
-            } else {
-                write!(fmt, "{}", type_name::<T>())
-            }
-        });
-
         // Exclusive systems are not supported because of the following reasons:
         //
         // 1. A hypothetical public RevWorld API would do the direct effect, the "doing", like
@@ -316,12 +308,20 @@ impl<T: System<In = (), Out = ()>, const FORWARD: bool> System for RevSystem<T, 
         // 3. A RevWorld API might need to be designed entirely differently to RevCommands and the
         //    relation to RevDirection matching inside the exclusive system. While this may partly
         //    solve the issues as pointed out at 1., it adds to this crate's learning curve.
-        assert_ne!(
-            access,
-            SystemAccess::Exclusive,
-            "exclusive systems as {name:?} are not supported to be reversible, \
-            use reversible commands via Commands::as_rev instead of &mut World",
-        );
+        if access == SystemAccess::Exclusive {
+            if size_of::<DebugName>() > 0 {
+                unimplemented!(
+                    "exclusive systems as {:?} are not supported to be reversible, \
+                    use reversible commands via Commands::as_rev instead of &mut World",
+                    self.name
+                )
+            } else {
+                unimplemented!(
+                    "exclusive systems are not supported to be reversible, use \
+                    reversible commands via Commands::as_rev instead of &mut World"
+                )
+            }
+        }
 
         if !inner.initialized && inner.system.has_deferred() {
             inner.deferred_log = Some(Default::default());

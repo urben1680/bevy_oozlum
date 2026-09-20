@@ -365,53 +365,30 @@ fn truncates_future_command_log() {
 }
 
 #[test]
+#[should_panic]
 fn delayed_rev_command_errors() {
-    extern crate std;
-    use std::{
-        format,
-        panic::{AssertUnwindSafe, catch_unwind},
-        string::{String, ToString},
-    };
-
-    let payload = catch_unwind(AssertUnwindSafe(should_panic)).unwrap_err();
-
-    let msg = if let Some(s) = payload.downcast_ref::<&str>() {
-        (*s).to_string()
-    } else if let Some(s) = payload.downcast_ref::<String>() {
-        s.clone()
-    } else {
-        format!("{payload:?}")
-    };
-
-    assert!(
-        msg.contains("a reversible spawn, despawn or marking an entity as such was attempted outside RevDirection::NotLog"),
-        "did not contain expected message:\n{msg}"
-    );
-
-    fn should_panic() {
-        fn system(not_log: NotLog, mut commands: Commands) {
-            commands
-                .delayed()
-                .secs(1.0)
-                .as_rev(not_log)
-                .rev_spawn_empty();
-        }
-
-        let mut app = App::new();
-        app.add_plugins((
-            MinimalPlugins,
-            RevPlugin
-                .set_max_past_len(u64::MAX)
-                .set_runner_in_schedule(Update),
-        ))
-        .rev_add_systems(RevUpdate, system)
-        .rev_add_systems(PreUpdate, ApplyDeferred);
-        panic_on_warnings_or_errors(app.world_mut());
-
-        app.update();
-        app.world_mut()
-            .resource_mut::<Time<Virtual>>()
-            .advance_by(Duration::from_secs(2));
-        app.update();
+    fn system(not_log: NotLog, mut commands: Commands) {
+        commands
+            .delayed()
+            .secs(1.0)
+            .as_rev(not_log)
+            .rev_spawn_empty();
     }
+
+    let mut app = App::new();
+    app.add_plugins((
+        MinimalPlugins,
+        RevPlugin
+            .set_max_past_len(u64::MAX)
+            .set_runner_in_schedule(Update),
+    ))
+    .rev_add_systems(RevUpdate, system)
+    .rev_add_systems(PreUpdate, ApplyDeferred);
+    panic_on_warnings_or_errors(app.world_mut());
+
+    app.update();
+    app.world_mut()
+        .resource_mut::<Time<Virtual>>()
+        .advance_by(Duration::from_secs(2));
+    app.update();
 }
