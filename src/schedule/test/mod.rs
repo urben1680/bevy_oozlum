@@ -365,7 +365,6 @@ fn truncates_future_command_log() {
 }
 
 #[test]
-#[should_panic]
 fn delayed_rev_command_errors() {
     extern crate std;
     use std::{
