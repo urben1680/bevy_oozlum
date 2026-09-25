@@ -1,9 +1,10 @@
-use alloc::vec::Vec;
+use alloc::{collections::VecDeque, vec::Vec};
 use bevy_ecs::{
     bundle::{Bundle, NoBundleEffect},
     change_detection::MaybeLocation,
     component::ComponentId,
     entity::{Entity, EntityNotSpawnedError},
+    query::{QueryData, QueryFilter},
     resource::Resource,
     schedule::{InternedScheduleLabel, ScheduleLabel},
     world::{
@@ -18,6 +19,9 @@ use crate::undo_redo::{
     EntityRevDespawnedError, RevBundle, RevInsertResourceNew, RevInsertResourceOverwrite,
     RevRemoveResource, UndoRedo, UndoRedoQueue, mark_entities, mark_entity,
 };
+
+#[cfg(test)]
+mod test;
 
 pub(super) trait RevWorld {
     fn queue_undo_redo(&mut self, undo_redo: impl UndoRedo, caller: MaybeLocation);
@@ -47,6 +51,12 @@ pub(super) trait RevWorld {
     fn rev_despawn(&mut self, entity: Entity, caller: MaybeLocation) -> bool;
 
     fn rev_despawn_batch(&mut self, entities: &[Entity], caller: MaybeLocation);
+
+    fn rev_despawn_all_where<D: QueryData, F: QueryFilter>(
+        &mut self,
+        cond: impl FnMut(D::Item<'_, '_>) -> bool,
+        caller: MaybeLocation,
+    );
 
     fn rev_spawn_batch<I>(&mut self, iter: I, caller: MaybeLocation) -> Vec<Entity>
     where
@@ -124,6 +134,31 @@ impl RevWorld for World {
 
     fn rev_despawn_batch(&mut self, entities: &[Entity], caller: MaybeLocation) {
         mark_entities::<false>(self, entities, false, caller);
+    }
+
+    fn rev_despawn_all_where<D: QueryData, F: QueryFilter>(
+        &mut self,
+        mut cond: impl FnMut(D::Item<'_, '_>) -> bool,
+        caller: MaybeLocation,
+    ) {
+        // following segment is copied from World::despawn_all_where impl
+
+        let mut query = self.query_filtered::<(Entity, D), F>();
+        let mut query = query.iter_mut(self);
+
+        let mut entities_to_despawn = VecDeque::new();
+
+        while let Some((entity, data)) = query.fetch_next() {
+            if cond(data) {
+                // We want to despawn the entities backwards since we're
+                // less likely to leave holes.
+                entities_to_despawn.push_front(entity);
+            }
+        }
+        // We have to explicitly drop the query to release the world borrow.
+        drop(query);
+
+        self.rev_despawn_batch(entities_to_despawn.make_contiguous(), caller);
     }
 
     fn rev_init_resource<R: Resource + FromWorld>(&mut self, caller: MaybeLocation) -> ComponentId {

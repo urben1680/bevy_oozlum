@@ -2,10 +2,9 @@ use alloc::borrow::Cow;
 use bevy_ecs::{
     change_detection::Tick,
     component::ComponentId,
-    query::FilteredAccessSet,
     resource::Resource,
     system::{
-        Command, ReadOnlySystemParam, SystemAccess, SystemMeta, SystemParam,
+        Command, ReadOnlySystemParam, Res, SystemAccess, SystemMeta, SystemParam,
         SystemParamValidationError,
     },
     world::{World, unsafe_world_cell::UnsafeWorldCell},
@@ -228,34 +227,16 @@ unsafe impl SystemParam for NotLog {
     type Item<'w, 's> = NotLog;
 
     fn init_state(world: &mut World) -> Self::State {
-        world
-            .components_registrator()
-            .register_component::<RevMeta>()
+        Res::<RevMeta>::init_state(world)
     }
 
     fn init_access(
-        &component_id: &Self::State,
+        state: &Self::State,
         system_meta: &mut SystemMeta,
         system_access: &mut SystemAccess,
-        _world: &mut World,
+        world: &mut World,
     ) {
-        match system_access {
-            SystemAccess::None => {
-                let mut access = FilteredAccessSet::new();
-                access.add_resource_read(component_id);
-                *system_access = SystemAccess::Shared(access);
-            }
-            SystemAccess::Shared(access) => {
-                let combined_access = access.combined_access();
-                assert!(
-                    !combined_access.has_write(component_id),
-                    "error[B0002]: NotLog in system {} conflicts with a previous ResMut<RevMeta> access. Consider removing the duplicate access. See: https://bevy.org/learn/errors/b0002",
-                    system_meta.name(),
-                );
-                access.add_resource_read(component_id);
-            }
-            SystemAccess::Exclusive => {} // RevSystem::initialize will panic
-        }
+        Res::<RevMeta>::init_access(state, system_meta, system_access, world);
     }
 
     #[inline]

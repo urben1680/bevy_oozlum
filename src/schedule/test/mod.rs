@@ -212,7 +212,7 @@ fn single_non_exclusive_system() {
 #[test]
 fn non_exclusive_then_non_exclusive() {
     test_run(
-        a_then_b(false),
+        a_then_b(false, false),
         vec![vec![
             Test::NonExclusiveSystem(1),
             Test::NonExclusiveSyncPoint(1),
@@ -225,11 +225,24 @@ fn non_exclusive_then_non_exclusive() {
 #[test]
 fn non_exclusive_then_non_exclusive_ignore_deferred() {
     test_run(
-        a_then_b(true),
+        a_then_b(true, false),
         vec![vec![
             Test::NonExclusiveSystem(1),
             Test::NonExclusiveSystem(2),
             Test::NonExclusiveSyncPoint(1),
+            Test::NonExclusiveSyncPoint(2),
+        ]],
+    )
+}
+
+#[test]
+fn non_exclusive_then_non_exclusive_weak() {
+    test_run(
+        a_then_b(false, true),
+        vec![vec![
+            Test::NonExclusiveSystem(1),
+            Test::NonExclusiveSyncPoint(1),
+            Test::NonExclusiveSystem(2),
             Test::NonExclusiveSyncPoint(2),
         ]],
     )
