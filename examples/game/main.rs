@@ -9,7 +9,7 @@ use bevy_oozlum::prelude::*;
 
 const ROWS: usize = 8;
 const MAX_PAST_LEN: u64 = 70;
-const CURRENT_BEVY_VERSION: u64 = 190; // 0.19.0
+const CURRENT_BEVY_VERSION: u64 = 200; // 0.20.0
 const WINNING_BEVY_VERSION: u64 = 1000; // 1.00.0
 const FRAMERATE_MIN: f64 = 10.0;
 const FRAMERATE_MAX: f64 = 66.667;
