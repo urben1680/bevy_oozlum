@@ -252,7 +252,8 @@ impl<'a> RevCommands<'a> {
         cond: impl FnMut(D::Item<'_, '_>) -> bool + Send + 'static,
     ) {
         let caller = MaybeLocation::caller();
-        self.0.queue(rev_despawn_all_where_with_caller::<D, F>(cond, caller));
+        self.0
+            .queue(rev_despawn_all_where_with_caller::<D, F>(cond, caller));
     }
 
     /// Reversible version of [`Commands::spawn`].
