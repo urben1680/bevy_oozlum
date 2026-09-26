@@ -239,9 +239,7 @@ impl<'a> RevCommands<'a> {
     #[track_caller]
     pub fn rev_despawn_all<F: QueryFilter>(&mut self) {
         let caller = MaybeLocation::caller();
-        self.0.queue(move |world: &mut World| {
-            world.rev_despawn_all_where::<(), F>(|_| true, caller);
-        });
+        self.0.queue(rev_despawn_all_with_caller::<F>(caller));
     }
 
     /// Reversible version of [`Commands::despawn_all_where`].
@@ -254,9 +252,7 @@ impl<'a> RevCommands<'a> {
         cond: impl FnMut(D::Item<'_, '_>) -> bool + Send + 'static,
     ) {
         let caller = MaybeLocation::caller();
-        self.0.queue(move |world: &mut World| {
-            world.rev_despawn_all_where::<D, F>(cond, caller);
-        });
+        self.0.queue(rev_despawn_all_where_with_caller::<D, F>(cond, caller));
     }
 
     /// Reversible version of [`Commands::spawn`].
@@ -330,9 +326,9 @@ impl<'a> RevCommands<'a> {
         I: IntoIterator<Item = (Entity, B)> + Send + Sync + 'static,
         B: RevBundle<Marker>,
     {
-        self.0.queue_handled(
-            rev_insert_batch_with_caller(iter, InsertMode::Replace, MaybeLocation::caller()),
-            warn,
+        self.0.queue(
+            rev_insert_batch_with_caller(iter, InsertMode::Replace, MaybeLocation::caller())
+                .handle_error_with(warn),
         );
     }
 
@@ -343,9 +339,9 @@ impl<'a> RevCommands<'a> {
         I: IntoIterator<Item = (Entity, B)> + Send + Sync + 'static,
         B: RevBundle<Marker>,
     {
-        self.0.queue_handled(
-            rev_insert_batch_with_caller(iter, InsertMode::Keep, MaybeLocation::caller()),
-            warn,
+        self.0.queue(
+            rev_insert_batch_with_caller(iter, InsertMode::Keep, MaybeLocation::caller())
+                .handle_error_with(warn),
         );
     }
 }
@@ -354,9 +350,6 @@ impl<'a> RevCommands<'a> {
 ///
 /// If any entities do not exist in the world or are reversibly despawned, this command will return
 /// an error.
-///
-/// See the [`undo_redo`](crate::undo_redo) module documentation to understand the mechanics of
-/// reversible spawn/despawn.
 #[track_caller]
 pub fn rev_insert_batch<I, B, Marker>(
     _: NotLog,
@@ -432,6 +425,9 @@ fn rev_remove_resource_with_caller<R: Resource>(caller: MaybeLocation) -> impl C
 }
 
 /// Reversible version of [`spawn_batch`](bevy_ecs::system::command::spawn_batch).
+///
+/// See the [`undo_redo`](crate::undo_redo) module documentation to understand the mechanics of
+/// reversible spawn/despawn.
 pub fn rev_spawn_batch<I>(_: NotLog, bundles_iter: I) -> impl Command
 where
     I: IntoIterator<Item: Bundle<Effect: NoBundleEffect>> + Send + 'static,
@@ -477,6 +473,9 @@ pub(super) fn rev_spawn_with_caller<'a, T: Bundle>(
 }
 
 /// Reversible version of [`despawn_all`](bevy_ecs::system::command::despawn_all).
+///
+/// See the [`undo_redo`](crate::undo_redo) module documentation to understand the mechanics of
+/// reversible spawn/despawn.
 #[track_caller]
 pub fn rev_despawn_all<F: QueryFilter>(_: NotLog) -> impl Command {
     rev_despawn_all_with_caller::<F>(MaybeLocation::caller())
@@ -489,6 +488,9 @@ fn rev_despawn_all_with_caller<F: QueryFilter>(caller: MaybeLocation) -> impl Co
 }
 
 /// Reversible version of [`despawn_all_where`](bevy_ecs::system::command::despawn_all_where).
+///
+/// See the [`undo_redo`](crate::undo_redo) module documentation to understand the mechanics of
+/// reversible spawn/despawn.
 #[track_caller]
 pub fn rev_despawn_all_where<D: QueryData, F: QueryFilter>(
     _: NotLog,

@@ -20,9 +20,6 @@ use crate::undo_redo::{
     RevRemoveResource, UndoRedo, UndoRedoQueue, mark_entities, mark_entity,
 };
 
-#[cfg(test)]
-mod test;
-
 pub(super) trait RevWorld {
     fn queue_undo_redo(&mut self, undo_redo: impl UndoRedo, caller: MaybeLocation);
 
