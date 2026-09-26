@@ -238,8 +238,8 @@ impl<'a> RevCommands<'a> {
     /// reversible spawn/despawn.
     #[track_caller]
     pub fn rev_despawn_all<F: QueryFilter>(&mut self) {
-        let caller = MaybeLocation::caller();
-        self.0.queue(rev_despawn_all_with_caller::<F>(caller));
+        self.0
+            .queue(rev_despawn_all_with_caller::<F>(MaybeLocation::caller()));
     }
 
     /// Reversible version of [`Commands::despawn_all_where`].
@@ -251,9 +251,10 @@ impl<'a> RevCommands<'a> {
         &mut self,
         cond: impl FnMut(D::Item<'_, '_>) -> bool + Send + 'static,
     ) {
-        let caller = MaybeLocation::caller();
-        self.0
-            .queue(rev_despawn_all_where_with_caller::<D, F>(cond, caller));
+        self.0.queue(rev_despawn_all_where_with_caller::<D, F>(
+            cond,
+            MaybeLocation::caller(),
+        ));
     }
 
     /// Reversible version of [`Commands::spawn`].

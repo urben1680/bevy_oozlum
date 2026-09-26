@@ -82,7 +82,7 @@ impl<T: ReadOnlySystem<In = (), Out = bool>> System for RevCondition<T> {
             SystemAccess::Shared(access) => {
                 access.add_resource_read(meta_id);
             }
-            SystemAccess::Exclusive => {}
+            SystemAccess::Exclusive => unreachable!("no read-only param has exclusive access"),
         }
         system_access
     }
