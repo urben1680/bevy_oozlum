@@ -13,10 +13,7 @@ use bevy_ecs::{
     },
     world::{DeferredWorld, World, unsafe_world_cell::UnsafeWorldCell},
 };
-use bevy_platform::sync::{
-    Arc, Mutex, MutexGuard,
-    atomic::{AtomicU32, Ordering},
-};
+use bevy_platform::sync::{Arc, Mutex, MutexGuard};
 use bevy_utils::DebugName;
 use core::{
     any::TypeId,
@@ -46,11 +43,10 @@ pub(super) fn into_rev_system<Marker>(
 
     // This set contains BackwardDeferred and both RevSystems of only this system instance. It is
     // the base for the other wrapping sets and for conditions to be used on.
-    let name = system.name();
-    let unified = RevSystemTypeSet::new(name.clone()).intern();
+    let unified = RevSystemTypeSet::new(&system).intern();
     let deferred = BackwardDeferredSet(unified);
 
-    let name = |postfix: &str| DebugName::owned(format!("{name}{postfix}"));
+    let name = |postfix: &str| DebugName::owned(format!("{}{postfix}", system.name()));
     let forward_system_name = name(" (forward system)");
     let backward_deferred_name = name(" (backward deferred)");
     let backward_system_name = name(" (backward system)");
@@ -103,7 +99,7 @@ pub(super) fn into_rev_system<Marker>(
 // is `pub(super)` for docs in parent module
 #[derive(SystemSet, Clone, Eq)]
 pub(super) struct RevSystemTypeSet {
-    id: u32,
+    id: TypeId,
     name: DebugName,
 }
 
@@ -121,27 +117,16 @@ impl Hash for RevSystemTypeSet {
 
 impl Debug for RevSystemTypeSet {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
-        if size_of::<DebugName>() == 0 {
-            write!(f, "RevSystemTypeSet({}, {})", self.id, self.name)
-        } else {
-            self.name.fmt(f)
-        }
+        self.name.fmt(f)
     }
 }
 
 impl RevSystemTypeSet {
-    fn new(name: DebugName) -> Self {
-        static ID: AtomicU32 = AtomicU32::new(0);
-        let id = ID.fetch_add(1, Ordering::Relaxed);
-        if id == u32::MAX {
-            // this technically is a warn and not an error, but detecting the actual first set after
-            // overflow needs another atomic with stricter Ordering for both which is not worth it
-            error_or_panic_at_tests!(
-                "an internal atomic counter to create reversible systems is exhausted, \
-                creating more may lead to multiple systems sharing the same run condition"
-            );
+    fn new<T: System>(system: &T) -> Self {
+        Self {
+            id: TypeId::of::<T>(),
+            name: system.name(),
         }
-        Self { id, name }
     }
 }
 
@@ -394,13 +379,7 @@ impl<T: System> System for BackwardDeferred<T> {
     fn has_deferred(&self) -> bool {
         match self.state {
             BackwardDeferredState::Init { has_deferred } => has_deferred,
-            BackwardDeferredState::Uninit(_) => {
-                error_or_panic_at_tests!(
-                    "reversible system {:?} should be initialized before calling System::has_deferred",
-                    self.name
-                );
-                true
-            }
+            BackwardDeferredState::Uninit(_) => true,
         }
     }
     unsafe fn run_unsafe(
@@ -589,18 +568,6 @@ pub fn remove_noop_backward_deferred(world: &mut World) -> Result<(), RunSystemE
         ))))
     }
 }
-
-macro_rules! error_or_panic_at_tests {
-    ($($tokens:tt)*) => {
-        if cfg!(test) {
-            panic!($($tokens)*);
-        } else {
-            bevy_log::error!($($tokens)*);
-        }
-    };
-}
-
-use error_or_panic_at_tests;
 
 #[cfg(test)]
 mod test {

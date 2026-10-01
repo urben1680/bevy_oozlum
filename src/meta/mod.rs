@@ -11,6 +11,8 @@ use crate::{
 use alloc::{borrow::Cow, format};
 #[cfg(feature = "track_update_logs")]
 use alloc::{string::ToString, vec::Vec};
+#[cfg(feature = "track_update_logs")]
+use bevy_ecs::error::{ErrorHandler, FallbackErrorHandler};
 use bevy_ecs::{
     resource::Resource,
     system::{RunSystemError, SystemParamValidationError},
@@ -69,6 +71,10 @@ pub struct RevMeta {
     #[cfg(feature = "track_update_logs")]
     /// Tracker of `UpdateLog` updates to report missed updates at [`Self::update`]
     update_log_limits: UpdateLogLimits,
+
+    #[cfg(feature = "track_update_logs")]
+    #[cfg_attr(feature = "track_update_logs", reflect(ignore))]
+    error_handler: ErrorHandler,
 }
 
 impl Default for RevMeta {
@@ -101,6 +107,8 @@ impl RevMeta {
 
             #[cfg(feature = "track_update_logs")]
             update_log_limits: UpdateLogLimits::default(),
+            #[cfg(feature = "track_update_logs")]
+            error_handler: FallbackErrorHandler::default().0,
         }
     }
 
@@ -410,10 +418,10 @@ impl RevMeta {
         feature = "track_update_logs",
         expect(clippy::result_large_err, reason = "barely above clippy limit")
     )]
-    pub fn update(
+    pub fn update<F: FnOnce(Self, RevDirection) -> Option<Self>>(
         mut self,
         queue: Option<RevQueue>,
-        c: impl FnOnce(Self, RevDirection) -> Option<Self>,
+        c: F,
     ) -> Result<Self, RevMetaUpdateErr> {
         // get direction that ran previously
         let (ran, after_log) = match self.direction {
@@ -523,6 +531,11 @@ impl RevMeta {
         Ok(meta)
     }
 
+    #[cfg(feature = "track_update_logs")]
+    pub(crate) fn error_handler(&self) -> ErrorHandler {
+        self.error_handler
+    }
+
     /// Clears the global log.
     fn clear(&mut self) {
         self.past_end = self.now;
@@ -532,12 +545,20 @@ impl RevMeta {
 
         #[cfg(feature = "track_update_logs")]
         {
+            use bevy_ecs::error::{BevyError, ErrorContext};
+            use bevy_utils::DebugName;
+
             self.update_log_limits.clear();
-            bevy_log::info!(
-                "`RevQueue::Clear` was applied, `RevMeta::log_clears` is now {}, all internal \
-                indices of `UpdateLog`s until now are invalid and will be reinitialized at their \
-                next mutation",
-                self.log_clears
+            self.error_handler()(
+                BevyError::info(format!(
+                    "`RevQueue::Clear` was applied, `RevMeta::log_clears` is now {}, all internal \
+                    indices of `UpdateLog`s until now are invalid and will be reinitialized at their \
+                    next mutation",
+                    self.log_clears
+                )),
+                ErrorContext::Command {
+                    name: DebugName::type_name_of_val(&Self::update::<fn(_, _) -> _>),
+                },
             )
         }
     }

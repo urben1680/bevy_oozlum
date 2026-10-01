@@ -35,7 +35,18 @@ mod test;
 ///
 /// Manually inserting it is discouraged because no finalized despawn will take place in these
 /// cases. Manually removing it will also not prevent the despawn.
-pub struct RevDespawned(pub MaybeLocation);
+pub struct RevDespawned(
+    #[cfg_attr(
+        feature = "reflect",
+        reflect(ignore, default = "rev_despawned_reflect_location")
+    )]
+    pub MaybeLocation,
+);
+
+#[cfg(feature = "reflect")]
+fn rev_despawned_reflect_location() -> MaybeLocation {
+    MaybeLocation::caller()
+}
 
 /// Despawn entities that are currently considered reversibly despawned and their relevant operation
 /// to revert that fell out of log. This must not be manually called if [`run_rev_update`] is used.

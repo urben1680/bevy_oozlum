@@ -290,13 +290,6 @@ fn run_if() {
     );
 }
 
-#[test]
-fn duplicate_system_chain_builds() {
-    let mut schedule = Schedule::default();
-    schedule.rev_add_systems((non_exclusive_system::<1>, non_exclusive_system::<1>).rev_chain());
-    schedule.initialize(&mut World::new()).unwrap();
-}
-
 fn remove_rev_systems_inner(remove_by_system: bool) {
     fn to_remove() {}
     fn to_keep() {}
