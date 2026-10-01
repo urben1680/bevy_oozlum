@@ -105,8 +105,8 @@ This list may be incomplete and only some items are prevented to be used in reve
 
 | Bevy Oozlum | Bevy |
 | - | - |
-| 0.2.0 | 0.20 |
-| 0.1.0 | 0.19 |
+| 0.2 | 0.20 |
+| 0.1 | 0.19 |
 
 ## License
 
