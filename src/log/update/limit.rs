@@ -12,7 +12,6 @@ use bevy_ecs::{
 use bevy_utils::{DebugName, Parallel};
 use core::{
     fmt::{Debug, Formatter, Result as FmtResult},
-    panic::Location,
     sync::atomic::AtomicU32,
 };
 use nonmax::NonMaxU32;
@@ -75,7 +74,7 @@ impl UpdateLogLimits {
         &self,
         state: &mut Option<UpdateLogState>,
         error_handler: ErrorHandler,
-        caller: MaybeLocation<Option<&'static Location>>,
+        caller: UpdateLocation,
     ) {
         match state {
             None => {

@@ -216,7 +216,7 @@ impl<T: System<In = (), Out = ()>, const FORWARD: bool> System for RevSystem<T, 
     fn refresh_hotpatch(&mut self) {
         match self.inner.try_lock() {
             Ok(mut inner) => inner.system.refresh_hotpatch(),
-            Err(err) => error_or_panic_at_tests!("could not hotpatch system {}: {err}", self.name),
+            Err(err) => panic!("could not hotpatch system {}: {err}", self.name),
         }
     }
     fn apply_deferred(&mut self, world: &mut World) {
