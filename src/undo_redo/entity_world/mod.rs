@@ -10,7 +10,7 @@ use bevy_utils::DebugName;
 
 use crate::undo_redo::{
     AddRemoveRelated, EntityRevDespawnedError, IsRevDespawned, RevBundle, RevDespawned, RevWorld,
-    UndoRedo, get_new_related, mark_entity,
+    UndoRedo, get_new_related, mark_entity, mark_spawn_empty,
 };
 
 #[cfg(test)]
@@ -24,6 +24,11 @@ pub(super) trait RevEntityWorld {
     fn rev_mark_spawned(
         &mut self,
         include_unlinked_related: bool,
+        caller: MaybeLocation,
+    ) -> Result<&mut Self, EntityRevDespawnedError>;
+
+    fn rev_mark_spawned_empty(
+        &mut self,
         caller: MaybeLocation,
     ) -> Result<&mut Self, EntityRevDespawnedError>;
 
@@ -138,13 +143,22 @@ impl<'w> RevEntityWorld for EntityWorldMut<'w> {
         caller: MaybeLocation,
     ) -> Result<&mut Self, EntityRevDespawnedError> {
         self.assert_not_rev_despawned()?;
-        mark_entity::<true>(self, include_unlinked_related, caller);
+        mark_entity::<true>(self, include_unlinked_related, true, caller);
+        Ok(self)
+    }
+
+    fn rev_mark_spawned_empty(
+        &mut self,
+        caller: MaybeLocation,
+    ) -> Result<&mut Self, EntityRevDespawnedError> {
+        self.assert_not_rev_despawned()?;
+        mark_spawn_empty(self, caller);
         Ok(self)
     }
 
     fn rev_despawn(mut self, caller: MaybeLocation) -> Result<(), EntityRevDespawnedError> {
         self.assert_not_rev_despawned()?;
-        mark_entity::<false>(&mut self, false, caller);
+        mark_entity::<false>(&mut self, false, true, caller);
         Ok(())
     }
 

@@ -92,7 +92,7 @@ The following bevy features are currently not available as reversible variants:
 - Exclusive systems
 - Hooks and observers, though both may queue reversible commands
 - Many commands are available but not all, like those for dynamic components or cloning entities *
-- Delayed commands
+- Delayed and `queue_spawn_scene`(`_list`) commands, only non-`queue` scene commands are present
 - Commands working with `Relationship`(`Target`) that have additional fields *
 - Disabling automatically inserted sync points of reversible schedules
 - Hotpatching reversible systems is supported but this is not reversible *

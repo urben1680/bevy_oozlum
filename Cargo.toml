@@ -33,6 +33,7 @@ bevy_platform = { version = "=0.20.0-rc.2", default-features = false }
 bevy_ptr = { version = "=0.20.0-rc.2", default-features = false } 
 bevy_reflect = { version = "=0.20.0-rc.2", optional = true, default-features = false }
 bevy_utils = { version = "=0.20.0-rc.2", default-features = false }
+bevy_scene = { version = "=0.20.0-rc.2", optional = true, default-features = false }
 nonmax = { version = "0.5", optional = true, default-features = false } # keep in sync with bevy
 variadics_please = "2.0" # keep in sync with bevy
 
@@ -48,9 +49,10 @@ name = "jump_to_frame"
 doc-scrape-examples = true
 
 [features]
-default = ["app", "reflect"]
+default = ["app", "reflect", "scene"]
 app = ["dep:bevy_app"]
 reflect = ["dep:bevy_reflect"]
+scene = ["dep:bevy_scene"]
 track_update_logs = ["dep:nonmax", "bevy_utils/parallel"]
 hotpatching = ["bevy_ecs/hotpatching"]
 ci_mode = [] # testing example in ci, not intended for other usages

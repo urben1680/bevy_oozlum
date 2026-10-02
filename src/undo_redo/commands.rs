@@ -13,6 +13,8 @@ use bevy_ecs::{
     system::{Command, Commands},
     world::{EntityWorldMut, FromWorld, World},
 };
+#[cfg(feature = "scene")]
+use bevy_scene::{EntityWorldMutSceneExt, Scene, SceneList, WorldSceneExt};
 
 use crate::{
     meta::NotLog,
@@ -291,6 +293,73 @@ impl<'a> RevCommands<'a> {
     {
         self.0
             .queue(rev_spawn_batch_with_caller(batch, MaybeLocation::caller()));
+    }
+
+    /// Reversible version of [`Commands::spawn_scene`](bevy_scene::CommandsSceneExt::spawn_scene).
+    /// Needs the `scene` feature to be present.
+    ///
+    /// See the [`undo_redo`](crate::undo_redo) module documentation to understand the mechanics of
+    /// reversible spawn/despawn.
+    #[cfg(feature = "scene")]
+    #[track_caller]
+    pub fn rev_spawn_scene<S: Scene>(&mut self, scene: S) -> RevEntityCommands<'_> {
+        let caller = MaybeLocation::caller();
+        let mut entity_commands = self.0.spawn_empty();
+        let id = entity_commands.id();
+        entity_commands.commands().queue(move |world: &mut World| {
+            use crate::undo_redo::mark_entity;
+            use bevy_ecs::error::{BevyError, ErrorContext};
+            use bevy_utils::DebugName;
+
+            let Ok(mut entity) = world.get_entity_mut(id) else {
+                return;
+            };
+
+            match entity.apply_scene(scene) {
+                Ok(()) => {
+                    mark_entity::<true>(&mut entity, true, true, caller);
+                }
+                Err(err) => world.fallback_error_handler()(
+                    BevyError::error(err),
+                    ErrorContext::Command {
+                        name: DebugName::type_name_of_val(&Self::rev_spawn_scene::<S>),
+                    },
+                ),
+            }
+        });
+
+        RevEntityCommands(entity_commands)
+    }
+
+    /// Reversible version of
+    /// [`Commands::spawn_scene_list`](bevy_scene::CommandsSceneExt::spawn_scene_list). Needs the
+    /// `scene` feature to be present.
+    ///
+    /// See the [`undo_redo`](crate::undo_redo) module documentation to understand the mechanics of
+    /// reversible spawn/despawn.
+    #[cfg(feature = "scene")]
+    #[track_caller]
+    pub fn rev_spawn_scene_list<L: SceneList>(&mut self, scenes: L) {
+        let caller = MaybeLocation::caller();
+        self.0.queue(move |world: &mut World| {
+            use crate::undo_redo::mark_entities;
+            use bevy_ecs::error::{BevyError, ErrorContext};
+            use bevy_utils::DebugName;
+
+            match world.spawn_scene_list(scenes) {
+                Ok(entities) => {
+                    mark_entities::<true>(world, &entities, true, caller);
+                }
+                Err(err) => {
+                    world.fallback_error_handler()(
+                        BevyError::error(err),
+                        ErrorContext::Command {
+                            name: DebugName::type_name_of_val(&Self::rev_spawn_scene_list::<L>),
+                        },
+                    );
+                }
+            }
+        });
     }
 
     /// Reversible version of [`Commands::insert_batch`].

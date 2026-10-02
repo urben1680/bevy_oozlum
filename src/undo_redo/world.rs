@@ -110,7 +110,7 @@ impl RevWorld for World {
         let Ok(mut entity) = self.get_entity_mut(entity) else {
             return false;
         };
-        mark_entity::<true>(&mut entity, include_unlinked_related, caller)
+        mark_entity::<true>(&mut entity, include_unlinked_related, true, caller)
     }
 
     fn rev_mark_spawned_batch(
@@ -126,7 +126,7 @@ impl RevWorld for World {
         let Ok(mut entity) = self.get_entity_mut(entity) else {
             return false;
         };
-        mark_entity::<false>(&mut entity, false, caller)
+        mark_entity::<false>(&mut entity, false, true, caller)
     }
 
     fn rev_despawn_batch(&mut self, entities: &[Entity], caller: MaybeLocation) {

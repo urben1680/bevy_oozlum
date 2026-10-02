@@ -1341,6 +1341,7 @@ dependencies = [
  "bevy_platform",
  "bevy_ptr",
  "bevy_reflect",
+ "bevy_scene",
  "bevy_utils",
  "nonmax",
  "variadics_please",
