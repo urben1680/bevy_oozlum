@@ -516,10 +516,6 @@ impl Error for UpdateMissedAt {}
 
 type UpdateLocation = MaybeLocation<Option<&'static Location<'static>>>;
 
-fn update_location_default() -> UpdateLocation {
-    UpdateLocation::new(None)
-}
-
 #[cfg(all(test, feature = "track_update_logs"))]
 mod test {
     use crate::meta::RevQueue;

@@ -16,7 +16,7 @@ use core::{
 };
 use nonmax::NonMaxU32;
 
-use crate::log::update::{UpdateLocation, update_location_default};
+use crate::log::update::UpdateLocation;
 
 /// The locals contain 2D vectors:
 ///
@@ -262,6 +262,10 @@ pub(crate) struct UpdateLogLimit {
         reflect(ignore, default = "update_location_default")
     )]
     last_update: UpdateLocation,
+}
+
+fn update_location_default() -> UpdateLocation {
+    UpdateLocation::new(None)
 }
 
 impl UpdateLogLimit {
