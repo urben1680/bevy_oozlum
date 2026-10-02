@@ -16,7 +16,7 @@ use core::{
 };
 use nonmax::NonMaxU32;
 
-use crate::log::update::UpdateLocation;
+use crate::log::update::{UpdateLocation, update_location_default};
 
 /// The locals contain 2D vectors:
 ///
@@ -42,7 +42,7 @@ pub(crate) struct UpdateLogLimits {
     limits_updates: u64,
 
     /// Queued limits to be drained into [`Self::update_log_limits`].
-    #[cfg_attr(feature = "reflect", reflect(ignore))]
+    #[cfg_attr(feature = "reflect", reflect(ignore, default = "Default::default"))]
     update_log_updates: Box<UpdateLogUpdates>,
 
     /// The most recent limits per [`UpdateLog`](super::UpdateLog) with [UpdateLogState::index]
@@ -257,6 +257,10 @@ pub(crate) struct UpdateLogLimit {
 
     /// The last location where [`UpdateLog`](super::UpdateLog) was updated. Is empty if bevy's
     /// `track_location` cargo feature is not used.
+    #[cfg_attr(
+        feature = "reflect",
+        reflect(ignore, default = "update_location_default")
+    )]
     last_update: UpdateLocation,
 }
 
