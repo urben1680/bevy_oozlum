@@ -20,7 +20,7 @@ use bevy_platform::{
 use bevy_utils::DebugName;
 use core::{
     any::TypeId,
-    fmt::{Debug, Formatter, from_fn},
+    fmt::{Debug, from_fn},
     hash::{BuildHasher, Hash, Hasher},
 };
 
@@ -44,8 +44,8 @@ pub(super) fn into_rev_system<Marker>(
         return RevScheduleConfigs::from(ApplyDeferred);
     }
 
-    let default_system_sets = system.default_system_sets();
-    let unified = RevSystemSet::new(&system, &default_system_sets).intern();
+    let default_sets = system.default_system_sets();
+    let unified = RevSystemSet::new(&system, &default_sets).intern();
 
     // This set contains BackwardDeferred and both RevSystems of only this system instance. It is
     // the base for the other wrapping sets and for conditions to be used on.
@@ -88,7 +88,7 @@ pub(super) fn into_rev_system<Marker>(
     // works even when T consists of multiple systems in a pipe and this is ordered to one of such
     // systems and not T as a whole
     // this fully replaces System::default_system_sets of the System impls in this module
-    for set in default_system_sets {
+    for set in default_sets {
         configs.rev_in_set_inner(set)
     }
 
@@ -100,38 +100,32 @@ pub(super) fn into_rev_system<Marker>(
 /// The only configuration will be reversible run conditions in [`RevScheduleConfigs::conditioned`]
 /// where these sets are placed at.
 // is `pub(super)` for docs in parent module
-#[derive(SystemSet, Clone, Eq)]
+#[derive(SystemSet, Clone, Eq, Debug)]
 pub(super) struct RevSystemSet {
     default_sets_hash: u64,
-    id: TypeId,
-    name: DebugName,
+    type_id: TypeId,
+    _name: DebugName,
 }
 
 impl PartialEq for RevSystemSet {
     fn eq(&self, other: &Self) -> bool {
-        self.default_sets_hash == other.default_sets_hash && self.id == other.id
+        self.default_sets_hash == other.default_sets_hash && self.type_id == other.type_id
     }
 }
 
 impl Hash for RevSystemSet {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.default_sets_hash.hash(state);
-        self.id.hash(state);
-    }
-}
-
-impl Debug for RevSystemSet {
-    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
-        self.name.fmt(f)
+        self.type_id.hash(state);
     }
 }
 
 impl RevSystemSet {
     fn new<T: System>(system: &T, default_system_sets: &[InternedSystemSet]) -> Self {
         Self {
-            default_sets_hash: FixedState::default().hash_one(&default_system_sets),
-            id: TypeId::of::<T>(),
-            name: system.name(),
+            default_sets_hash: FixedState::default().hash_one(default_system_sets),
+            type_id: TypeId::of::<T>(),
+            _name: system.name(),
         }
     }
 }
