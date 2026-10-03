@@ -179,9 +179,6 @@ impl ModifiedRevPlugin {
 
     /// Unsets [`RevMeta`] insertion. With this the insertion needs to be done manually.
     pub fn unset_meta(mut self) -> ModifiedRevPlugin {
-        if self.meta.is_some_and(|meta| meta != Self::META_DEFAULT) {
-            warn_once!("overwrote plugin change with RevUpdate::unset_meta");
-        }
         self.meta = None;
         self
     }
@@ -195,13 +192,9 @@ impl ModifiedRevPlugin {
     pub fn set_max_past_len(mut self, max_past_len: u64) -> ModifiedRevPlugin {
         match self.meta.as_mut() {
             Some((max_past_len_mut, _)) => {
-                if *max_past_len_mut != RevMeta::DEFAULT_MAX_PAST_LEN {
-                    warn_once!("overwrote plugin change with RevUpdate::set_max_past_len");
-                }
                 *max_past_len_mut = max_past_len;
             }
             None => {
-                warn_once!("overwrote plugin change with RevUpdate::set_max_past_len");
                 self.meta = Some((max_past_len, false));
             }
         }
@@ -218,7 +211,6 @@ impl ModifiedRevPlugin {
                 *paused_mut = false;
             }
             None => {
-                warn_once!("overwrote plugin change with RevUpdate::set_paused");
                 self.meta = Some((RevMeta::DEFAULT_MAX_PAST_LEN, false));
             }
         }
@@ -232,12 +224,6 @@ impl ModifiedRevPlugin {
     /// [`set_runner_in_schedule`]: Self::set_runner_in_schedule
     /// [`set_runner_in_set`]: Self::set_runner_in_set
     pub fn unset_runner(mut self) -> ModifiedRevPlugin {
-        if self
-            .runner
-            .is_some_and(|(schedule, set)| schedule != FixedUpdate.intern() || set.is_some())
-        {
-            warn_once!("overwrote plugin change with RevUpdate::unset_runner");
-        }
         self.runner = None;
         self
     }
@@ -249,13 +235,9 @@ impl ModifiedRevPlugin {
     pub fn set_runner_in_schedule(mut self, schedule: impl ScheduleLabel) -> ModifiedRevPlugin {
         match self.runner.as_mut() {
             Some((schedule_mut, _)) => {
-                if *schedule_mut != FixedUpdate.intern() {
-                    warn_once!("overwrote plugin change with RevUpdate::set_runner_in_schedule");
-                }
                 *schedule_mut = schedule.intern();
             }
             None => {
-                warn_once!("overwrote plugin change with RevUpdate::set_runner_in_schedule");
                 self.runner = Some((schedule.intern(), None));
             }
         }
@@ -269,14 +251,12 @@ impl ModifiedRevPlugin {
     pub fn set_runner_in_set(mut self, set: impl SystemSet) -> ModifiedRevPlugin {
         match self.runner.as_mut() {
             Some((_, Some(set_mut))) => {
-                warn_once!("overwrote plugin change with RevUpdate::set_runner_in_set");
                 *set_mut = set.intern();
             }
             Some((_, set_mut)) => {
                 *set_mut = Some(set.intern());
             }
             None => {
-                warn_once!("overwrote plugin change with RevUpdate::set_runner_in_set");
                 self.runner = Some((FixedUpdate.intern(), Some(set.intern())));
             }
         }
@@ -322,15 +302,3 @@ impl Plugin for ModifiedRevPlugin {
         }
     }
 }
-
-macro_rules! warn_once {
-    ($($args:tt)*) => {
-        if cfg!(test) {
-            panic!($($args)*);
-        } else {
-            bevy_log::warn_once!($($args)*);
-        }
-    };
-}
-
-use warn_once;

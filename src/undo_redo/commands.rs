@@ -7,17 +7,20 @@ use bevy_ecs::{
     change_detection::MaybeLocation,
     entity::Entity,
     error::{Result, warn},
+    query::{QueryData, QueryFilter},
     resource::Resource,
     schedule::ScheduleLabel,
     system::{Command, Commands},
     world::{EntityWorldMut, FromWorld, World},
 };
+#[cfg(feature = "scene")]
+use bevy_scene::{EntityWorldMutSceneExt, Scene, SceneList, WorldSceneExt};
 
 use crate::{
     meta::NotLog,
     undo_redo::{
         CommandsAsRev, RevBundle, RevEntityWorld, RevWorld, UndoRedo,
-        entity_commands::RevEntityCommands, mark_spawn_empty,
+        entity_commands::RevEntityCommands, mark_spawn_non_parent,
     },
 };
 
@@ -231,6 +234,31 @@ impl<'a> RevCommands<'a> {
         });
     }
 
+    /// Reversible version of [`Commands::despawn_all`].
+    ///
+    /// See the [`undo_redo`](crate::undo_redo) module documentation to understand the mechanics of
+    /// reversible spawn/despawn.
+    #[track_caller]
+    pub fn rev_despawn_all<F: QueryFilter>(&mut self) {
+        self.0
+            .queue(rev_despawn_all_with_caller::<F>(MaybeLocation::caller()));
+    }
+
+    /// Reversible version of [`Commands::despawn_all_where`].
+    ///
+    /// See the [`undo_redo`](crate::undo_redo) module documentation to understand the mechanics of
+    /// reversible spawn/despawn.
+    #[track_caller]
+    pub fn rev_despawn_all_where<D: QueryData, F: QueryFilter>(
+        &mut self,
+        cond: impl FnMut(D::Item<'_, '_>) -> bool + Send + 'static,
+    ) {
+        self.0.queue(rev_despawn_all_where_with_caller::<D, F>(
+            cond,
+            MaybeLocation::caller(),
+        ));
+    }
+
     /// Reversible version of [`Commands::spawn`].
     ///
     /// See the [`undo_redo`](crate::undo_redo) module documentation to understand the mechanics of
@@ -249,7 +277,7 @@ impl<'a> RevCommands<'a> {
         let caller = MaybeLocation::caller();
         let mut entity_cmds = self.0.spawn_empty();
         entity_cmds.queue(move |mut entity_mut: EntityWorldMut| {
-            mark_spawn_empty(&mut entity_mut, caller);
+            mark_spawn_non_parent(&mut entity_mut, caller);
         });
         RevEntityCommands(entity_cmds)
     }
@@ -265,6 +293,73 @@ impl<'a> RevCommands<'a> {
     {
         self.0
             .queue(rev_spawn_batch_with_caller(batch, MaybeLocation::caller()));
+    }
+
+    /// Reversible version of [`Commands::spawn_scene`](bevy_scene::CommandsSceneExt::spawn_scene).
+    /// Needs the `scene` feature to be present.
+    ///
+    /// See the [`undo_redo`](crate::undo_redo) module documentation to understand the mechanics of
+    /// reversible spawn/despawn.
+    #[cfg(feature = "scene")]
+    #[track_caller]
+    pub fn rev_spawn_scene<S: Scene>(&mut self, scene: S) -> RevEntityCommands<'_> {
+        let caller = MaybeLocation::caller();
+        let mut entity_commands = self.0.spawn_empty();
+        let id = entity_commands.id();
+        entity_commands.commands().queue(move |world: &mut World| {
+            use crate::undo_redo::mark_entity;
+            use bevy_ecs::error::{BevyError, ErrorContext};
+            use bevy_utils::DebugName;
+
+            let Ok(mut entity) = world.get_entity_mut(id) else {
+                return;
+            };
+
+            match entity.apply_scene(scene) {
+                Ok(()) => {
+                    mark_entity::<true>(&mut entity, true, true, caller);
+                }
+                Err(err) => world.fallback_error_handler()(
+                    BevyError::error(err),
+                    ErrorContext::Command {
+                        name: DebugName::type_name_of_val(&Self::rev_spawn_scene::<S>),
+                    },
+                ),
+            }
+        });
+
+        RevEntityCommands(entity_commands)
+    }
+
+    /// Reversible version of
+    /// [`Commands::spawn_scene_list`](bevy_scene::CommandsSceneExt::spawn_scene_list). Needs the
+    /// `scene` feature to be present.
+    ///
+    /// See the [`undo_redo`](crate::undo_redo) module documentation to understand the mechanics of
+    /// reversible spawn/despawn.
+    #[cfg(feature = "scene")]
+    #[track_caller]
+    pub fn rev_spawn_scene_list<L: SceneList>(&mut self, scenes: L) {
+        let caller = MaybeLocation::caller();
+        self.0.queue(move |world: &mut World| {
+            use crate::undo_redo::mark_entities;
+            use bevy_ecs::error::{BevyError, ErrorContext};
+            use bevy_utils::DebugName;
+
+            match world.spawn_scene_list(scenes) {
+                Ok(entities) => {
+                    mark_entities::<true>(world, &entities, true, caller);
+                }
+                Err(err) => {
+                    world.fallback_error_handler()(
+                        BevyError::error(err),
+                        ErrorContext::Command {
+                            name: DebugName::type_name_of_val(&Self::rev_spawn_scene_list::<L>),
+                        },
+                    );
+                }
+            }
+        });
     }
 
     /// Reversible version of [`Commands::insert_batch`].
@@ -302,9 +397,9 @@ impl<'a> RevCommands<'a> {
         I: IntoIterator<Item = (Entity, B)> + Send + Sync + 'static,
         B: RevBundle<Marker>,
     {
-        self.0.queue_handled(
-            rev_insert_batch_with_caller(iter, InsertMode::Replace, MaybeLocation::caller()),
-            warn,
+        self.0.queue(
+            rev_insert_batch_with_caller(iter, InsertMode::Replace, MaybeLocation::caller())
+                .handle_error_with(warn),
         );
     }
 
@@ -315,9 +410,9 @@ impl<'a> RevCommands<'a> {
         I: IntoIterator<Item = (Entity, B)> + Send + Sync + 'static,
         B: RevBundle<Marker>,
     {
-        self.0.queue_handled(
-            rev_insert_batch_with_caller(iter, InsertMode::Keep, MaybeLocation::caller()),
-            warn,
+        self.0.queue(
+            rev_insert_batch_with_caller(iter, InsertMode::Keep, MaybeLocation::caller())
+                .handle_error_with(warn),
         );
     }
 }
@@ -326,9 +421,6 @@ impl<'a> RevCommands<'a> {
 ///
 /// If any entities do not exist in the world or are reversibly despawned, this command will return
 /// an error.
-///
-/// See the [`undo_redo`](crate::undo_redo) module documentation to understand the mechanics of
-/// reversible spawn/despawn.
 #[track_caller]
 pub fn rev_insert_batch<I, B, Marker>(
     _: NotLog,
@@ -404,6 +496,9 @@ fn rev_remove_resource_with_caller<R: Resource>(caller: MaybeLocation) -> impl C
 }
 
 /// Reversible version of [`spawn_batch`](bevy_ecs::system::command::spawn_batch).
+///
+/// See the [`undo_redo`](crate::undo_redo) module documentation to understand the mechanics of
+/// reversible spawn/despawn.
 pub fn rev_spawn_batch<I>(_: NotLog, bundles_iter: I) -> impl Command
 where
     I: IntoIterator<Item: Bundle<Effect: NoBundleEffect>> + Send + 'static,
@@ -421,6 +516,7 @@ where
 }
 
 /// Reversible version of [`run_schedule`](bevy_ecs::system::command::run_schedule).
+#[track_caller]
 pub fn rev_run_schedule(_: NotLog, label: impl ScheduleLabel) -> impl Command<Out = Result> {
     rev_run_schedule_with_caller(label, MaybeLocation::caller())
 }
@@ -445,4 +541,40 @@ pub(super) fn rev_spawn_with_caller<'a, T: Bundle>(
         entity_mut.rev_mark_spawned(true, caller).map(|_| ())
     });
     RevEntityCommands(entity_cmds)
+}
+
+/// Reversible version of [`despawn_all`](bevy_ecs::system::command::despawn_all).
+///
+/// See the [`undo_redo`](crate::undo_redo) module documentation to understand the mechanics of
+/// reversible spawn/despawn.
+#[track_caller]
+pub fn rev_despawn_all<F: QueryFilter>(_: NotLog) -> impl Command {
+    rev_despawn_all_with_caller::<F>(MaybeLocation::caller())
+}
+
+fn rev_despawn_all_with_caller<F: QueryFilter>(caller: MaybeLocation) -> impl Command {
+    move |world: &mut World| {
+        world.rev_despawn_all_where::<(), F>(|_| true, caller);
+    }
+}
+
+/// Reversible version of [`despawn_all_where`](bevy_ecs::system::command::despawn_all_where).
+///
+/// See the [`undo_redo`](crate::undo_redo) module documentation to understand the mechanics of
+/// reversible spawn/despawn.
+#[track_caller]
+pub fn rev_despawn_all_where<D: QueryData, F: QueryFilter>(
+    _: NotLog,
+    cond: impl FnMut(D::Item<'_, '_>) -> bool + Send + 'static,
+) -> impl Command {
+    rev_despawn_all_where_with_caller::<D, F>(cond, MaybeLocation::caller())
+}
+
+fn rev_despawn_all_where_with_caller<D: QueryData, F: QueryFilter>(
+    cond: impl FnMut(D::Item<'_, '_>) -> bool + Send + 'static,
+    caller: MaybeLocation,
+) -> impl Command {
+    move |world: &mut World| {
+        world.rev_despawn_all_where::<D, F>(cond, caller);
+    }
 }

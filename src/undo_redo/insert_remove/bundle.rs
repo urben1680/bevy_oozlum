@@ -185,7 +185,7 @@ impl<R: Relationship, B: Bundle> RevBundle<[R; 2]> for SpawnOneRelated<R, B> {
         };
         entity.world_scope(|world| {
             if let Ok(mut new_related) = world.get_entity_mut(new_related) {
-                mark_entity::<true>(&mut new_related, true, caller);
+                mark_entity::<true>(&mut new_related, true, true, caller);
             }
         });
         let id = entity.id();

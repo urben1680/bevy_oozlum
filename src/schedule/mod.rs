@@ -493,6 +493,32 @@ pub trait IntoRevScheduleConfigs<
         configs
     }
 
+    /// Reversible variant of [`IntoScheduleConfigs::before_weak`].
+    fn rev_before_weak<M>(self, set: impl IntoSystemSet<M>) -> RevScheduleConfigs<T> {
+        // See rev_before, may be unordered if no commands or access conflicts are involved
+        let set = set.into_system_set().intern();
+        let mut configs = self.into_rev_configs();
+        configs.forward_systems = configs.forward_systems.before_weak(ForwardSystemSet(set));
+        // todo: https://github.com/bevyengine/bevy/issues/25927
+        configs.backward_deferred_and_systems = configs
+            .backward_deferred_and_systems
+            .after_ignore_deferred(BackwardDeferredAndSystemSet(set));
+        configs
+    }
+
+    /// Reversible variant of [`IntoScheduleConfigs::after_weak`].
+    fn rev_after_weak<M>(self, set: impl IntoSystemSet<M>) -> RevScheduleConfigs<T> {
+        // See rev_after, may be unordered if no commands or access conflicts are involved
+        let set = set.into_system_set().intern();
+        let mut configs = self.into_rev_configs();
+        configs.forward_systems = configs.forward_systems.after_weak(ForwardSystemSet(set));
+        // todo: https://github.com/bevyengine/bevy/issues/25927
+        configs.backward_deferred_and_systems = configs
+            .backward_deferred_and_systems
+            .before_ignore_deferred(BackwardDeferredAndSystemSet(set));
+        configs
+    }
+
     /// Reversible variant of [`IntoScheduleConfigs::run_if`].
     fn rev_run_if<M>(self, condition: impl SystemCondition<M>) -> RevScheduleConfigs<T> {
         let mut configs = self.into_rev_configs();
@@ -577,6 +603,18 @@ pub trait IntoRevScheduleConfigs<
         configs.forward_systems = configs.forward_systems.chain_ignore_deferred();
         configs.backward_deferred = configs.backward_deferred.chain_ignore_deferred();
         configs.backward_systems = configs.backward_systems.chain_ignore_deferred();
+        configs
+    }
+
+    /// Reversible variant of [`IntoScheduleConfigs::chain_weak`].
+    fn rev_chain_weak(self) -> RevScheduleConfigs<T> {
+        // See rev_chain, may be unordered if no commands or access conflicts are involved
+        let mut configs = self.into_rev_configs();
+        configs.forward_systems = configs.forward_systems.chain_weak();
+        // todo: https://github.com/bevyengine/bevy/issues/25927
+        configs.backward_deferred_and_systems = configs
+            .backward_deferred_and_systems
+            .chain_ignore_deferred();
         configs
     }
 }

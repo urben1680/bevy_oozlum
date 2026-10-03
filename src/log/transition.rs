@@ -376,7 +376,7 @@ impl<T> Drop for TransitionDrain<'_, T> {
             self.log.transitions.clear();
         } else {
             self.log.transitions.truncate(self.gap_range.end);
-            // todo: use truncate_front https://github.com/rust-lang/rust/issues/140667
+            // todo: use retain_back when MSRV of bevy is 1.99
             self.log.transitions.drain(..self.gap_range.start);
         }
         prepend(&mut self.log.transitions, &mut self.gap_buffer);

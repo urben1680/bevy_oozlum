@@ -1,7 +1,6 @@
 use bevy::{
     ecs::error::{FallbackErrorHandler, Severity},
     input::{InputPlugin, keyboard::Key},
-    prelude::*,
     state::app::StatesPlugin,
 };
 use bevy_oozlum::meta::{RevDirection, RevMeta};

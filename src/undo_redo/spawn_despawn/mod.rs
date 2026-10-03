@@ -35,7 +35,13 @@ mod test;
 ///
 /// Manually inserting it is discouraged because no finalized despawn will take place in these
 /// cases. Manually removing it will also not prevent the despawn.
-pub struct RevDespawned(pub MaybeLocation);
+pub struct RevDespawned(
+    #[cfg_attr(
+        feature = "reflect",
+        reflect(ignore, default = "MaybeLocation::caller")
+    )]
+    pub MaybeLocation,
+);
 
 /// Despawn entities that are currently considered reversibly despawned and their relevant operation
 /// to revert that fell out of log. This must not be manually called if [`run_rev_update`] is used.
@@ -164,10 +170,12 @@ pub(super) fn mark_entities<const SPAWN: bool>(
     }
 }
 
-/// Mark a single entity and its children as spawned/despawned.
+/// Mark a single entity and its children as spawned/despawned. Returns `false` if `entity` is
+/// reversibly despawne, otherwise returns `true`.
 pub(super) fn mark_entity<const SPAWN: bool>(
     entity: &mut EntityWorldMut,
     include_unlinked_related: bool,
+    include_root: bool,
     caller: MaybeLocation,
 ) -> bool {
     if entity.is_rev_despawned() {
@@ -183,21 +191,24 @@ pub(super) fn mark_entity<const SPAWN: bool>(
         include_unlinked_related,
     );
 
-    let id = entity.id();
-
-    if entities_set.is_empty() {
-        // do not allocate a HashSet just for one entity
-        entity.world_scope(|world| mark_inner::<SPAWN>(world, id, caller));
-    } else {
-        entities_set.insert(id);
+    if include_root {
+        let id = entity.id();
+        if entities_set.is_empty() {
+            // do not allocate a HashSet just for one entity
+            entity.world_scope(|world| mark_inner::<SPAWN>(world, id, caller));
+        } else {
+            entities_set.insert(id);
+            entity.world_scope(|world| mark_inner::<SPAWN>(world, entities_set, caller));
+        }
+    } else if !entities_set.is_empty() {
         entity.world_scope(|world| mark_inner::<SPAWN>(world, entities_set, caller));
     }
 
     true
 }
 
-/// Mark a single empty entity as spawned.
-pub(super) fn mark_spawn_empty(entity: &mut EntityWorldMut, caller: MaybeLocation) {
+/// Mark a single entity without children as spawned.
+pub(super) fn mark_spawn_non_parent(entity: &mut EntityWorldMut, caller: MaybeLocation) {
     let id = entity.id();
     let spawn_despawn = RevSpawnDespawn::<_, true> {
         entities: id,

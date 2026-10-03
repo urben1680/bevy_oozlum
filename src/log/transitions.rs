@@ -520,7 +520,7 @@ where
             self.transitions.clear();
         } else {
             self.transitions.truncate(self.gap_range.end);
-            // todo: use truncate_front https://github.com/rust-lang/rust/issues/140667
+            // todo: use retain_back when MSRV of bevy is 1.99
             self.transitions.drain(..self.gap_range.start);
         }
         prepend(self.transitions, &mut self.gap_buffer);

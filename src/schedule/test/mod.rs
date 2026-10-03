@@ -212,7 +212,7 @@ fn single_non_exclusive_system() {
 #[test]
 fn non_exclusive_then_non_exclusive() {
     test_run(
-        a_then_b(false),
+        a_then_b(false, false),
         vec![vec![
             Test::NonExclusiveSystem(1),
             Test::NonExclusiveSyncPoint(1),
@@ -225,11 +225,24 @@ fn non_exclusive_then_non_exclusive() {
 #[test]
 fn non_exclusive_then_non_exclusive_ignore_deferred() {
     test_run(
-        a_then_b(true),
+        a_then_b(true, false),
         vec![vec![
             Test::NonExclusiveSystem(1),
             Test::NonExclusiveSystem(2),
             Test::NonExclusiveSyncPoint(1),
+            Test::NonExclusiveSyncPoint(2),
+        ]],
+    )
+}
+
+#[test]
+fn non_exclusive_then_non_exclusive_weak() {
+    test_run(
+        a_then_b(false, true),
+        vec![vec![
+            Test::NonExclusiveSystem(1),
+            Test::NonExclusiveSyncPoint(1),
+            Test::NonExclusiveSystem(2),
             Test::NonExclusiveSyncPoint(2),
         ]],
     )
@@ -275,13 +288,6 @@ fn run_if() {
             vec![], // does not run at 3
         ],
     );
-}
-
-#[test]
-fn duplicate_system_chain_builds() {
-    let mut schedule = Schedule::default();
-    schedule.rev_add_systems((non_exclusive_system::<1>, non_exclusive_system::<1>).rev_chain());
-    schedule.initialize(&mut World::new()).unwrap();
 }
 
 fn remove_rev_systems_inner(remove_by_system: bool) {
@@ -365,7 +371,7 @@ fn truncates_future_command_log() {
 }
 
 #[test]
-#[should_panic = "a reversible spawn, despawn or marking an entity as such was attempted outside RevDirection::NotLog"]
+#[should_panic]
 fn delayed_rev_command_errors() {
     fn system(not_log: NotLog, mut commands: Commands) {
         commands

@@ -93,6 +93,7 @@ pub(super) fn add_children(
     entities_set: &mut EntityHashSet,
     include_unlinked_related: bool,
 ) {
+    // todo: maybe compare the spawn tick with pre and post spawn to ensure this is a new entity
     if parent.is_rev_despawned() {
         return;
     }
