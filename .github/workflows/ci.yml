@@ -26,12 +26,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: 1.96
+          targets: wasm32-unknown-unknown 
 
       - name: cargo check with all features
         run: cargo check --lib --all-features
 
       - name: cargo check without default features
-        run: cargo check --lib --no-default-features
+        run: cargo check --lib --no-default-features --target wasm32-unknown-unknown
 
   stable:
     name: Stable (full checks)
