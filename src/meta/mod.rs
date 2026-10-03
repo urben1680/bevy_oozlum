@@ -644,7 +644,7 @@ impl RevMeta {
         world
             .try_schedule_scope(RevUpdate, |world, schedule| {
                 // check for skipping conditions
-                let Some(meta) = world.remove_resource::<RevMeta>() else {
+                let Some(mut meta) = world.remove_resource::<RevMeta>() else {
                     return Err(RunSystemError::Skipped(
                         SystemParamValidationError::skipped::<RevMeta>(Cow::Borrowed(
                             "resource RevMeta does not exist, schedule RevUpdate will not be run \
@@ -665,6 +665,11 @@ impl RevMeta {
                     ));
                     world.insert_resource(meta);
                     return err;
+                }
+
+                #[cfg(feature = "track_update_logs")]
+                {
+                    meta.error_handler = world.fallback_error_handler();
                 }
 
                 // update RevMeta and DespawnFinalizer

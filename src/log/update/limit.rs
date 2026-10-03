@@ -42,7 +42,7 @@ pub(crate) struct UpdateLogLimits {
     limits_updates: u64,
 
     /// Queued limits to be drained into [`Self::update_log_limits`].
-    #[cfg_attr(feature = "reflect", reflect(ignore, default = "Default::default"))]
+    #[cfg_attr(feature = "reflect", reflect(ignore))]
     update_log_updates: Box<UpdateLogUpdates>,
 
     /// The most recent limits per [`UpdateLog`](super::UpdateLog) with [UpdateLogState::index]
