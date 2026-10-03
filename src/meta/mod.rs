@@ -644,6 +644,7 @@ impl RevMeta {
         world
             .try_schedule_scope(RevUpdate, |world, schedule| {
                 // check for skipping conditions
+                #[cfg_attr(not(feature = "track_update_logs"), expect(unused_mut))]
                 let Some(mut meta) = world.remove_resource::<RevMeta>() else {
                     return Err(RunSystemError::Skipped(
                         SystemParamValidationError::skipped::<RevMeta>(Cow::Borrowed(
