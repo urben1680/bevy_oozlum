@@ -10,7 +10,7 @@ use bevy_utils::DebugName;
 
 use crate::undo_redo::{
     AddRemoveRelated, EntityRevDespawnedError, IsRevDespawned, RevBundle, RevDespawned, RevWorld,
-    UndoRedo, get_new_related, mark_entity, mark_spawn_empty,
+    UndoRedo, get_new_related, mark_entity, mark_spawn_non_parent,
 };
 
 #[cfg(test)]
@@ -152,7 +152,7 @@ impl<'w> RevEntityWorld for EntityWorldMut<'w> {
         caller: MaybeLocation,
     ) -> Result<&mut Self, EntityRevDespawnedError> {
         self.assert_not_rev_despawned()?;
-        mark_spawn_empty(self, caller);
+        mark_spawn_non_parent(self, caller);
         Ok(self)
     }
 

@@ -207,9 +207,8 @@ pub(super) fn mark_entity<const SPAWN: bool>(
     true
 }
 
-/// Mark a single empty entity as spawned. May also be used if it is ensured the entity has only
-/// non-children components.
-pub(super) fn mark_spawn_empty(entity: &mut EntityWorldMut, caller: MaybeLocation) {
+/// Mark a single entity without children as spawned.
+pub(super) fn mark_spawn_non_parent(entity: &mut EntityWorldMut, caller: MaybeLocation) {
     let id = entity.id();
     let spawn_despawn = RevSpawnDespawn::<_, true> {
         entities: id,

@@ -20,7 +20,7 @@ use crate::{
     meta::NotLog,
     undo_redo::{
         CommandsAsRev, RevBundle, RevEntityWorld, RevWorld, UndoRedo,
-        entity_commands::RevEntityCommands, mark_spawn_empty,
+        entity_commands::RevEntityCommands, mark_spawn_non_parent,
     },
 };
 
@@ -277,7 +277,7 @@ impl<'a> RevCommands<'a> {
         let caller = MaybeLocation::caller();
         let mut entity_cmds = self.0.spawn_empty();
         entity_cmds.queue(move |mut entity_mut: EntityWorldMut| {
-            mark_spawn_empty(&mut entity_mut, caller);
+            mark_spawn_non_parent(&mut entity_mut, caller);
         });
         RevEntityCommands(entity_cmds)
     }
