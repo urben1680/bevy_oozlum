@@ -49,7 +49,7 @@ name = "jump_to_frame"
 doc-scrape-examples = true
 
 [features]
-default = ["app", "reflect", "scene", "track_update_logs"]
+default = ["app", "reflect", "scene"]
 app = ["dep:bevy_app"]
 reflect = ["dep:bevy_reflect"]
 scene = ["dep:bevy_scene"]
