@@ -13,12 +13,15 @@ use bevy_ecs::{
     },
     world::{DeferredWorld, World, unsafe_world_cell::UnsafeWorldCell},
 };
-use bevy_platform::sync::{Arc, Mutex, MutexGuard};
+use bevy_platform::{
+    hash::FixedState,
+    sync::{Arc, Mutex, MutexGuard},
+};
 use bevy_utils::DebugName;
 use core::{
     any::TypeId,
     fmt::{Debug, Formatter, from_fn},
-    hash::{Hash, Hasher},
+    hash::{BuildHasher, Hash, Hasher},
 };
 
 use crate::{
@@ -41,17 +44,17 @@ pub(super) fn into_rev_system<Marker>(
         return RevScheduleConfigs::from(ApplyDeferred);
     }
 
+    let default_system_sets = system.default_system_sets();
+    let unified = RevSystemSet::new(&system, &default_system_sets).intern();
+
     // This set contains BackwardDeferred and both RevSystems of only this system instance. It is
     // the base for the other wrapping sets and for conditions to be used on.
-    let unified = RevSystemTypeSet::new(&system).intern();
     let deferred = BackwardDeferredSet(unified);
 
     let name = |postfix: &str| DebugName::owned(format!("{}{postfix}", system.name()));
     let forward_system_name = name(" (forward system)");
     let backward_deferred_name = name(" (backward deferred)");
     let backward_system_name = name(" (backward system)");
-
-    let default_system_sets = system.default_system_sets();
 
     let inner = Arc::new(Mutex::new(Inner::from(system)));
 
@@ -98,32 +101,35 @@ pub(super) fn into_rev_system<Marker>(
 /// where these sets are placed at.
 // is `pub(super)` for docs in parent module
 #[derive(SystemSet, Clone, Eq)]
-pub(super) struct RevSystemTypeSet {
+pub(super) struct RevSystemSet {
+    default_sets_hash: u64,
     id: TypeId,
     name: DebugName,
 }
 
-impl PartialEq for RevSystemTypeSet {
+impl PartialEq for RevSystemSet {
     fn eq(&self, other: &Self) -> bool {
-        self.id == other.id
+        self.default_sets_hash == other.default_sets_hash && self.id == other.id
     }
 }
 
-impl Hash for RevSystemTypeSet {
+impl Hash for RevSystemSet {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.id.hash(state)
+        self.default_sets_hash.hash(state);
+        self.id.hash(state);
     }
 }
 
-impl Debug for RevSystemTypeSet {
+impl Debug for RevSystemSet {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         self.name.fmt(f)
     }
 }
 
-impl RevSystemTypeSet {
-    fn new<T: System>(system: &T) -> Self {
+impl RevSystemSet {
+    fn new<T: System>(system: &T, default_system_sets: &[InternedSystemSet]) -> Self {
         Self {
+            default_sets_hash: FixedState::default().hash_one(&default_system_sets),
             id: TypeId::of::<T>(),
             name: system.name(),
         }

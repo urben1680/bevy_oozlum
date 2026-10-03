@@ -30,7 +30,7 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(docsrs_dep)'] }
 bevy_app = { version = "=0.20.0-rc.2", optional = true, default-features = false }
 bevy_ecs = { version = "=0.20.0-rc.2", default-features = false }
 bevy_platform = { version = "=0.20.0-rc.2", default-features = false }
-bevy_ptr = { version = "=0.20.0-rc.2", default-features = false } 
+bevy_ptr = { version = "=0.20.0-rc.2", default-features = false }
 bevy_reflect = { version = "=0.20.0-rc.2", optional = true, default-features = false }
 bevy_utils = { version = "=0.20.0-rc.2", default-features = false }
 bevy_scene = { version = "=0.20.0-rc.2", optional = true, default-features = false }
