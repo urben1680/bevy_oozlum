@@ -251,7 +251,7 @@ impl GapRange {
     fn is_clear(self) -> bool {
         self.keep_len == 0
     }
-    fn get_drain_past_len(self) -> usize {
+    fn drain_past_len_or_zero(self) -> usize {
         self.drain_past_len.unwrap_or(NonMaxUsize::ZERO).get()
     }
     fn take_drain_past_len(&mut self) -> usize {

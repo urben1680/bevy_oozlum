@@ -368,7 +368,7 @@ impl<'a, T> TransitionDrain<'a, T> {
     }
 
     pub(super) fn iter_past<'b>(&'b self) -> Iter<'b, T> {
-        let end = self.gap_range.get_drain_past_len();
+        let end = self.gap_range.drain_past_len_or_zero();
         self.log.transitions.range(..end)
     }
 

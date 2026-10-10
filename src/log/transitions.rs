@@ -583,12 +583,12 @@ where
 impl<T, U> TransitionsDrainIters<DrainAll<'_, T>, DrainAll<'_, TransitionsLogUpdate<U>>, U> {
     /// Returns the amount of log updates (`U`) that are in the past segment of this iterator.
     pub fn past_updates_len(&self) -> usize {
-        self.updates.gap_range.get_drain_past_len()
+        self.updates.gap_range.drain_past_len_or_zero()
     }
 
     /// Returns the amount of log transitions (`T`) that are in the past segment of this iterator.
     pub fn past_transitions_len(&self) -> usize {
-        self.transitions.gap_range.get_drain_past_len()
+        self.transitions.gap_range.drain_past_len_or_zero()
     }
 }
 
