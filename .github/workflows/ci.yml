@@ -25,7 +25,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.96
+          toolchain: 1.97.1
           targets: wasm32-unknown-unknown 
 
       - name: cargo check with all features
