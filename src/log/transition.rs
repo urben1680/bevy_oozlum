@@ -1,14 +1,12 @@
-use alloc::{
-    boxed::Box,
-    collections::{
-        TryReserveError, VecDeque,
-        vec_deque::{Drain, Iter, IterMut},
-    },
+use alloc::collections::{
+    TryReserveError, VecDeque,
+    vec_deque::{Drain, Iter, IterMut},
 };
 use core::{fmt::Debug, mem::ManuallyDrop, num::NonZeroU64};
+use nonmax::NonMaxUsize;
 
 use crate::{
-    log::{DrainAll, GapRange, OutOfLog, prepend},
+    log::{DrainAll, GapRange, OutOfLog},
     meta::RevMeta,
 };
 
@@ -224,19 +222,24 @@ impl<T> TransitionLog<T> {
         past_len: impl Into<NonZeroU64>,
         transition: T,
     ) -> TransitionDrain<'a, T> {
-        let gap_range = if self.witnessed_log_clears < meta.log_clears() {
+        let drain_past_len = if self.witnessed_log_clears < meta.log_clears() {
             self.witnessed_log_clears = meta.log_clears();
-            GapRange::new_clear(self.index)
+            self.index
         } else {
             let past_len = past_len.into().get().try_into().unwrap_or(usize::MAX);
-            GapRange::new(self.index.saturating_sub(past_len - 1), self.index)
+            self.index.saturating_sub(past_len - 1)
         };
+        let drain_future_len = self.transitions.len() - self.index;
+        let keep_len = self.index - drain_past_len;
         self.witnessed_log_exits = meta.log_exits();
         TransitionDrain {
             log: self,
             transition: ManuallyDrop::new(transition),
-            gap_range,
-            gap_buffer: Default::default(),
+            gap_range: GapRange {
+                drain_past_len: NonMaxUsize::new(drain_past_len),
+                drain_future_len,
+                keep_len,
+            },
         }
     }
 
@@ -328,31 +331,34 @@ pub struct TransitionDrain<'a, T> {
     log: &'a mut TransitionLog<T>,
     transition: ManuallyDrop<T>,
     gap_range: GapRange,
-    gap_buffer: Box<[T]>,
 }
 
 impl<'a, T> TransitionDrain<'a, T> {
     /// Returns log entries that were pushed before [`RevMeta::past_end`].
     pub fn past<'b>(&'b mut self) -> Drain<'b, T> {
-        let end = self.gap_range.take_drain_past_end();
+        let end = self.gap_range.take_drain_past_len();
         self.log.transitions.drain(..end)
     }
 
     /// Returns log entries that were pushed after [`RevMeta::now`] which, at this point of time,
     /// is equal to [`RevMeta::future_end`].
     pub fn future<'b>(&'b mut self) -> Drain<'b, T> {
-        let start = self.gap_range.drain_future_start();
-        self.log.transitions.drain(start..)
+        let to_drain_future = self.gap_range.take_drain_future_len();
+        if let Some(to_drain_past) = self.gap_range.drain_past_len {
+            let start = to_drain_past.get() + self.gap_range.keep_len;
+            self.log.transitions.drain(start..)
+        } else {
+            self.log.transitions.drain(..to_drain_future)
+        }
     }
 
     /// Returns log entries that were pushed before [`RevMeta::past_end`] or after [`RevMeta::now`]
     /// which, at this point of time, is equal to [`RevMeta::future_end`].
     pub fn all<'b>(&'b mut self) -> DrainAll<'b, T> {
-        DrainAll::new(
-            &mut self.log.transitions,
-            &mut self.gap_range,
-            &mut self.gap_buffer,
-        )
+        DrainAll {
+            deque: &mut self.log.transitions,
+            gap_range: self.gap_range.take_all(),
+        }
     }
 
     /// Returns `true` if all log entries are to be cleared, regardless of the user actively drains
@@ -362,7 +368,8 @@ impl<'a, T> TransitionDrain<'a, T> {
     }
 
     pub(super) fn iter_past<'b>(&'b self) -> Iter<'b, T> {
-        self.log.transitions.range(..self.gap_range.start)
+        let end = self.gap_range.drain_past_len_or_zero();
+        self.log.transitions.range(..end)
     }
 
     pub(super) fn transition_mut(&mut self) -> &mut T {
@@ -372,14 +379,7 @@ impl<'a, T> TransitionDrain<'a, T> {
 
 impl<T> Drop for TransitionDrain<'_, T> {
     fn drop(&mut self) {
-        if self.gap_range.is_clear() {
-            self.log.transitions.clear();
-        } else {
-            self.log.transitions.truncate(self.gap_range.end);
-            // todo: use truncate_front https://github.com/rust-lang/rust/issues/140667
-            self.log.transitions.drain(..self.gap_range.start);
-        }
-        prepend(&mut self.log.transitions, &mut self.gap_buffer);
+        self.all();
         // SAFETY: Only called this once and only in this Drop
         let transition = unsafe { ManuallyDrop::take(&mut self.transition) };
         self.log.transitions.push_back(transition);

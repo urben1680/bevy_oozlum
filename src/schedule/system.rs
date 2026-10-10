@@ -2,27 +2,26 @@ use alloc::{borrow::Cow, boxed::Box, format, string::ToString, vec::Vec};
 use bevy_ecs::{
     change_detection::{CheckChangeTicks, Tick},
     error::{BevyError, ErrorContext},
-    query::FilteredAccessSet,
     resource::Resource,
     schedule::{
         ApplyDeferred, InternedSystemSet, IntoScheduleConfigs, Schedule, ScheduleCleanupPolicy,
         Schedules, SystemSet,
     },
     system::{
-        IntoSystem, RunSystemError, ScheduleSystem, System, SystemIn, SystemParamValidationError,
-        SystemStateFlags,
+        IntoSystem, RunSystemError, ScheduleSystem, System, SystemAccess, SystemIn,
+        SystemParamValidationError, SystemStateFlags,
     },
     world::{DeferredWorld, World, unsafe_world_cell::UnsafeWorldCell},
 };
-use bevy_platform::sync::{
-    Arc, Mutex, MutexGuard,
-    atomic::{AtomicU32, Ordering},
+use bevy_platform::{
+    hash::FixedState,
+    sync::{Arc, Mutex, MutexGuard},
 };
 use bevy_utils::DebugName;
 use core::{
     any::TypeId,
-    fmt::{Debug, Formatter, from_fn},
-    hash::{Hash, Hasher},
+    fmt::{Debug, from_fn},
+    hash::{BuildHasher, Hash, Hasher},
 };
 
 use crate::{
@@ -45,56 +44,17 @@ pub(super) fn into_rev_system<Marker>(
         return RevScheduleConfigs::from(ApplyDeferred);
     }
 
-    let name = system.name();
-
-    if system.is_exclusive() {
-        // Exclusive systems are not supported because of the following reasons:
-        //
-        // 1. A hypothetical public RevWorld API would do the direct effect, the "doing", like
-        //    inserting a component anytime inside the exclusive system. Just like RevCommands this
-        //    would store their UndoRedo in a resource that at the next sync point is stored in the
-        //    system state. This has the consequence that the "undoing" and "redoing" can only
-        //    happen at sync points.
-        //    However, reversible logic that happens inside the exclusive system directly, not using
-        //    sync points, can not be reliably ordered to UndoRedo logic without putting the burden
-        //    on the user.
-        //    For example, an exclusive system could rev_spawn an entity via a RevWorld API (1),
-        //    then do non-UndoRedo logic based on the current RevDirection (2), and third do another
-        //    UndoRedo-generating logic via RevWorld (3).
-        //    This would be the order of actions depending on RevDirection:
-        //     NotLog:      do (1), do (2), do (3), all in the exclusive system, not in a sync point
-        //     BackwardLog: undo (3), undo (1) in a preceding sync point, undo (2) in the system
-        //     ForwardLog:  redo (2) in the system, redo (1), redo (3) in a following sync point
-        //    As one can see, the order is wrong. The user would have to actively refrain from using
-        //    such a RevWorld API. Not offering such an API would be not enough as nothing hinders
-        //    the user from directly applying reversible commands in the system.
-        //    The above issue gets worse when mixed with other systems with non-UndoRedo reversible
-        //    logic that run after the exclusive system but before a next sync point.
-        // 2. Supporting reversible exclusive systems makes the RevSystem implementation more
-        //    complicated, error prone and even more dependent on implementation details of
-        //    ExclusiveFunctionSystem that would need to be mirrored here additionally to the
-        //    FunctionSystem implementation. The needed public RevWorld API adds much more code to
-        //    test and maintain.
-        // 3. A RevWorld API might need to be designed entirely differently to RevCommands and the
-        //    relation to RevDirection matching inside the exclusive system. While this may partly
-        //    solve the issues as pointed out at 1., it adds to this crate's learning curve.
-        unimplemented!(
-            "exclusive systems as {name:?} are not supported to be reversible, \
-            use reversible commands via Commands::as_rev instead of &mut World"
-        );
-    }
+    let default_sets = system.default_system_sets();
+    let unified = RevSystemSet::new(&system, &default_sets).intern();
 
     // This set contains BackwardDeferred and both RevSystems of only this system instance. It is
     // the base for the other wrapping sets and for conditions to be used on.
-    let unified = RevSystemTypeSet::new(name.clone()).intern();
     let deferred = BackwardDeferredSet(unified);
 
-    let name = |postfix: &str| DebugName::owned(format!("{name}{postfix}"));
+    let name = |postfix: &str| DebugName::owned(format!("{}{postfix}", system.name()));
     let forward_system_name = name(" (forward system)");
     let backward_deferred_name = name(" (backward deferred)");
     let backward_system_name = name(" (backward system)");
-
-    let default_system_sets = system.default_system_sets();
 
     let inner = Arc::new(Mutex::new(Inner::from(system)));
 
@@ -114,7 +74,7 @@ pub(super) fn into_rev_system<Marker>(
         .in_set(BackwardSystemSet(unified))
         .in_set(BackwardDeferredAndSystemSet(unified))
         .in_set(BackwardSystems)
-        .after(deferred);
+        .after_weak(deferred);
 
     let mut configs = RevScheduleConfigs {
         forward_systems,
@@ -128,7 +88,7 @@ pub(super) fn into_rev_system<Marker>(
     // works even when T consists of multiple systems in a pipe and this is ordered to one of such
     // systems and not T as a whole
     // this fully replaces System::default_system_sets of the System impls in this module
-    for set in default_system_sets {
+    for set in default_sets {
         configs.rev_in_set_inner(set)
     }
 
@@ -140,47 +100,33 @@ pub(super) fn into_rev_system<Marker>(
 /// The only configuration will be reversible run conditions in [`RevScheduleConfigs::conditioned`]
 /// where these sets are placed at.
 // is `pub(super)` for docs in parent module
-#[derive(SystemSet, Clone, Eq)]
-pub(super) struct RevSystemTypeSet {
-    id: u32,
-    name: DebugName,
+#[derive(SystemSet, Clone, Eq, Debug)]
+pub(super) struct RevSystemSet {
+    default_sets_hash: u64,
+    type_id: TypeId,
+    _name: DebugName,
 }
 
-impl PartialEq for RevSystemTypeSet {
+impl PartialEq for RevSystemSet {
     fn eq(&self, other: &Self) -> bool {
-        self.id == other.id
+        self.default_sets_hash == other.default_sets_hash && self.type_id == other.type_id
     }
 }
 
-impl Hash for RevSystemTypeSet {
+impl Hash for RevSystemSet {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.id.hash(state)
+        self.default_sets_hash.hash(state);
+        self.type_id.hash(state);
     }
 }
 
-impl Debug for RevSystemTypeSet {
-    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
-        if size_of::<DebugName>() == 0 {
-            write!(f, "RevSystemTypeSet({}, {})", self.id, self.name)
-        } else {
-            self.name.fmt(f)
+impl RevSystemSet {
+    fn new<T: System>(system: &T, default_system_sets: &[InternedSystemSet]) -> Self {
+        Self {
+            default_sets_hash: FixedState::default().hash_one(default_system_sets),
+            type_id: TypeId::of::<T>(),
+            _name: system.name(),
         }
-    }
-}
-
-impl RevSystemTypeSet {
-    fn new(name: DebugName) -> Self {
-        static ID: AtomicU32 = AtomicU32::new(0);
-        let id = ID.fetch_add(1, Ordering::Relaxed);
-        if id == u32::MAX {
-            // this technically is a warn and not an error, but detecting the actual first set after
-            // overflow needs another atomic with stricter Ordering for both which is not worth it
-            error_or_panic_at_tests!(
-                "an internal atomic counter to create reversible systems is exhausted, \
-                creating more may lead to multiple systems sharing the same run condition"
-            );
-        }
-        Self { id, name }
     }
 }
 
@@ -270,7 +216,7 @@ impl<T: System<In = (), Out = ()>, const FORWARD: bool> System for RevSystem<T, 
     fn refresh_hotpatch(&mut self) {
         match self.inner.try_lock() {
             Ok(mut inner) => inner.system.refresh_hotpatch(),
-            Err(err) => error_or_panic_at_tests!("could not hotpatch system {}: {err}", self.name),
+            Err(err) => panic!("could not hotpatch system {}: {err}", self.name),
         }
     }
     fn apply_deferred(&mut self, world: &mut World) {
@@ -312,10 +258,55 @@ impl<T: System<In = (), Out = ()>, const FORWARD: bool> System for RevSystem<T, 
     fn queue_deferred(&mut self, _world: DeferredWorld) {
         unreachable!() // reversible systems are not used as observers
     }
-    fn initialize(&mut self, world: &mut World) -> FilteredAccessSet {
+    fn initialize(&mut self, world: &mut World) -> SystemAccess {
         // this must panic on try_lock or else System::run_unsafe cannot be used safely
         let mut inner = get_inner(&self.inner, &self.name);
         let access = inner.system.initialize(world);
+
+        // Exclusive systems are not supported because of the following reasons:
+        //
+        // 1. A hypothetical public RevWorld API would do the direct effect, the "doing", like
+        //    inserting a component anytime inside the exclusive system. Just like RevCommands this
+        //    would store their UndoRedo in a resource that at the next sync point is stored in the
+        //    system state. This has the consequence that the "undoing" and "redoing" can only
+        //    happen at sync points.
+        //    However, reversible logic that happens inside the exclusive system directly, not using
+        //    sync points, can not be reliably ordered to UndoRedo logic without putting the burden
+        //    on the user.
+        //    For example, an exclusive system could rev_spawn an entity via a RevWorld API (1),
+        //    then do non-UndoRedo logic based on the current RevDirection (2), and third do another
+        //    UndoRedo-generating logic via RevWorld (3).
+        //    This would be the order of actions depending on RevDirection:
+        //     NotLog:      do (1), do (2), do (3), all in the exclusive system, not in a sync point
+        //     BackwardLog: undo (3), undo (1) in a preceding sync point, undo (2) in the system
+        //     ForwardLog:  redo (2) in the system, redo (1), redo (3) in a following sync point
+        //    As one can see, the order is wrong. The user would have to actively refrain from using
+        //    such a RevWorld API. Not offering such an API would be not enough as nothing hinders
+        //    the user from directly applying reversible commands in the system.
+        //    The above issue gets worse when mixed with other systems with non-UndoRedo reversible
+        //    logic that run after the exclusive system but before a next sync point.
+        // 2. Supporting reversible exclusive systems makes the RevSystem implementation more
+        //    complicated, error prone and even more dependent on implementation details of
+        //    ExclusiveFunctionSystem that would need to be mirrored here additionally to the
+        //    FunctionSystem implementation. The needed public RevWorld API adds much more code to
+        //    test and maintain.
+        // 3. A RevWorld API might need to be designed entirely differently to RevCommands and the
+        //    relation to RevDirection matching inside the exclusive system. While this may partly
+        //    solve the issues as pointed out at 1., it adds to this crate's learning curve.
+        if access == SystemAccess::Exclusive {
+            if size_of::<DebugName>() > 0 {
+                unimplemented!(
+                    "exclusive systems as {:?} are not supported to be reversible, \
+                    use reversible commands via Commands::as_rev instead of &mut World",
+                    self.name
+                )
+            } else {
+                unimplemented!(
+                    "exclusive systems are not supported to be reversible, use \
+                    reversible commands via Commands::as_rev instead of &mut World"
+                )
+            }
+        }
 
         if !inner.initialized && inner.system.has_deferred() {
             inner.deferred_log = Some(Default::default());
@@ -385,19 +376,10 @@ impl<T: System> System for BackwardDeferred<T> {
     fn is_send(&self) -> bool {
         true
     }
-    fn is_exclusive(&self) -> bool {
-        false
-    }
     fn has_deferred(&self) -> bool {
         match self.state {
             BackwardDeferredState::Init { has_deferred } => has_deferred,
-            BackwardDeferredState::Uninit(_) => {
-                error_or_panic_at_tests!(
-                    "reversible system {:?} should be initialized before calling System::has_deferred",
-                    self.name
-                );
-                true
-            }
+            BackwardDeferredState::Uninit(_) => true,
         }
     }
     unsafe fn run_unsafe(
@@ -458,7 +440,7 @@ impl<T: System> System for BackwardDeferred<T> {
     fn queue_deferred(&mut self, _world: DeferredWorld) {
         unreachable!() // reversible systems are not used as observers
     }
-    fn initialize(&mut self, world: &mut World) -> FilteredAccessSet {
+    fn initialize(&mut self, world: &mut World) -> SystemAccess {
         if let BackwardDeferredState::Uninit(set) = self.state {
             match self.inner.try_lock() {
                 Ok(mut inner) => {
@@ -499,7 +481,7 @@ impl<T: System> System for BackwardDeferred<T> {
             }
         }
 
-        FilteredAccessSet::new()
+        SystemAccess::None
     }
     fn default_system_sets(&self) -> Vec<InternedSystemSet> {
         Vec::new() // already specified via rev_in_set_inner at into_rev_system
@@ -586,18 +568,6 @@ pub fn remove_noop_backward_deferred(world: &mut World) -> Result<(), RunSystemE
         ))))
     }
 }
-
-macro_rules! error_or_panic_at_tests {
-    ($($tokens:tt)*) => {
-        if cfg!(test) {
-            panic!($($tokens)*);
-        } else {
-            bevy_log::error!($($tokens)*);
-        }
-    };
-}
-
-use error_or_panic_at_tests;
 
 #[cfg(test)]
 mod test {
@@ -807,6 +777,9 @@ mod test {
     #[test]
     #[should_panic = "exclusive system"]
     fn deny_exclusive_systems() {
-        super::into_rev_system(|_: &mut World| {});
+        let mut world = World::new();
+        let mut schedule = Schedule::default();
+        schedule.rev_add_systems(|_: &mut World| {});
+        let _ = schedule.initialize(&mut world);
     }
 }

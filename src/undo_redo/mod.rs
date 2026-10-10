@@ -35,6 +35,9 @@
 //! ## Notes
 //!
 //! - The APIs mind linked entities based on [`RelationshipTarget::LINKED_SPAWN`].
+//! - Since [`RelationshipTarget`]s are not manually inserted during spawns, it is assumed
+//!   that children of spawned entities were spawned along it. The chance that those were not and
+//!   instead got linked by hooks or observers is neglected.
 //! - Manually inserting [`RevDespawned`] is discouraged because no finalized despawn will take
 //!   place in these cases. Manually removing it will also not prevent the despawn.
 //!
@@ -44,6 +47,7 @@
 //! [`RevCommands::rev_despawn`]: crate::undo_redo::commands::RevCommands::rev_despawn
 //! [`RevEntityCommands::rev_despawn`]: crate::undo_redo::entity_commands::RevEntityCommands::rev_despawn
 //! [`RelationshipTarget::LINKED_SPAWN`]: bevy_ecs::relationship::RelationshipTarget::LINKED_SPAWN
+//! [`RelationshipTarget`]: bevy_ecs::relationship::RelationshipTarget
 
 use alloc::{boxed::Box, vec::Vec};
 use bevy_ecs::{change_detection::MaybeLocation, entity::Entity, resource::Resource, world::World};

@@ -12,6 +12,8 @@ use bevy_ecs::{
     system::{EntityCommand, EntityCommands, EntityEntryCommands},
     world::{EntityWorldMut, FromWorld, World},
 };
+#[cfg(feature = "scene")]
+use bevy_scene::{EntityWorldMutSceneExt, Scene};
 use bevy_utils::DebugName;
 
 use crate::{
@@ -146,6 +148,24 @@ impl<'a> RevEntityCommands<'a> {
         self
     }
 
+    /// Reversible version of
+    /// [`EntityCommands::apply_scene`](bevy_scene::EntityCommandsSceneExt::apply_scene). Needs the
+    /// `scene` feature to be present.
+    ///
+    /// See the [`undo_redo`](crate::undo_redo) module documentation to understand the mechanics of
+    /// reversible spawn/despawn.
+    #[cfg(feature = "scene")]
+    #[track_caller]
+    pub fn rev_apply_scene<S: Scene>(&mut self, scene: S) -> &mut Self {
+        let caller = MaybeLocation::caller();
+        self.0.queue(move |mut entity: EntityWorldMut| {
+            entity.apply_scene(scene).inspect(|_| {
+                crate::undo_redo::mark_entity::<true>(&mut entity, true, false, caller);
+            })
+        });
+        self
+    }
+
     /// Reversible version of [`EntityCommands::entry`].
     pub fn rev_entry<T: Component>(&mut self) -> RevEntityEntryCommands<'_, T> {
         RevEntityEntryCommands(self.0.entry::<T>())
@@ -182,12 +202,19 @@ impl<'a> RevEntityCommands<'a> {
     /// See the [`undo_redo`](crate::undo_redo) module documentation to understand the mechanics of
     /// reversible spawn/despawn.
     #[track_caller]
-    pub fn rev_mark_spawned(&mut self, include_unlinked_related: bool) -> &mut Self {
+    pub fn rev_mark_spawned(
+        &mut self,
+        include_unlinked_related: bool,
+        may_have_children: bool,
+    ) -> &mut Self {
         let caller = MaybeLocation::caller();
         self.0.queue(move |mut entity_world_mut: EntityWorldMut| {
-            entity_world_mut
-                .rev_mark_spawned(include_unlinked_related, caller)
-                .map(|_| ())
+            if may_have_children {
+                entity_world_mut.rev_mark_spawned(include_unlinked_related, caller)
+            } else {
+                entity_world_mut.rev_mark_spawned_empty(caller)
+            }
+            .map(|_| ())
         });
         self
     }

@@ -9,7 +9,10 @@ use bevy_ecs::{
     error::BevyError,
     query::FilteredAccessSet,
     schedule::{BoxedCondition, InternedSystemSet, SystemCondition},
-    system::{IntoSystem, ReadOnlySystem, RunSystemError, System, SystemIn, SystemStateFlags},
+    system::{
+        IntoSystem, ReadOnlySystem, RunSystemError, System, SystemAccess, SystemIn,
+        SystemStateFlags,
+    },
     world::{DeferredWorld, World, unsafe_world_cell::UnsafeWorldCell},
 };
 use bevy_platform::{
@@ -66,12 +69,22 @@ impl<T: ReadOnlySystem<In = (), Out = bool>> System for RevCondition<T> {
     fn flags(&self) -> SystemStateFlags {
         self.condition.flags()
     }
-    fn initialize(&mut self, world: &mut World) -> FilteredAccessSet {
-        let mut access = self.condition.initialize(world);
+    fn initialize(&mut self, world: &mut World) -> SystemAccess {
+        let mut system_access = self.condition.initialize(world);
         let meta_id = world.register_component::<RevMeta>();
         self.meta_id = Some(meta_id);
-        access.add_resource_read(meta_id);
-        access
+        match &mut system_access {
+            SystemAccess::None => {
+                let mut access = FilteredAccessSet::new();
+                access.add_resource_read(meta_id);
+                system_access = SystemAccess::Shared(access);
+            }
+            SystemAccess::Shared(access) => {
+                access.add_resource_read(meta_id);
+            }
+            SystemAccess::Exclusive => unreachable!("no read-only param has exclusive access"),
+        }
+        system_access
     }
     unsafe fn run_unsafe(
         &mut self,
@@ -203,9 +216,9 @@ impl FailedLogs {
         // log hash as transition, reduce usages for drained, remove if unused
         let past_len = self.err_failed_log.forward_past_len(meta);
         let mut drain = self.failed_log.forward_push(meta, past_len, key);
-        for key in drain.all() {
-            self.failed_cache.reduce_or_remove(key);
-        }
+        drain
+            .all()
+            .for_each(|key| self.failed_cache.reduce_or_remove(key));
 
         Ok(())
     }

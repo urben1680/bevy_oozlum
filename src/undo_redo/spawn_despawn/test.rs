@@ -161,9 +161,14 @@ impl Hierarchy<bool, Hierarchy<bool, bool>> {
     }
 }
 
+enum TestVariant {
+    MarkEntity { include_root: bool },
+    MarkEntities,
+}
+
 fn test<const SPAWN: bool>(
     include_unlinked_related: bool,
-    as_entity_world_mut: bool,
+    variant: TestVariant,
     forward: Hierarchy<bool, Hierarchy<bool, bool>>,
     backward: Hierarchy<bool, Hierarchy<bool, bool>>,
     forward_finalized: bool,
@@ -174,12 +179,25 @@ fn test<const SPAWN: bool>(
         &mut world,
         |world, _| {
             let caller = MaybeLocation::caller();
-            if as_entity_world_mut {
-                let mut root = world.entity_mut(hierarchy.root);
-                let success = mark_entity::<SPAWN>(&mut root, include_unlinked_related, caller);
-                assert!(success);
-            } else {
-                mark_entities::<SPAWN>(world, &[hierarchy.root], include_unlinked_related, caller);
+            match variant {
+                TestVariant::MarkEntity { include_root } => {
+                    let mut root = world.entity_mut(hierarchy.root);
+                    let success = mark_entity::<SPAWN>(
+                        &mut root,
+                        include_unlinked_related,
+                        include_root,
+                        caller,
+                    );
+                    assert!(success);
+                }
+                TestVariant::MarkEntities => {
+                    mark_entities::<SPAWN>(
+                        world,
+                        &[hierarchy.root],
+                        include_unlinked_related,
+                        caller,
+                    );
+                }
             }
             hierarchy.assert_rev_despawned_nested(world, forward);
         },
@@ -200,9 +218,22 @@ fn test<const SPAWN: bool>(
 fn spawn_linked_only_entity_finalize_forward() {
     test::<true>(
         false,
-        true,
+        TestVariant::MarkEntity { include_root: true },
         Hierarchy::new_expected_despawned_nested(false, false, false),
         Hierarchy::new_expected_despawned_nested(true, true, false),
+        true,
+    );
+}
+
+#[test]
+fn spawn_linked_only_entity_finalize_forward_without_root() {
+    test::<true>(
+        false,
+        TestVariant::MarkEntity {
+            include_root: false,
+        },
+        Hierarchy::new_expected_despawned_nested(false, false, false),
+        Hierarchy::new_expected_despawned_nested(false, true, false),
         true,
     );
 }
@@ -211,9 +242,22 @@ fn spawn_linked_only_entity_finalize_forward() {
 fn spawn_linked_only_entity_finalize_backward() {
     test::<true>(
         false,
-        true,
+        TestVariant::MarkEntity { include_root: true },
         Hierarchy::new_expected_despawned_nested(false, false, false),
         Hierarchy::new_expected_despawned_nested(true, true, false),
+        false,
+    );
+}
+
+#[test]
+fn spawn_linked_only_entity_finalize_backward_without_root() {
+    test::<true>(
+        false,
+        TestVariant::MarkEntity {
+            include_root: false,
+        },
+        Hierarchy::new_expected_despawned_nested(false, false, false),
+        Hierarchy::new_expected_despawned_nested(false, true, false),
         false,
     );
 }
@@ -222,7 +266,7 @@ fn spawn_linked_only_entity_finalize_backward() {
 fn spawn_linked_only_entities_finalize_forward() {
     test::<true>(
         false,
-        false,
+        TestVariant::MarkEntities,
         Hierarchy::new_expected_despawned_nested(false, false, false),
         Hierarchy::new_expected_despawned_nested(true, true, false),
         true,
@@ -233,7 +277,7 @@ fn spawn_linked_only_entities_finalize_forward() {
 fn spawn_linked_only_entities_finalize_backward() {
     test::<true>(
         false,
-        false,
+        TestVariant::MarkEntities,
         Hierarchy::new_expected_despawned_nested(false, false, false),
         Hierarchy::new_expected_despawned_nested(true, true, false),
         false,
@@ -244,8 +288,21 @@ fn spawn_linked_only_entities_finalize_backward() {
 fn despawn_linked_only_entity_finalize_forward() {
     test::<false>(
         false,
-        true,
+        TestVariant::MarkEntity { include_root: true },
         Hierarchy::new_expected_despawned_nested(true, true, false),
+        Hierarchy::new_expected_despawned_nested(false, false, false),
+        true,
+    );
+}
+
+#[test]
+fn despawn_linked_only_entity_finalize_forward_without_root() {
+    test::<false>(
+        false,
+        TestVariant::MarkEntity {
+            include_root: false,
+        },
+        Hierarchy::new_expected_despawned_nested(false, true, false),
         Hierarchy::new_expected_despawned_nested(false, false, false),
         true,
     );
@@ -255,8 +312,21 @@ fn despawn_linked_only_entity_finalize_forward() {
 fn despawn_linked_only_entity_finalize_backward() {
     test::<false>(
         false,
-        true,
+        TestVariant::MarkEntity { include_root: true },
         Hierarchy::new_expected_despawned_nested(true, true, false),
+        Hierarchy::new_expected_despawned_nested(false, false, false),
+        false,
+    );
+}
+
+#[test]
+fn despawn_linked_only_entity_finalize_backward_without_root() {
+    test::<false>(
+        false,
+        TestVariant::MarkEntity {
+            include_root: false,
+        },
+        Hierarchy::new_expected_despawned_nested(false, true, false),
         Hierarchy::new_expected_despawned_nested(false, false, false),
         false,
     );
@@ -266,7 +336,7 @@ fn despawn_linked_only_entity_finalize_backward() {
 fn despawn_linked_only_entities_finalize_forward() {
     test::<false>(
         false,
-        false,
+        TestVariant::MarkEntities,
         Hierarchy::new_expected_despawned_nested(true, true, false),
         Hierarchy::new_expected_despawned_nested(false, false, false),
         true,
@@ -277,7 +347,7 @@ fn despawn_linked_only_entities_finalize_forward() {
 fn despawn_linked_only_entities_finalize_backward() {
     test::<false>(
         false,
-        false,
+        TestVariant::MarkEntities,
         Hierarchy::new_expected_despawned_nested(true, true, false),
         Hierarchy::new_expected_despawned_nested(false, false, false),
         false,
@@ -288,9 +358,22 @@ fn despawn_linked_only_entities_finalize_backward() {
 fn spawn_linked_and_unlinked_entity_finalize_forward() {
     test::<true>(
         true,
-        true,
+        TestVariant::MarkEntity { include_root: true },
         Hierarchy::new_expected_despawned_nested(false, false, false),
         Hierarchy::new_expected_despawned_nested(true, true, true),
+        true,
+    );
+}
+
+#[test]
+fn spawn_linked_and_unlinked_entity_finalize_forward_without_root() {
+    test::<true>(
+        true,
+        TestVariant::MarkEntity {
+            include_root: false,
+        },
+        Hierarchy::new_expected_despawned_nested(false, false, false),
+        Hierarchy::new_expected_despawned_nested(false, true, true),
         true,
     );
 }
@@ -299,9 +382,22 @@ fn spawn_linked_and_unlinked_entity_finalize_forward() {
 fn spawn_linked_and_unlinked_entity_finalize_backward() {
     test::<true>(
         true,
-        true,
+        TestVariant::MarkEntity { include_root: true },
         Hierarchy::new_expected_despawned_nested(false, false, false),
         Hierarchy::new_expected_despawned_nested(true, true, true),
+        false,
+    );
+}
+
+#[test]
+fn spawn_linked_and_unlinked_entity_finalize_backward_without_root() {
+    test::<true>(
+        true,
+        TestVariant::MarkEntity {
+            include_root: false,
+        },
+        Hierarchy::new_expected_despawned_nested(false, false, false),
+        Hierarchy::new_expected_despawned_nested(false, true, true),
         false,
     );
 }
@@ -310,7 +406,7 @@ fn spawn_linked_and_unlinked_entity_finalize_backward() {
 fn spawn_linked_and_unlinked_entities_finalize_forward() {
     test::<true>(
         true,
-        false,
+        TestVariant::MarkEntities,
         Hierarchy::new_expected_despawned_nested(false, false, false),
         Hierarchy::new_expected_despawned_nested(true, true, true),
         true,
@@ -321,8 +417,21 @@ fn spawn_linked_and_unlinked_entities_finalize_forward() {
 fn despawn_linked_and_unlinked_entity_finalize_forward() {
     test::<false>(
         true,
-        true,
+        TestVariant::MarkEntity { include_root: true },
         Hierarchy::new_expected_despawned_nested(true, true, true),
+        Hierarchy::new_expected_despawned_nested(false, false, false),
+        true,
+    );
+}
+
+#[test]
+fn despawn_linked_and_unlinked_entity_finalize_forward_without_root() {
+    test::<false>(
+        true,
+        TestVariant::MarkEntity {
+            include_root: false,
+        },
+        Hierarchy::new_expected_despawned_nested(false, true, true),
         Hierarchy::new_expected_despawned_nested(false, false, false),
         true,
     );
@@ -332,7 +441,7 @@ fn despawn_linked_and_unlinked_entity_finalize_forward() {
 fn despawn_linked_and_unlinked_entity_finalize_backward() {
     test::<false>(
         true,
-        true,
+        TestVariant::MarkEntity { include_root: true },
         Hierarchy::new_expected_despawned_nested(true, true, true),
         Hierarchy::new_expected_despawned_nested(false, false, false),
         false,
@@ -343,7 +452,7 @@ fn despawn_linked_and_unlinked_entity_finalize_backward() {
 fn despawn_linked_and_unlinked_entities_finalize_forward() {
     test::<false>(
         true,
-        false,
+        TestVariant::MarkEntities,
         Hierarchy::new_expected_despawned_nested(true, true, true),
         Hierarchy::new_expected_despawned_nested(false, false, false),
         true,
@@ -354,7 +463,7 @@ fn despawn_linked_and_unlinked_entities_finalize_forward() {
 fn despawn_linked_and_unlinked_entities_finalize_backward() {
     test::<false>(
         true,
-        false,
+        TestVariant::MarkEntities,
         Hierarchy::new_expected_despawned_nested(true, true, true),
         Hierarchy::new_expected_despawned_nested(false, false, false),
         false,

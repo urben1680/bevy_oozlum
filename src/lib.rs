@@ -191,6 +191,7 @@
 //! | - | - | - |
 //! | `app` | Includes the [`app`] module, useful when using `bevy` or `bevy_app` and not just `bevy_ecs` | Yes |
 //! | `reflect` | Derives [`Reflect`] on some of the types of this crate | Yes |
+//! | `scene` | Includes methods to reversibly spawning scenes | Yes |
 //! | `track_update_logs` | Asserts after each [`RevUpdate`] that all [`UpdateLog`]s ran the expected amount of times | No |
 //! | `hotpatching` | Makes this crate compile while using bevy's hotpatching feature | No |
 //!
@@ -214,7 +215,8 @@
 //!   prominently those based on **dynamic components** or **entity cloning**. Supporting them is
 //!   past the scope of this crate. One has to implement [`UndoRedo`] types on their own if these
 //!   are needed.
-//! - Reversible commands cannot be delayed, this will cause run-time errors.
+//! - Reversible commands cannot be delayed, this will cause run-time errors. This crate also does
+//!   not offer `queue_spawn_scene`(`_list`) methods, only the variants without `queue` prefix.
 //! - Reversible commands working with **relationships** are generally available. If custom types
 //!   are used that also contain other data next to the entity collections however, some APIs in
 //!   this crate will not compile in the best case or will silently make that data unrecoverable at

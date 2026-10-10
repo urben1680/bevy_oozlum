@@ -81,12 +81,20 @@ fn render<const ROWS: usize>(
     writeln!(
         &mut text.0,
         "Let's waste the time 'til Bevy 1.0 by tossing said waste into the ocean!
-No worry, it's okay as long you undo it. Just don't wait for too long...
-\n                         It is Bevy {v1}.{v2:02}.{v3} now!\n",
-        v1 = bevy_version / 1000,
-        v2 = bevy_version % 1000 / 10,
-        v3 = bevy_version % 10
+No worry, it's okay as long you undo it. Just don't wait for too long..."
     )?;
+
+    if bevy_version < 1000 {
+        writeln!(
+            &mut text.0,
+            "                         It is Bevy {v1}.{v2:02}.{v3} now!\n",
+            v1 = bevy_version / 1000,
+            v2 = bevy_version % 1000 / 10,
+            v3 = bevy_version % 10
+        )?;
+    } else {
+        writeln!(&mut text.0, "\n")?;
+    }
 
     let wave_iter = |offset: u64| "`-._,~'".chars().cycle().skip(7 - offset as usize % 7);
 
@@ -125,7 +133,7 @@ ENTER (hold): reduce past length                 BACKSPACE: clear log"
         GameState::Won if (meta.now() / 60) % 2 == 0 => {
             writeln!(
                 &mut text.0,
-                "\n                    Yay, Bevy 1.0 is there! YOU WON!"
+                "\n                    Yay, Bevy 1.0 is there! YOU WON!\n"
             )?;
         }
         GameState::Lost if (meta.now() / 9) % 2 == 0 => {

@@ -4,12 +4,14 @@
 //! errors if it did not update at the current frame as it did during
 //! [`RevDirection::NotLog`](crate::meta::RevDirection::NotLog).
 
-use alloc::{boxed::Box, vec::Vec};
-use bevy_ecs::change_detection::MaybeLocation;
-use bevy_utils::Parallel;
+use alloc::{boxed::Box, format, vec::Vec};
+use bevy_ecs::{
+    change_detection::MaybeLocation,
+    error::{BevyError, ErrorContext, ErrorHandler},
+};
+use bevy_utils::{DebugName, Parallel};
 use core::{
     fmt::{Debug, Formatter, Result as FmtResult},
-    panic::Location,
     sync::atomic::AtomicU32,
 };
 use nonmax::NonMaxU32;
@@ -71,7 +73,8 @@ impl UpdateLogLimits {
     pub(crate) fn set_update_state(
         &self,
         state: &mut Option<UpdateLogState>,
-        caller: MaybeLocation<Option<&'static Location>>,
+        error_handler: ErrorHandler,
+        caller: UpdateLocation,
     ) {
         match state {
             None => {
@@ -86,10 +89,15 @@ impl UpdateLogLimits {
                     witnessed_limits_updates: self.limits_updates,
                 });
                 if let Some(caller) = caller.into_option().flatten() {
-                    bevy_log::info!(
-                        "A `UpdateLog` with the index `{index}` was initiated at {caller},  this \
-                        index remains valid until a `RevQueue::Clear` is applied, after that the \
-                        index could be assigned to a different UpdateLog"
+                    error_handler(
+                        BevyError::info(format!(
+                            "A `UpdateLog` with the index `{index}` was initiated at {caller},  this \
+                            index remains valid until a `RevQueue::Clear` is applied, after that the \
+                            index could be assigned to a different UpdateLog"
+                        )),
+                        ErrorContext::Command {
+                            name: DebugName::type_name_of_val(&Self::set_update_state),
+                        },
                     );
                 }
             }
@@ -249,7 +257,15 @@ pub(crate) struct UpdateLogLimit {
 
     /// The last location where [`UpdateLog`](super::UpdateLog) was updated. Is empty if bevy's
     /// `track_location` cargo feature is not used.
+    #[cfg_attr(
+        feature = "reflect",
+        reflect(ignore, default = "update_location_default")
+    )]
     last_update: UpdateLocation,
+}
+
+fn update_location_default() -> UpdateLocation {
+    UpdateLocation::new(None)
 }
 
 impl UpdateLogLimit {
@@ -366,6 +382,10 @@ mod test {
 
     use alloc::vec;
 
+    fn error_handler(_: BevyError, _: ErrorContext) {
+        panic!()
+    }
+
     #[test]
     fn updates_state() {
         let mut limits = UpdateLogLimits::default();
@@ -374,7 +394,7 @@ mod test {
         let no_caller = MaybeLocation::new(None);
 
         // initial set gives Nothing variant
-        limits.set_update_state(&mut state, no_caller);
+        limits.set_update_state(&mut state, error_handler, no_caller);
         assert_eq!(
             state,
             Some(UpdateLogState {
@@ -400,7 +420,7 @@ mod test {
         limits.update(2, false).unwrap();
 
         // update at another frame
-        limits.set_update_state(&mut state, no_caller);
+        limits.set_update_state(&mut state, error_handler, no_caller);
         assert_eq!(
             state,
             Some(UpdateLogState {
@@ -427,7 +447,7 @@ mod test {
         limits.update(3, false).unwrap();
 
         // increased log_exits gives DropFuture variant
-        limits.set_update_state(&mut state, no_caller);
+        limits.set_update_state(&mut state, error_handler, no_caller);
         assert_eq!(
             state,
             Some(UpdateLogState {
@@ -456,7 +476,7 @@ mod test {
         // when clearing limits, UpdateLog also unsets state, generate new state
         limits.clear();
         state = None;
-        limits.set_update_state(&mut state, no_caller);
+        limits.set_update_state(&mut state, error_handler, no_caller);
         assert_eq!(
             state,
             Some(UpdateLogState {
@@ -468,7 +488,7 @@ mod test {
 
         // another UpdateLog receives a different index
         state = None;
-        limits.set_update_state(&mut state, no_caller);
+        limits.set_update_state(&mut state, error_handler, no_caller);
         assert_eq!(
             state,
             Some(UpdateLogState {
@@ -487,13 +507,13 @@ mod test {
         // add a past limit of 1
         let mut past_state = None;
         let past_limit = UpdateLogLimit::new_log(1, u64::MAX, MaybeLocation::caller().map(Some));
-        limits.set_update_state(&mut past_state, no_caller);
+        limits.set_update_state(&mut past_state, error_handler, no_caller);
         limits.push_limit(past_state.as_mut().unwrap(), past_limit);
 
         // add a future limit of 1
         let mut future_state = None;
         let future_limit = UpdateLogLimit::new_log(u64::MIN, 1, MaybeLocation::caller().map(Some));
-        limits.set_update_state(&mut future_state, no_caller);
+        limits.set_update_state(&mut future_state, error_handler, no_caller);
         limits.push_limit(future_state.as_mut().unwrap(), future_limit);
 
         // 1 is in both limits

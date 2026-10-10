@@ -1,9 +1,6 @@
-use alloc::{
-    boxed::Box,
-    collections::{
-        TryReserveError, VecDeque,
-        vec_deque::{Drain, Iter, IterMut},
-    },
+use alloc::collections::{
+    TryReserveError, VecDeque,
+    vec_deque::{Drain, Iter, IterMut},
 };
 use core::{
     fmt::Debug,
@@ -12,9 +9,10 @@ use core::{
     mem::ManuallyDrop,
     num::NonZeroU64,
 };
+use nonmax::NonMaxUsize;
 
 use crate::{
-    log::{DrainAll, GapRange, OutOfLog, TransitionDrain, TransitionLog, prepend},
+    log::{DrainAll, GapRange, OutOfLog, TransitionDrain, TransitionLog},
     meta::RevMeta,
 };
 
@@ -338,22 +336,26 @@ impl<T, U> TransitionsLog<T, U> {
                 transitions_len: usize::MAX.to_ne_bytes(),
             },
         );
-        let gap_range = if updates.is_clear() {
-            GapRange::new_clear(self.index)
+        let drain_past_len = if updates.is_clear() {
+            self.index
         } else {
-            let start = updates
+            updates
                 .iter_past()
                 .map(|update| update.transitions_len())
-                .sum::<usize>();
-            GapRange::new(start, self.index)
+                .sum::<usize>()
         };
+        let drain_future_len = self.transitions.len() - self.index;
+        let keep_len = self.index - drain_past_len;
         TransitionsDrain {
             transitions: &mut self.transitions,
             updates,
             index: &mut self.index,
             transitions_iter: ManuallyDrop::new(transitions),
-            gap_range,
-            gap_buffer: Default::default(),
+            gap_range: GapRange {
+                drain_past_len: NonMaxUsize::new(drain_past_len),
+                drain_future_len,
+                keep_len,
+            },
         }
     }
 
@@ -459,7 +461,6 @@ where
     index: &'a mut usize,
     transitions_iter: ManuallyDrop<I>,
     gap_range: GapRange,
-    gap_buffer: Box<[T]>,
 }
 
 impl<'a, T, U, I> TransitionsDrain<'a, T, U, I>
@@ -470,7 +471,7 @@ where
     pub fn past<'b>(
         &'b mut self,
     ) -> TransitionsDrainIters<Drain<'b, T>, Drain<'b, TransitionsLogUpdate<U>>, U> {
-        let end = self.gap_range.take_drain_past_end();
+        let end = self.gap_range.take_drain_past_len();
         let transitions = self.transitions.drain(..end);
         let updates = self.updates.past();
         TransitionsDrainIters {
@@ -485,8 +486,13 @@ where
     pub fn future<'b>(
         &'b mut self,
     ) -> TransitionsDrainIters<Drain<'b, T>, Drain<'b, TransitionsLogUpdate<U>>, U> {
-        let start = self.gap_range.drain_future_start();
-        let transitions = self.transitions.drain(start..);
+        let to_drain_future = self.gap_range.take_drain_future_len();
+        let transitions = if let Some(to_drain_past) = self.gap_range.drain_past_len {
+            let start = to_drain_past.get() + self.gap_range.keep_len;
+            self.transitions.drain(start..)
+        } else {
+            self.transitions.drain(..to_drain_future)
+        };
         let updates = self.updates.future();
         TransitionsDrainIters {
             transitions,
@@ -500,8 +506,10 @@ where
     pub fn all<'b>(
         &'b mut self,
     ) -> TransitionsDrainIters<DrainAll<'b, T>, DrainAll<'b, TransitionsLogUpdate<U>>, U> {
-        let transitions =
-            DrainAll::new(self.transitions, &mut self.gap_range, &mut self.gap_buffer);
+        let transitions = DrainAll {
+            deque: self.transitions,
+            gap_range: self.gap_range.take_all(),
+        };
         let updates = self.updates.all();
         TransitionsDrainIters {
             transitions,
@@ -516,14 +524,7 @@ where
     I: IntoIterator<Item = T>,
 {
     fn drop(&mut self) {
-        if self.gap_range.is_clear() {
-            self.transitions.clear();
-        } else {
-            self.transitions.truncate(self.gap_range.end);
-            // todo: use truncate_front https://github.com/rust-lang/rust/issues/140667
-            self.transitions.drain(..self.gap_range.start);
-        }
-        prepend(self.transitions, &mut self.gap_buffer);
+        self.all();
         // SAFETY: Only called this once and only in this Drop
         let transitions_iter = unsafe { ManuallyDrop::take(&mut self.transitions_iter) };
         let mut len = self.transitions.len();
@@ -567,17 +568,27 @@ where
             )
         })
     }
+
+    /// Calls a closure on the transitions and update of each log entry.
+    pub fn for_each_log_entry<F: FnMut(Take<&'_ mut TI>, U)>(&mut self, mut f: F) {
+        self.updates.by_ref().for_each(|update| {
+            f(
+                self.transitions.by_ref().take(update.transitions_len()),
+                update.update,
+            )
+        });
+    }
 }
 
 impl<T, U> TransitionsDrainIters<DrainAll<'_, T>, DrainAll<'_, TransitionsLogUpdate<U>>, U> {
     /// Returns the amount of log updates (`U`) that are in the past segment of this iterator.
     pub fn past_updates_len(&self) -> usize {
-        self.updates.gap_range.start
+        self.updates.gap_range.drain_past_len_or_zero()
     }
 
     /// Returns the amount of log transitions (`T`) that are in the past segment of this iterator.
     pub fn past_transitions_len(&self) -> usize {
-        self.transitions.gap_range.start
+        self.transitions.gap_range.drain_past_len_or_zero()
     }
 }
 

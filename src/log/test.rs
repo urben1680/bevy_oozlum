@@ -1,6 +1,7 @@
 use super::*;
 
 use alloc::{
+    collections::vec_deque::Drain,
     string::{String, ToString},
     vec::Vec,
 };
@@ -8,143 +9,69 @@ use core::{num::NonZeroU64, str::Chars};
 
 use crate::meta::{RevMeta, RevQueue};
 
-static EMPTY: &[char] = &[];
-static A: &[char] = &['a'];
-static AB: &[char] = &['a', 'b'];
-static AC: &[char] = &['a', 'c'];
-static ABC: &[char] = &['a', 'b', 'c'];
-static B: &[char] = &['b'];
-static BC: &[char] = &['b', 'c'];
-static C: &[char] = &['c'];
-
-#[derive(Debug, Clone)]
-struct GapTest {
-    drained: &'static [char],
-    kept: &'static [char],
-    buffer: &'static [char],
-}
-
-impl GapTest {
-    fn gap_clear() -> Self {
-        Self {
-            drained: ABC,
-            kept: EMPTY,
-            buffer: EMPTY,
-        }
-    }
-    fn gap_empty(drained: &'static [char], buffer: &'static [char]) -> Self {
-        Self {
-            drained,
-            kept: EMPTY,
-            buffer,
-        }
-    }
-    fn gap_a() -> Self {
-        Self {
-            drained: BC,
-            kept: A,
-            buffer: EMPTY,
-        }
-    }
-    fn gap_b() -> Self {
-        Self {
-            drained: AC,
-            kept: EMPTY,
-            buffer: B,
-        }
-    }
-    fn gap_c() -> Self {
-        Self {
-            drained: AB,
-            kept: C,
-            buffer: EMPTY,
-        }
-    }
-    fn gap_ab() -> Self {
-        Self {
-            drained: C,
-            kept: AB,
-            buffer: EMPTY,
-        }
-    }
-    fn gap_bc() -> Self {
-        Self {
-            drained: A,
-            kept: BC,
-            buffer: EMPTY,
-        }
-    }
-    fn gap_abc() -> Self {
-        Self {
-            drained: EMPTY,
-            kept: ABC,
-            buffer: EMPTY,
-        }
-    }
-}
-
-#[test]
-fn drain_all_iterator_works() {
-    let tests = [
-        (GapRange::new(0, 0), GapTest::gap_empty(ABC, EMPTY)),
-        (GapRange::new(0, 1), GapTest::gap_a()),
-        (GapRange::new(0, 2), GapTest::gap_ab()),
-        (GapRange::new(0, 3), GapTest::gap_abc()),
-        (GapRange::new_clear(0), GapTest::gap_clear()),
-        (GapRange::new(1, 1), GapTest::gap_empty(ABC, EMPTY)),
-        (GapRange::new(1, 2), GapTest::gap_b()),
-        (GapRange::new(1, 3), GapTest::gap_bc()),
-        (GapRange::new_clear(1), GapTest::gap_clear()),
-        (GapRange::new(2, 2), GapTest::gap_empty(ABC, EMPTY)),
-        (GapRange::new(2, 3), GapTest::gap_c()),
-        (GapRange::new_clear(2), GapTest::gap_clear()),
-        (GapRange::new(3, 3), GapTest::gap_empty(ABC, EMPTY)),
-        (GapRange::new_clear(3), GapTest::gap_clear()),
-    ];
-
-    for (i, (mut gap_range, test)) in tests.into_iter().enumerate() {
-        let mut deque = ABC.iter().cloned().collect::<VecDeque<_>>();
-        let mut gap_buffer = Default::default();
-        let drain_all = DrainAll::new(&mut deque, &mut gap_range, &mut gap_buffer);
-        let updated_gap = gap_range;
-
-        let drained = drain_all.collect::<Vec<_>>();
-
-        assert_eq!(deque, test.kept, "#{i}");
-        assert_eq!(drained, test.drained, "#{i}");
-        assert_eq!(&*gap_buffer, test.buffer, "#{i}");
-
-        let drain_all = DrainAll::new(&mut deque, &mut gap_range, &mut gap_buffer);
-
-        let drained = drain_all.collect::<Vec<char>>();
-        assert_eq!(deque, test.kept, "#{i}");
-        assert_eq!(drained, [] as [char; 0], "#{i}");
-        assert_eq!(&*gap_buffer, test.buffer, "#{i}");
-
-        assert_eq!(gap_range.start, updated_gap.start, "#{i}");
-        assert_eq!(gap_range.end, updated_gap.end, "#{i}");
-        prepend(&mut deque, &mut gap_buffer);
-        assert!(deque.iter().is_sorted(), "#{i}");
-    }
-}
-
 #[derive(Debug, Default)]
 pub(super) struct Logs<T> {
     drop_drain: T,
-    past_drain: T,
-    future_drain: T,
-    past_future_drain: T,
-    future_past_drain: T,
-    all_drain: T,
-    past_all_drain: T,
-    future_all_drain: T,
+    past_drain_iter: T,
+    future_drain_iter: T,
+    past_future_drain_iter: T,
+    future_past_drain_iter: T,
+    all_drain_iter: T,
+    past_all_drain_iter: T,
+    future_all_drain_iter: T,
+    past_drain_for_each: T,
+    future_drain_for_each: T,
+    past_future_drain_for_each: T,
+    future_past_drain_for_each: T,
+    all_drain_for_each: T,
+    past_all_drain_for_each: T,
+    future_all_drain_for_each: T,
+}
+
+impl<T> Logs<T> {
+    fn iter_mut(&mut self) -> impl Iterator<Item = &mut T> {
+        [
+            &mut self.drop_drain,
+            &mut self.past_drain_iter,
+            &mut self.future_drain_iter,
+            &mut self.past_future_drain_iter,
+            &mut self.future_past_drain_iter,
+            &mut self.all_drain_iter,
+            &mut self.past_all_drain_iter,
+            &mut self.future_all_drain_iter,
+            &mut self.past_drain_for_each,
+            &mut self.future_drain_for_each,
+            &mut self.past_future_drain_for_each,
+            &mut self.future_past_drain_for_each,
+            &mut self.all_drain_for_each,
+            &mut self.past_all_drain_for_each,
+            &mut self.future_all_drain_for_each,
+        ]
+        .into_iter()
+    }
 }
 
 impl TransitionDrain<'_, char> {
-    pub(super) fn assert_past(&mut self, expected: &[char]) -> &mut Self {
+    pub(super) fn assert_past_iter(&mut self, expected: &[char]) -> &mut Self {
+        self.assert_past_inner(expected, |iter| iter.collect::<Vec<_>>())
+    }
+
+    pub(super) fn assert_past_for_each(&mut self, expected: &[char]) -> &mut Self {
+        self.assert_past_inner(expected, |iter| {
+            let mut actual = Vec::new();
+            iter.for_each(|item| actual.push(item));
+            actual
+        })
+    }
+
+    pub(super) fn assert_past_inner(
+        &mut self,
+        expected: &[char],
+        collect: impl FnOnce(Drain<char>) -> Vec<char>,
+    ) -> &mut Self {
         let iter = self.past();
         assert_eq!(iter.size_hint().0, expected.len());
-        let actual = iter.collect::<Vec<_>>();
+        let actual = collect(iter);
         assert_eq!(actual, expected);
         if !expected.is_empty() {
             let iter = self.past();
@@ -154,10 +81,26 @@ impl TransitionDrain<'_, char> {
         self
     }
 
-    pub(super) fn assert_future(&mut self, expected: &[char]) -> &mut Self {
+    pub(super) fn assert_future_iter(&mut self, expected: &[char]) -> &mut Self {
+        self.assert_future_inner(expected, |iter| iter.collect::<Vec<_>>())
+    }
+
+    pub(super) fn assert_future_for_each(&mut self, expected: &[char]) -> &mut Self {
+        self.assert_future_inner(expected, |iter| {
+            let mut actual = Vec::new();
+            iter.for_each(|item| actual.push(item));
+            actual
+        })
+    }
+
+    pub(super) fn assert_future_inner(
+        &mut self,
+        expected: &[char],
+        collect: impl FnOnce(Drain<char>) -> Vec<char>,
+    ) -> &mut Self {
         let iter = self.future();
         assert_eq!(iter.len(), expected.len());
-        let actual = iter.collect::<Vec<_>>();
+        let actual = collect(iter);
         assert_eq!(actual, expected);
         if !expected.is_empty() {
             let iter = self.future();
@@ -167,11 +110,28 @@ impl TransitionDrain<'_, char> {
         self
     }
 
-    pub(super) fn assert_all(&mut self, past: &[char], future: &[char]) -> &mut Self {
+    pub(super) fn assert_all_iter(&mut self, past: &[char], future: &[char]) -> &mut Self {
+        self.assert_all_inner(past, future, |iter| iter.collect::<Vec<_>>())
+    }
+
+    pub(super) fn assert_all_for_each(&mut self, past: &[char], future: &[char]) -> &mut Self {
+        self.assert_all_inner(past, future, |iter| {
+            let mut actual = Vec::new();
+            iter.for_each(|item| actual.push(item));
+            actual
+        })
+    }
+
+    pub(super) fn assert_all_inner(
+        &mut self,
+        past: &[char],
+        future: &[char],
+        collect: impl FnOnce(DrainAll<char>) -> Vec<char>,
+    ) -> &mut Self {
         let drain_len_sum = past.len() + future.len();
         let iter = self.all();
         assert_eq!(iter.len(), drain_len_sum);
-        let actual = iter.collect::<Vec<_>>();
+        let actual = collect(iter);
         let expected = past
             .iter()
             .cloned()
@@ -198,43 +158,81 @@ impl Logs<TransitionLog<char>> {
     ) {
         self.drop_drain.forward_push(meta, max_past_len, push);
 
-        self.past_drain
+        self.past_drain_iter
             .forward_push(meta, max_past_len, push)
-            .assert_past(past_drain);
+            .assert_past_iter(past_drain);
 
-        self.future_drain
+        self.future_drain_iter
             .forward_push(meta, max_past_len, push)
-            .assert_future(future_drain);
+            .assert_future_iter(future_drain);
 
-        self.past_future_drain
+        self.past_future_drain_iter
             .forward_push(meta, max_past_len, push)
-            .assert_past(past_drain)
-            .assert_future(future_drain)
-            .assert_all(&[], &[]);
+            .assert_past_iter(past_drain)
+            .assert_future_iter(future_drain)
+            .assert_all_iter(&[], &[]);
 
-        self.future_past_drain
+        self.future_past_drain_iter
             .forward_push(meta, max_past_len, push)
-            .assert_future(future_drain)
-            .assert_past(past_drain)
-            .assert_all(&[], &[]);
+            .assert_future_iter(future_drain)
+            .assert_past_iter(past_drain)
+            .assert_all_iter(&[], &[]);
 
-        self.all_drain
+        self.all_drain_iter
             .forward_push(meta, max_past_len, push)
-            .assert_all(past_drain, future_drain)
-            .assert_past(&[])
-            .assert_future(&[]);
+            .assert_all_iter(past_drain, future_drain)
+            .assert_past_iter(&[])
+            .assert_future_iter(&[]);
 
-        self.past_all_drain
+        self.past_all_drain_iter
             .forward_push(meta, max_past_len, push)
-            .assert_past(past_drain)
-            .assert_all(&[], future_drain)
-            .assert_future(&[]);
+            .assert_past_iter(past_drain)
+            .assert_all_iter(&[], future_drain)
+            .assert_future_iter(&[]);
 
-        self.future_all_drain
+        self.future_all_drain_iter
             .forward_push(meta, max_past_len, push)
-            .assert_future(future_drain)
-            .assert_all(past_drain, &[])
-            .assert_future(&[]);
+            .assert_future_iter(future_drain)
+            .assert_all_iter(past_drain, &[])
+            .assert_future_iter(&[]);
+
+        self.past_drain_for_each
+            .forward_push(meta, max_past_len, push)
+            .assert_past_for_each(past_drain);
+
+        self.future_drain_for_each
+            .forward_push(meta, max_past_len, push)
+            .assert_future_for_each(future_drain);
+
+        self.past_future_drain_for_each
+            .forward_push(meta, max_past_len, push)
+            .assert_past_for_each(past_drain)
+            .assert_future_for_each(future_drain)
+            .assert_all_for_each(&[], &[]);
+
+        self.future_past_drain_for_each
+            .forward_push(meta, max_past_len, push)
+            .assert_future_for_each(future_drain)
+            .assert_past_for_each(past_drain)
+            .assert_all_for_each(&[], &[]);
+
+        self.all_drain_for_each
+            .forward_push(meta, max_past_len, push)
+            .assert_all_for_each(past_drain, future_drain)
+            .assert_past_for_each(&[])
+            .assert_future_for_each(&[]);
+
+        self.past_all_drain_for_each
+            .forward_push(meta, max_past_len, push)
+            .assert_past_for_each(past_drain)
+            .assert_all_for_each(&[], future_drain)
+            .assert_future_for_each(&[]);
+
+        self.future_all_drain_for_each
+            .forward_push(meta, max_past_len, push)
+            .assert_future_for_each(future_drain)
+            .assert_all_for_each(past_drain, &[])
+            .assert_future_for_each(&[]);
     }
 
     #[track_caller]
@@ -243,29 +241,17 @@ impl Logs<TransitionLog<char>> {
         meta: &RevMeta,
         expected: Result<char, ()>,
     ) {
-        let logs = [
-            &mut self.drop_drain,
-            &mut self.past_drain,
-            &mut self.future_drain,
-            &mut self.past_future_drain,
-            &mut self.future_past_drain,
-            &mut self.all_drain,
-            &mut self.past_all_drain,
-            &mut self.future_all_drain,
-        ]
-        .into_iter()
-        .enumerate();
-
+        let logs = self.iter_mut();
         match expected {
             Ok(expected) => {
-                for (i, log) in logs {
+                for log in logs {
                     let actual = log.forward_log(meta).map(|char| *char);
-                    assert_eq!(actual, Ok(expected), "{i}");
+                    assert_eq!(actual, Ok(expected));
                 }
             }
             Err(()) => {
-                for (i, log) in logs {
-                    assert_eq!(log.forward_log(meta), Err(OutOfLog::caller()), "{i}");
+                for log in logs {
+                    assert_eq!(log.forward_log(meta), Err(OutOfLog::caller()));
                 }
             }
         }
@@ -277,16 +263,7 @@ impl Logs<TransitionLog<char>> {
         meta: &RevMeta,
         expected: Result<char, ()>,
     ) {
-        let logs = [
-            &mut self.drop_drain,
-            &mut self.past_drain,
-            &mut self.future_drain,
-            &mut self.past_future_drain,
-            &mut self.future_past_drain,
-            &mut self.all_drain,
-            &mut self.past_all_drain,
-            &mut self.future_all_drain,
-        ];
+        let logs = self.iter_mut();
         match expected {
             Ok(expected) => {
                 for log in logs {
@@ -315,41 +292,77 @@ impl Logs<TransitionsLog<char, char>> {
         self.drop_drain
             .forward_extend_with(meta, max_past_len, transitions.chars(), update);
 
-        self.past_drain
+        self.past_drain_iter
             .forward_extend_with(meta, max_past_len, transitions.chars(), update)
-            .assert_past(past_drain);
+            .assert_past_iter(past_drain);
 
-        self.future_drain
+        self.future_drain_iter
             .forward_extend_with(meta, max_past_len, transitions.chars(), update)
-            .assert_future(future_drain);
+            .assert_future_iter(future_drain);
 
-        self.past_future_drain
+        self.past_future_drain_iter
             .forward_extend_with(meta, max_past_len, transitions.chars(), update)
-            .assert_past(past_drain)
-            .assert_future(future_drain)
-            .assert_all(&[], &[]);
+            .assert_past_iter(past_drain)
+            .assert_future_iter(future_drain)
+            .assert_all_iter(&[], &[]);
 
-        self.future_past_drain
+        self.future_past_drain_iter
             .forward_extend_with(meta, max_past_len, transitions.chars(), update)
-            .assert_future(future_drain)
-            .assert_past(past_drain)
-            .assert_all(&[], &[]);
+            .assert_future_iter(future_drain)
+            .assert_past_iter(past_drain)
+            .assert_all_iter(&[], &[]);
 
-        self.all_drain
+        self.all_drain_iter
             .forward_extend_with(meta, max_past_len, transitions.chars(), update)
-            .assert_all(past_drain, future_drain);
+            .assert_all_iter(past_drain, future_drain);
 
-        self.past_all_drain
+        self.past_all_drain_iter
             .forward_extend_with(meta, max_past_len, transitions.chars(), update)
-            .assert_past(past_drain)
-            .assert_all(&[], future_drain)
-            .assert_future(&[]);
+            .assert_past_iter(past_drain)
+            .assert_all_iter(&[], future_drain)
+            .assert_future_iter(&[]);
 
-        self.future_all_drain
+        self.future_all_drain_iter
             .forward_extend_with(meta, max_past_len, transitions.chars(), update)
-            .assert_future(future_drain)
-            .assert_all(past_drain, &[])
-            .assert_future(&[]);
+            .assert_future_iter(future_drain)
+            .assert_all_iter(past_drain, &[])
+            .assert_future_iter(&[]);
+
+        self.past_drain_for_each
+            .forward_extend_with(meta, max_past_len, transitions.chars(), update)
+            .assert_past_for_each(past_drain);
+
+        self.future_drain_for_each
+            .forward_extend_with(meta, max_past_len, transitions.chars(), update)
+            .assert_future_for_each(future_drain);
+
+        self.past_future_drain_for_each
+            .forward_extend_with(meta, max_past_len, transitions.chars(), update)
+            .assert_past_for_each(past_drain)
+            .assert_future_for_each(future_drain)
+            .assert_all_for_each(&[], &[]);
+
+        self.future_past_drain_for_each
+            .forward_extend_with(meta, max_past_len, transitions.chars(), update)
+            .assert_future_for_each(future_drain)
+            .assert_past_for_each(past_drain)
+            .assert_all_for_each(&[], &[]);
+
+        self.all_drain_for_each
+            .forward_extend_with(meta, max_past_len, transitions.chars(), update)
+            .assert_all_for_each(past_drain, future_drain);
+
+        self.past_all_drain_for_each
+            .forward_extend_with(meta, max_past_len, transitions.chars(), update)
+            .assert_past_for_each(past_drain)
+            .assert_all_for_each(&[], future_drain)
+            .assert_future_for_each(&[]);
+
+        self.future_all_drain_for_each
+            .forward_extend_with(meta, max_past_len, transitions.chars(), update)
+            .assert_future_for_each(future_drain)
+            .assert_all_for_each(past_drain, &[])
+            .assert_future_for_each(&[]);
     }
 
     #[track_caller]
@@ -358,16 +371,7 @@ impl Logs<TransitionsLog<char, char>> {
         meta: &RevMeta,
         expected: Result<(&'static str, char), ()>,
     ) {
-        let logs = [
-            &mut self.drop_drain,
-            &mut self.past_drain,
-            &mut self.future_drain,
-            &mut self.past_future_drain,
-            &mut self.future_past_drain,
-            &mut self.all_drain,
-            &mut self.past_all_drain,
-            &mut self.future_all_drain,
-        ];
+        let logs = self.iter_mut();
         match expected {
             Ok((transitions, update)) => {
                 for log in logs {
@@ -392,16 +396,7 @@ impl Logs<TransitionsLog<char, char>> {
         meta: &RevMeta,
         expected: Result<(&'static str, char), ()>,
     ) {
-        let logs = [
-            &mut self.drop_drain,
-            &mut self.past_drain,
-            &mut self.future_drain,
-            &mut self.past_future_drain,
-            &mut self.future_past_drain,
-            &mut self.all_drain,
-            &mut self.past_all_drain,
-            &mut self.future_all_drain,
-        ];
+        let logs = self.iter_mut();
         match expected {
             Ok((transitions, update)) => {
                 for log in logs {
@@ -425,7 +420,21 @@ impl Logs<TransitionsLog<char, char>> {
 }
 
 impl TransitionsDrain<'_, char, char, Chars<'_>> {
-    pub(super) fn assert_past(&mut self, expected: &[(&'static str, char)]) -> &mut Self {
+    pub(super) fn assert_past_iter(&mut self, expected: &[(&'static str, char)]) -> &mut Self {
+        self.assert_past_inner(expected, |iter| iter.iter_into_tuples())
+    }
+
+    pub(super) fn assert_past_for_each(&mut self, expected: &[(&'static str, char)]) -> &mut Self {
+        self.assert_past_inner(expected, |iter| iter.for_each_into_tuples())
+    }
+
+    pub(super) fn assert_past_inner(
+        &mut self,
+        expected: &[(&'static str, char)],
+        collect: impl FnOnce(
+            TransitionsDrainIters<Drain<char>, Drain<TransitionsLogUpdate<char>>, char>,
+        ) -> Vec<(String, char)>,
+    ) -> &mut Self {
         let iter = self.past();
         let len = expected
             .iter()
@@ -433,7 +442,7 @@ impl TransitionsDrain<'_, char, char, Chars<'_>> {
             .sum::<usize>();
         assert_eq!(iter.transitions.size_hint().0, len);
         assert_eq!(iter.updates.size_hint().0, expected.len());
-        let actual = iter.into_tuples();
+        let actual = collect(iter);
         let expected = expected
             .iter()
             .map(|(transitions, update)| (transitions.to_string(), *update))
@@ -448,7 +457,25 @@ impl TransitionsDrain<'_, char, char, Chars<'_>> {
         }
         self
     }
-    pub(super) fn assert_future(&mut self, expected: &[(&'static str, char)]) -> &mut Self {
+
+    pub(super) fn assert_future_iter(&mut self, expected: &[(&'static str, char)]) -> &mut Self {
+        self.assert_future_inner(expected, |iter| iter.iter_into_tuples())
+    }
+
+    pub(super) fn assert_future_for_each(
+        &mut self,
+        expected: &[(&'static str, char)],
+    ) -> &mut Self {
+        self.assert_future_inner(expected, |iter| iter.for_each_into_tuples())
+    }
+
+    pub(super) fn assert_future_inner(
+        &mut self,
+        expected: &[(&'static str, char)],
+        collect: impl FnOnce(
+            TransitionsDrainIters<Drain<char>, Drain<TransitionsLogUpdate<char>>, char>,
+        ) -> Vec<(String, char)>,
+    ) -> &mut Self {
         let iter = self.future();
         let len = expected
             .iter()
@@ -456,7 +483,7 @@ impl TransitionsDrain<'_, char, char, Chars<'_>> {
             .sum::<usize>();
         assert_eq!(iter.transitions.len(), len);
         assert_eq!(iter.updates.len(), expected.len());
-        let actual = iter.into_tuples();
+        let actual = collect(iter);
         let expected = expected
             .iter()
             .map(|(transitions, update)| (transitions.to_string(), *update))
@@ -471,10 +498,30 @@ impl TransitionsDrain<'_, char, char, Chars<'_>> {
         }
         self
     }
-    pub(super) fn assert_all(
+
+    pub(super) fn assert_all_iter(
         &mut self,
         past: &[(&'static str, char)],
         future: &[(&'static str, char)],
+    ) -> &mut Self {
+        self.assert_all_inner(past, future, |iter| iter.iter_into_tuples())
+    }
+
+    pub(super) fn assert_all_for_each(
+        &mut self,
+        past: &[(&'static str, char)],
+        future: &[(&'static str, char)],
+    ) -> &mut Self {
+        self.assert_all_inner(past, future, |iter| iter.for_each_into_tuples())
+    }
+
+    pub(super) fn assert_all_inner(
+        &mut self,
+        past: &[(&'static str, char)],
+        future: &[(&'static str, char)],
+        collect: impl FnOnce(
+            TransitionsDrainIters<DrainAll<char>, DrainAll<TransitionsLogUpdate<char>>, char>,
+        ) -> Vec<(String, char)>,
     ) -> &mut Self {
         let drain_sum_len = past.len() + future.len();
         let iter = self.all();
@@ -487,7 +534,7 @@ impl TransitionsDrain<'_, char, char, Chars<'_>> {
         assert_eq!(iter.updates.len(), drain_sum_len);
         assert_eq!(iter.past_transitions_len(), past_transitions_len);
         assert_eq!(iter.past_updates_len(), past.len());
-        let actual = iter.into_tuples();
+        let actual = collect(iter);
         let expected = past
             .iter()
             .cloned()
@@ -513,11 +560,16 @@ where
     TI: Iterator<Item = char>,
     UI: Iterator<Item = TransitionsLogUpdate<char>>,
 {
-    fn into_tuples(mut self) -> Vec<(String, char)> {
+    fn iter_into_tuples(mut self) -> Vec<(String, char)> {
         let mut v = Vec::new();
         while let Some((transitions, update)) = self.next_log_entry() {
             v.push((transitions.collect(), update))
         }
+        v
+    }
+    fn for_each_into_tuples(mut self) -> Vec<(String, char)> {
+        let mut v = Vec::new();
+        self.for_each_log_entry(|transitions, update| v.push((transitions.collect(), update)));
         v
     }
 }

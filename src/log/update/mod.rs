@@ -457,8 +457,11 @@ impl UpdateLog {
         }
 
         #[cfg(feature = "track_update_logs")]
-        meta.update_log_limits()
-            .set_update_state(&mut self.update_state, _caller);
+        meta.update_log_limits().set_update_state(
+            &mut self.update_state,
+            meta.error_handler(),
+            _caller,
+        );
 
         clear
     }

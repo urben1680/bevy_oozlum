@@ -85,16 +85,15 @@
 //! [reversible scheduling]: crate::schedule::RevSchedule
 //! [reversible commands]: crate::undo_redo::commands::RevCommands
 
-use alloc::{
-    boxed::Box,
-    collections::{VecDeque, vec_deque::Drain},
-};
+use alloc::collections::VecDeque;
 use bevy_ecs::change_detection::MaybeLocation;
 use core::{
     error::Error,
     fmt::{Debug, Display, Formatter, Result as FmtResult},
     iter::FusedIterator,
+    mem::take,
 };
+use nonmax::NonMaxUsize;
 
 #[cfg(feature = "track_update_logs")]
 pub(crate) use update::limit::UpdateLogLimits;
@@ -162,51 +161,8 @@ impl Error for OutOfLog {}
 /// Iterator that drains both past and future log entries that got
 /// [out of log](crate::meta::RevMeta::contains).
 pub struct DrainAll<'a, T> {
-    drain: Drain<'a, T>,
+    deque: &'a mut VecDeque<T>,
     gap_range: GapRange,
-    gap_buffer: &'a mut Box<[T]>,
-}
-
-impl<'a, T> DrainAll<'a, T> {
-    /// Calling this may cause `log` to become empty including in-log items that are returned on
-    /// Self::drop.
-    ///
-    /// Calling this again will return an empty iterator.
-    fn new(
-        log: &'a mut VecDeque<T>,
-        gap_range: &mut GapRange,
-        gap_buffer: &'a mut Box<[T]>,
-    ) -> Self {
-        // this_range is basically the state before the iteration, and gap_range will be mutated
-        // here to the state after iteration/drop
-        let mut this_range = *gap_range;
-
-        let drain;
-        if gap_range.end == log.len() {
-            // only a past to drain
-            drain = log.drain(..gap_range.start);
-            this_range.end = gap_range.start;
-            gap_range.end -= gap_range.start;
-            gap_range.start = 0;
-        } else if gap_range.start == 0 {
-            // only a future to drain
-            drain = log.drain(gap_range.end..);
-            this_range.start = 0;
-            this_range.end = 0;
-        } else {
-            // full drain including log items that are not out-of-log, but those will be buffered in
-            // gap_buffer for reinsertion at drop
-            gap_range.start = 0;
-            gap_range.end = 0;
-            drain = log.drain(..);
-        }
-
-        Self {
-            drain,
-            gap_range: this_range,
-            gap_buffer,
-        }
-    }
 }
 
 impl<T> Iterator for DrainAll<'_, T> {
@@ -214,17 +170,42 @@ impl<T> Iterator for DrainAll<'_, T> {
 
     #[inline]
     fn next(&mut self) -> Option<T> {
-        if self.gap_range.start > 0 {
-            // pre buffering
-            self.gap_range.start -= 1;
-            self.gap_range.end -= 1;
-        } else if self.gap_range.end > 0 {
-            // buffer before advancing
-            *self.gap_buffer = self.drain.by_ref().take(self.gap_range.end).collect();
-            self.gap_range.end = 0;
-            self.gap_range.start = 0;
+        if self.gap_range.is_clear() {
+            return self.deque.pop_front();
         }
-        self.drain.next()
+        if let Some(to_drain_past) = self.gap_range.drain_past_len {
+            let to_drain_past = to_drain_past.get();
+            if to_drain_past > 0 {
+                self.gap_range.drain_past_len = NonMaxUsize::new(to_drain_past - 1);
+                return self.deque.pop_front();
+            } else if self.gap_range.drain_future_len == 0 {
+                return None;
+            }
+            self.gap_range.drain_past_len = None;
+            self.deque.rotate_left(self.gap_range.keep_len);
+        } else if self.gap_range.drain_future_len == 0 {
+            return None;
+        }
+        self.gap_range.drain_future_len -= 1;
+        self.deque.pop_front()
+    }
+
+    fn for_each<F>(mut self, mut f: F)
+    where
+        Self: Sized,
+        F: FnMut(Self::Item),
+    {
+        if self.gap_range.is_clear() {
+            self.deque.drain(..).for_each(f);
+        } else if let Some(to_drain_past) = self.gap_range.drain_past_len {
+            self.deque.drain(..to_drain_past.get()).for_each(&mut f);
+            self.deque.drain(self.gap_range.keep_len..).for_each(f);
+        } else {
+            self.deque
+                .drain(..self.gap_range.drain_future_len)
+                .for_each(f);
+        }
+        self.gap_range.take_all();
     }
 
     #[inline]
@@ -236,13 +217,7 @@ impl<T> Iterator for DrainAll<'_, T> {
 
 impl<T> ExactSizeIterator for DrainAll<'_, T> {
     fn len(&self) -> usize {
-        if self.gap_range.buffer_pending() {
-            self.drain
-                .len()
-                .saturating_sub(self.gap_range.end - self.gap_range.start)
-        } else {
-            self.drain.len()
-        }
+        self.deque.len() - self.gap_range.keep_len
     }
 }
 
@@ -250,64 +225,52 @@ impl<T> FusedIterator for DrainAll<'_, T> {}
 
 impl<T> Drop for DrainAll<'_, T> {
     fn drop(&mut self) {
-        if self.gap_range.buffer_pending() {
-            let start = self.gap_range.start;
-            let len = self.gap_range.end - start;
-            *self.gap_buffer = self.drain.by_ref().skip(start).take(len).collect();
+        if self.gap_range.is_clear() {
+            self.deque.clear();
+        } else if let Some(to_drain_past) = self.gap_range.drain_past_len {
+            // todo: use retain_back when MSRV of bevy is 1.99
+            self.deque.drain(..to_drain_past.get());
+            self.deque.truncate(self.gap_range.keep_len);
+        } else {
+            // todo: use retain_back when MSRV of bevy is 1.99
+            self.deque.drain(..self.gap_range.drain_future_len);
         }
     }
 }
 
-/// Defines a range of log entries that should be kept. Comparable to [`Range`](core::ops::Range)
-/// but comes with usecase-relevant methods.
+/// Defines lengthes of drainable segments of a `VecDeque`.
 #[derive(Clone, Copy, Debug)]
 struct GapRange {
-    start: usize,
-    end: usize,
+    /// Is `None` if deque was rotated
+    drain_past_len: Option<NonMaxUsize>,
+    drain_future_len: usize,
+    keep_len: usize,
 }
 
 impl GapRange {
-    fn new(start: usize, end: usize) -> Self {
-        Self { start, end }
-    }
-    fn new_clear(index: usize) -> Self {
-        Self {
-            start: index,
-            end: index,
-        }
-    }
     fn is_clear(self) -> bool {
-        self.start == self.end
+        self.keep_len == 0
     }
-    fn buffer_pending(self) -> bool {
-        !self.is_clear() && self.start > 0
+    fn drain_past_len_or_zero(self) -> usize {
+        self.drain_past_len.unwrap_or(NonMaxUsize::ZERO).get()
     }
-    fn take_drain_past_end(&mut self) -> usize {
-        let end = self.start;
-        self.end -= end;
-        self.start = 0;
-        end
+    fn take_drain_past_len(&mut self) -> usize {
+        self.drain_past_len
+            .as_mut()
+            .map(take)
+            .unwrap_or(NonMaxUsize::ZERO)
+            .get()
     }
-    fn drain_future_start(&self) -> usize {
-        self.end
+    fn take_drain_future_len(&mut self) -> usize {
+        take(&mut self.drain_future_len)
     }
-}
-
-// todo: use prepend https://github.com/rust-lang/rust/issues/146975
-fn prepend<T>(deque: &mut VecDeque<T>, gap_buffer: &mut Box<[T]>) {
-    let mut buffer = core::mem::take(gap_buffer).into_iter();
-    if deque.is_empty() {
-        return deque.extend(buffer);
-    }
-    match buffer.len() {
-        0 => {}
-        1 => {
-            let entry = buffer.next().unwrap(); // len != 0 expects an item
-            deque.push_front(entry);
-        }
-        len => {
-            deque.extend(buffer);
-            deque.rotate_right(len);
+    fn take_all(&mut self) -> Self {
+        let to_drain_past = self.drain_past_len.as_mut().map(take);
+        let to_drain_future = take(&mut self.drain_future_len);
+        Self {
+            drain_past_len: to_drain_past,
+            drain_future_len: to_drain_future,
+            keep_len: self.keep_len,
         }
     }
 }

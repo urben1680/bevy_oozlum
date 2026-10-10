@@ -178,7 +178,7 @@ fn test_step(
 
 type ConfigsVec = Vec<Box<dyn for<'a> Fn(&'a mut Schedule) -> &'a mut Schedule>>;
 
-pub(super) fn a_then_b(ignore_deferred: bool) -> ConfigsVec {
+pub(super) fn a_then_b(ignore_deferred: bool, weak: bool) -> ConfigsVec {
     fn noop<const N: u8>() {}
 
     let sys_after: fn(
@@ -215,22 +215,35 @@ pub(super) fn a_then_b(ignore_deferred: bool) -> ConfigsVec {
     let set_sys_b = non_exclusive_system::<2>.into_system_set().intern();
     let set_noop_b = noop::<4>.into_system_set().intern();
 
-    if ignore_deferred {
-        sys_after = |sys, set| sys.rev_after_ignore_deferred(set);
-        sys_before = |sys, set| sys.rev_before_ignore_deferred(set);
-        sys_chain = |sys| sys.rev_chain_ignore_deferred();
+    match (ignore_deferred, weak) {
+        (false, false) => {
+            sys_after = |sys, set| sys.rev_after(set);
+            sys_before = |sys, set| sys.rev_before(set);
+            sys_chain = |sys| sys.rev_chain();
 
-        set_after = |sys, set| sys.rev_after_ignore_deferred(set);
-        set_before = |sys, set| sys.rev_before_ignore_deferred(set);
-        set_chain = |sys| sys.rev_chain_ignore_deferred();
-    } else {
-        sys_after = |sys, set| sys.rev_after(set);
-        sys_before = |sys, set| sys.rev_before(set);
-        sys_chain = |sys| sys.rev_chain();
+            set_after = |sys, set| sys.rev_after(set);
+            set_before = |sys, set| sys.rev_before(set);
+            set_chain = |sys| sys.rev_chain();
+        }
+        (true, false) => {
+            sys_after = |sys, set| sys.rev_after_ignore_deferred(set);
+            sys_before = |sys, set| sys.rev_before_ignore_deferred(set);
+            sys_chain = |sys| sys.rev_chain_ignore_deferred();
 
-        set_after = |sys, set| sys.rev_after(set);
-        set_before = |sys, set| sys.rev_before(set);
-        set_chain = |sys| sys.rev_chain();
+            set_after = |sys, set| sys.rev_after_ignore_deferred(set);
+            set_before = |sys, set| sys.rev_before_ignore_deferred(set);
+            set_chain = |sys| sys.rev_chain_ignore_deferred();
+        }
+        (false, true) => {
+            sys_after = |sys, set| sys.rev_after_weak(set);
+            sys_before = |sys, set| sys.rev_before_weak(set);
+            sys_chain = |sys| sys.rev_chain_weak();
+
+            set_after = |sys, set| sys.rev_after_weak(set);
+            set_before = |sys, set| sys.rev_before_weak(set);
+            set_chain = |sys| sys.rev_chain_weak();
+        }
+        (true, true) => unimplemented!(),
     }
 
     let mut configs: ConfigsVec = vec![

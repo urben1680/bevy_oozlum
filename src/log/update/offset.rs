@@ -251,7 +251,7 @@ impl OffsetLog {
                         *minus += remaining;
                         removed_offsets += remaining;
                         let to_drain = iter.index - 1;
-                        // todo: use truncate_front https://github.com/rust-lang/rust/issues/140667
+                        // todo: use retain_back when MSRV of bevy is 1.99
                         self.offsets.drain(..to_drain);
                         self.meta.index -= to_drain;
 
@@ -269,7 +269,7 @@ impl OffsetLog {
                     if item.offset > minus_target - *minus {
                         // offset leads to a frame that is > meta.log_end, keep it
 
-                        // todo: use truncate_front https://github.com/rust-lang/rust/issues/140667
+                        // todo: use retain_back when MSRV of bevy is 1.99
                         self.offsets.drain(..item.index);
                         self.meta.index -= item.index;
 
