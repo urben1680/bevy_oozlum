@@ -336,7 +336,7 @@ impl<T, U> TransitionsLog<T, U> {
                 transitions_len: usize::MAX.to_ne_bytes(),
             },
         );
-        let to_drain_past = if updates.is_clear() {
+        let drain_past_len = if updates.is_clear() {
             self.index
         } else {
             updates
@@ -344,17 +344,17 @@ impl<T, U> TransitionsLog<T, U> {
                 .map(|update| update.transitions_len())
                 .sum::<usize>()
         };
-        let to_drain_future = self.transitions.len() - self.index;
-        let to_keep = self.index - to_drain_past;
+        let drain_future_len = self.transitions.len() - self.index;
+        let keep_len = self.index - drain_past_len;
         TransitionsDrain {
             transitions: &mut self.transitions,
             updates,
             index: &mut self.index,
             transitions_iter: ManuallyDrop::new(transitions),
             gap_range: GapRange {
-                drain_past_len: NonMaxUsize::new(to_drain_past),
-                drain_future_len: to_drain_future,
-                keep_len: to_keep,
+                drain_past_len: NonMaxUsize::new(drain_past_len),
+                drain_future_len,
+                keep_len,
             },
         }
     }

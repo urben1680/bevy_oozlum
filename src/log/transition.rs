@@ -222,23 +222,23 @@ impl<T> TransitionLog<T> {
         past_len: impl Into<NonZeroU64>,
         transition: T,
     ) -> TransitionDrain<'a, T> {
-        let to_drain_past = if self.witnessed_log_clears < meta.log_clears() {
+        let drain_past_len = if self.witnessed_log_clears < meta.log_clears() {
             self.witnessed_log_clears = meta.log_clears();
             self.index
         } else {
             let past_len = past_len.into().get().try_into().unwrap_or(usize::MAX);
             self.index.saturating_sub(past_len - 1)
         };
-        let to_drain_future = self.transitions.len() - self.index;
-        let to_keep = self.index - to_drain_past;
+        let drain_future_len = self.transitions.len() - self.index;
+        let keep_len = self.index - drain_past_len;
         self.witnessed_log_exits = meta.log_exits();
         TransitionDrain {
             log: self,
             transition: ManuallyDrop::new(transition),
             gap_range: GapRange {
-                drain_past_len: NonMaxUsize::new(to_drain_past),
-                drain_future_len: to_drain_future,
-                keep_len: to_keep,
+                drain_past_len: NonMaxUsize::new(drain_past_len),
+                drain_future_len,
+                keep_len,
             },
         }
     }
