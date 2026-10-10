@@ -236,9 +236,9 @@ impl<T> TransitionLog<T> {
             log: self,
             transition: ManuallyDrop::new(transition),
             gap_range: GapRange {
-                to_drain_past: NonMaxUsize::new(to_drain_past),
-                to_drain_future,
-                to_keep,
+                drain_past_len: NonMaxUsize::new(to_drain_past),
+                drain_future_len: to_drain_future,
+                keep_len: to_keep,
             },
         }
     }
@@ -336,16 +336,16 @@ pub struct TransitionDrain<'a, T> {
 impl<'a, T> TransitionDrain<'a, T> {
     /// Returns log entries that were pushed before [`RevMeta::past_end`].
     pub fn past<'b>(&'b mut self) -> Drain<'b, T> {
-        let end = self.gap_range.take_past();
+        let end = self.gap_range.take_drain_past_len();
         self.log.transitions.drain(..end)
     }
 
     /// Returns log entries that were pushed after [`RevMeta::now`] which, at this point of time,
     /// is equal to [`RevMeta::future_end`].
     pub fn future<'b>(&'b mut self) -> Drain<'b, T> {
-        let to_drain_future = self.gap_range.take_future();
-        if let Some(to_drain_past) = self.gap_range.to_drain_past {
-            let start = to_drain_past.get() + self.gap_range.to_keep;
+        let to_drain_future = self.gap_range.take_drain_future_len();
+        if let Some(to_drain_past) = self.gap_range.drain_past_len {
+            let start = to_drain_past.get() + self.gap_range.keep_len;
             self.log.transitions.drain(start..)
         } else {
             self.log.transitions.drain(..to_drain_future)
@@ -368,11 +368,7 @@ impl<'a, T> TransitionDrain<'a, T> {
     }
 
     pub(super) fn iter_past<'b>(&'b self) -> Iter<'b, T> {
-        let end = self
-            .gap_range
-            .to_drain_past
-            .unwrap_or(NonMaxUsize::ZERO)
-            .get();
+        let end = self.gap_range.get_drain_past_len();
         self.log.transitions.range(..end)
     }
 

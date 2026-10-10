@@ -173,20 +173,20 @@ impl<T> Iterator for DrainAll<'_, T> {
         if self.gap_range.is_clear() {
             return self.deque.pop_front();
         }
-        if let Some(to_drain_past) = self.gap_range.to_drain_past {
+        if let Some(to_drain_past) = self.gap_range.drain_past_len {
             let to_drain_past = to_drain_past.get();
             if to_drain_past > 0 {
-                self.gap_range.to_drain_past = NonMaxUsize::new(to_drain_past - 1);
+                self.gap_range.drain_past_len = NonMaxUsize::new(to_drain_past - 1);
                 return self.deque.pop_front();
-            } else if self.gap_range.to_drain_future == 0 {
+            } else if self.gap_range.drain_future_len == 0 {
                 return None;
             }
-            self.gap_range.to_drain_past = None;
-            self.deque.rotate_left(self.gap_range.to_keep);
-        } else if self.gap_range.to_drain_future == 0 {
+            self.gap_range.drain_past_len = None;
+            self.deque.rotate_left(self.gap_range.keep_len);
+        } else if self.gap_range.drain_future_len == 0 {
             return None;
         }
-        self.gap_range.to_drain_future -= 1;
+        self.gap_range.drain_future_len -= 1;
         self.deque.pop_front()
     }
 
@@ -197,12 +197,12 @@ impl<T> Iterator for DrainAll<'_, T> {
     {
         if self.gap_range.is_clear() {
             self.deque.drain(..).for_each(f);
-        } else if let Some(to_drain_past) = self.gap_range.to_drain_past {
+        } else if let Some(to_drain_past) = self.gap_range.drain_past_len {
             self.deque.drain(..to_drain_past.get()).for_each(&mut f);
-            self.deque.drain(self.gap_range.to_keep..).for_each(f);
+            self.deque.drain(self.gap_range.keep_len..).for_each(f);
         } else {
             self.deque
-                .drain(..self.gap_range.to_drain_future)
+                .drain(..self.gap_range.drain_future_len)
                 .for_each(f);
         }
         self.gap_range.take_all();
@@ -217,7 +217,7 @@ impl<T> Iterator for DrainAll<'_, T> {
 
 impl<T> ExactSizeIterator for DrainAll<'_, T> {
     fn len(&self) -> usize {
-        self.deque.len() - self.gap_range.to_keep
+        self.deque.len() - self.gap_range.keep_len
     }
 }
 
@@ -227,48 +227,50 @@ impl<T> Drop for DrainAll<'_, T> {
     fn drop(&mut self) {
         if self.gap_range.is_clear() {
             self.deque.clear();
-        } else if let Some(to_drain_past) = self.gap_range.to_drain_past {
+        } else if let Some(to_drain_past) = self.gap_range.drain_past_len {
             // todo: use retain_back when MSRV of bevy is 1.99
             self.deque.drain(..to_drain_past.get());
-            self.deque.truncate(self.gap_range.to_keep);
+            self.deque.truncate(self.gap_range.keep_len);
         } else {
             // todo: use retain_back when MSRV of bevy is 1.99
-            self.deque.drain(..self.gap_range.to_drain_future);
+            self.deque.drain(..self.gap_range.drain_future_len);
         }
     }
 }
 
-/// Defines a range of log entries that should be kept. Comparable to [`Range`](core::ops::Range)
-/// but comes with usecase-relevant methods.
+/// Defines lengthes of drainable segments of a `VecDeque`.
 #[derive(Clone, Copy, Debug)]
 struct GapRange {
     /// Is `None` if deque was rotated
-    to_drain_past: Option<NonMaxUsize>,
-    to_drain_future: usize,
-    to_keep: usize,
+    drain_past_len: Option<NonMaxUsize>,
+    drain_future_len: usize,
+    keep_len: usize,
 }
 
 impl GapRange {
     fn is_clear(self) -> bool {
-        self.to_keep == 0
+        self.keep_len == 0
     }
-    fn take_past(&mut self) -> usize {
-        self.to_drain_past
+    fn get_drain_past_len(self) -> usize {
+        self.drain_past_len.unwrap_or(NonMaxUsize::ZERO).get()
+    }
+    fn take_drain_past_len(&mut self) -> usize {
+        self.drain_past_len
             .as_mut()
             .map(take)
             .unwrap_or(NonMaxUsize::ZERO)
             .get()
     }
-    fn take_future(&mut self) -> usize {
-        take(&mut self.to_drain_future)
+    fn take_drain_future_len(&mut self) -> usize {
+        take(&mut self.drain_future_len)
     }
     fn take_all(&mut self) -> Self {
-        let to_drain_past = self.to_drain_past.as_mut().map(take);
-        let to_drain_future = take(&mut self.to_drain_future);
+        let to_drain_past = self.drain_past_len.as_mut().map(take);
+        let to_drain_future = take(&mut self.drain_future_len);
         Self {
-            to_drain_past,
-            to_drain_future,
-            to_keep: self.to_keep,
+            drain_past_len: to_drain_past,
+            drain_future_len: to_drain_future,
+            keep_len: self.keep_len,
         }
     }
 }

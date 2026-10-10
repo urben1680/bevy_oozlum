@@ -532,6 +532,7 @@ impl RevMeta {
     }
 
     #[cfg(feature = "track_update_logs")]
+    /// Get the errorhandler that was recently copied from the world.
     pub(crate) fn error_handler(&self) -> ErrorHandler {
         self.error_handler
     }

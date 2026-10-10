@@ -352,9 +352,9 @@ impl<T, U> TransitionsLog<T, U> {
             index: &mut self.index,
             transitions_iter: ManuallyDrop::new(transitions),
             gap_range: GapRange {
-                to_drain_past: NonMaxUsize::new(to_drain_past),
-                to_drain_future,
-                to_keep,
+                drain_past_len: NonMaxUsize::new(to_drain_past),
+                drain_future_len: to_drain_future,
+                keep_len: to_keep,
             },
         }
     }
@@ -471,7 +471,7 @@ where
     pub fn past<'b>(
         &'b mut self,
     ) -> TransitionsDrainIters<Drain<'b, T>, Drain<'b, TransitionsLogUpdate<U>>, U> {
-        let end = self.gap_range.take_past();
+        let end = self.gap_range.take_drain_past_len();
         let transitions = self.transitions.drain(..end);
         let updates = self.updates.past();
         TransitionsDrainIters {
@@ -486,9 +486,9 @@ where
     pub fn future<'b>(
         &'b mut self,
     ) -> TransitionsDrainIters<Drain<'b, T>, Drain<'b, TransitionsLogUpdate<U>>, U> {
-        let to_drain_future = self.gap_range.take_future();
-        let transitions = if let Some(to_drain_past) = self.gap_range.to_drain_past {
-            let start = to_drain_past.get() + self.gap_range.to_keep;
+        let to_drain_future = self.gap_range.take_drain_future_len();
+        let transitions = if let Some(to_drain_past) = self.gap_range.drain_past_len {
+            let start = to_drain_past.get() + self.gap_range.keep_len;
             self.transitions.drain(start..)
         } else {
             self.transitions.drain(..to_drain_future)
@@ -583,20 +583,12 @@ where
 impl<T, U> TransitionsDrainIters<DrainAll<'_, T>, DrainAll<'_, TransitionsLogUpdate<U>>, U> {
     /// Returns the amount of log updates (`U`) that are in the past segment of this iterator.
     pub fn past_updates_len(&self) -> usize {
-        self.updates
-            .gap_range
-            .to_drain_past
-            .unwrap_or(NonMaxUsize::ZERO)
-            .get()
+        self.updates.gap_range.get_drain_past_len()
     }
 
     /// Returns the amount of log transitions (`T`) that are in the past segment of this iterator.
     pub fn past_transitions_len(&self) -> usize {
-        self.transitions
-            .gap_range
-            .to_drain_past
-            .unwrap_or(NonMaxUsize::ZERO)
-            .get()
+        self.transitions.gap_range.get_drain_past_len()
     }
 }
 
